@@ -208,8 +208,8 @@ export function MySkills() {
           className={cn(
             "pb-12",
             viewMode === "grid"
-              ? "grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3"
-              : "flex flex-col gap-3"
+              ? "grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3"
+              : "flex flex-col gap-1.5"
           )}
         >
           {filtered.map((skill) => {
@@ -220,148 +220,171 @@ export function MySkills() {
             const sourceTypeLabel =
               skill.source_type === "skillssh" ? "skills.sh" : skill.source_type;
 
-            return (
-              <div
-                key={skill.id}
-                className={cn(
-                  "group relative flex overflow-hidden rounded-xl border border-[#232325] bg-[#121212] transition-colors",
-                  viewMode === "grid"
-                    ? "flex-col hover:border-[#3A3A3A]"
-                    : "items-center px-4 py-3 hover:border-[#3A3A3A]"
-                )}
-              >
-                <div className={cn("relative flex-1", viewMode === "grid" ? "flex flex-col p-4" : "flex items-center gap-4")}>
-                  <div className="mb-2 flex items-start justify-between">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={cn(
-                            "inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium backdrop-blur-sm",
-                            enabledInScenario
-                              ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
-                              : "border-[#2A2A2A] bg-[#161616] text-zinc-500"
-                          )}
-                        >
-                          {enabledInScenario ? activeScenarioName : t("mySkills.notInScenario")}
-                        </span>
-                        <span className="inline-flex items-center gap-1 rounded-md border border-[#2A2A2A] bg-[#161616] px-2 py-0.5 text-[10px] font-medium text-zinc-400">
-                          {sourceIcon(skill.source_type)}
-                          {sourceTypeLabel}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-lg font-semibold tracking-tight text-zinc-100">{skill.name}</h3>
-                        {isSynced ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                        ) : (
-                          <Circle className="h-4 w-4 text-zinc-600" />
-                        )}
-                      </div>
-                    </div>
-                    {viewMode === "grid" && (
-                      <button
-                        onClick={() => setDeleteTarget(skill)}
-                        className="text-zinc-500 transition-colors focus:outline-none hover:text-red-400"
-                        title={t("mySkills.delete")}
+            /* ── Grid Card ── */
+            if (viewMode === "grid") {
+              return (
+                <div
+                  key={skill.id}
+                  className="group relative flex flex-col overflow-hidden rounded-lg border border-[#1E1E20] bg-[#111113] transition-all hover:border-[#333] hover:bg-[#141416]"
+                >
+                  {/* Header row: name + status indicators */}
+                  <div className="flex items-start gap-2 px-3 pt-3 pb-1">
+                    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                      {isSynced ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                      ) : (
+                        <Circle className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
+                      )}
+                      <h3
+                        className="truncate text-[13px] font-semibold text-zinc-100 cursor-pointer hover:text-white"
+                        onClick={() => setSelectedSkill(skill)}
+                        title={skill.name}
                       >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
+                        {skill.name}
+                      </h3>
+                    </div>
+                    <button
+                      onClick={() => setDeleteTarget(skill)}
+                      className="shrink-0 rounded p-0.5 text-zinc-600 opacity-0 transition-all group-hover:opacity-100 hover:text-red-400"
+                      title={t("mySkills.delete")}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
 
-                  <p
-                    className={cn(
-                      "text-sm leading-6 text-zinc-400 line-clamp-3 mt-1",
-                      viewMode === "list" && "mb-0 flex-1"
-                    )}
-                  >
+                  {/* Description */}
+                  <p className="px-3 text-[12px] leading-[18px] text-zinc-500 line-clamp-2 min-h-[36px]">
                     {skill.description || "—"}
                   </p>
 
-                  {viewMode === "list" && (
-                    <div className="flex w-[360px] items-center justify-end gap-4">
-                      <button
-                        onClick={() => setDeleteTarget(skill)}
-                        className="rounded-md border border-red-500/20 bg-red-500/5 px-4 py-1.5 text-sm font-medium text-red-300 transition-colors hover:bg-red-500/10"
+                  {/* Footer: meta + actions */}
+                  <div className="mt-auto flex items-center justify-between gap-2 border-t border-[#1A1A1C] px-3 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1 text-[10px] text-zinc-600">
+                        {sourceIcon(skill.source_type)}
+                        {sourceTypeLabel}
+                      </span>
+                      <span className="text-zinc-700">·</span>
+                      <span
+                        className={cn(
+                          "text-[10px] font-medium",
+                          enabledInScenario ? "text-amber-400/80" : "text-zinc-600"
+                        )}
                       >
-                        {t("mySkills.delete")}
-                      </button>
+                        {enabledInScenario ? activeScenarioName : t("mySkills.notInScenario")}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
                       <button
                         onClick={() => handleToggleScenario(skill)}
                         disabled={!activeScenario}
                         className={cn(
-                          "rounded-md border px-4 py-1.5 text-sm font-medium transition-colors",
+                          "rounded px-2 py-0.5 text-[11px] font-medium transition-colors outline-none",
                           enabledInScenario
-                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/15"
-                            : "border-[#2A2A2A] bg-[#1C1C1C] text-zinc-300 hover:bg-[#252528]"
+                            ? "text-emerald-400 hover:bg-emerald-500/10"
+                            : "text-zinc-500 hover:bg-[#1E1E20] hover:text-zinc-300"
                         )}
                       >
-                        {enabledInScenario
-                          ? t("mySkills.disableForScenario")
-                          : t("mySkills.enableForScenario")}
+                        {enabledInScenario ? t("mySkills.disable") : (
+                          <span className="inline-flex items-center gap-0.5">
+                            <Plus className="h-3 w-3" />
+                            {t("mySkills.enable")}
+                          </span>
+                        )}
                       </button>
                       <button
                         onClick={() => (isSynced ? handleUnsync(skill) : handleSync(skill))}
                         className={cn(
-                          "rounded-md border px-4 py-1.5 text-sm font-medium transition-colors",
+                          "rounded px-2 py-0.5 text-[11px] font-medium transition-colors outline-none",
                           isSynced
-                            ? "border-[#2A2A2A] bg-[#1C1C1C] text-zinc-300 hover:border-red-500/30 hover:bg-[#252528] hover:text-red-400"
-                            : "border-indigo-500/30 bg-indigo-600/10 text-indigo-400 hover:bg-indigo-600/20"
+                            ? "text-zinc-400 hover:bg-[#1E1E20] hover:text-red-400"
+                            : "text-indigo-400 hover:bg-indigo-500/10"
                         )}
                       >
-                        {isSynced ? t("mySkills.unsync") : t("mySkills.sync")}
+                        {isSynced ? t("mySkills.synced") : t("mySkills.sync")}
                       </button>
                     </div>
-                  )}
+                  </div>
+                </div>
+              );
+            }
+
+            /* ── List Row ── */
+            return (
+              <div
+                key={skill.id}
+                className="group flex items-center gap-3 rounded-lg border border-transparent bg-[#111113] px-3 py-2 transition-all hover:border-[#252528] hover:bg-[#141416]"
+              >
+                {/* Sync indicator dot */}
+                {isSynced ? (
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                ) : (
+                  <Circle className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
+                )}
+
+                {/* Name */}
+                <h3
+                  className="w-[180px] shrink-0 truncate text-[13px] font-semibold text-zinc-200 cursor-pointer hover:text-white"
+                  onClick={() => setSelectedSkill(skill)}
+                  title={skill.name}
+                >
+                  {skill.name}
+                </h3>
+
+                {/* Description */}
+                <p className="min-w-0 flex-1 truncate text-[12px] text-zinc-500">
+                  {skill.description || "—"}
+                </p>
+
+                {/* Meta tags */}
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="inline-flex items-center gap-1 text-[10px] text-zinc-600">
+                    {sourceIcon(skill.source_type)}
+                    {sourceTypeLabel}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-[10px] font-medium",
+                      enabledInScenario ? "text-amber-400/80" : "text-zinc-600"
+                    )}
+                  >
+                    {enabledInScenario ? activeScenarioName : t("mySkills.notInScenario")}
+                  </span>
                 </div>
 
-                {viewMode === "grid" && (
-                  <div className="relative flex justify-end gap-2 border-t border-[#1C1C1C] bg-[#0A0A0A]/90 px-4 py-3 mt-auto">
-                    <button
-                      onClick={() => handleToggleScenario(skill)}
-                      disabled={!activeScenario}
-                      className={cn(
-                        "rounded-md border px-3 py-1 text-xs font-medium transition-colors outline-none",
-                        enabledInScenario
-                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/15"
-                          : "border-[#2A2A2A] bg-[#1C1C1C] text-zinc-300 hover:bg-[#252528]"
-                      )}
-                      title={
-                        enabledInScenario
-                          ? t("mySkills.disableForScenario")
-                          : t("mySkills.enableForScenario")
-                      }
-                    >
-                      {enabledInScenario ? (
-                        t("mySkills.disable")
-                      ) : (
-                        <span className="inline-flex items-center gap-1">
-                          <Plus className="h-3 w-3" />
-                          {t("mySkills.enable")}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => setSelectedSkill(skill)}
-                      className="rounded p-1.5 text-zinc-500 transition-colors hover:bg-[#1C1C1C] hover:text-zinc-300"
-                      title={t("mySkills.viewDoc")}
-                    >
-                      <FileText className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => (isSynced ? handleUnsync(skill) : handleSync(skill))}
-                      className={cn(
-                        "rounded-md border px-3 py-1 text-xs font-medium transition-colors outline-none",
-                        isSynced
-                          ? "border-[#2A2A2A] bg-[#1C1C1C] text-zinc-300 hover:bg-[#252528]"
-                          : "border-indigo-500 bg-indigo-600 text-white hover:bg-indigo-500"
-                      )}
-                    >
-                      {isSynced ? t("mySkills.synced") : t("mySkills.sync")}
-                    </button>
-                  </div>
-                )}
+                {/* Actions */}
+                <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <button
+                    onClick={() => handleToggleScenario(skill)}
+                    disabled={!activeScenario}
+                    className={cn(
+                      "rounded px-2 py-0.5 text-[11px] font-medium transition-colors outline-none",
+                      enabledInScenario
+                        ? "text-emerald-400 hover:bg-emerald-500/10"
+                        : "text-zinc-500 hover:bg-[#1E1E20] hover:text-zinc-300"
+                    )}
+                  >
+                    {enabledInScenario ? t("mySkills.disable") : t("mySkills.enable")}
+                  </button>
+                  <button
+                    onClick={() => (isSynced ? handleUnsync(skill) : handleSync(skill))}
+                    className={cn(
+                      "rounded px-2 py-0.5 text-[11px] font-medium transition-colors outline-none",
+                      isSynced
+                        ? "text-zinc-400 hover:text-red-400"
+                        : "text-indigo-400 hover:bg-indigo-500/10"
+                    )}
+                  >
+                    {isSynced ? t("mySkills.synced") : t("mySkills.sync")}
+                  </button>
+                  <button
+                    onClick={() => setDeleteTarget(skill)}
+                    className="rounded p-0.5 text-zinc-600 transition-colors hover:text-red-400"
+                    title={t("mySkills.delete")}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
             );
           })}
