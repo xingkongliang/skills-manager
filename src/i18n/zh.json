@@ -13,6 +13,42 @@
   "topbar": {
     "supportedSkills": "支持的 Skills"
   },
+  "search": {
+    "placeholder": "搜索 Skills 名称、描述或来源",
+    "emptyTitle": "全局搜索",
+    "emptyDescription": "输入 Skill 名称、描述或来源。按 Enter 直接打开详情。",
+    "noResultsTitle": "没有匹配的 Skills",
+    "noResultsDescription": "试试更短的名称、描述关键词，或来源类型。",
+    "scenarioCount": "{{count}} 个场景",
+    "enabledInCurrent": "当前场景已启用"
+  },
+  "help": {
+    "eyebrow": "操作指南",
+    "title": "快速上手 Skills Manager",
+    "description": "这几个动作就够用，其他能力都围绕它们展开。",
+    "items": {
+      "scenarios": {
+        "title": "场景就是一组 Skill 组合",
+        "description": "把工作、学习、开源项目分成不同场景，每个场景维护自己的启用列表。"
+      },
+      "switching": {
+        "title": "切换场景会自动切换同步结果",
+        "description": "点击左侧场景后，应用会取消旧场景同步，并把当前场景的 Skills 同步到已检测到的 Agent。"
+      },
+      "install": {
+        "title": "从本地、Git 或市场安装",
+        "description": "安装完成后，Skill 会进入中央仓库，并可立即加入当前场景。"
+      },
+      "sync": {
+        "title": "在“我的 Skills”里管理启用与同步",
+        "description": "你可以决定某个 Skill 是否属于当前场景，也可以手动同步或取消同步到各个 Agent。"
+      },
+      "search": {
+        "title": "使用 ⌘K 全局搜索",
+        "description": "无论在哪个页面，都可以用顶部搜索或 ⌘K 快速定位 Skill 并直接打开详情。"
+      }
+    }
+  },
   "dashboard": {
     "greeting": "你好！",
     "currentScenario": "当前场景",

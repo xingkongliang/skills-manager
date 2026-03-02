@@ -17,10 +17,14 @@ impl SyncMode {
 
 }
 
-pub fn sync_mode_for_tool(tool_key: &str) -> SyncMode {
-    match tool_key {
-        "cursor" => SyncMode::Copy,
-        _ => SyncMode::Symlink,
+pub fn sync_mode_for_tool(tool_key: &str, configured_mode: Option<&str>) -> SyncMode {
+    match configured_mode {
+        Some("copy") => SyncMode::Copy,
+        Some("symlink") => SyncMode::Symlink,
+        _ => match tool_key {
+            "cursor" => SyncMode::Copy,
+            _ => SyncMode::Symlink,
+        },
     }
 }
 

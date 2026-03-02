@@ -24,7 +24,7 @@ export function Sidebar() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
-  const { scenarios, activeScenario, switchScenario, refreshScenarios } = useApp();
+  const { scenarios, activeScenario, switchScenario, refreshScenarios, refreshManagedSkills } = useApp();
   const [showCreate, setShowCreate] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; icon?: string | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
@@ -46,7 +46,10 @@ export function Sidebar() {
 
   const handleCreateScenario = async (name: string, description?: string, icon?: string) => {
     await api.createScenario(name, description, icon);
-    await refreshScenarios();
+    await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+    if (location.pathname === "/settings") {
+      navigate("/my-skills");
+    }
     toast.success(t("scenario.created"));
   };
 
@@ -67,7 +70,7 @@ export function Sidebar() {
   const handleDeleteScenario = async () => {
     if (!deleteTarget) return;
     await api.deleteScenario(deleteTarget.id);
-    await refreshScenarios();
+    await Promise.all([refreshScenarios(), refreshManagedSkills()]);
     if (location.pathname === "/settings") {
       navigate("/my-skills");
     }

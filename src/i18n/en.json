@@ -13,6 +13,42 @@
   "topbar": {
     "supportedSkills": "Supported Skills"
   },
+  "search": {
+    "placeholder": "Search skills by name, description, or source",
+    "emptyTitle": "Global Search",
+    "emptyDescription": "Type a skill name, description, or source. Press Enter to open details.",
+    "noResultsTitle": "No matching skills",
+    "noResultsDescription": "Try a shorter name, a description keyword, or a source label.",
+    "scenarioCount": "{{count}} scenarios",
+    "enabledInCurrent": "Enabled in current scenario"
+  },
+  "help": {
+    "eyebrow": "Guide",
+    "title": "Quick Start for Skills Manager",
+    "description": "These are the core actions. Everything else builds on them.",
+    "items": {
+      "scenarios": {
+        "title": "A scenario is a curated skill setup",
+        "description": "Use separate scenarios for work, learning, or open source so each flow keeps its own enabled skills."
+      },
+      "switching": {
+        "title": "Switching scenarios also switches sync targets",
+        "description": "When you click a scenario, the app unsyncs the previous one and syncs the current scenario to detected agents."
+      },
+      "install": {
+        "title": "Install from local, Git, or the market",
+        "description": "Installed skills are stored in the central library and can be added to the current scenario immediately."
+      },
+      "sync": {
+        "title": "Manage enablement and sync in My Skills",
+        "description": "Decide whether a skill belongs to the current scenario, then sync or unsync it for your agents."
+      },
+      "search": {
+        "title": "Use ⌘K for global search",
+        "description": "From any page, use the top search or ⌘K to find a skill fast and open its detail view."
+      }
+    }
+  },
   "dashboard": {
     "greeting": "Hello!",
     "currentScenario": "Current Scenario",

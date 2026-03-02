@@ -28,7 +28,10 @@ pub fn sync_skill_to_tool(
 
     let source = PathBuf::from(&skill.central_path);
     let target = adapter.skills_dir().join(&skill.name);
-    let mode = sync_engine::sync_mode_for_tool(&tool);
+    let configured_mode = store
+        .get_setting("sync_mode")
+        .map_err(|e| e.to_string())?;
+    let mode = sync_engine::sync_mode_for_tool(&tool, configured_mode.as_deref());
 
     let actual_mode =
         sync_engine::sync_skill(&source, &target, mode).map_err(|e| e.to_string())?;

@@ -9,7 +9,6 @@ import {
   Copy,
   Settings2,
   Github,
-  MessageSquare,
   Loader2,
   ExternalLink,
   Sun,
@@ -18,6 +17,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
@@ -32,6 +32,8 @@ export function Settings() {
   const [defaultScenario, setDefaultScenario] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [openingRepo, setOpeningRepo] = useState(false);
+  const [openingGithub, setOpeningGithub] = useState(false);
+  const GITHUB_URL = "https://github.com/xingkongliang/skills-manager";
 
   useEffect(() => {
     api.getSettings("sync_mode").then((v) => { if (v) setSyncMode(v); });
@@ -62,6 +64,7 @@ export function Settings() {
   };
 
   const handleLanguageChange = (lng: string) => {
+    localStorage.setItem("language", lng);
     i18n.changeLanguage(lng);
     api.setSettings("language", lng);
   };
@@ -75,6 +78,18 @@ export function Settings() {
       toast.error(t("common.error"));
     } finally {
       setOpeningRepo(false);
+    }
+  };
+
+  const handleOpenGithub = async () => {
+    try {
+      setOpeningGithub(true);
+      await openUrl(GITHUB_URL);
+    } catch (error) {
+      console.error("Failed to open GitHub repository", error);
+      toast.error(t("common.error"));
+    } finally {
+      setOpeningGithub(false);
     }
   };
 
@@ -305,11 +320,13 @@ export function Settings() {
               </div>
             </div>
             <div className="flex gap-2">
-              <button className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[4px] bg-surface-hover hover:bg-surface-active text-tertiary text-[11px] font-medium transition-colors border border-border outline-none">
+              <button
+                type="button"
+                onClick={handleOpenGithub}
+                disabled={openingGithub}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[4px] bg-surface-hover hover:bg-surface-active text-tertiary text-[11px] font-medium transition-colors border border-border outline-none disabled:opacity-60"
+              >
                 <Github className="w-3 h-3" /> GitHub
-              </button>
-              <button className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[4px] bg-surface-hover hover:bg-surface-active text-tertiary text-[11px] font-medium transition-colors border border-border outline-none">
-                <MessageSquare className="w-3 h-3" /> Feedback
               </button>
             </div>
           </div>

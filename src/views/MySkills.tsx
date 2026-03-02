@@ -1,9 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Search,
   LayoutGrid,
   List,
-  FileText,
   CheckCircle2,
   Circle,
   Plus,
@@ -24,11 +23,19 @@ import type { ManagedSkill } from "../lib/tauri";
 
 export function MySkills() {
   const { t } = useTranslation();
-  const { activeScenario, tools, managedSkills: skills, refreshScenarios, refreshManagedSkills } = useApp();
+  const {
+    activeScenario,
+    tools,
+    managedSkills: skills,
+    refreshScenarios,
+    refreshManagedSkills,
+    detailSkillId,
+    openSkillDetailById,
+    closeSkillDetail,
+  } = useApp();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
   const [search, setSearch] = useState("");
-  const [selectedSkill, setSelectedSkill] = useState<ManagedSkill | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ManagedSkill | null>(null);
 
   const installedTools = tools.filter((tool) => tool.installed);
@@ -52,6 +59,11 @@ export function MySkills() {
     return true;
   });
 
+  const selectedSkill = useMemo(
+    () => skills.find((skill) => skill.id === detailSkillId) || null,
+    [detailSkillId, skills]
+  );
+
   const handleSync = async (skill: ManagedSkill) => {
     for (const tool of installedTools) {
       if (!skill.targets.find((target) => target.tool === tool.key)) {
@@ -73,7 +85,7 @@ export function MySkills() {
   const handleDeleteManagedSkill = async () => {
     if (!deleteTarget) return;
     await api.deleteManagedSkill(deleteTarget.id);
-    if (selectedSkill?.id === deleteTarget.id) setSelectedSkill(null);
+    if (selectedSkill?.id === deleteTarget.id) closeSkillDetail();
     toast.success(`${deleteTarget.name} ${t("mySkills.deleted")}`);
     setDeleteTarget(null);
     await Promise.all([refreshManagedSkills(), refreshScenarios()]);
@@ -217,7 +229,7 @@ export function MySkills() {
                     )}
                     <h3
                       className="flex-1 truncate text-[14px] font-semibold text-primary cursor-pointer hover:text-accent-light"
-                      onClick={() => setSelectedSkill(skill)}
+                      onClick={() => openSkillDetailById(skill.id)}
                       title={skill.name}
                     >
                       {skill.name}
@@ -302,7 +314,7 @@ export function MySkills() {
 
                 <h3
                   className="w-[180px] shrink-0 truncate text-[14px] font-semibold text-secondary cursor-pointer hover:text-primary"
-                  onClick={() => setSelectedSkill(skill)}
+                  onClick={() => openSkillDetailById(skill.id)}
                   title={skill.name}
                 >
                   {skill.name}
@@ -365,7 +377,7 @@ export function MySkills() {
         </div>
       )}
 
-      <SkillDetailPanel skill={selectedSkill} onClose={() => setSelectedSkill(null)} />
+      <SkillDetailPanel skill={selectedSkill} onClose={closeSkillDetail} />
       <ConfirmDialog
         open={deleteTarget !== null}
         message={t("mySkills.deleteConfirm", { name: deleteTarget?.name || "" })}

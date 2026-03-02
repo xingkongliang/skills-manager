@@ -76,6 +76,7 @@ pub fn create_scenario(
 ) -> Result<ScenarioDto, String> {
     let now = chrono::Utc::now().timestamp_millis();
     let id = uuid::Uuid::new_v4().to_string();
+    let previous_active_id = store.get_active_scenario_id().map_err(|e| e.to_string())?;
 
     let record = ScenarioRecord {
         id: id.clone(),
@@ -91,10 +92,10 @@ pub fn create_scenario(
         .insert_scenario(&record)
         .map_err(|e| e.to_string())?;
 
-    // If no active scenario, set this as active
-    if store.get_active_scenario_id().ok().flatten().is_none() {
-        store.set_active_scenario(&id).map_err(|e| e.to_string())?;
+    if let Some(previous_id) = previous_active_id.as_deref() {
+        unsync_scenario_skills(&store, previous_id)?;
     }
+    store.set_active_scenario(&id).map_err(|e| e.to_string())?;
 
     Ok(ScenarioDto {
         id,
@@ -123,21 +124,25 @@ pub fn update_scenario(
 
 #[tauri::command]
 pub fn delete_scenario(id: String, store: State<'_, Arc<SkillStore>>) -> Result<(), String> {
-    // Unsync all skills for this scenario first
-    unsync_scenario_skills(&store, &id)?;
+    let was_active = store
+        .get_active_scenario_id()
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        == Some(id.as_str());
+
+    if was_active {
+        unsync_scenario_skills(&store, &id)?;
+    }
 
     store.delete_scenario(&id).map_err(|e| e.to_string())?;
 
-    // If this was the active scenario, clear it
-    if let Ok(Some(active_id)) = store.get_active_scenario_id() {
-        if active_id == id {
-            // Set first remaining scenario as active
-            let remaining = store.get_all_scenarios().map_err(|e| e.to_string())?;
-            if let Some(first) = remaining.first() {
-                store
-                    .set_active_scenario(&first.id)
-                    .map_err(|e| e.to_string())?;
-            }
+    if was_active {
+        let remaining = store.get_all_scenarios().map_err(|e| e.to_string())?;
+        if let Some(first) = remaining.first() {
+            store
+                .set_active_scenario(&first.id)
+                .map_err(|e| e.to_string())?;
+            sync_scenario_skills(&store, &first.id)?;
         }
     }
 
@@ -179,12 +184,13 @@ pub fn add_skill_to_scenario(
         if active_id == scenario_id {
             // Sync to all installed tools
             let adapters = tool_adapters::default_tool_adapters();
+            let configured_mode = store.get_setting("sync_mode").map_err(|e| e.to_string())?;
             if let Ok(Some(skill)) = store.get_skill_by_id(&skill_id) {
                 let source = PathBuf::from(&skill.central_path);
                 for adapter in &adapters {
                     if adapter.is_installed() {
                         let target = adapter.skills_dir().join(&skill.name);
-                        let mode = sync_engine::sync_mode_for_tool(&adapter.key);
+                        let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
                         if sync_engine::sync_skill(&source, &target, mode).is_ok() {
                             let now = chrono::Utc::now().timestamp_millis();
                             let target_record = crate::core::skill_store::SkillTargetRecord {
@@ -257,11 +263,12 @@ pub fn reorder_scenarios(
 
 // ── Internal helpers ──
 
-fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), String> {
+pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), String> {
     let skills = store
         .get_skills_for_scenario(scenario_id)
         .map_err(|e| e.to_string())?;
     let adapters = tool_adapters::default_tool_adapters();
+    let configured_mode = store.get_setting("sync_mode").map_err(|e| e.to_string())?;
 
     for skill in &skills {
         let source = PathBuf::from(&skill.central_path);
@@ -270,7 +277,7 @@ fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), Str
                 continue;
             }
             let target = adapter.skills_dir().join(&skill.name);
-            let mode = sync_engine::sync_mode_for_tool(&adapter.key);
+            let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
             if let Ok(actual_mode) = sync_engine::sync_skill(&source, &target, mode) {
                 let now = chrono::Utc::now().timestamp_millis();
                 let target_record = crate::core::skill_store::SkillTargetRecord {
@@ -291,7 +298,7 @@ fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), Str
     Ok(())
 }
 
-fn unsync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), String> {
+pub(crate) fn unsync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), String> {
     let skill_ids = store
         .get_skill_ids_for_scenario(scenario_id)
         .map_err(|e| e.to_string())?;
