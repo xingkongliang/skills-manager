@@ -10,22 +10,10 @@
     "newScenario": "新建场景",
     "settings": "设置"
   },
-  "topbar": {
-    "supportedSkills": "支持的 Skills"
-  },
-  "search": {
-    "placeholder": "搜索 Skills 名称、描述或来源",
-    "emptyTitle": "全局搜索",
-    "emptyDescription": "输入 Skill 名称、描述或来源。按 Enter 直接打开详情。",
-    "noResultsTitle": "没有匹配的 Skills",
-    "noResultsDescription": "试试更短的名称、描述关键词，或来源类型。",
-    "scenarioCount": "{{count}} 个场景",
-    "enabledInCurrent": "当前场景已启用"
-  },
   "help": {
     "eyebrow": "操作指南",
     "title": "快速上手 Skills Manager",
-    "description": "这几个动作就够用，其他能力都围绕它们展开。",
+    "description": "现在的主流程很简单：选场景、装 Skill、在“我的 Skills”里管理启用和同步。",
     "items": {
       "scenarios": {
         "title": "场景就是一组 Skill 组合",
@@ -43,9 +31,9 @@
         "title": "在“我的 Skills”里管理启用与同步",
         "description": "你可以决定某个 Skill 是否属于当前场景，也可以手动同步或取消同步到各个 Agent。"
       },
-      "search": {
-        "title": "使用 ⌘K 全局搜索",
-        "description": "无论在哪个页面，都可以用顶部搜索或 ⌘K 快速定位 Skill 并直接打开详情。"
+      "settings": {
+        "title": "设置页负责环境和偏好",
+        "description": "在设置里检查 Agent 安装状态、切换主题和语言、修改默认场景，也可以从这里重新打开这份帮助。"
       }
     }
   },
@@ -228,6 +216,7 @@
     "themeDark": "深色",
     "themeSystem": "跟随系统",
     "language": "语言 (Language)",
+    "help": "帮助",
     "about": "关于",
     "version": "Skills Manager 2.2",
     "tagline": "Built for macOS. 极简、高效、无感多场景切换。"

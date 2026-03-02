@@ -10,7 +10,6 @@ interface AppState {
   managedSkills: ManagedSkill[];
   loading: boolean;
   appError: string | null;
-  globalSearchOpen: boolean;
   helpOpen: boolean;
   detailSkillId: string | null;
   refreshAppData: () => Promise<void>;
@@ -19,8 +18,6 @@ interface AppState {
   refreshManagedSkills: () => Promise<void>;
   switchScenario: (id: string) => Promise<void>;
   clearAppError: () => void;
-  openGlobalSearch: () => void;
-  closeGlobalSearch: () => void;
   openHelp: () => void;
   closeHelp: () => void;
   openSkillDetailById: (skillId: string) => void;
@@ -36,7 +33,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [managedSkills, setManagedSkills] = useState<ManagedSkill[]>([]);
   const [loading, setLoading] = useState(true);
   const [appError, setAppError] = useState<string | null>(null);
-  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
 
@@ -117,7 +113,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         managedSkills,
         loading,
         appError,
-        globalSearchOpen,
         helpOpen,
         detailSkillId,
         refreshAppData,
@@ -126,8 +121,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshManagedSkills,
         switchScenario: handleSwitchScenario,
         clearAppError: () => setAppError(null),
-        openGlobalSearch: () => setGlobalSearchOpen(true),
-        closeGlobalSearch: () => setGlobalSearchOpen(false),
         openHelp: () => setHelpOpen(true),
         closeHelp: () => setHelpOpen(false),
         openSkillDetailById: (skillId: string) => setDetailSkillId(skillId),

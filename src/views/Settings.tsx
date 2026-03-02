@@ -14,6 +14,7 @@ import {
   Sun,
   Moon,
   Monitor,
+  BookOpen,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -26,7 +27,7 @@ import type { Theme } from "../hooks/useTheme";
 
 export function Settings() {
   const { t, i18n } = useTranslation();
-  const { tools, scenarios, activeScenario, refreshTools, switchScenario } = useApp();
+  const { tools, scenarios, activeScenario, refreshTools, switchScenario, openHelp } = useApp();
   const { theme, setTheme } = useThemeContext();
   const [syncMode, setSyncMode] = useState("symlink");
   const [defaultScenario, setDefaultScenario] = useState("");
@@ -320,6 +321,13 @@ export function Settings() {
               </div>
             </div>
             <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={openHelp}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[4px] bg-surface-hover hover:bg-surface-active text-tertiary text-[11px] font-medium transition-colors border border-border outline-none"
+              >
+                <BookOpen className="w-3 h-3" /> {t("settings.help")}
+              </button>
               <button
                 type="button"
                 onClick={handleOpenGithub}

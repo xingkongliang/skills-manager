@@ -1,8 +1,8 @@
-import { BookOpen, Command, Layers3, Search, Sparkles, X } from "lucide-react";
+import { BookOpen, Layers3, RefreshCw, Settings2, Sparkles, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useApp } from "../context/AppContext";
 
-const GUIDE_ICONS = [Layers3, Sparkles, BookOpen, Search, Command];
+const GUIDE_ICONS = [Layers3, RefreshCw, BookOpen, Sparkles, Settings2];
 
 export function HelpDialog() {
   const { t } = useTranslation();
@@ -34,7 +34,7 @@ export function HelpDialog() {
         </div>
 
         <div className="space-y-3 px-5 py-5">
-          {(["scenarios", "switching", "install", "sync", "search"] as const).map((key, index) => {
+          {(["scenarios", "switching", "install", "sync", "settings"] as const).map((key, index) => {
             const Icon = GUIDE_ICONS[index];
             return (
               <div

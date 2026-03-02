@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AppProvider } from "./context/AppContext";
 import { ThemeProvider, useThemeContext } from "./context/ThemeContext";
-import { GlobalSearchDialog } from "./components/GlobalSearchDialog";
 import { HelpDialog } from "./components/HelpDialog";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./views/Dashboard";
@@ -40,7 +39,6 @@ function App() {
               <Route path="/settings" element={<Settings />} />
             </Route>
           </Routes>
-          <GlobalSearchDialog />
           <HelpDialog />
         </BrowserRouter>
         <ThemedToaster />

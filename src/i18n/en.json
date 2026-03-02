@@ -10,22 +10,10 @@
     "newScenario": "New Scenario",
     "settings": "Settings"
   },
-  "topbar": {
-    "supportedSkills": "Supported Skills"
-  },
-  "search": {
-    "placeholder": "Search skills by name, description, or source",
-    "emptyTitle": "Global Search",
-    "emptyDescription": "Type a skill name, description, or source. Press Enter to open details.",
-    "noResultsTitle": "No matching skills",
-    "noResultsDescription": "Try a shorter name, a description keyword, or a source label.",
-    "scenarioCount": "{{count}} scenarios",
-    "enabledInCurrent": "Enabled in current scenario"
-  },
   "help": {
     "eyebrow": "Guide",
     "title": "Quick Start for Skills Manager",
-    "description": "These are the core actions. Everything else builds on them.",
+    "description": "The main flow is simple now: pick a scenario, install skills, then manage enablement and sync in My Skills.",
     "items": {
       "scenarios": {
         "title": "A scenario is a curated skill setup",
@@ -43,9 +31,9 @@
         "title": "Manage enablement and sync in My Skills",
         "description": "Decide whether a skill belongs to the current scenario, then sync or unsync it for your agents."
       },
-      "search": {
-        "title": "Use ⌘K for global search",
-        "description": "From any page, use the top search or ⌘K to find a skill fast and open its detail view."
+      "settings": {
+        "title": "Use Settings for environment and preferences",
+        "description": "Check detected agents, change theme or language, set the default scenario, and reopen this guide from the Settings page."
       }
     }
   },
@@ -228,6 +216,7 @@
     "themeDark": "Dark",
     "themeSystem": "System",
     "language": "Language",
+    "help": "Help",
     "about": "About",
     "version": "Skills Manager 2.2",
     "tagline": "Built for macOS. Minimal, efficient, seamless multi-scenario switching."
