@@ -66,7 +66,7 @@ npm run tauri:build
 下载应用后如果出现此提示，在终端执行以下命令后重新打开即可：
 
 ```bash
-xattr -cr /Applications/Skills\ Manager.app
+xattr -cr /Applications/skills-manager.app
 ```
 
 如果 `.app` 不在 `/Applications`，请替换为实际路径。

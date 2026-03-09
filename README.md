@@ -66,7 +66,7 @@ npm run tauri:build
 If you see this error after downloading the app, run the following command in Terminal and then open the app again:
 
 ```bash
-xattr -cr /Applications/Skills\ Manager.app
+xattr -cr /Applications/skills-manager.app
 ```
 
 Replace the path with wherever you placed the `.app` file if it's not in `/Applications`.

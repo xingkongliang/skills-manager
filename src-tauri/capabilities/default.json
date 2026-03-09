@@ -11,6 +11,7 @@
     "dialog:default",
     "dialog:allow-open",
     "shell:default",
-    "opener:default"
+    "opener:default",
+    "updater:default"
   ]
 }

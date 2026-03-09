@@ -72,10 +72,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           tagName: v__VERSION__
           releaseName: 'Skills Manager v__VERSION__'
           releaseBody: 'See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.'
           releaseDraft: true
           prerelease: false
+          updaterJsonKeepUniversal: true
           args: --target ${{ matrix.target }}

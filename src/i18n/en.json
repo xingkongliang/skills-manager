@@ -225,6 +225,9 @@
     "updateAvailable": "New version {{version}} available!",
     "noUpdate": "You're on the latest version.",
     "download": "Download",
+    "installUpdate": "Install Update",
+    "installing": "Installing…",
+    "restartToApply": "Update installed. Restart the app to apply.",
     "updateError": "Failed to check for updates."
   },
   "common": {

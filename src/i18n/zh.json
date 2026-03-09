@@ -225,6 +225,9 @@
     "updateAvailable": "发现新版本 {{version}}！",
     "noUpdate": "当前已是最新版本。",
     "download": "下载",
+    "installUpdate": "安装更新",
+    "installing": "安装中…",
+    "restartToApply": "更新已安装，重启应用即可生效。",
     "updateError": "检查更新失败。"
   },
   "common": {

@@ -20,12 +20,15 @@ import {
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { check } from "@tauri-apps/plugin-updater";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
 import * as api from "../lib/tauri";
 import type { AppUpdateInfo } from "../lib/tauri";
 import type { Theme } from "../hooks/useTheme";
+
+const IS_WINDOWS = navigator.userAgent.includes("Windows");
 
 export function Settings() {
   const { t, i18n } = useTranslation();
@@ -39,6 +42,7 @@ export function Settings() {
   const [centralRepoPath, setCentralRepoPath] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [installing, setInstalling] = useState(false);
   const GITHUB_URL = "https://github.com/xingkongliang/skills-manager";
 
   useEffect(() => {
@@ -115,6 +119,24 @@ export function Settings() {
       toast.error(t("settings.updateError"));
     } finally {
       setCheckingUpdate(false);
+    }
+  };
+
+  const handleAutoUpdate = async () => {
+    setInstalling(true);
+    try {
+      const update = await check();
+      if (update) {
+        toast.info(t("settings.installing"));
+        await update.downloadAndInstall();
+        toast.success(t("settings.restartToApply"));
+      } else {
+        toast.success(t("settings.noUpdate"));
+      }
+    } catch {
+      toast.error(t("settings.updateError"));
+    } finally {
+      setInstalling(false);
     }
   };
 
@@ -356,13 +378,29 @@ export function Settings() {
             </div>
             <div className="flex gap-2">
               {updateInfo?.has_update ? (
-                <button
-                  type="button"
-                  onClick={() => openUrl(updateInfo.release_url)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[4px] bg-accent text-white text-[13px] font-medium transition-colors border border-accent hover:opacity-90 outline-none"
-                >
-                  <Download className="w-3 h-3" /> {t("settings.download")}
-                </button>
+                IS_WINDOWS ? (
+                  <button
+                    type="button"
+                    onClick={handleAutoUpdate}
+                    disabled={installing}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[4px] bg-accent text-white text-[13px] font-medium transition-colors border border-accent hover:opacity-90 outline-none disabled:opacity-60"
+                  >
+                    {installing ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Download className="w-3 h-3" />
+                    )}
+                    {installing ? t("settings.installing") : t("settings.installUpdate")}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => openUrl(updateInfo.release_url)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[4px] bg-accent text-white text-[13px] font-medium transition-colors border border-accent hover:opacity-90 outline-none"
+                  >
+                    <Download className="w-3 h-3" /> {t("settings.download")}
+                  </button>
+                )
               ) : (
                 <button
                   type="button"
