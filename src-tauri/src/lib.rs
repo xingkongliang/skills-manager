@@ -46,6 +46,8 @@ pub fn run() {
             commands::skills::check_all_skill_updates,
             commands::skills::update_skill,
             commands::skills::reimport_local_skill,
+            commands::skills::get_all_tags,
+            commands::skills::set_skill_tags,
             // Sync
             commands::sync::sync_skill_to_tool,
             commands::sync::unsync_skill_from_tool,

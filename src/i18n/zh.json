@@ -124,6 +124,21 @@
       "all": "全部",
       "enabled": "当前场景已启用",
       "available": "当前场景未启用"
+    },
+    "sourceFilter": {
+      "all": "全部来源",
+      "local": "本地",
+      "import": "导入",
+      "git": "Git",
+      "skillssh": "skills.sh"
+    },
+    "tags": {
+      "filter": "标签",
+      "allTags": "全部标签",
+      "addTag": "添加标签...",
+      "noTags": "无标签",
+      "tagAdded": "标签已添加",
+      "tagsUpdated": "标签已更新"
     }
   },
   "install": {

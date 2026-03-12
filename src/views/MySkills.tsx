@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Search,
   LayoutGrid,
@@ -15,6 +15,8 @@ import {
   GitBranch,
   ArrowUpCircle,
   Loader2,
+  X,
+  Plus,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -43,6 +45,9 @@ export function MySkills() {
   } = useApp();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
+  const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
+  const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
+  const [allTags, setAllTags] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ManagedSkill | null>(null);
   const [syncingSkillId, setSyncingSkillId] = useState<string | null>(null);
@@ -52,6 +57,9 @@ export function MySkills() {
   const [gitStatus, setGitStatus] = useState<GitBackupStatus | null>(null);
   const [gitLoading, setGitLoading] = useState<string | null>(null); // "start" | "sync"
   const [gitRemoteConfig, setGitRemoteConfig] = useState("");
+  const [tagEditSkillId, setTagEditSkillId] = useState<string | null>(null);
+  const [tagInput, setTagInput] = useState("");
+  const tagInputRef = useRef<HTMLInputElement>(null);
 
   const installedTools = tools.filter((tool) => tool.installed);
   const activeScenarioName = activeScenario?.name || t("mySkills.currentScenarioFallback");
@@ -60,19 +68,56 @@ export function MySkills() {
     ? skills.filter((skill) => skill.scenario_ids.includes(activeScenario.id)).length
     : 0;
 
-  const filtered = skills.filter((skill) => {
-    const matchesSearch =
-      skill.name.toLowerCase().includes(search.toLowerCase()) ||
-      (skill.description || "").toLowerCase().includes(search.toLowerCase());
+  const refreshAllTags = async () => {
+    try {
+      const tags = await api.getAllTags();
+      setAllTags(tags);
+    } catch {
+      // not critical
+    }
+  };
 
-    if (!matchesSearch) return false;
-    if (!activeScenario) return true;
+  useEffect(() => {
+    refreshAllTags();
+  }, [skills]);
 
-    const enabledInScenario = skill.scenario_ids.includes(activeScenario.id);
-    if (filterMode === "enabled") return enabledInScenario;
-    if (filterMode === "available") return !enabledInScenario;
-    return true;
-  });
+  const toggleFilter = (set: Set<string>, value: string): Set<string> => {
+    const next = new Set(set);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    return next;
+  };
+
+  const filtered = useMemo(() => {
+    const result = skills.filter((skill) => {
+      const matchesSearch =
+        skill.name.toLowerCase().includes(search.toLowerCase()) ||
+        (skill.description || "").toLowerCase().includes(search.toLowerCase());
+      if (!matchesSearch) return false;
+
+      if (sourceFilters.size > 0 && !sourceFilters.has(skill.source_type)) return false;
+
+      if (tagFilters.size > 0 && !skill.tags.some((t) => tagFilters.has(t))) return false;
+
+      if (!activeScenario) return true;
+
+      const enabledInScenario = skill.scenario_ids.includes(activeScenario.id);
+      if (filterMode === "enabled") return enabledInScenario;
+      if (filterMode === "available") return !enabledInScenario;
+      return true;
+    });
+
+    if (activeScenario) {
+      result.sort((a, b) => {
+        const aEnabled = a.scenario_ids.includes(activeScenario.id) ? 0 : 1;
+        const bEnabled = b.scenario_ids.includes(activeScenario.id) ? 0 : 1;
+        if (aEnabled !== bEnabled) return aEnabled - bEnabled;
+        return a.name.localeCompare(b.name);
+      });
+    }
+
+    return result;
+  }, [skills, search, sourceFilters, tagFilters, filterMode, activeScenario]);
 
   const selectedSkill = useMemo(
     () => skills.find((skill) => skill.id === detailSkillId) || null,
@@ -252,6 +297,32 @@ export function MySkills() {
       await refreshManagedSkills();
     } finally {
       setUpdatingSkillId(null);
+    }
+  };
+
+  const handleAddTag = async (skill: ManagedSkill) => {
+    const trimmed = tagInput.trim();
+    if (!trimmed || skill.tags.includes(trimmed)) {
+      setTagInput("");
+      return;
+    }
+    try {
+      await api.setSkillTags(skill.id, [...skill.tags, trimmed]);
+      toast.success(t("mySkills.tags.tagAdded"));
+      setTagInput("");
+      await refreshManagedSkills();
+    } catch (e: any) {
+      toast.error(e.toString());
+    }
+  };
+
+  const handleRemoveTag = async (skill: ManagedSkill, tagToRemove: string) => {
+    try {
+      await api.setSkillTags(skill.id, skill.tags.filter((t) => t !== tagToRemove));
+      toast.success(t("mySkills.tags.tagsUpdated"));
+      await refreshManagedSkills();
+    } catch (e: any) {
+      toast.error(e.toString());
     }
   };
 
@@ -459,6 +530,7 @@ export function MySkills() {
               </button>
             ))}
           </div>
+
         </div>
 
         <div className="app-segmented">
@@ -524,6 +596,64 @@ export function MySkills() {
             <List className="h-4 w-4" />
           </button>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1 px-1 -mt-4 -mb-4">
+        {(["local", "import", "git", "skillssh"] as const).map((src) => (
+          <button
+            key={src}
+            onClick={() => setSourceFilters(toggleFilter(sourceFilters, src))}
+            className={cn(
+              "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+              sourceFilters.has(src)
+                ? "bg-accent text-white dark:bg-accent dark:text-white"
+                : "bg-surface-hover text-muted hover:text-secondary"
+            )}
+          >
+            {t(`mySkills.sourceFilter.${src}`)}
+          </button>
+        ))}
+        {allTags.length > 0 && (
+          <>
+            <span className="mx-0.5 h-3 w-px bg-border-subtle" />
+            {allTags.map((tag, i) => {
+              const colors = [
+                "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+                "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+                "bg-violet-500/15 text-violet-600 dark:text-violet-400",
+                "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+                "bg-rose-500/15 text-rose-600 dark:text-rose-400",
+                "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400",
+                "bg-orange-500/15 text-orange-600 dark:text-orange-400",
+                "bg-pink-500/15 text-pink-600 dark:text-pink-400",
+              ];
+              const activeColors = [
+                "bg-blue-500 text-white dark:bg-blue-500",
+                "bg-emerald-500 text-white dark:bg-emerald-500",
+                "bg-violet-500 text-white dark:bg-violet-500",
+                "bg-amber-500 text-white dark:bg-amber-500",
+                "bg-rose-500 text-white dark:bg-rose-500",
+                "bg-cyan-500 text-white dark:bg-cyan-500",
+                "bg-orange-500 text-white dark:bg-orange-500",
+                "bg-pink-500 text-white dark:bg-pink-500",
+              ];
+              const colorIndex = i % colors.length;
+              const isActive = tagFilters.has(tag);
+              return (
+                <button
+                  key={tag}
+                  onClick={() => setTagFilters(toggleFilter(tagFilters, tag))}
+                  className={cn(
+                    "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                    isActive ? activeColors[colorIndex] : colors[colorIndex]
+                  )}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </>
+        )}
       </div>
 
       {filtered.length === 0 ? (
@@ -618,6 +748,46 @@ export function MySkills() {
                         </span>
                       </div>
                     )}
+                    <div className="mt-2 flex flex-wrap items-center gap-1">
+                      {skill.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="group/tag inline-flex items-center gap-0.5 rounded-full bg-accent-bg px-2 py-0.5 text-[11px] font-medium text-accent-light"
+                        >
+                          {tag}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleRemoveTag(skill, tag); }}
+                            className="hidden group-hover/tag:inline-flex rounded-full p-0 text-accent-light/60 hover:text-accent-light"
+                          >
+                            <X className="h-2.5 w-2.5" />
+                          </button>
+                        </span>
+                      ))}
+                      {tagEditSkillId === skill.id ? (
+                        <input
+                          ref={tagInputRef}
+                          type="text"
+                          value={tagInput}
+                          onChange={(e) => setTagInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { handleAddTag(skill); }
+                            if (e.key === "Escape") { setTagEditSkillId(null); setTagInput(""); }
+                          }}
+                          onBlur={() => { if (tagInput.trim()) handleAddTag(skill); else { setTagEditSkillId(null); setTagInput(""); } }}
+                          placeholder={t("mySkills.tags.addTag")}
+                          className="h-5 w-16 rounded-full border border-border-subtle bg-transparent px-1.5 text-[11px] text-secondary outline-none focus:border-accent"
+                          autoFocus
+                        />
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setTagEditSkillId(skill.id); setTagInput(""); }}
+                          className="inline-flex items-center rounded-full p-0.5 text-faint transition-colors hover:text-muted opacity-0 group-hover:opacity-100"
+                          title={t("mySkills.tags.addTag")}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="mt-auto flex items-center justify-between gap-2 border-t border-border-subtle px-3.5 py-2.5">
@@ -679,6 +849,17 @@ export function MySkills() {
                 <p className="min-w-0 flex-1 truncate text-[13px] text-muted">
                   {skill.description || "—"}
                 </p>
+
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {skill.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center rounded-full bg-accent-bg px-1.5 py-0.5 text-[11px] font-medium text-accent-light"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
 
                 <div className="flex shrink-0 items-center gap-2.5">
                   <span className="inline-flex items-center gap-1 text-[13px] text-muted">

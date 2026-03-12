@@ -27,6 +27,7 @@ export interface ManagedSkill {
   status: string;
   targets: SkillTarget[];
   scenario_ids: string[];
+  tags: string[];
 }
 
 export interface SkillTarget {
@@ -149,6 +150,11 @@ export const updateSkill = (skillId: string) =>
 
 export const reimportLocalSkill = (skillId: string) =>
   invoke<ManagedSkill>("reimport_local_skill", { skillId });
+
+export const getAllTags = () => invoke<string[]>("get_all_tags");
+
+export const setSkillTags = (skillId: string, tags: string[]) =>
+  invoke<void>("set_skill_tags", { skillId, tags });
 
 // ── Sync ──
 

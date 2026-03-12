@@ -29,6 +29,7 @@ pub struct ManagedSkillDto {
     pub status: String,
     pub targets: Vec<TargetDto>,
     pub scenario_ids: Vec<String>,
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,9 +75,10 @@ struct GitSkillSource {
 pub fn get_managed_skills(store: State<'_, Arc<SkillStore>>) -> Result<Vec<ManagedSkillDto>, String> {
     let skills = store.get_all_skills().map_err(|e| e.to_string())?;
     let all_targets = store.get_all_targets().map_err(|e| e.to_string())?;
+    let tags_map = store.get_tags_map().map_err(|e| e.to_string())?;
     Ok(skills
         .into_iter()
-        .map(|skill| managed_skill_to_dto(&store, skill, &all_targets))
+        .map(|skill| managed_skill_to_dto(&store, skill, &all_targets, &tags_map))
         .collect())
 }
 
@@ -89,10 +91,11 @@ pub fn get_skills_for_scenario(
         .get_skills_for_scenario(&scenario_id)
         .map_err(|e| e.to_string())?;
     let all_targets = store.get_all_targets().map_err(|e| e.to_string())?;
+    let tags_map = store.get_tags_map().map_err(|e| e.to_string())?;
 
     Ok(skills
         .into_iter()
-        .map(|skill| managed_skill_to_dto(&store, skill, &all_targets))
+        .map(|skill| managed_skill_to_dto(&store, skill, &all_targets, &tags_map))
         .collect())
 }
 
@@ -452,6 +455,7 @@ fn managed_skill_to_dto(
     store: &SkillStore,
     skill: SkillRecord,
     all_targets: &[SkillTargetRecord],
+    tags_map: &std::collections::HashMap<String, Vec<String>>,
 ) -> ManagedSkillDto {
     let targets = all_targets
         .iter()
@@ -468,6 +472,7 @@ fn managed_skill_to_dto(
         .collect();
 
     let scenario_ids = store.get_scenarios_for_skill(&skill.id).unwrap_or_default();
+    let tags = tags_map.get(&skill.id).cloned().unwrap_or_default();
 
     ManagedSkillDto {
         id: skill.id,
@@ -487,6 +492,7 @@ fn managed_skill_to_dto(
         status: skill.status,
         targets,
         scenario_ids,
+        tags,
     }
 }
 
@@ -496,7 +502,8 @@ fn managed_skill_by_id(store: &SkillStore, skill_id: &str) -> Result<ManagedSkil
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Skill not found".to_string())?;
     let all_targets = store.get_all_targets().map_err(|e| e.to_string())?;
-    Ok(managed_skill_to_dto(store, skill, &all_targets))
+    let tags_map = store.get_tags_map().map_err(|e| e.to_string())?;
+    Ok(managed_skill_to_dto(store, skill, &all_targets, &tags_map))
 }
 
 fn store_installed_skill(
@@ -789,6 +796,20 @@ fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), String>
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_all_tags(store: State<'_, Arc<SkillStore>>) -> Result<Vec<String>, String> {
+    store.get_all_tags().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_skill_tags(
+    skill_id: String,
+    tags: Vec<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), String> {
+    store.set_tags_for_skill(&skill_id, &tags).map_err(|e| e.to_string())
 }
 
 fn remove_path_if_exists(path: &Path) -> Result<(), String> {

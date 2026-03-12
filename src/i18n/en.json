@@ -124,6 +124,21 @@
       "all": "All",
       "enabled": "Enabled",
       "available": "Available"
+    },
+    "sourceFilter": {
+      "all": "All Sources",
+      "local": "Local",
+      "import": "Imported",
+      "git": "Git",
+      "skillssh": "skills.sh"
+    },
+    "tags": {
+      "filter": "Tags",
+      "allTags": "All Tags",
+      "addTag": "Add tag...",
+      "noTags": "No tags",
+      "tagAdded": "Tag added",
+      "tagsUpdated": "Tags updated"
     }
   },
   "install": {

@@ -168,6 +168,13 @@ impl SkillStore {
                 created_at INTEGER,
                 updated_at INTEGER
             );
+
+            CREATE TABLE IF NOT EXISTS skill_tags (
+                skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+                tag TEXT NOT NULL,
+                PRIMARY KEY(skill_id, tag)
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_tags_tag ON skill_tags(tag);
             ",
         )?;
 
@@ -733,6 +740,43 @@ impl SkillStore {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    // ── Skill Tags ──
+
+    pub fn get_all_tags(&self) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT DISTINCT tag FROM skill_tags ORDER BY tag")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn set_tags_for_skill(&self, skill_id: &str, tags: &[String]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM skill_tags WHERE skill_id = ?1", params![skill_id])?;
+        for tag in tags {
+            let trimmed = tag.trim();
+            if !trimmed.is_empty() {
+                conn.execute(
+                    "INSERT OR IGNORE INTO skill_tags (skill_id, tag) VALUES (?1, ?2)",
+                    params![skill_id, trimmed],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_tags_map(&self) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT skill_id, tag FROM skill_tags ORDER BY tag")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for row in rows.filter_map(|r| r.ok()) {
+            map.entry(row.0).or_default().push(row.1);
+        }
+        Ok(map)
     }
 }
 
