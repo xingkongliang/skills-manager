@@ -15,8 +15,11 @@ pub fn run() {
     );
     initialize_startup_scenario(&store).expect("Failed to initialize startup scenario");
 
+    let cancel_registry = Arc::new(core::install_cancel::InstallCancelRegistry::new());
+
     tauri::Builder::default()
         .manage(store)
+        .manage(cancel_registry)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -48,6 +51,7 @@ pub fn run() {
             commands::skills::reimport_local_skill,
             commands::skills::get_all_tags,
             commands::skills::set_skill_tags,
+            commands::skills::cancel_install,
             // Sync
             commands::sync::sync_skill_to_tool,
             commands::sync::unsync_skill_from_tool,

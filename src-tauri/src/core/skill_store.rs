@@ -279,6 +279,23 @@ impl SkillStore {
         Ok(rows.next().and_then(|r| r.ok()))
     }
 
+    pub fn get_skill_by_source_ref(
+        &self,
+        source_type: &str,
+        source_ref: &str,
+    ) -> Result<Option<SkillRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, source_type, source_ref, source_ref_resolved, source_subpath,
+                    source_branch, source_revision, remote_revision, central_path, content_hash, enabled,
+                    created_at, updated_at, status, update_status, last_checked_at, last_check_error
+             FROM skills
+             WHERE source_type = ?1 AND source_ref = ?2",
+        )?;
+        let mut rows = stmt.query_map(params![source_type, source_ref], map_skill_row)?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
     pub fn update_skill_source_metadata(
         &self,
         id: &str,
@@ -352,6 +369,49 @@ impl SkillStore {
             params![
                 name,
                 description,
+                source_revision,
+                remote_revision,
+                content_hash,
+                now,
+                update_status,
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_skill_after_reinstall(
+        &self,
+        id: &str,
+        name: &str,
+        description: Option<&str>,
+        source_type: &str,
+        source_ref: Option<&str>,
+        source_ref_resolved: Option<&str>,
+        source_subpath: Option<&str>,
+        source_branch: Option<&str>,
+        source_revision: Option<&str>,
+        remote_revision: Option<&str>,
+        content_hash: Option<&str>,
+        update_status: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE skills
+             SET name = ?1, description = ?2, source_type = ?3, source_ref = ?4, source_ref_resolved = ?5,
+                 source_subpath = ?6, source_branch = ?7, source_revision = ?8, remote_revision = ?9,
+                 content_hash = ?10, updated_at = ?11, status = 'ok', update_status = ?12, last_checked_at = ?11,
+                 last_check_error = NULL
+             WHERE id = ?13",
+            params![
+                name,
+                description,
+                source_type,
+                source_ref,
+                source_ref_resolved,
+                source_subpath,
+                source_branch,
                 source_revision,
                 remote_revision,
                 content_hash,

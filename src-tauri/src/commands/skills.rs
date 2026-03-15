@@ -5,7 +5,10 @@ use tauri::State;
 use walkdir::WalkDir;
 
 use crate::core::{
-    git_fetcher, installer,
+    central_repo,
+    git_fetcher,
+    install_cancel::InstallCancelRegistry,
+    installer,
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
     sync_engine,
 };
@@ -69,6 +72,23 @@ struct GitSkillSource {
     branch: Option<String>,
     subpath: Option<String>,
     locator_skill_id: Option<String>,
+}
+
+struct CancelRegistrationGuard {
+    registry: Arc<InstallCancelRegistry>,
+    key: String,
+}
+
+impl CancelRegistrationGuard {
+    fn new(registry: Arc<InstallCancelRegistry>, key: String) -> Self {
+        Self { registry, key }
+    }
+}
+
+impl Drop for CancelRegistrationGuard {
+    fn drop(&mut self) {
+        self.registry.remove(&self.key);
+    }
 }
 
 #[tauri::command]
@@ -233,9 +253,15 @@ pub async fn install_git(
     repo_url: String,
     name: Option<String>,
     store: State<'_, Arc<SkillStore>>,
+    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let store = store.inner().clone();
+    let registry = cancel_registry.inner().clone();
+    let cancel_key = repo_url.clone();
+    let cancel = registry.register(&cancel_key);
+    let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key);
+
     tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
         let emit_progress = |phase: &str| {
@@ -248,7 +274,7 @@ pub async fn install_git(
         emit_progress("cloning");
         let parsed = git_fetcher::parse_git_source(&repo_url);
         let temp_dir =
-            git_fetcher::clone_repo_ref(&parsed.clone_url, parsed.branch.as_deref()).map_err(|e| e.to_string())?;
+            git_fetcher::clone_repo_ref(&parsed.clone_url, parsed.branch.as_deref(), Some(&cancel)).map_err(|e| e.to_string())?;
 
         emit_progress("installing");
         let install_result = (|| -> Result<(installer::InstallResult, InstallSourceMetadata), String> {
@@ -287,9 +313,15 @@ pub async fn install_from_skillssh(
     source: String,
     skill_id: String,
     store: State<'_, Arc<SkillStore>>,
+    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let store = store.inner().clone();
+    let registry = cancel_registry.inner().clone();
+    let cancel_key_owned = format!("{}/{}", source, skill_id);
+    let cancel = registry.register(&cancel_key_owned);
+    let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key_owned);
+
     tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
         let skill_key = format!("{}/{}", source, skill_id);
@@ -302,17 +334,21 @@ pub async fn install_from_skillssh(
 
         emit_progress("cloning");
         let repo_url = format!("https://github.com/{}.git", source);
-        let temp_dir = git_fetcher::clone_repo_ref(&repo_url, None).map_err(|e| e.to_string())?;
+        let temp_dir = git_fetcher::clone_repo_ref(&repo_url, None, Some(&cancel)).map_err(|e| e.to_string())?;
 
         emit_progress("installing");
         let install_result = (|| -> Result<(installer::InstallResult, InstallSourceMetadata), String> {
             let skill_dir = resolve_skill_dir(&temp_dir, None, Some(&skill_id))?;
             let revision = git_fetcher::get_head_revision(&temp_dir).map_err(|e| e.to_string())?;
+            let source_ref = format!("{}/{}", source, skill_id);
+            let (install_name, destination) =
+                resolve_skillssh_install_target(&store, &source_ref, &skill_id)?;
             let result =
-                installer::install_from_git_dir(&skill_dir, Some(&skill_id)).map_err(|e| e.to_string())?;
+                installer::install_skill_dir_to_destination(&skill_dir, &install_name, &destination)
+                    .map_err(|e| e.to_string())?;
             let metadata = InstallSourceMetadata {
                 source_type: "skillssh".to_string(),
-                source_ref: Some(format!("{}/{}", source, skill_id)),
+                source_ref: Some(source_ref),
                 source_ref_resolved: Some(repo_url.clone()),
                 source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
                 source_branch: None,
@@ -390,8 +426,14 @@ pub async fn check_all_skill_updates(
 pub async fn update_skill(
     skill_id: String,
     store: State<'_, Arc<SkillStore>>,
+    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
 ) -> Result<ManagedSkillDto, String> {
     let store = store.inner().clone();
+    let registry = cancel_registry.inner().clone();
+    let cancel_key = format!("update:{}", skill_id);
+    let cancel = registry.register(&cancel_key);
+    let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key);
+
     tauri::async_runtime::spawn_blocking(move || {
         let skill = store
             .get_skill_by_id(&skill_id)
@@ -423,7 +465,7 @@ pub async fn update_skill(
             .map_err(|e| e.to_string())?;
 
         let temp_dir =
-            git_fetcher::clone_repo_ref(&git_source.clone_url, git_source.branch.as_deref()).map_err(|e| e.to_string())?;
+            git_fetcher::clone_repo_ref(&git_source.clone_url, git_source.branch.as_deref(), Some(&cancel)).map_err(|e| e.to_string())?;
         let update_result = (|| -> Result<(), String> {
             git_fetcher::checkout_revision(&temp_dir, &remote_revision).map_err(|e| e.to_string())?;
             let skill_dir = resolve_skill_dir(
@@ -605,6 +647,38 @@ fn store_installed_skill(
     active_scenario_id: Option<&str>,
 ) -> Result<String, String> {
     let now = chrono::Utc::now().timestamp_millis();
+    let central_path = result.central_path.to_string_lossy().to_string();
+
+    if let Some(existing) = store
+        .get_skill_by_central_path(&central_path)
+        .map_err(|e| e.to_string())?
+    {
+        store
+            .update_skill_after_reinstall(
+                &existing.id,
+                &result.name,
+                result.description.as_deref(),
+                &metadata.source_type,
+                metadata.source_ref.as_deref(),
+                metadata.source_ref_resolved.as_deref(),
+                metadata.source_subpath.as_deref(),
+                metadata.source_branch.as_deref(),
+                metadata.source_revision.as_deref(),
+                metadata.remote_revision.as_deref(),
+                Some(&result.content_hash),
+                &metadata.update_status,
+            )
+            .map_err(|e| e.to_string())?;
+
+        if let Some(scenario_id) = active_scenario_id {
+            store
+                .add_skill_to_scenario(scenario_id, &existing.id)
+                .map_err(|e| e.to_string())?;
+        }
+
+        return Ok(existing.id);
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
 
     let record = SkillRecord {
@@ -618,7 +692,7 @@ fn store_installed_skill(
         source_branch: metadata.source_branch.clone(),
         source_revision: metadata.source_revision.clone(),
         remote_revision: metadata.remote_revision.clone(),
-        central_path: result.central_path.to_string_lossy().to_string(),
+        central_path,
         content_hash: Some(result.content_hash.clone()),
         enabled: true,
         created_at: now,
@@ -823,6 +897,45 @@ fn resolve_skill_dir(
     git_fetcher::find_skill_dir(repo_dir, skill_id).map_err(|e| e.to_string())
 }
 
+fn resolve_skillssh_install_target(
+    store: &SkillStore,
+    source_ref: &str,
+    skill_id: &str,
+) -> Result<(String, PathBuf), String> {
+    if let Some(existing) = store
+        .get_skill_by_source_ref("skillssh", source_ref)
+        .map_err(|e| e.to_string())?
+    {
+        return Ok((existing.name, PathBuf::from(existing.central_path)));
+    }
+
+    let base_name = skill_id.trim();
+    if base_name.is_empty() {
+        return Err("Skill id is empty".to_string());
+    }
+
+    let mut attempt = 1;
+    loop {
+        let candidate_name = if attempt == 1 {
+            base_name.to_string()
+        } else {
+            format!("{base_name}-{attempt}")
+        };
+        let candidate_path = central_repo::skills_dir().join(&candidate_name);
+        let candidate_path_str = candidate_path.to_string_lossy().to_string();
+        let occupied = store
+            .get_skill_by_central_path(&candidate_path_str)
+            .map_err(|e| e.to_string())?
+            .is_some();
+
+        if !occupied {
+            return Ok((candidate_name, candidate_path));
+        }
+
+        attempt += 1;
+    }
+}
+
 fn staged_path_for(central_path: &str) -> PathBuf {
     let path = PathBuf::from(central_path);
     let file_name = path
@@ -912,6 +1025,14 @@ pub async fn set_skill_tags(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn cancel_install(
+    key: String,
+    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
+) -> Result<bool, String> {
+    Ok(cancel_registry.cancel(&key))
 }
 
 fn remove_path_if_exists(path: &Path) -> Result<(), String> {

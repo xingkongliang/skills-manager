@@ -177,12 +177,15 @@
     "loadingMore": "Loading more...",
     "installing": "Installing...",
     "installed": "Installed",
+    "cancel": "Cancel",
     "toast": {
       "cloning": "Cloning repository...",
       "installing": "Installing {{name}}...",
       "syncing": "Syncing to tools...",
       "success": "{{name}} installed successfully",
-      "done": "Done"
+      "done": "Done",
+      "cancelled": "Installation cancelled",
+      "timeout": "Installation timed out — check your network"
     },
     "local": {
       "title": "Import a local skill source",

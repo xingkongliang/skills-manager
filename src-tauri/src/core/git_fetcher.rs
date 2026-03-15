@@ -3,6 +3,11 @@ use anyhow::{Context, Result};
 use git2::{Direction, Repository};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+const CLONE_TIMEOUT_SECS: u64 = 120;
 
 /// Create a `Command` for git that hides the console window on Windows.
 fn git_command() -> Command {
@@ -36,8 +41,14 @@ pub fn parse_git_source(url: &str) -> ParsedGitSource {
     }
 }
 
-pub fn clone_repo_ref(url: &str, branch: Option<&str>) -> Result<PathBuf> {
-    let temp_dir = std::env::temp_dir().join(format!("skills-manager-clone-{}", uuid::Uuid::new_v4()));
+pub fn clone_repo_ref(
+    url: &str,
+    branch: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<PathBuf> {
+    let temp_dir =
+        std::env::temp_dir().join(format!("skills-manager-clone-{}", uuid::Uuid::new_v4()));
+    let timeout = Duration::from_secs(CLONE_TIMEOUT_SECS);
 
     // Try system git first (faster, supports SSH)
     let mut command = git_command();
@@ -45,16 +56,41 @@ pub fn clone_repo_ref(url: &str, branch: Option<&str>) -> Result<PathBuf> {
     if let Some(branch) = branch {
         command.arg("--branch").arg(branch);
     }
-    let status = command
+    let child = command
         .arg(url)
         .arg(&temp_dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status();
+        .spawn();
 
-    if let Ok(s) = status {
-        if s.success() {
-            return Ok(temp_dir);
+    if let Ok(mut child) = child {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if cancel.map_or(false, |c| c.load(Ordering::SeqCst)) {
+                let _ = child.kill();
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                anyhow::bail!("Installation cancelled");
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    if status.success() {
+                        return Ok(temp_dir);
+                    }
+                    break; // fall through to git2
+                }
+                Ok(None) => {
+                    if Instant::now() > deadline {
+                        let _ = child.kill();
+                        let _ = std::fs::remove_dir_all(&temp_dir);
+                        anyhow::bail!(
+                            "Git clone timed out after {}s — check your network connection",
+                            CLONE_TIMEOUT_SECS
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                Err(_) => break,
+            }
         }
     }
 
@@ -63,6 +99,20 @@ pub fn clone_repo_ref(url: &str, branch: Option<&str>) -> Result<PathBuf> {
     if let Some(branch) = branch {
         builder.branch(branch);
     }
+
+    // git2: use transfer_progress callback for cancel checking
+    let cancel_clone = cancel.cloned();
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.transfer_progress(move |_progress| {
+        if let Some(ref c) = cancel_clone {
+            return !c.load(Ordering::SeqCst);
+        }
+        true
+    });
+    let mut fetch_opts = git2::FetchOptions::new();
+    fetch_opts.remote_callbacks(callbacks);
+    builder.fetch_options(fetch_opts);
+
     builder
         .clone(url, &temp_dir)
         .with_context(|| format!("Failed to clone {}", url))?;

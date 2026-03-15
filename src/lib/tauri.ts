@@ -136,6 +136,9 @@ export const installGit = (repoUrl: string, name?: string) =>
 export const installFromSkillssh = (source: string, skillId: string) =>
   invoke<void>("install_from_skillssh", { source, skillId });
 
+export const cancelInstall = (key: string) =>
+  invoke<boolean>("cancel_install", { key });
+
 export const checkSkillUpdate = (skillId: string, force?: boolean) =>
   invoke<ManagedSkill>("check_skill_update", {
     skillId,

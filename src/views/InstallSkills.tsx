@@ -27,6 +27,7 @@ import type { ScanResult, SkillsShSkill } from "../lib/tauri";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSearchParams } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
 import { StatusBanner } from "../components/StatusBanner";
 
 const MARKET_PAGE_SIZE = 24;
@@ -54,6 +55,7 @@ export function InstallSkills() {
   const [gitUrl, setGitUrl] = useState("");
   const [gitName, setGitName] = useState("");
   const [gitLoading, setGitLoading] = useState(false);
+  const [gitCancelKey, setGitCancelKey] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -258,19 +260,44 @@ export function InstallSkills() {
 
   const handleInstallSkillssh = async (skill: SkillsShSkill) => {
     const displayName = skill.name || skill.skill_id;
+    const cancelKey = `${skill.source}/${skill.skill_id}`;
     setInstalling(skill.id);
-    toast.promise(
-      (async () => {
-        await api.installFromSkillssh(skill.source, skill.skill_id);
-        await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-      })(),
-      {
-        loading: t("install.toast.installing", { name: displayName }),
-        success: t("install.toast.success", { name: displayName }),
-        error: (e) => e?.toString() || t("common.error"),
-        finally: () => setInstalling(null),
+
+    const toastId = toast.loading(t("install.toast.cloning"));
+    let unlisten: (() => void) | null = null;
+
+    try {
+      unlisten = await listen<{ skill_id: string; phase: string }>(
+        "install-progress",
+        (event) => {
+          if (event.payload.skill_id !== cancelKey) return;
+          if (event.payload.phase === "cloning") {
+            toast.loading(t("install.toast.cloning"), { id: toastId });
+          } else if (event.payload.phase === "installing") {
+            toast.loading(t("install.toast.installing", { name: displayName }), { id: toastId });
+          }
+        }
+      );
+      await api.installFromSkillssh(skill.source, skill.skill_id);
+      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+      toast.success(t("install.toast.success", { name: displayName }), { id: toastId });
+    } catch (e: any) {
+      const msg = e?.toString() || t("common.error");
+      if (msg.includes("cancelled")) {
+        toast.info(t("install.toast.cancelled"), { id: toastId });
+      } else {
+        toast.error(msg, { id: toastId });
       }
-    );
+    } finally {
+      setInstalling(null);
+      unlisten?.();
+    }
+  };
+
+  const handleCancelInstall = (cancelKey: string) => {
+    api.cancelInstall(cancelKey).catch(() => {
+      // Ignore race: install may have completed before cancel request arrives.
+    });
   };
 
   const handleGitInstall = async () => {
@@ -278,20 +305,41 @@ export function InstallSkills() {
     setGitLoading(true);
     const url = gitUrl.trim();
     const name = gitName.trim() || undefined;
-    toast.promise(
-      (async () => {
-        await api.installGit(url, name);
-        setGitUrl("");
-        setGitName("");
-        await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-      })(),
-      {
-        loading: t("install.toast.cloning"),
-        success: t("install.toast.success", { name: name || url }),
-        error: (e) => e?.toString() || t("common.error"),
-        finally: () => setGitLoading(false),
+    const cancelKey = url;
+    setGitCancelKey(cancelKey);
+
+    const toastId = toast.loading(t("install.toast.cloning"));
+    let unlisten: (() => void) | null = null;
+
+    try {
+      unlisten = await listen<{ skill_id: string; phase: string }>(
+        "install-progress",
+        (event) => {
+          if (event.payload.skill_id !== cancelKey) return;
+          if (event.payload.phase === "cloning") {
+            toast.loading(t("install.toast.cloning"), { id: toastId });
+          } else if (event.payload.phase === "installing") {
+            toast.loading(t("install.toast.installing", { name: name || url }), { id: toastId });
+          }
+        }
+      );
+      await api.installGit(url, name);
+      setGitUrl("");
+      setGitName("");
+      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+      toast.success(t("install.toast.success", { name: name || url }), { id: toastId });
+    } catch (e: any) {
+      const msg = e?.toString() || t("common.error");
+      if (msg.includes("cancelled")) {
+        toast.info(t("install.toast.cancelled"), { id: toastId });
+      } else {
+        toast.error(msg, { id: toastId });
       }
-    );
+    } finally {
+      setGitLoading(false);
+      setGitCancelKey(null);
+      unlisten?.();
+    }
   };
 
   const handleImportDiscovered = async (sourcePath: string, name: string) => {
@@ -591,18 +639,22 @@ export function InstallSkills() {
                               >
                                 <Check className="h-3.5 w-3.5" />
                               </span>
+                            ) : installing === skill.id ? (
+                              <button
+                                onClick={() => handleCancelInstall(`${skill.source}/${skill.skill_id}`)}
+                                className="rounded-[5px] border border-red-500/30 bg-red-500/10 p-1 text-red-400 transition-colors hover:bg-red-500/20"
+                                title={t("install.cancel")}
+                              >
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              </button>
                             ) : (
                               <button
                                 onClick={() => handleInstallSkillssh(skill)}
-                                disabled={installing === skill.id}
+                                disabled={installing !== null}
                                 className="rounded-[5px] border border-accent-border bg-accent-dark p-1 text-white transition-colors hover:bg-accent disabled:opacity-50"
                                 title={t("install.oneClickInstall")}
                               >
-                                {installing === skill.id ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <Plus className="h-3.5 w-3.5" />
-                                )}
+                                <Plus className="h-3.5 w-3.5" />
                               </button>
                             )}
                           </div>
@@ -912,6 +964,7 @@ export function InstallSkills() {
                   value={gitUrl}
                   onChange={(e) => setGitUrl(e.target.value)}
                   placeholder={t("install.repoUrlPlaceholder")}
+                  disabled={gitLoading}
                   className="app-input w-full bg-background"
                 />
               </div>
@@ -927,22 +980,30 @@ export function InstallSkills() {
                   value={gitName}
                   onChange={(e) => setGitName(e.target.value)}
                   placeholder={t("install.customNamePlaceholder")}
+                  disabled={gitLoading}
                   className="app-input w-full bg-background"
                 />
               </div>
-              <div className="pt-2">
-                <button
-                  onClick={handleGitInstall}
-                  disabled={!gitUrl.trim() || gitLoading}
-                  className="app-button-primary flex w-full"
-                >
-                  {gitLoading ? (
+              <div className="flex gap-2 pt-2">
+                {gitLoading ? (
+                  <button
+                    onClick={() => gitCancelKey && handleCancelInstall(gitCancelKey)}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-[13px] font-medium text-red-400 transition-colors hover:bg-red-500/20"
+                    disabled={!gitCancelKey}
+                  >
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
+                    {t("install.cancel")}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleGitInstall}
+                    disabled={!gitUrl.trim()}
+                    className="app-button-primary flex w-full"
+                  >
                     <DownloadCloud className="h-3.5 w-3.5" />
-                  )}
-                  {gitLoading ? t("install.installing") : t("install.installClone")}
-                </button>
+                    {t("install.installClone")}
+                  </button>
+                )}
               </div>
             </div>
           </div>

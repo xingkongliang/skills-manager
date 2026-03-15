@@ -177,12 +177,15 @@
     "loadingMore": "正在加载更多...",
     "installing": "安装中...",
     "installed": "已安装",
+    "cancel": "取消",
     "toast": {
       "cloning": "正在克隆仓库...",
       "installing": "正在安装 {{name}}...",
       "syncing": "正在同步到工具...",
       "success": "{{name}} 安装成功",
-      "done": "完成"
+      "done": "完成",
+      "cancelled": "安装已取消",
+      "timeout": "安装超时 — 请检查网络连接"
     },
     "local": {
       "title": "导入本地 Skill 源",
