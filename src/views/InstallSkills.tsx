@@ -642,10 +642,14 @@ export function InstallSkills() {
                             ) : installing === skill.id ? (
                               <button
                                 onClick={() => handleCancelInstall(`${skill.source}/${skill.skill_id}`)}
-                                className="rounded-[5px] border border-red-500/30 bg-red-500/10 p-1 text-red-400 transition-colors hover:bg-red-500/20"
+                                className="inline-flex items-center gap-1 rounded-[5px] border border-red-500/30 bg-red-500/10 px-1.5 py-1 text-red-400 transition-colors hover:bg-red-500/20"
                                 title={t("install.cancel")}
+                                aria-label={t("install.cancel")}
                               >
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                <span className="text-[11px] leading-none font-medium">
+                                  {t("install.cancel")}
+                                </span>
                               </button>
                             ) : (
                               <button
