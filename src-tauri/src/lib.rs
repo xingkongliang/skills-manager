@@ -60,6 +60,7 @@ pub fn run() {
             commands::skills::get_all_tags,
             commands::skills::set_skill_tags,
             commands::skills::cancel_install,
+            commands::skills::batch_import_folder,
             // Sync
             commands::sync::sync_skill_to_tool,
             commands::sync::unsync_skill_from_tool,

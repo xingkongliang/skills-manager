@@ -156,6 +156,15 @@ export const updateSkill = (skillId: string) =>
 export const reimportLocalSkill = (skillId: string) =>
   invoke<ManagedSkill>("reimport_local_skill", { skillId });
 
+export interface BatchImportResult {
+  imported: number;
+  skipped: number;
+  errors: string[];
+}
+
+export const batchImportFolder = (folderPath: string) =>
+  invoke<BatchImportResult>("batch_import_folder", { folderPath });
+
 export const getAllTags = () => invoke<string[]>("get_all_tags");
 
 export const setSkillTags = (skillId: string, tags: string[]) =>

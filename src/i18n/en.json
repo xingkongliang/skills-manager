@@ -191,7 +191,13 @@
       "title": "Import a local skill source",
       "description": "Choose a folder that contains `SKILL.md`, or import a `.zip` or `.skill` package.",
       "selectFolder": "Select folder",
-      "selectArchive": "Select archive or file"
+      "selectArchive": "Select archive or file",
+      "batchImport": "Batch import from folder",
+      "batchImporting": "Scanning for skills...",
+      "batchProgress": "Importing {{current}}/{{total}}: {{name}}...",
+      "batchSuccess": "Imported {{imported}} skill(s), skipped {{skipped}} already-imported",
+      "batchAllSkipped": "All {{skipped}} skill(s) were already imported",
+      "batchErrors": "{{count}} skill(s) failed to import"
     },
     "selectLocal": "Select local file...",
     "gitTitle": "Install from Git Repository",

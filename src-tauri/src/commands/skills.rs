@@ -9,6 +9,7 @@ use crate::core::{
     git_fetcher,
     install_cancel::InstallCancelRegistry,
     installer,
+    skill_metadata,
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
     sync_engine,
 };
@@ -1031,6 +1032,121 @@ pub async fn cancel_install(
     cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
 ) -> Result<bool, String> {
     Ok(cancel_registry.cancel(&key))
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchImportResult {
+    pub imported: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
+fn is_valid_skill_dir(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let candidates = ["SKILL.md", "skill.md", "CLAUDE.md"];
+    candidates.iter().any(|name| dir.join(name).exists())
+}
+
+#[tauri::command]
+pub async fn batch_import_folder(
+    folder_path: String,
+    store: State<'_, Arc<SkillStore>>,
+    app_handle: tauri::AppHandle,
+) -> Result<BatchImportResult, String> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Emitter;
+
+        let root = PathBuf::from(&folder_path);
+        if !root.is_dir() {
+            return Err("Selected path is not a directory".to_string());
+        }
+
+        // Collect valid skill subdirectories (depth=1)
+        let mut skill_dirs: Vec<PathBuf> = Vec::new();
+        let entries = std::fs::read_dir(&root).map_err(|e| e.to_string())?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if is_valid_skill_dir(&path) {
+                skill_dirs.push(path);
+            }
+        }
+
+        if skill_dirs.is_empty() {
+            return Ok(BatchImportResult {
+                imported: 0,
+                skipped: 0,
+                errors: vec![],
+            });
+        }
+
+        let total = skill_dirs.len();
+        let mut imported = 0usize;
+        let mut skipped = 0usize;
+        let mut errors = Vec::new();
+        let active = store.get_active_scenario_id().ok().flatten();
+
+        for (i, dir) in skill_dirs.iter().enumerate() {
+            let name = skill_metadata::infer_skill_name(dir);
+
+            app_handle
+                .emit(
+                    "batch-import-progress",
+                    serde_json::json!({
+                        "current": i + 1,
+                        "total": total,
+                        "name": &name,
+                    }),
+                )
+                .ok();
+
+            // Check if already imported by prospective central path
+            let prospective_central = central_repo::skills_dir().join(&name);
+            let central_str = prospective_central.to_string_lossy().to_string();
+            if let Ok(Some(existing)) = store.get_skill_by_central_path(&central_str) {
+                if let Some(ref scenario_id) = active {
+                    if let Err(e) = store.add_skill_to_scenario(scenario_id, &existing.id) {
+                        errors.push(format!("{}: {}", name, e));
+                        continue;
+                    }
+                }
+                skipped += 1;
+                continue;
+            }
+
+            match installer::install_from_local(dir, Some(&name)) {
+                Ok(result) => {
+                    let metadata = InstallSourceMetadata {
+                        source_type: "local".to_string(),
+                        source_ref: Some(dir.to_string_lossy().to_string()),
+                        source_ref_resolved: None,
+                        source_subpath: None,
+                        source_branch: None,
+                        source_revision: None,
+                        remote_revision: None,
+                        update_status: "local_only".to_string(),
+                    };
+                    match store_installed_skill(&store, &result, &metadata, active.as_deref()) {
+                        Ok(_) => imported += 1,
+                        Err(e) => errors.push(format!("{}: {}", name, e)),
+                    }
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {}", name, e));
+                }
+            }
+        }
+
+        Ok(BatchImportResult {
+            imported,
+            skipped,
+            errors,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn remove_path_if_exists(path: &Path) -> Result<(), String> {

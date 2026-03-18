@@ -12,6 +12,7 @@ import {
   Loader2,
   RefreshCw,
   FolderSearch,
+  FolderInput,
   ExternalLink,
   Check,
   ChevronLeft,
@@ -23,7 +24,7 @@ import { toast } from "sonner";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import * as api from "../lib/tauri";
-import type { ScanResult, SkillsShSkill } from "../lib/tauri";
+import type { ScanResult, SkillsShSkill, BatchImportResult } from "../lib/tauri";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSearchParams } from "react-router-dom";
@@ -256,6 +257,66 @@ export function InstallSkills() {
       const message = getErrorMessage(error, t("common.error"));
       setLocalError(message);
       toast.error(message);
+    }
+  };
+
+  const handleBatchImportFolder = async () => {
+    let unlisten: (() => void) | null = null;
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      });
+      if (!selected) return;
+
+      const toastId = toast.loading(t("install.local.batchImporting"));
+
+      unlisten = await listen<{ current: number; total: number; name: string }>(
+        "batch-import-progress",
+        (event) => {
+          const { current, total, name } = event.payload;
+          toast.loading(
+            t("install.local.batchProgress", { current, total, name }),
+            { id: toastId }
+          );
+        }
+      );
+
+      const result: BatchImportResult = await api.batchImportFolder(
+        selected as string
+      );
+
+      if (result.errors.length > 0) {
+        const previewErrors = result.errors.slice(0, 3).join("; ");
+        const remaining = result.errors.length - 3;
+        const detail = remaining > 0 ? `${previewErrors}; +${remaining} more` : previewErrors;
+        toast.error(
+          `${t("install.local.batchErrors", { count: result.errors.length })}: ${detail}`,
+          { id: toastId }
+        );
+      } else if (result.imported === 0) {
+        toast.info(
+          t("install.local.batchAllSkipped", { skipped: result.skipped }),
+          { id: toastId }
+        );
+      } else {
+        toast.success(
+          t("install.local.batchSuccess", {
+            imported: result.imported,
+            skipped: result.skipped,
+          }),
+          { id: toastId }
+        );
+      }
+
+      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+      runScan();
+    } catch (error: unknown) {
+      const message = getErrorMessage(error, t("common.error"));
+      setLocalError(message);
+      toast.error(message);
+    } finally {
+      unlisten?.();
     }
   };
 
@@ -794,6 +855,14 @@ export function InstallSkills() {
                   >
                     <UploadCloud className="h-4 w-4" />
                     {t("install.local.selectArchive")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleBatchImportFolder}
+                    className="app-button-secondary bg-background"
+                  >
+                    <FolderInput className="h-4 w-4" />
+                    {t("install.local.batchImport")}
                   </button>
                 </div>
               </div>
