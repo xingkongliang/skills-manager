@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::Utc;
 use std::path::Path;
 use std::process::Command;
 
@@ -32,6 +33,18 @@ pub struct GitBackupStatus {
     pub last_commit: Option<String>,
     /// Last commit timestamp (ISO 8601)
     pub last_commit_time: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GitBackupVersion {
+    /// Snapshot tag name (e.g. sm-v-20260318-153012-abc1234)
+    pub tag: String,
+    /// Commit SHA this snapshot points to (short)
+    pub commit: String,
+    /// Commit message at this snapshot
+    pub message: String,
+    /// Commit timestamp (ISO 8601)
+    pub committed_at: String,
 }
 
 /// Get the current git status of the skills directory.
@@ -169,6 +182,95 @@ pub fn push(skills_dir: &Path) -> Result<()> {
 pub fn pull(skills_dir: &Path) -> Result<()> {
     ensure_repo(skills_dir)?;
     run_git_checked(skills_dir, &["pull", "--rebase", "--autostash"])?;
+    Ok(())
+}
+
+/// Create an annotated snapshot tag on current HEAD.
+pub fn create_snapshot_tag(skills_dir: &Path) -> Result<String> {
+    ensure_repo(skills_dir)?;
+
+    let short_sha = run_git(skills_dir, &["rev-parse", "--short", "HEAD"])?;
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let mut tag = format!("sm-v-{}-{}", timestamp, short_sha);
+
+    // Avoid collision when multiple snapshots happen within the same second.
+    if run_git(skills_dir, &["rev-parse", "-q", "--verify", &format!("refs/tags/{tag}")]).is_ok() {
+        let millis = Utc::now().format("%3f");
+        tag = format!("sm-v-{}{}-{}", timestamp, millis, short_sha);
+    }
+
+    // Use lightweight tag to avoid requiring git user.name/user.email on client machines.
+    run_git_checked(skills_dir, &["tag", &tag])?;
+    Ok(tag)
+}
+
+/// List snapshot versions, newest first.
+pub fn list_snapshot_versions(skills_dir: &Path, limit: Option<usize>) -> Result<Vec<GitBackupVersion>> {
+    ensure_repo(skills_dir)?;
+    let tags = run_git(skills_dir, &["tag", "--list", "sm-v-*", "--sort=-creatordate"])?;
+    if tags.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let max = limit.unwrap_or(30);
+    let mut versions = Vec::new();
+    for tag in tags.lines().take(max) {
+        let commit = run_git(skills_dir, &["rev-list", "-n", "1", tag]).unwrap_or_default();
+        let short_commit = if commit.len() > 8 {
+            commit[..8].to_string()
+        } else {
+            commit.clone()
+        };
+        let message = run_git(skills_dir, &["log", "-1", "--format=%s", tag]).unwrap_or_default();
+        let committed_at = run_git(skills_dir, &["log", "-1", "--format=%cI", tag]).unwrap_or_default();
+
+        versions.push(GitBackupVersion {
+            tag: tag.to_string(),
+            commit: short_commit,
+            message,
+            committed_at,
+        });
+    }
+
+    Ok(versions)
+}
+
+/// Restore skills files to a snapshot tag by creating a new restore commit.
+pub fn restore_snapshot_version(skills_dir: &Path, tag: &str) -> Result<()> {
+    ensure_repo(skills_dir)?;
+
+    if !tag.starts_with("sm-v-") {
+        anyhow::bail!("Invalid snapshot tag");
+    }
+    run_git_checked(skills_dir, &["rev-parse", "-q", "--verify", &format!("refs/tags/{tag}")])?;
+
+    let status = run_git(skills_dir, &["status", "--porcelain"])?;
+    if !status.is_empty() {
+        anyhow::bail!("Working tree has uncommitted changes. Sync or commit before restore.");
+    }
+
+    // Keep a restore point before we mutate the working tree.
+    let head_short = run_git(skills_dir, &["rev-parse", "--short", "HEAD"])?;
+    let restore_point = format!(
+        "sm-restore-point-{}-{}",
+        Utc::now().format("%Y%m%d-%H%M%S"),
+        head_short
+    );
+    run_git_checked(skills_dir, &["tag", &restore_point])?;
+
+    // Apply snapshot content into working tree + index, then commit as a forward change.
+    run_git_checked(skills_dir, &["checkout", tag, "--", "."])?;
+    run_git_checked(skills_dir, &["add", "-A"])?;
+
+    let changed = run_git(skills_dir, &["status", "--porcelain"])?;
+    if changed.is_empty() {
+        return Ok(());
+    }
+
+    run_git_checked(
+        skills_dir,
+        &["commit", "-m", &format!("restore: switch skills library to {}", tag)],
+    )?;
     Ok(())
 }
 

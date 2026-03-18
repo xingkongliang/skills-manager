@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Search,
   LayoutGrid,
@@ -13,6 +13,7 @@ import {
   RefreshCw,
   RotateCcw,
   GitBranch,
+  History,
   ArrowUpCircle,
   Loader2,
   X,
@@ -25,7 +26,7 @@ import { useApp } from "../context/AppContext";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import * as api from "../lib/tauri";
-import type { ManagedSkill, ToolInfo, GitBackupStatus } from "../lib/tauri";
+import type { ManagedSkill, ToolInfo, GitBackupStatus, GitBackupVersion } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 
 function getToolDisplayName(toolKey: string, tools: ToolInfo[]) {
@@ -58,6 +59,11 @@ export function MySkills() {
   const [gitStatus, setGitStatus] = useState<GitBackupStatus | null>(null);
   const [gitLoading, setGitLoading] = useState<string | null>(null); // "start" | "sync"
   const [gitRemoteConfig, setGitRemoteConfig] = useState("");
+  const [gitVersionsOpen, setGitVersionsOpen] = useState(false);
+  const [gitVersionsLoading, setGitVersionsLoading] = useState(false);
+  const [gitVersions, setGitVersions] = useState<GitBackupVersion[]>([]);
+  const [restoreVersionTag, setRestoreVersionTag] = useState<string | null>(null);
+  const [restoringVersionTag, setRestoringVersionTag] = useState<string | null>(null);
   const [tagEditSkillId, setTagEditSkillId] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
   const tagInputRef = useRef<HTMLInputElement>(null);
@@ -147,17 +153,38 @@ export function MySkills() {
     if (message.includes("not a git repository")) {
       return t("settings.gitErrorNotRepo");
     }
-    return t("settings.gitErrorGeneric");
+    const fallback = t("settings.gitErrorGeneric");
+    const detail = getErrorMessage(error, "").trim();
+    if (detail && detail !== "Error") {
+      return `${fallback} (${detail})`;
+    }
+    return fallback;
   };
 
-  const refreshGitStatus = async () => {
+  const refreshGitStatus = useCallback(async () => {
     try {
       const status = await api.gitBackupStatus();
       setGitStatus(status);
     } catch {
       // not critical
     }
-  };
+  }, []);
+
+  const refreshGitVersions = useCallback(async () => {
+    if (!gitStatus?.is_repo) {
+      setGitVersions([]);
+      return;
+    }
+    setGitVersionsLoading(true);
+    try {
+      const versions = await api.gitBackupListVersions(30);
+      setGitVersions(versions);
+    } catch {
+      setGitVersions([]);
+    } finally {
+      setGitVersionsLoading(false);
+    }
+  }, [gitStatus?.is_repo]);
 
   useEffect(() => {
     (async () => {
@@ -176,7 +203,38 @@ export function MySkills() {
         api.setSettings("git_backup_remote_url", detectedRemote).catch(() => {});
       }
     })();
-  }, []);
+  }, [refreshGitStatus]);
+
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      refreshGitStatus();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshGitStatus();
+      }
+    };
+
+    window.addEventListener("focus", handleWindowFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", handleWindowFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [refreshGitStatus]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      refreshGitStatus();
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [skills, refreshGitStatus]);
+
+  useEffect(() => {
+    if (gitVersionsOpen && gitStatus?.is_repo) {
+      refreshGitVersions();
+    }
+  }, [gitVersionsOpen, gitStatus?.is_repo, refreshGitVersions]);
 
   const getSyncMeta = (skill: ManagedSkill) => {
     const syncedToolKeys = skill.targets
@@ -374,9 +432,11 @@ export function MySkills() {
         return;
       }
 
-      if (status.behind > 0 && (status.has_changes || status.ahead > 0)) {
-        toast.info(t("settings.gitNeedPullFirst"));
-        return;
+      let committed = false;
+      if (status.has_changes) {
+        await api.gitBackupCommit(t("settings.gitCommitPlaceholder"));
+        committed = true;
+        status = await api.gitBackupStatus();
       }
 
       if (status.behind > 0) {
@@ -385,24 +445,38 @@ export function MySkills() {
         toast.success(t("settings.gitPullSuccess"));
       }
 
-      let committed = false;
-      if (status.has_changes) {
-        await api.gitBackupCommit(t("settings.gitCommitPlaceholder"));
-        committed = true;
-      }
-
       if (committed || status.ahead > 0) {
+        const snapshotTag = await api.gitBackupCreateSnapshot();
         await api.gitBackupPush();
-        toast.success(t("settings.gitSyncSuccess"));
+        toast.success(t("mySkills.gitSyncSuccessWithVersion", { tag: snapshotTag }));
       } else {
         toast.success(t("settings.gitUpToDate"));
       }
 
       await refreshGitStatus();
+      if (gitVersionsOpen) {
+        await refreshGitVersions();
+      }
     } catch (e) {
       toast.error(mapGitError(e));
     } finally {
       setGitLoading(null);
+    }
+  };
+
+  const handleRestoreVersion = async () => {
+    if (!restoreVersionTag) return;
+    setRestoringVersionTag(restoreVersionTag);
+    try {
+      await api.gitBackupRestoreVersion(restoreVersionTag);
+      toast.success(t("mySkills.gitVersionRestoreSuccess", { tag: restoreVersionTag }));
+      toast.info(t("mySkills.gitVersionRestoreNeedSync"));
+      await Promise.all([refreshGitStatus(), refreshGitVersions(), refreshManagedSkills()]);
+      setRestoreVersionTag(null);
+    } catch (error: unknown) {
+      toast.error(mapGitError(error));
+    } finally {
+      setRestoringVersionTag(null);
     }
   };
 
@@ -470,6 +544,13 @@ export function MySkills() {
 
   const sourceTypeLabel = (skill: ManagedSkill) =>
     skill.source_type === "skillssh" ? "skills.sh" : skill.source_type;
+
+  const formatGitDateTime = (iso: string) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString();
+  };
 
   const refreshLabel = (skill: ManagedSkill) =>
     skill.source_type === "local" || skill.source_type === "import"
@@ -565,21 +646,34 @@ export function MySkills() {
             (() => {
               const gitSyncButton = getGitSyncButtonState();
               return (
-                <button
-                  onClick={handleGitSync}
-                  disabled={!!gitLoading || gitSyncButton.disabled}
-                  className={cn(
-                    "inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium transition-colors hover:bg-surface-hover disabled:opacity-50",
-                    gitSyncButton.toneClassName
-                  )}
-                >
-                  {gitLoading === "sync" ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <ArrowUpCircle className="h-3.5 w-3.5" />
-                  )}
-                  {gitLoading === "sync" ? t("mySkills.gitRepoSyncing") : gitSyncButton.label}
-                </button>
+                <>
+                  <button
+                    onClick={handleGitSync}
+                    disabled={!!gitLoading || gitSyncButton.disabled}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium transition-colors hover:bg-surface-hover disabled:opacity-50",
+                      gitSyncButton.toneClassName
+                    )}
+                  >
+                    {gitLoading === "sync" ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ArrowUpCircle className="h-3.5 w-3.5" />
+                    )}
+                    {gitLoading === "sync" ? t("mySkills.gitRepoSyncing") : gitSyncButton.label}
+                  </button>
+                  <button
+                    onClick={() => setGitVersionsOpen((v) => !v)}
+                    disabled={!!gitLoading}
+                    className={cn(
+                      "ml-1 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium transition-colors hover:bg-surface-hover disabled:opacity-50",
+                      gitVersionsOpen ? "text-secondary" : "text-muted"
+                    )}
+                  >
+                    <History className="h-3.5 w-3.5" />
+                    {t("mySkills.gitVersionHistory")}
+                  </button>
+                </>
               );
             })()
           )}
@@ -669,6 +763,55 @@ export function MySkills() {
           </>
         )}
       </div>
+
+      {gitVersionsOpen && gitStatus?.is_repo && (
+        <div className="app-panel -mt-2 mb-2 p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-[13px] font-semibold text-secondary">{t("mySkills.gitVersionHistory")}</h3>
+            <button
+              onClick={refreshGitVersions}
+              disabled={gitVersionsLoading || !!gitLoading}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[13px] text-muted hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", gitVersionsLoading && "animate-spin")} />
+              {t("settings.refresh")}
+            </button>
+          </div>
+          {gitVersionsLoading ? (
+            <div className="py-2 text-[13px] text-muted">{t("mySkills.gitVersionLoading")}</div>
+          ) : gitVersions.length === 0 ? (
+            <div className="py-2 text-[13px] text-muted">{t("mySkills.gitVersionEmpty")}</div>
+          ) : (
+            <div className="max-h-64 space-y-1 overflow-auto pr-1">
+              {gitVersions.map((version) => (
+                <div
+                  key={version.tag}
+                  className="flex items-center justify-between rounded-md border border-border-subtle bg-bg-secondary px-2.5 py-2"
+                >
+                  <div className="min-w-0 pr-3">
+                    <div className="truncate text-[13px] font-medium text-secondary">{version.tag}</div>
+                    <div className="truncate text-[12px] text-muted">
+                      {version.message || version.commit}
+                    </div>
+                    <div className="text-[11px] text-faint">
+                      {version.commit} · {formatGitDateTime(version.committed_at)}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setRestoreVersionTag(version.tag)}
+                    disabled={!!restoringVersionTag}
+                    className="shrink-0 rounded-md border border-border-subtle px-2 py-1 text-[12px] font-medium text-secondary hover:bg-surface-hover disabled:opacity-50"
+                  >
+                    {restoringVersionTag === version.tag
+                      ? t("mySkills.gitVersionRestoring")
+                      : t("mySkills.gitVersionRestore")}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {filtered.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center pb-20 text-center">
@@ -966,6 +1109,15 @@ export function MySkills() {
         message={t("mySkills.deleteConfirm", { name: deleteTarget?.name || "" })}
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDeleteManagedSkill}
+      />
+      <ConfirmDialog
+        open={restoreVersionTag !== null}
+        title={t("mySkills.gitVersionRestoreTitle")}
+        message={t("mySkills.gitVersionRestoreConfirm", { tag: restoreVersionTag || "" })}
+        tone="warning"
+        confirmLabel={t("mySkills.gitVersionRestore")}
+        onClose={() => setRestoreVersionTag(null)}
+        onConfirm={handleRestoreVersion}
       />
     </div>
   );

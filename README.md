@@ -58,6 +58,7 @@ Back up `~/.skills-manager/skills/` to a Git repo for version history and multi-
 5. Use **Sync to Git** from the My Skills toolbar.
 
 `Sync to Git` automatically handles pull/commit/push based on current repo status.
+Each successful sync now creates a snapshot version tag. You can open **Version History** in My Skills and restore any snapshot as a new commit.
 
 ### Authentication
 

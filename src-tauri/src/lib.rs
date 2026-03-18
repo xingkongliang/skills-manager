@@ -85,6 +85,9 @@ pub fn run() {
             commands::git_backup::git_backup_push,
             commands::git_backup::git_backup_pull,
             commands::git_backup::git_backup_clone,
+            commands::git_backup::git_backup_create_snapshot,
+            commands::git_backup::git_backup_list_versions,
+            commands::git_backup::git_backup_restore_version,
             // Projects
             commands::projects::get_projects,
             commands::projects::add_project,

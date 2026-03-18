@@ -236,6 +236,13 @@ export interface GitBackupStatus {
   last_commit_time: string | null;
 }
 
+export interface GitBackupVersion {
+  tag: string;
+  commit: string;
+  message: string;
+  committed_at: string;
+}
+
 export const gitBackupStatus = () =>
   invoke<GitBackupStatus>("git_backup_status");
 
@@ -253,6 +260,17 @@ export const gitBackupPull = () => invoke<void>("git_backup_pull");
 
 export const gitBackupClone = (url: string) =>
   invoke<void>("git_backup_clone", { url });
+
+export const gitBackupCreateSnapshot = () =>
+  invoke<string>("git_backup_create_snapshot");
+
+export const gitBackupListVersions = (limit?: number) =>
+  invoke<GitBackupVersion[]>("git_backup_list_versions", {
+    limit: typeof limit === "number" ? limit : null,
+  });
+
+export const gitBackupRestoreVersion = (tag: string) =>
+  invoke<void>("git_backup_restore_version", { tag });
 
 // ── Scenarios ──
 
