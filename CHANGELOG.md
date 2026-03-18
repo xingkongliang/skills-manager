@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-03-18
+
+### Added
+- Git snapshot versioning: create and restore point-in-time snapshots of your skills library
+- Batch import skills from a local folder
+- Snapshot tags are now automatically pushed to remote during sync
+
+### Changed
+- Redesigned skill detail panel header layout
+- Sync button uses amber tone instead of red for better visual clarity
+- Deeper directory scanning when reconciling skills index (supports nested folder structures)
+
+### Fixed
+- Snapshot restore now correctly handles file deletions with automatic rollback on failure
+- Duplicate snapshot tags no longer created when retrying after a failed push
 ## [1.4.1] - 2026-03-15
 
 ### Added
