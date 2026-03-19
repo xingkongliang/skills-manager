@@ -149,6 +149,11 @@ fn copy_skill_dir(src: &Path, dst: &Path) -> Result<()> {
             continue;
         }
 
+        // Skip symlinks to prevent exfiltration of files outside the skill directory
+        if ft.is_symlink() {
+            continue;
+        }
+
         let dest_path = dst.join(&name);
         if ft.is_dir() {
             copy_skill_dir(&entry.path(), &dest_path)?;

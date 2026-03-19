@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https:"
     }
   },
   "plugins": {

@@ -179,11 +179,22 @@ fn add_column_if_missing(
     column: &str,
     definition: &str,
 ) -> Result<()> {
+    // Validate identifiers to prevent SQL injection if call sites ever change.
+    validate_identifier(table)?;
+    validate_identifier(column)?;
+
     if !has_column(conn, table, column)? {
         conn.execute(
             &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
             [],
         )?;
+    }
+    Ok(())
+}
+
+fn validate_identifier(name: &str) -> Result<()> {
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        anyhow::bail!("Invalid SQL identifier: {}", name);
     }
     Ok(())
 }

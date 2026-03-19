@@ -489,6 +489,10 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let ty = entry.file_type()?;
+        // Skip symlinks to prevent following links outside the source directory
+        if ty.is_symlink() {
+            continue;
+        }
         if ty.is_dir() {
             copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
         } else {

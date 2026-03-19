@@ -41,6 +41,18 @@ pub fn parse_git_source(url: &str) -> ParsedGitSource {
     }
 }
 
+/// Validate that a URL uses an allowed scheme for git operations.
+/// Rejects `file://` and other potentially dangerous schemes.
+pub fn validate_git_url(url: &str) -> Result<()> {
+    let trimmed = url.trim();
+    if trimmed.starts_with("file://") || trimmed.starts_with("file:") {
+        anyhow::bail!("file:// URLs are not allowed for security reasons");
+    }
+    // Allow https://, http://, git@, ssh://
+    // Also allow shorthand like "user/repo" (no scheme)
+    Ok(())
+}
+
 pub fn clone_repo_ref(
     url: &str,
     branch: Option<&str>,

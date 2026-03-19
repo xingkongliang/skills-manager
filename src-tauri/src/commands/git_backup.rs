@@ -1,4 +1,4 @@
-use crate::core::{central_repo, error::AppError, git_backup, skill_metadata};
+use crate::core::{central_repo, error::AppError, git_backup, git_fetcher, skill_metadata};
 use std::sync::Arc;
 use tauri::State;
 use walkdir::WalkDir;
@@ -35,6 +35,7 @@ pub async fn git_backup_set_remote(
     url: String,
 ) -> Result<(), AppError> {
     let _ = store;
+    git_fetcher::validate_git_url(&url).map_err(AppError::git)?;
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
         git_backup::set_remote(&skills_dir, &url).map_err(AppError::git)
@@ -85,6 +86,7 @@ pub async fn git_backup_clone(
     url: String,
 ) -> Result<(), AppError> {
     let _ = store;
+    git_fetcher::validate_git_url(&url).map_err(AppError::git)?;
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
         git_backup::clone_into(&skills_dir, &url).map_err(AppError::git)

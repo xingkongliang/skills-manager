@@ -251,6 +251,7 @@ pub async fn install_git(
     cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), AppError> {
+    git_fetcher::validate_git_url(&repo_url).map_err(AppError::git)?;
     let store = store.inner().clone();
     let registry = cancel_registry.inner().clone();
     let cancel_key = repo_url.clone();
@@ -436,6 +437,7 @@ pub async fn update_skill(
         }
 
         let git_source = git_source_from_skill(&skill)?;
+        git_fetcher::validate_git_url(&git_source.clone_url).map_err(AppError::git)?;
         let remote_revision = git_fetcher::resolve_remote_revision(
             &git_source.clone_url,
             git_source.branch.as_deref(),

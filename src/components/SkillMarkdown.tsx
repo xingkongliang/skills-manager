@@ -45,14 +45,18 @@ export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
           p: ({ className, ...props }) => (
             <p className={cn("mb-4 text-[13px] leading-6 text-secondary", className)} {...props} />
           ),
-          a: ({ className, ...props }) => (
-            <a
-              className={cn("text-accent-light underline decoration-accent-border underline-offset-4", className)}
-              target="_blank"
-              rel="noreferrer"
-              {...props}
-            />
-          ),
+          a: ({ className, href, ...props }) => {
+            const safeHref = href && /^https?:\/\//.test(href) ? href : undefined;
+            return (
+              <a
+                className={cn("text-accent-light underline decoration-accent-border underline-offset-4", className)}
+                href={safeHref}
+                target="_blank"
+                rel="noreferrer"
+                {...props}
+              />
+            );
+          },
           ul: ({ className, ...props }) => (
             <ul className={cn("mb-4 list-disc space-y-1 pl-5 text-secondary", className)} {...props} />
           ),
