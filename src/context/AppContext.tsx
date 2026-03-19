@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { ManagedSkill, Project, Scenario, ToolInfo } from "../lib/tauri";
 import * as api from "../lib/tauri";
 import i18n from "../i18n";
+import { toast } from "sonner";
 
 interface AppState {
   scenarios: Scenario[];
@@ -137,6 +138,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
     };
   }, [refreshManagedSkills, refreshScenarios]);
+
+  // Auto-check skill updates on startup (non-blocking, silent)
+  useEffect(() => {
+    if (loading || managedSkills.length === 0) return;
+    const hasGitSkills = managedSkills.some(
+      (s) => s.source_type === "git" || s.source_type === "skillssh"
+    );
+    if (!hasGitSkills) return;
+
+    // Delay to avoid slowing down initial render
+    const timer = setTimeout(() => {
+      api.checkAllSkillUpdates(false)
+        .then(async () => {
+          const skills = await api.getManagedSkills();
+          setManagedSkills(skills);
+          const updatable = skills.filter((s) => s.update_status === "update_available");
+          if (updatable.length > 0) {
+            toast.info(
+              i18n.t("mySkills.updateNotification", { count: updatable.length }),
+              { duration: 6000 }
+            );
+          }
+        })
+        .catch(() => {}); // silent failure
+    }, 3000);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   return (
     <AppContext.Provider

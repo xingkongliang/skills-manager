@@ -104,6 +104,7 @@
     "gitCurrentVersionSnapshot": "Current: {{tag}}",
     "gitCurrentVersionRestored": "Current: restored from {{tag}}",
     "gitCurrentVersionUnknown": "Current: no snapshot",
+    "updateNotification": "{{count}} skill(s) have updates available",
     "compactEnabledCount": "{{count}} enabled",
     "confirmSyncTitle": "Confirm sync scope",
     "confirmUnsyncTitle": "Confirm unsync scope",

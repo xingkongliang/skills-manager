@@ -104,6 +104,7 @@
     "gitCurrentVersionSnapshot": "当前：{{tag}}",
     "gitCurrentVersionRestored": "当前：从 {{tag}} 恢复",
     "gitCurrentVersionUnknown": "当前：无快照",
+    "updateNotification": "{{count}} 个 Skill 有可用更新",
     "compactEnabledCount": "已启用 {{count}} 个",
     "confirmSyncTitle": "确认同步范围",
     "confirmUnsyncTitle": "确认取消同步范围",
