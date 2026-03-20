@@ -181,7 +181,7 @@ fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// v1 → v2: Add per-scenario, per-skill tool toggle table.
+/// v1 → v2: Add per-scenario, per-skill tool toggle table + sort_order column.
 fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
@@ -195,6 +195,7 @@ fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
         );
         ",
     )?;
+    add_column_if_missing(conn, "scenario_skills", "sort_order", "INTEGER DEFAULT 0")?;
     Ok(())
 }
 

@@ -375,6 +375,12 @@ export const reorderScenarios = (ids: string[]) =>
 export const reorderProjects = (ids: string[]) =>
   invoke<void>("reorder_projects", { ids });
 
+export const getScenarioSkillOrder = (scenarioId: string) =>
+  invoke<string[]>("get_scenario_skill_order", { scenarioId });
+
+export const reorderScenarioSkills = (scenarioId: string, skillIds: string[]) =>
+  invoke<void>("reorder_scenario_skills", { scenarioId, skillIds });
+
 // ── Projects ──
 
 export const getProjects = () => invoke<Project[]>("get_projects");

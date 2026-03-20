@@ -636,10 +636,22 @@ impl SkillStore {
         Ok(())
     }
 
+    pub fn reorder_scenario_skills(&self, scenario_id: &str, skill_ids: &[String]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        for (i, skill_id) in skill_ids.iter().enumerate() {
+            conn.execute(
+                "UPDATE scenario_skills SET sort_order = ?1 WHERE scenario_id = ?2 AND skill_id = ?3",
+                params![i as i32, scenario_id, skill_id],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn get_skill_ids_for_scenario(&self, scenario_id: &str) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT skill_id FROM scenario_skills WHERE scenario_id = ?1")?;
+        let mut stmt = conn.prepare(
+            "SELECT skill_id FROM scenario_skills WHERE scenario_id = ?1 ORDER BY sort_order, added_at",
+        )?;
         let rows = stmt.query_map(params![scenario_id], |row| row.get::<_, String>(0))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
@@ -653,7 +665,7 @@ impl SkillStore {
              FROM skills s
              INNER JOIN scenario_skills ss ON s.id = ss.skill_id
              WHERE ss.scenario_id = ?1
-             ORDER BY s.name",
+             ORDER BY ss.sort_order, s.name",
         )?;
         let rows = stmt.query_map(params![scenario_id], map_skill_row)?;
         Ok(rows.filter_map(|r| r.ok()).collect())

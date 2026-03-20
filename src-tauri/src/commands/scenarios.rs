@@ -372,6 +372,35 @@ pub async fn reorder_scenarios(
     result
 }
 
+#[tauri::command]
+pub async fn get_scenario_skill_order(
+    scenario_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<String>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store
+            .get_skill_ids_for_scenario(&scenario_id)
+            .map_err(AppError::db)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn reorder_scenario_skills(
+    scenario_id: String,
+    skill_ids: Vec<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store
+            .reorder_scenario_skills(&scenario_id, &skill_ids)
+            .map_err(AppError::db)
+    })
+    .await?
+}
+
 // ── Internal helpers ──
 
 pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), AppError> {

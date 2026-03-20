@@ -10,7 +10,7 @@ import { getScenarioIconOption } from "../lib/scenarioIcons";
 export function Dashboard() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { activeScenario, tools } = useApp();
+  const { activeScenario, tools, openSkillDetailById } = useApp();
   const [skills, setSkills] = useState<ManagedSkill[]>([]);
 
   const installed = tools.filter((t) => t.installed).length;
@@ -115,7 +115,19 @@ export function Dashboard() {
             {skills.slice(0, 5).map((skill) => (
               <div
                 key={skill.id}
-                className="flex items-center justify-between px-3.5 py-2.5 hover:bg-surface-hover transition-colors"
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  openSkillDetailById(skill.id);
+                  navigate("/my-skills");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    openSkillDetailById(skill.id);
+                    navigate("/my-skills");
+                  }
+                }}
+                className="flex items-center justify-between px-3.5 py-2.5 hover:bg-surface-hover transition-colors cursor-pointer"
               >
                 <div className="flex items-center gap-2.5">
                   <div className="w-6 h-6 rounded-[4px] flex items-center justify-center text-[13px] font-semibold bg-accent-bg text-accent-light shrink-0">

@@ -20,6 +20,7 @@ import {
   Plus,
   SquareCheck,
   Square,
+  GripVertical,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -38,6 +39,63 @@ import type {
   SkillToolToggle,
 } from "../lib/tauri";
 import { getErrorMessage, getErrorKind } from "../lib/error";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  rectSortingStrategy,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+
+interface SortableSkillItemProps {
+  id: string;
+  disabled: boolean;
+  children: (dragHandle: React.ReactNode) => React.ReactNode;
+}
+
+function SortableSkillItem({ id, disabled, children }: SortableSkillItemProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id, disabled });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : undefined,
+  };
+
+  const handle = !disabled ? (
+    <div
+      ref={setActivatorNodeRef}
+      {...listeners}
+      className="flex cursor-grab items-center justify-center rounded p-1 text-faint transition-colors hover:bg-surface-hover hover:text-muted active:cursor-grabbing"
+    >
+      <GripVertical className="h-4 w-4" />
+    </div>
+  ) : null;
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes}>
+      {children(handle)}
+    </div>
+  );
+}
 
 function getToolDisplayName(toolKey: string, tools: ToolInfo[]) {
   return tools.find((tool) => tool.key === toolKey)?.display_name || toolKey;
@@ -90,7 +148,19 @@ export function MySkills() {
   const [tagInput, setTagInput] = useState("");
   const tagInputRef = useRef<HTMLInputElement>(null);
 
+  const [scenarioSkillOrder, setScenarioSkillOrder] = useState<string[]>([]);
+
+  const installedTools = tools.filter((tool) => tool.installed);
   const activeScenarioName = activeScenario?.name || t("mySkills.currentScenarioFallback");
+
+  // Fetch sort order whenever active scenario changes
+  useEffect(() => {
+    if (!activeScenario) {
+      setScenarioSkillOrder([]);
+      return;
+    }
+    api.getScenarioSkillOrder(activeScenario.id).then(setScenarioSkillOrder).catch(() => {});
+  }, [activeScenario, skills]);
 
   const refreshAllTags = async () => {
     try {
@@ -131,17 +201,24 @@ export function MySkills() {
       return true;
     });
 
+    // Always sort enabled skills first; within enabled group, use custom sort order
     if (activeScenario) {
       result.sort((a, b) => {
         const aEnabled = a.scenario_ids.includes(activeScenario.id) ? 0 : 1;
         const bEnabled = b.scenario_ids.includes(activeScenario.id) ? 0 : 1;
         if (aEnabled !== bEnabled) return aEnabled - bEnabled;
+        // Within same group, use scenario sort order
+        const aOrder = scenarioSkillOrder.indexOf(a.id);
+        const bOrder = scenarioSkillOrder.indexOf(b.id);
+        if (aOrder !== -1 && bOrder !== -1) return aOrder - bOrder;
+        if (aOrder !== -1) return -1;
+        if (bOrder !== -1) return 1;
         return a.name.localeCompare(b.name);
       });
     }
 
     return result;
-  }, [skills, search, sourceFilters, tagFilters, filterMode, activeScenario]);
+  }, [skills, search, sourceFilters, tagFilters, filterMode, activeScenario, scenarioSkillOrder]);
 
   const {
     isMultiSelect, setIsMultiSelect,
@@ -162,6 +239,41 @@ export function MySkills() {
     () => skills.find((skill) => skill.id === detailSkillId) || null,
     [detailSkillId, skills]
   );
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id || !activeScenario) return;
+
+      // Only reorder enabled skills (they are always at the front)
+      const enabledSkills = filtered.filter((s) => s.scenario_ids.includes(activeScenario.id));
+      const oldIndex = enabledSkills.findIndex((s) => s.id === active.id);
+      const newIndex = enabledSkills.findIndex((s) => s.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const reordered = [...enabledSkills];
+      const [moved] = reordered.splice(oldIndex, 1);
+      reordered.splice(newIndex, 0, moved);
+
+      // Optimistic update
+      setScenarioSkillOrder(reordered.map((s) => s.id));
+
+      try {
+        await api.reorderScenarioSkills(activeScenario.id, reordered.map((s) => s.id));
+      } catch {
+        // Revert on failure
+        await api.getScenarioSkillOrder(activeScenario.id).then(setScenarioSkillOrder).catch(() => {});
+      }
+    },
+    [filtered, activeScenario]
+  );
+
+  const canDrag = !!activeScenario;
 
   const mapGitError = (error: unknown) => {
     const kind = getErrorKind(error);
@@ -948,14 +1060,19 @@ export function MySkills() {
           </p>
         </div>
       ) : (
-        <div
-          className={cn(
-            "pb-8",
-            viewMode === "grid"
-              ? "grid grid-cols-2 gap-3 lg:grid-cols-3"
-              : "flex flex-col gap-0.5"
-          )}
-        >
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext
+            items={filtered.map((s) => s.id)}
+            strategy={viewMode === "grid" ? rectSortingStrategy : verticalListSortingStrategy}
+          >
+          <div
+            className={cn(
+              "pb-8",
+              viewMode === "grid"
+                ? "grid grid-cols-2 gap-3 lg:grid-cols-3"
+                : "flex flex-col gap-0.5"
+            )}
+          >
           {filtered.map((skill) => {
             const isSynced = skill.targets.length > 0;
             const enabledInScenario = activeScenario
@@ -965,8 +1082,9 @@ export function MySkills() {
 
             if (viewMode === "grid") {
               return (
+                <SortableSkillItem key={skill.id} id={skill.id} disabled={!canDrag}>
+                {(dragHandle) => (
                 <div
-                  key={skill.id}
                   className={cn(
                     "app-panel group relative flex flex-col overflow-hidden transition-all hover:border-border hover:bg-surface-hover",
                     enabledInScenario && "border-l-2 border-l-accent",
@@ -975,7 +1093,8 @@ export function MySkills() {
                   )}
                   onClick={isMultiSelect ? () => toggleSelect(skill.id) : undefined}
                 >
-                  <div className={cn("absolute right-3 top-3 flex items-center gap-1 opacity-0 transition-all", !isMultiSelect && "group-hover:opacity-100")}>
+                  <div className={cn("absolute right-2 top-2 flex items-center gap-0.5 rounded-lg border border-border-subtle bg-surface px-1 py-0.5 opacity-0 shadow-sm transition-all", !isMultiSelect && "group-hover:opacity-100")}>
+                    {dragHandle}
                     <button
                       onClick={() => handleCheckUpdate(skill)}
                       disabled={checkingSkillId === skill.id}
@@ -1003,7 +1122,7 @@ export function MySkills() {
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-2.5 px-3.5 pt-3 pb-1.5">
+                  <div className="flex items-center gap-2.5 px-3.5 pr-20 pt-3 pb-1.5">
                     {isMultiSelect ? (
                       selectedIds.has(skill.id)
                         ? <SquareCheck className="h-3.5 w-3.5 shrink-0 text-accent" />
@@ -1132,12 +1251,15 @@ export function MySkills() {
                     </div>
                   </div>
                 </div>
+                )}
+                </SortableSkillItem>
               );
             }
 
             return (
+              <SortableSkillItem key={skill.id} id={skill.id} disabled={!canDrag}>
+              {(dragHandle) => (
               <div
-                key={skill.id}
                 className={cn(
                   "app-panel group flex items-center gap-3.5 rounded-xl border-transparent px-3.5 py-3 transition-all hover:border-border hover:bg-surface-hover",
                   enabledInScenario && "border-l-2 border-l-accent",
@@ -1146,6 +1268,7 @@ export function MySkills() {
                 )}
                 onClick={isMultiSelect ? () => toggleSelect(skill.id) : undefined}
               >
+                {dragHandle}
                 {isMultiSelect ? (
                   selectedIds.has(skill.id)
                     ? <SquareCheck className="h-3.5 w-3.5 shrink-0 text-accent" />
@@ -1231,9 +1354,13 @@ export function MySkills() {
                   </button>
                 </div>
               </div>
+              )}
+              </SortableSkillItem>
             );
           })}
         </div>
+          </SortableContext>
+        </DndContext>
       )}
 
       <SkillDetailPanel

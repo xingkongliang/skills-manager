@@ -469,6 +469,8 @@ pub fn run() {
             commands::scenarios::remove_skill_from_scenario,
             commands::scenarios::reorder_scenarios,
             commands::projects::reorder_projects,
+            commands::scenarios::get_scenario_skill_order,
+            commands::scenarios::reorder_scenario_skills,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
