@@ -160,8 +160,12 @@
     "deleteSelected": "删除 {{count}} 个",
     "batchDeleteConfirm": "确定彻底删除选中的 {{count}} 个 Skill 吗？中央仓库文件、场景关联和已同步到各 Agent 的目标都会被移除。",
     "batchDeleted": "已删除 {{count}} 个 Skill",
-    "batchDeleteFailed": "{{count}} 个 Skill 删除失败",
-    "cancelSelect": "取消多选"
+    "selectAll": "全选",
+    "deselectAll": "取消全选",
+    "batchEnable": "启用 {{count}} 个",
+    "batchDisable": "停用 {{count}} 个",
+    "batchEnabled": "已启用 {{count}} 个 Skill",
+    "batchDisabled": "已停用 {{count}} 个 Skill"
   },
   "install": {
     "title": "安装 Skills",
@@ -186,6 +190,15 @@
     "noResults": {
       "title": "没有找到匹配的市场 Skill",
       "description": "换一个关键词，或者清空来源筛选后再试。"
+    },
+    "batch": {
+      "start": "批量安装",
+      "cancel": "取消批量",
+      "cartTitle": "待安装队列",
+      "addToCart": "加入队列",
+      "removeFromCart": "移出队列",
+      "installAll": "全部安装 ({{count}})",
+      "emptyCart": "暂无选中的 Skill"
     },
     "oneClickInstall": "一键安装",
     "viewOnWeb": "在 skills.sh 查看",
@@ -264,10 +277,6 @@
     "supportedAgents": "支持的 Agent",
     "refresh": "重新检测",
     "notInstalled": "未安装",
-    "enableAll": "全部启用",
-    "disableAll": "全部禁用",
-    "enableAgent": "启用此 Agent",
-    "disableAgent": "禁用此 Agent",
     "globalConfig": "全局配置",
     "repoPath": "中央仓库路径",
     "repoPathDesc": "所有 Skills 和场景配置的默认存储位置。",
@@ -289,7 +298,7 @@
     "language": "语言",
     "help": "帮助",
     "about": "关于",
-    "version": "Skills Manager 1.8.0",
+    "version": "Skills Manager 1.6.0",
     "tagline": "跨平台。极简、高效、无感多场景切换。",
     "checkUpdate": "检查更新",
     "checking": "检查中…",
@@ -307,7 +316,6 @@
     "proxyUrlDesc": "设置后，所有 Git 拉取和网络请求均通过此代理出口。留空则直连。",
     "proxyUrlPlaceholder": "http://127.0.0.1:7890",
     "proxyUrlSaved": "代理设置已保存",
-    "proxyUrlInvalid": "代理地址必须以 http://、https:// 或 socks5:// 开头",
     "gitSyncConfig": "Git 同步配置",
     "gitSyncConfigDesc": "这里只保存远程仓库地址等偏好；初始化与同步操作请在“我的 Skills”页面执行。",
     "gitConfigSaved": "Git 同步配置已保存",
@@ -354,21 +362,16 @@
     "gitErrorNotRepo": "未检测到 Git 仓库，请先开始备份。",
     "gitErrorGeneric": "Git 操作失败，请检查高级设置后重试。",
     "closeAction": "关闭行为",
-    "closeActionDesc": "选择点击窗口关闭按钮后的应用行为。",
+    "closeActionDesc": "点击窗口关闭按钮时的默认动作。",
     "closeAction_ask": "每次询问",
-    "closeAction_hide": "最小化到托盘",
-    "closeAction_close": "退出应用",
-    "trayIcon": "托盘图标",
-    "trayIconDesc": "在系统托盘中显示图标，便于快速执行显示和退出操作。",
-    "trayIcon_on": "显示",
-    "trayIcon_off": "隐藏",
-    "trayIconOffHint": "托盘图标已隐藏，关闭窗口时将直接退出应用。"
+    "closeAction_hide": "隐藏到托盘",
+    "closeAction_close": "退出应用"
   },
   "closeAction": {
-    "title": "关闭行为",
-    "message": "最小化到托盘后，应用仍会在后台运行，你可以从系统托盘图标重新打开。",
+    "title": "关闭还是隐藏？",
+    "message": "点击关闭按钮时，你希望应用如何响应？",
     "close": "退出应用",
-    "hide": "最小化到托盘",
+    "hide": "隐藏到托盘",
     "remember": "记住我的选择，下次不再提示"
   },
   "common": {
@@ -465,8 +468,21 @@
     "searchCenterSkills": "搜索中央仓库中的 Skills...",
     "noSkillsToExport": "中央仓库中没有可更新到项目的 Skill",
     "import": "更新",
+    "updateSelected": "更新 {{count}} 个",
+    "batchImported": "已更新 {{count}} 个 Skill",
     "deleteSkill": "删除 Skill",
     "deleteSkillConfirm": "确定永久删除 Skill \"{{name}}\" 吗？此操作不可恢复。",
-    "skillDeleted": "\"{{name}}\" 已删除"
+    "skillDeleted": "\"{{name}}\" 已删除",
+    "selectMode": "多选",
+    "cancelSelect": "退出多选",
+    "selectedCount": "已选 {{count}} 个",
+    "selectHint": "点击 Skill 开始选择",
+    "deleteSelected": "删除 {{count}} 个",
+    "batchDeleteConfirm": "确定永久删除选中的 {{count}} 个 Skill 吗？此操作不可恢复。",
+    "batchDeleted": "已删除 {{count}} 个 Skill",
+    "batchEnable": "启用 {{count}} 个",
+    "batchDisable": "停用 {{count}} 个",
+    "batchEnabled": "已启用 {{count}} 个 Skill",
+    "batchDisabled": "已停用 {{count}} 个 Skill"
   }
 }

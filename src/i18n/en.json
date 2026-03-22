@@ -160,8 +160,12 @@
     "deleteSelected": "Delete {{count}}",
     "batchDeleteConfirm": "Delete {{count}} selected skills permanently? This removes their central library files, scenario links, and synced agent targets.",
     "batchDeleted": "{{count}} skills deleted",
-    "batchDeleteFailed": "{{count}} skills failed to delete",
-    "cancelSelect": "Cancel selection"
+    "selectAll": "Select All",
+    "deselectAll": "Deselect All",
+    "batchEnable": "Enable {{count}}",
+    "batchDisable": "Disable {{count}}",
+    "batchEnabled": "{{count}} skills enabled",
+    "batchDisabled": "{{count}} skills disabled"
   },
   "install": {
     "title": "Install Skills",
@@ -186,6 +190,15 @@
     "noResults": {
       "title": "No matching market skills",
       "description": "Try another keyword or clear the source filter."
+    },
+    "batch": {
+      "start": "Batch Install",
+      "cancel": "Cancel Batch",
+      "cartTitle": "Install Queue",
+      "addToCart": "Add to Queue",
+      "removeFromCart": "Remove from Queue",
+      "installAll": "Install All ({{count}})",
+      "emptyCart": "No skills selected"
     },
     "oneClickInstall": "Install",
     "viewOnWeb": "View on skills.sh",
@@ -264,10 +277,6 @@
     "supportedAgents": "Supported Agents",
     "refresh": "Refresh",
     "notInstalled": "Not installed",
-    "enableAll": "Enable All",
-    "disableAll": "Disable All",
-    "enableAgent": "Enable this agent",
-    "disableAgent": "Disable this agent",
     "globalConfig": "Global Configuration",
     "repoPath": "Central Repository Path",
     "repoPathDesc": "Default storage location for all Skills and scenario configs.",
@@ -289,7 +298,7 @@
     "language": "Language",
     "help": "Help",
     "about": "About",
-    "version": "Skills Manager 1.8.0",
+    "version": "Skills Manager 1.6.0",
     "tagline": "Cross-platform. Minimal, efficient, seamless multi-scenario switching.",
     "checkUpdate": "Check for Updates",
     "checking": "Checking…",
@@ -307,7 +316,6 @@
     "proxyUrlDesc": "All Git clones and network requests will route through this proxy. Leave blank to connect directly.",
     "proxyUrlPlaceholder": "http://127.0.0.1:7890",
     "proxyUrlSaved": "Proxy settings saved",
-    "proxyUrlInvalid": "Proxy URL must start with http://, https://, or socks5://",
     "gitSyncConfig": "Git Sync Configuration",
     "gitSyncConfigDesc": "This page stores remote repository preferences only. Initialize and run sync from the My Skills page.",
     "gitConfigSaved": "Git sync configuration saved",
@@ -354,22 +362,17 @@
     "gitErrorNotRepo": "Git repository not found. Start backup first.",
     "gitErrorGeneric": "Git operation failed. Please check Advanced Settings and try again.",
     "closeAction": "Close Behavior",
-    "closeActionDesc": "Choose what happens when you click the window close button.",
+    "closeActionDesc": "What happens when you click the window close button.",
     "closeAction_ask": "Ask each time",
-    "closeAction_hide": "Minimize to tray",
-    "closeAction_close": "Quit app",
-    "trayIcon": "Tray Icon",
-    "trayIconDesc": "Show an icon in the system tray for quick Show and Quit actions.",
-    "trayIcon_on": "Show",
-    "trayIcon_off": "Hide",
-    "trayIconOffHint": "Tray icon is hidden, so closing the window will quit the app."
+    "closeAction_hide": "Hide to tray",
+    "closeAction_close": "Quit app"
   },
   "closeAction": {
-    "title": "Close behavior",
-    "message": "Minimize to tray keeps the app running in the background and lets you reopen it from the tray icon.",
+    "title": "Close or hide?",
+    "message": "What should happen when you click the close button?",
     "close": "Quit app",
-    "hide": "Minimize to tray",
-    "remember": "Remember my choice for next time"
+    "hide": "Hide to tray",
+    "remember": "Remember my choice and don't ask again"
   },
   "common": {
     "loading": "Loading...",
@@ -465,8 +468,21 @@
     "searchCenterSkills": "Search skills in the central library...",
     "noSkillsToExport": "No skills available to update from center",
     "import": "Update",
+    "updateSelected": "Update {{count}}",
+    "batchImported": "{{count}} skills updated",
     "deleteSkill": "Delete skill",
     "deleteSkillConfirm": "Permanently delete skill \"{{name}}\"? This action cannot be undone.",
-    "skillDeleted": "\"{{name}}\" deleted"
+    "skillDeleted": "\"{{name}}\" deleted",
+    "selectMode": "Select",
+    "cancelSelect": "Exit Select",
+    "selectedCount": "{{count}} selected",
+    "selectHint": "Click skills to select",
+    "deleteSelected": "Delete {{count}}",
+    "batchDeleteConfirm": "Permanently delete {{count}} selected skills? This action cannot be undone.",
+    "batchDeleted": "{{count}} skills deleted",
+    "batchEnable": "Enable {{count}}",
+    "batchDisable": "Disable {{count}}",
+    "batchEnabled": "{{count}} skills enabled",
+    "batchDisabled": "{{count}} skills disabled"
   }
 }

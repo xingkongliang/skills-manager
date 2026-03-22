@@ -44,7 +44,3 @@ tempfile = "3.26.0"
 semver = "1"
 aes-gcm = "0.10"
 rand = "0.8"
-image = { version = "0.25", default-features = false, features = ["png"] }
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"

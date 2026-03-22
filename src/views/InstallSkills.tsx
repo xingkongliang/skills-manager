@@ -8,6 +8,7 @@ import {
   TrendingUp,
   Clock,
   Plus,
+  Minus,
   FolderUp,
   Loader2,
   RefreshCw,
@@ -18,8 +19,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Search,
-  X,
   MoreHorizontal,
+  ShoppingCart,
+  X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -39,6 +41,7 @@ const MARKET_SEARCH_STEP = 60;
 const MARKET_SEARCH_DEBOUNCE_MS = 450;
 const MARKET_SEARCH_CACHE_TTL_MS = 120_000;
 const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
+const BATCH_CONCURRENCY = 5;
 
 export function InstallSkills() {
   const { t } = useTranslation();
@@ -60,7 +63,6 @@ export function InstallSkills() {
   const [gitLoading, setGitLoading] = useState(false);
   const [gitCancelKey, setGitCancelKey] = useState<string | null>(null);
   const [gitPreview, setGitPreview] = useState<GitPreviewResult | null>(null);
-  const [gitPreviewRepoUrl, setGitPreviewRepoUrl] = useState<string | null>(null);
   const [gitSelections, setGitSelections] = useState<{ dir_name: string; name: string; description: string | null; selected: boolean }[]>([]);
   const [gitConfirmLoading, setGitConfirmLoading] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -74,9 +76,14 @@ export function InstallSkills() {
   const [sourceSearch, setSourceSearch] = useState("");
   const [sourceFocusedIndex, setSourceFocusedIndex] = useState(-1);
   const sourceListRef = useRef<HTMLDivElement | null>(null);
-  const [visibleSourceCount, setVisibleSourceCount] = useState<number>(Infinity);
+  const [visibleSourceCount, setVisibleSourceCount] = useState<number>(0);
   const sourceOverflowBtnRef = useRef<HTMLButtonElement | null>(null);
   const sourceOverflowPanelRef = useRef<HTMLDivElement | null>(null);
+  const [batchMode, setBatchMode] = useState(false);
+  const [cartItems, setCartItems] = useState<Map<string, SkillsShSkill>>(new Map());
+  const [cartOpen, setCartOpen] = useState(false);
+  const [batchInstalling, setBatchInstalling] = useState(false);
+  const [batchInstallingIds, setBatchInstallingIds] = useState<Set<string>>(new Set());
   const filterContainerRef = useRef<HTMLDivElement | null>(null);
   const allBtnMeasureRef = useRef<HTMLButtonElement | null>(null);
   const moreBtnMeasureRef = useRef<HTMLButtonElement | null>(null);
@@ -85,11 +92,6 @@ export function InstallSkills() {
   const marketSkillsLengthRef = useRef(0);
   const [debouncedMarketQuery, setDebouncedMarketQuery] = useState("");
   const deferredMarketQuery = useDeferredValue(marketQuery);
-  const resetSourceOverflowState = useCallback(() => {
-    setSourceOverflowOpen(false);
-    setSourceSearch("");
-    setSourceFocusedIndex(-1);
-  }, []);
 
   const pruneMarketSearchCache = useCallback(() => {
     const now = Date.now();
@@ -113,6 +115,91 @@ export function InstallSkills() {
       marketSearchCacheRef.current.delete(key);
     }
   }, []);
+
+  const cartSkills = useMemo(() => Array.from(cartItems.values()), [cartItems]);
+
+  const toggleCart = (skill: SkillsShSkill) => {
+    setCartItems((prev) => {
+      const next = new Map(prev);
+      if (next.has(skill.id)) next.delete(skill.id);
+      else next.set(skill.id, skill);
+      return next;
+    });
+  };
+
+  const exitBatchMode = () => {
+    setBatchMode(false);
+    setCartItems(new Map());
+    setCartOpen(false);
+  };
+
+  const handleBatchInstall = async () => {
+    const toInstall = cartSkills.filter(
+      (s) => !installedSourceRefs.has(`${s.source}/${s.skill_id}`)
+    );
+    if (toInstall.length === 0) return;
+    setBatchInstalling(true);
+    setBatchInstallingIds(new Set(toInstall.map((s) => s.id)));
+
+    const queue = [...toInstall];
+
+    const installOne = async (skill: SkillsShSkill) => {
+      const displayName = skill.name || skill.skill_id;
+      const cancelKey = `${skill.source}/${skill.skill_id}`;
+      const toastId = toast.loading(t("install.toast.cloning"));
+      let unlisten: (() => void) | null = null;
+      try {
+        unlisten = await listen<{ skill_id: string; phase: string }>(
+          "install-progress",
+          (event) => {
+            if (event.payload.skill_id !== cancelKey) return;
+            if (event.payload.phase === "cloning") {
+              toast.loading(t("install.toast.cloning"), { id: toastId });
+            } else if (event.payload.phase === "installing") {
+              toast.loading(t("install.toast.installing", { name: displayName }), { id: toastId });
+            }
+          }
+        );
+        await api.installFromSkillssh(skill.source, skill.skill_id);
+        toast.success(t("install.toast.success", { name: displayName }), { id: toastId });
+        setCartItems((prev) => {
+          const next = new Map(prev);
+          next.delete(skill.id);
+          return next;
+        });
+      } catch (error: unknown) {
+        if (getErrorKind(error) === "cancelled") {
+          toast.info(t("install.toast.cancelled"), { id: toastId });
+        } else {
+          toast.error(getErrorMessage(error, t("common.error")), { id: toastId });
+        }
+      } finally {
+        setBatchInstallingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(skill.id);
+          return next;
+        });
+        unlisten?.();
+      }
+    };
+
+    const worker = async () => {
+      while (queue.length > 0) {
+        const skill = queue.shift()!;
+        await installOne(skill);
+      }
+    };
+
+    await Promise.allSettled(
+      Array.from({ length: Math.min(BATCH_CONCURRENCY, toInstall.length) }, worker)
+    );
+
+    try {
+      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+    } finally {
+      setBatchInstalling(false);
+    }
+  };
 
   const installedSourceRefs = useMemo(() => {
     const set = new Set<string>();
@@ -142,11 +229,13 @@ export function InstallSkills() {
         sourceOverflowBtnRef.current?.contains(e.target as Node) ||
         sourceOverflowPanelRef.current?.contains(e.target as Node)
       ) return;
-      resetSourceOverflowState();
+      setSourceOverflowOpen(false);
+      setSourceSearch("");
+      setSourceFocusedIndex(-1);
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [resetSourceOverflowState, sourceOverflowOpen]);
+  }, [sourceOverflowOpen]);
 
   useEffect(() => {
     const tab = searchParams.get("tab");
@@ -418,7 +507,6 @@ export function InstallSkills() {
       const preview = await api.previewGitInstall(url);
       toast.dismiss(toastId);
       setGitPreview(preview);
-      setGitPreviewRepoUrl(url);
       setGitSelections(preview.skills.map((s) => ({
         dir_name: s.dir_name,
         name: s.name,
@@ -438,26 +526,14 @@ export function InstallSkills() {
     }
   };
 
-  const handleGitPreviewClose = () => {
-    if (gitConfirmLoading) return;
-    if (gitPreview) {
-      api.cancelGitPreview(gitPreview.temp_dir).catch(() => {});
-    }
-    setGitPreview(null);
-    setGitPreviewRepoUrl(null);
-    setGitSelections([]);
-  };
-
   const handleGitConfirm = async () => {
     if (!gitPreview) return;
-    const repoUrl = gitPreviewRepoUrl ?? gitUrl.trim();
-    if (!repoUrl) return;
     const selected = gitSelections.filter((s) => s.selected);
     if (selected.length === 0) return;
     setGitConfirmLoading(true);
     try {
       await api.confirmGitInstall(
-        repoUrl,
+        gitUrl.trim(),
         gitPreview.temp_dir,
         selected.map((s) => ({ dir_name: s.dir_name, name: s.name }))
       );
@@ -465,7 +541,6 @@ export function InstallSkills() {
       toast.success(t("install.toast.success", { name: selected.map((s) => s.name).join(", ") }));
       setGitUrl("");
       setGitPreview(null);
-      setGitPreviewRepoUrl(null);
       setGitSelections([]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
@@ -522,11 +597,6 @@ export function InstallSkills() {
     [marketSkills]
   );
 
-  // Trim stale measurement refs when sourceOptions shrinks
-  useEffect(() => {
-    sourceMeasureRefs.current.length = sourceOptions.length;
-  }, [sourceOptions.length]);
-
   const computeVisibleCount = useCallback(() => {
     const container = filterContainerRef.current;
     if (!container || sourceOptions.length === 0) {
@@ -542,7 +612,6 @@ export function InstallSkills() {
     const totalNeeded = widths.reduce((sum, w) => sum + w + GAP, 0);
     if (totalNeeded <= available) {
       setVisibleSourceCount(sourceOptions.length);
-      resetSourceOverflowState();
       return;
     }
     const availableWithMore = available - moreBtnWidth - GAP;
@@ -557,7 +626,7 @@ export function InstallSkills() {
       }
     }
     setVisibleSourceCount(count);
-  }, [resetSourceOverflowState, sourceOptions]);
+  }, [sourceOptions]);
 
   useLayoutEffect(() => {
     computeVisibleCount();
@@ -570,7 +639,6 @@ export function InstallSkills() {
     observer.observe(container);
     return () => observer.disconnect();
   }, [computeVisibleCount]);
-
   const filteredMarketSkills = useMemo(() => {
     const filtered = marketSourceFilter === "all"
       ? marketSkills
@@ -598,33 +666,6 @@ export function InstallSkills() {
   const hasMarketQuery = debouncedMarketQuery.trim().length > 0;
   const canLoadMoreSearch = hasMarketQuery && marketSkills.length >= marketSearchLimit;
   const isLoadingMoreSearch = hasMarketQuery && marketLoadingMore;
-
-  const overflowSources = sourceOptions.slice(visibleSourceCount);
-  const filteredOverflowSources = sourceSearch
-    ? overflowSources.filter((s) => s.toLowerCase().includes(sourceSearch.toLowerCase()))
-    : overflowSources;
-
-  useEffect(() => {
-    if (sourceOverflowOpen && visibleSourceCount >= sourceOptions.length) {
-      resetSourceOverflowState();
-    }
-  }, [resetSourceOverflowState, sourceOptions.length, sourceOverflowOpen, visibleSourceCount]);
-
-  useEffect(() => {
-    setSourceFocusedIndex((idx) => {
-      if (filteredOverflowSources.length === 0) return -1;
-      if (idx < 0) return idx;
-      return Math.min(idx, filteredOverflowSources.length - 1);
-    });
-  }, [filteredOverflowSources.length]);
-
-  // Scroll the focused overflow item into view whenever the index changes
-  useEffect(() => {
-    if (sourceFocusedIndex < 0) return;
-    sourceListRef.current
-      ?.children[sourceFocusedIndex]
-      ?.scrollIntoView({ block: "nearest" });
-  }, [sourceFocusedIndex]);
 
   return (
     <div className="app-page">
@@ -706,21 +747,54 @@ export function InstallSkills() {
                     </div>
                   ) : null}
 
-                  <div className="relative flex-1 lg:max-w-[640px]">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
-                    <input
-                      type="text"
-                      value={marketQuery}
-                      onChange={(event) => {
-                        setMarketQuery(event.target.value);
-                        setMarketSearchLimit(MARKET_SEARCH_STEP);
-                      }}
-                      placeholder={t("install.searchMarket")}
-                      className="app-input w-full bg-background pl-9"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck={false}
-                    />
+                  <div className="flex flex-1 items-center gap-2">
+                    <div className="relative flex-1 lg:max-w-[640px]">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+                      <input
+                        type="text"
+                        value={marketQuery}
+                        onChange={(event) => {
+                          setMarketQuery(event.target.value);
+                          setMarketSearchLimit(MARKET_SEARCH_STEP);
+                        }}
+                        placeholder={t("install.searchMarket")}
+                        className="app-input w-full bg-background pl-9"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => (batchMode ? exitBatchMode() : setBatchMode(true))}
+                      className={cn(
+                        "shrink-0 inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[13px] font-medium transition-colors",
+                        batchMode
+                          ? "border-border bg-surface-hover text-secondary hover:bg-surface-active"
+                          : "border-border-subtle bg-background text-muted hover:text-secondary"
+                      )}
+                    >
+                      {batchMode ? t("install.batch.cancel") : t("install.batch.start")}
+                    </button>
+
+                    {batchMode && (
+                      <div className="relative shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setCartOpen(true)}
+                          className="inline-flex items-center justify-center rounded-lg border border-border-subtle bg-background p-1.5 text-muted transition-colors hover:text-secondary"
+                          title={t("install.batch.cartTitle")}
+                        >
+                          <ShoppingCart className="h-4 w-4" />
+                        </button>
+                        {cartItems.size > 0 && (
+                          <span className="pointer-events-none absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                            {cartItems.size}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -732,7 +806,7 @@ export function InstallSkills() {
                   </span>
                   <div ref={filterContainerRef} className="relative min-w-0 flex-1">
                     {/* Hidden measurement layer — never visible, keeps all pills in DOM for width queries */}
-                    <div className="pointer-events-none invisible absolute left-0 top-0 flex h-0 items-center gap-1.5 overflow-hidden" aria-hidden="true">
+                    <div className="pointer-events-none invisible absolute left-0 top-0 flex items-center gap-1.5" aria-hidden="true">
                       <button
                         ref={allBtnMeasureRef}
                         tabIndex={-1}
@@ -797,13 +871,7 @@ export function InstallSkills() {
                                 const rect = sourceOverflowBtnRef.current.getBoundingClientRect();
                                 setSourceOverflowSide(rect.left + 192 > window.innerWidth ? "right" : "left");
                               }
-                              setSourceOverflowOpen((v) => {
-                                if (v) {
-                                  setSourceSearch("");
-                                  setSourceFocusedIndex(-1);
-                                }
-                                return !v;
-                              });
+                              setSourceOverflowOpen((v) => !v);
                             }}
                             className={cn(
                               "flex items-center rounded-full border px-2 py-1 text-[13px] font-medium transition-colors",
@@ -812,15 +880,12 @@ export function InstallSkills() {
                                 : "border-border-subtle bg-background text-muted hover:text-secondary"
                             )}
                             title={`${sourceOptions.length - visibleSourceCount} more`}
-                            aria-expanded={sourceOverflowOpen}
-                            aria-haspopup="listbox"
                           >
                             <MoreHorizontal className="h-3.5 w-3.5" />
                           </button>
                           {sourceOverflowOpen && (
                             <div
                               ref={sourceOverflowPanelRef}
-                              role="listbox"
                               className={cn(
                                 "absolute top-full z-50 mt-1.5 w-48 overflow-hidden rounded-xl border border-border bg-surface shadow-lg",
                                 sourceOverflowSide === "left" ? "left-0" : "right-0"
@@ -837,26 +902,43 @@ export function InstallSkills() {
                                       setSourceFocusedIndex(-1);
                                     }}
                                     onKeyDown={(e) => {
+                                      const filtered = sourceOptions.filter((s) =>
+                                        s.toLowerCase().includes(sourceSearch.toLowerCase())
+                                      );
                                       if (e.key === "ArrowDown") {
                                         e.preventDefault();
-                                        if (filteredOverflowSources.length === 0) return;
-                                        setSourceFocusedIndex((i) =>
-                                          Math.min(i + 1, filteredOverflowSources.length - 1)
-                                        );
+                                        setSourceFocusedIndex((i) => {
+                                          const next = Math.min(i + 1, filtered.length - 1);
+                                          requestAnimationFrame(() => {
+                                            sourceListRef.current
+                                              ?.children[next]
+                                              ?.scrollIntoView({ block: "nearest" });
+                                          });
+                                          return next;
+                                        });
                                       } else if (e.key === "ArrowUp") {
                                         e.preventDefault();
-                                        if (filteredOverflowSources.length === 0) return;
-                                        setSourceFocusedIndex((i) =>
-                                          i <= 0 ? 0 : i - 1
-                                        );
-                                      } else if (e.key === "Enter" && sourceFocusedIndex >= 0) {
-                                        const target = filteredOverflowSources[sourceFocusedIndex];
+                                        setSourceFocusedIndex((i) => {
+                                          const next = Math.max(i - 1, 0);
+                                          requestAnimationFrame(() => {
+                                            sourceListRef.current
+                                              ?.children[next]
+                                              ?.scrollIntoView({ block: "nearest" });
+                                          });
+                                          return next;
+                                        });
+                                      } else if (e.key === "Enter") {
+                                        const target = filtered[sourceFocusedIndex] ?? filtered[0];
                                         if (target) {
                                           setMarketSourceFilter(target);
-                                          resetSourceOverflowState();
+                                          setSourceOverflowOpen(false);
+                                          setSourceSearch("");
+                                          setSourceFocusedIndex(-1);
                                         }
                                       } else if (e.key === "Escape") {
-                                        resetSourceOverflowState();
+                                        setSourceOverflowOpen(false);
+                                        setSourceSearch("");
+                                        setSourceFocusedIndex(-1);
                                       }
                                     }}
                                     placeholder={t("common.search")}
@@ -869,15 +951,17 @@ export function InstallSkills() {
                                 </div>
                               </div>
                               <div ref={sourceListRef} className="max-h-48 overflow-y-auto scrollbar-hide py-1">
-                                {filteredOverflowSources.map((source, idx) => (
+                                {sourceOptions.filter((s) =>
+                                  s.toLowerCase().includes(sourceSearch.toLowerCase())
+                                ).map((source, idx) => (
                                   <button
                                     key={source}
                                     type="button"
-                                    role="option"
-                                    aria-selected={marketSourceFilter === source}
                                     onClick={() => {
                                       setMarketSourceFilter(source);
-                                      resetSourceOverflowState();
+                                      setSourceOverflowOpen(false);
+                                      setSourceSearch("");
+                                      setSourceFocusedIndex(-1);
                                     }}
                                     className={cn(
                                       "flex w-full items-center px-3 py-1.5 text-left text-[13px] transition-colors",
@@ -985,6 +1069,24 @@ export function InstallSkills() {
                               >
                                 <Check className="h-3.5 w-3.5" />
                               </span>
+                            ) : batchMode ? (
+                              cartItems.has(skill.id) ? (
+                                <button
+                                  onClick={() => toggleCart(skill)}
+                                  className="rounded-[5px] border border-red-500/30 bg-red-500/10 p-1 text-red-400 transition-colors hover:bg-red-500/20"
+                                  title={t("install.batch.removeFromCart")}
+                                >
+                                  <Minus className="h-3.5 w-3.5" />
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => toggleCart(skill)}
+                                  className="rounded-[5px] border border-accent-border bg-accent-dark p-1 text-white transition-colors hover:bg-accent"
+                                  title={t("install.batch.addToCart")}
+                                >
+                                  <Plus className="h-3.5 w-3.5" />
+                                </button>
+                              )
                             ) : installing === skill.id ? (
                               <button
                                 onClick={() => handleCancelInstall(`${skill.source}/${skill.skill_id}`)}
@@ -1323,7 +1425,7 @@ export function InstallSkills() {
                   onChange={(e) => setGitUrl(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !gitLoading && gitUrl.trim()) handleGitPreview(); }}
                   placeholder={t("install.repoUrlPlaceholder")}
-                  disabled={gitLoading}
+                  disabled={gitLoading || gitPreview !== null}
                   className="app-input w-full bg-background"
                 />
               </div>
@@ -1353,19 +1455,106 @@ export function InstallSkills() {
         </div>
       )}
 
+      {/* Batch install cart panel */}
+      {cartOpen && batchMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setCartOpen(false)}
+          />
+          <div className="relative flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl border border-border bg-surface p-5 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-[14px] font-semibold text-primary">
+                {t("install.batch.cartTitle")}
+              </h2>
+              <button
+                onClick={() => setCartOpen(false)}
+                className="rounded p-1 text-muted transition-colors hover:text-secondary"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleBatchInstall}
+              disabled={cartSkills.length === 0 || batchInstalling}
+              className="app-button-primary mb-4 flex w-full justify-center"
+            >
+              {batchInstalling ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <DownloadCloud className="h-3.5 w-3.5" />
+              )}
+              {t("install.batch.installAll", { count: cartSkills.length })}
+            </button>
+
+            {cartSkills.length === 0 ? (
+              <p className="py-8 text-center text-[13px] text-muted">
+                {t("install.batch.emptyCart")}
+              </p>
+            ) : (
+              <div className="flex-1 space-y-2 overflow-y-auto scrollbar-hide">
+                {cartSkills.map((skill) => {
+                  const displayName = skill.name || skill.skill_id;
+                  const owner = skill.source.split("/")[0];
+                  const avatarUrl = `https://github.com/${owner}.png?size=32`;
+                  const isInstalled = installedSourceRefs.has(`${skill.source}/${skill.skill_id}`);
+                  return (
+                    <div
+                      key={skill.id}
+                      className="app-panel flex items-center gap-2.5 p-2.5 transition-colors hover:border-border"
+                    >
+                      <img
+                        src={avatarUrl}
+                        alt={owner}
+                        className="h-6 w-6 shrink-0 rounded-full border border-border-subtle"
+                        loading="lazy"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-semibold text-secondary">
+                          {displayName}
+                        </p>
+                        <p className="truncate text-[13px] text-muted">@{skill.source}</p>
+                      </div>
+                      {isInstalled ? (
+                        <span className="shrink-0 rounded-[5px] border border-emerald-500/20 bg-emerald-500/10 p-1 text-emerald-400">
+                          <Check className="h-3.5 w-3.5" />
+                        </span>
+                      ) : batchInstallingIds.has(skill.id) ? (
+                        <span className="shrink-0 p-1 text-accent">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
+                      ) : null}
+                      <button
+                        onClick={() => toggleCart(skill)}
+                        disabled={batchInstalling}
+                        className="shrink-0 rounded-[5px] p-1 text-muted transition-colors hover:bg-surface-hover hover:text-red-400 disabled:opacity-50"
+                        title={t("install.batch.removeFromCart")}
+                      >
+                        <Minus className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Git preview / selection dialog */}
       {gitPreview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
             className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-            onClick={handleGitPreviewClose}
+            onClick={() => { setGitPreview(null); setGitSelections([]); }}
           />
           <div className="relative w-full max-w-md rounded-xl border border-border bg-surface p-5 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-[14px] font-semibold text-primary">{t("install.gitPreview.title")}</h2>
               <button
-                onClick={handleGitPreviewClose}
-                disabled={gitConfirmLoading}
+                onClick={() => { setGitPreview(null); setGitSelections([]); }}
                 className="rounded p-1 text-muted transition-colors hover:text-secondary"
               >
                 <X className="h-4 w-4" />
@@ -1378,7 +1567,6 @@ export function InstallSkills() {
               <button
                 type="button"
                 onClick={() => setGitSelections((prev) => prev.map((s) => ({ ...s, selected: true })))}
-                disabled={gitConfirmLoading}
                 className="text-[13px] text-accent-light hover:underline"
               >
                 {t("install.gitPreview.selectAll")}
@@ -1387,7 +1575,6 @@ export function InstallSkills() {
               <button
                 type="button"
                 onClick={() => setGitSelections((prev) => prev.map((s) => ({ ...s, selected: false })))}
-                disabled={gitConfirmLoading}
                 className="text-[13px] text-muted hover:underline"
               >
                 {t("install.gitPreview.deselectAll")}
@@ -1411,7 +1598,6 @@ export function InstallSkills() {
                     <input
                       type="checkbox"
                       checked={item.selected}
-                      disabled={gitConfirmLoading}
                       onChange={(e) =>
                         setGitSelections((prev) =>
                           prev.map((s, i) => i === idx ? { ...s, selected: e.target.checked } : s)
@@ -1428,7 +1614,7 @@ export function InstallSkills() {
                             prev.map((s, i) => i === idx ? { ...s, name: e.target.value } : s)
                           )
                         }
-                        disabled={!item.selected || gitConfirmLoading}
+                        disabled={!item.selected}
                         placeholder={t("install.gitPreview.namePlaceholder")}
                         className="app-input w-full bg-background py-1 text-[13px]"
                       />
@@ -1444,8 +1630,7 @@ export function InstallSkills() {
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={handleGitPreviewClose}
-                disabled={gitConfirmLoading}
+                onClick={() => { setGitPreview(null); setGitSelections([]); }}
                 className="px-3 py-1.5 text-[13px] font-medium text-muted hover:text-secondary transition-colors"
               >
                 {t("common.cancel")}
