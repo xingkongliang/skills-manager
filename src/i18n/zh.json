@@ -218,10 +218,16 @@
     "gitDesc": "输入公共或私有 Git 仓库地址。私有仓库请确保本地已配置对应的 SSH 密钥。",
     "repoUrl": "仓库地址",
     "repoUrlPlaceholder": "https://github.com/user/repo.git 或 git@github.com...",
-    "customName": "自定义名称",
-    "customNameOptional": "可选",
-    "customNamePlaceholder": "留空则使用仓库名称",
-    "installClone": "安装并克隆",
+    "installClone": "克隆并预览",
+    "gitPreview": {
+      "title": "选择要导入的技能",
+      "description": "从仓库中发现了以下技能，可自定义名称后导入。",
+      "selectAll": "全选",
+      "deselectAll": "取消全选",
+      "namePlaceholder": "技能名称",
+      "confirm": "导入选中项",
+      "empty": "未发现可导入的技能"
+    },
     "scan": {
       "title": "扫描本地 Skills 并导入",
       "initial": "扫描当前机器上各 Agent 已安装的 Skills。",

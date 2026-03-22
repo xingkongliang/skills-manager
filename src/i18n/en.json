@@ -218,10 +218,16 @@
     "gitDesc": "Enter a public or private Git repository URL. For private repos, ensure SSH keys are configured.",
     "repoUrl": "Repository URL",
     "repoUrlPlaceholder": "https://github.com/user/repo.git or git@github.com...",
-    "customName": "Custom Name",
-    "customNameOptional": "Optional",
-    "customNamePlaceholder": "Leave blank to use repo name",
-    "installClone": "Install & Clone",
+    "installClone": "Clone & Preview",
+    "gitPreview": {
+      "title": "Select Skills to Import",
+      "description": "The following skills were found in the repository. Rename them if needed, then confirm.",
+      "selectAll": "Select All",
+      "deselectAll": "Deselect All",
+      "namePlaceholder": "Skill name",
+      "confirm": "Import Selected",
+      "empty": "No importable skills found"
+    },
     "scan": {
       "title": "Scan Local Skills",
       "initial": "Scan agent skill folders already present on this machine.",

@@ -52,6 +52,8 @@ pub fn run() {
             commands::skills::delete_managed_skill,
             commands::skills::install_local,
             commands::skills::install_git,
+            commands::skills::preview_git_install,
+            commands::skills::confirm_git_install,
             commands::skills::install_from_skillssh,
             commands::skills::check_skill_update,
             commands::skills::check_all_skill_updates,

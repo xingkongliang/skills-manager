@@ -71,10 +71,11 @@ pub async fn git_backup_push(
 pub async fn git_backup_pull(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
-    let _ = store;
+    let store = store.inner().clone();
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
-        git_backup::pull(&skills_dir).map_err(AppError::git)
+        git_backup::pull(&skills_dir).map_err(AppError::git)?;
+        reconcile_skills_index(&store).map_err(AppError::db)
     })
     .await?
 }
@@ -84,10 +85,11 @@ pub async fn git_backup_clone(
     store: State<'_, Arc<SkillStore>>,
     url: String,
 ) -> Result<(), AppError> {
-    let _ = store;
+    let store = store.inner().clone();
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
-        git_backup::clone_into(&skills_dir, &url).map_err(AppError::git)
+        git_backup::clone_into(&skills_dir, &url).map_err(AppError::git)?;
+        reconcile_skills_index(&store).map_err(AppError::db)
     })
     .await?
 }

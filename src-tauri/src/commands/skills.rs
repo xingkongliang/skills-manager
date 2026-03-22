@@ -76,6 +76,25 @@ struct GitSkillSource {
     locator_skill_id: Option<String>,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct GitSkillPreview {
+    pub dir_name: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct GitPreviewResult {
+    pub temp_dir: String,
+    pub skills: Vec<GitSkillPreview>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SkillInstallItem {
+    pub dir_name: String,
+    pub name: String,
+}
+
 struct CancelRegistrationGuard {
     registry: Arc<InstallCancelRegistry>,
     key: String,
@@ -360,6 +379,124 @@ pub async fn install_from_skillssh(
         store_installed_skill(&store, &result, &metadata, active.as_deref())?;
 
         emit_progress("done");
+        Ok(())
+    })
+    .await?
+}
+
+/// Clone a git repo and return a preview list of skills found, without installing.
+/// The caller must follow up with `confirm_git_install` using the returned `temp_dir`.
+#[tauri::command]
+pub async fn preview_git_install(
+    repo_url: String,
+    store: State<'_, Arc<SkillStore>>,
+    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
+    app_handle: tauri::AppHandle,
+) -> Result<GitPreviewResult, AppError> {
+    let store = store.inner().clone();
+    let proxy_url = store.get_setting("proxy_url").ok().flatten();
+    let registry = cancel_registry.inner().clone();
+    let cancel_key = repo_url.clone();
+    let cancel = registry.register(&cancel_key);
+    let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Emitter;
+        app_handle.emit("install-progress", serde_json::json!({
+            "skill_id": repo_url,
+            "phase": "cloning",
+        })).ok();
+
+        let parsed = git_fetcher::parse_git_source(&repo_url);
+        let temp_dir = git_fetcher::clone_repo_ref(
+            &parsed.clone_url,
+            parsed.branch.as_deref(),
+            Some(&cancel),
+            proxy_url.as_deref(),
+        ).map_err(AppError::git_or_cancelled)?;
+
+        let skill_dir = resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)?;
+        let dirs = collect_git_skill_dirs(&skill_dir);
+
+        let skills: Vec<GitSkillPreview> = dirs.iter().map(|dir| {
+            let meta = skill_metadata::parse_skill_md(dir);
+            let dir_name = dir.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let name = meta.name
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| dir_name.clone());
+            GitSkillPreview { dir_name, name, description: meta.description }
+        }).collect();
+
+        Ok(GitPreviewResult {
+            temp_dir: temp_dir.to_string_lossy().to_string(),
+            skills,
+        })
+    })
+    .await?
+}
+
+/// Install selected skills from a previously cloned temp directory.
+#[tauri::command]
+pub async fn confirm_git_install(
+    repo_url: String,
+    temp_dir: String,
+    items: Vec<SkillInstallItem>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let temp_path = PathBuf::from(&temp_dir);
+
+        // Security: temp_path must be inside OS temp dir and carry our prefix.
+        let expected_prefix = std::env::temp_dir();
+        if !temp_path.starts_with(&expected_prefix) {
+            return Err(AppError::invalid_input("Invalid temp directory"));
+        }
+        let dir_name_str = temp_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !dir_name_str.starts_with("skills-manager-clone-") {
+            return Err(AppError::invalid_input("Invalid temp directory"));
+        }
+        if !temp_path.exists() {
+            return Err(AppError::invalid_input("Clone session expired, please try again"));
+        }
+
+        let parsed = git_fetcher::parse_git_source(&repo_url);
+        let skill_dir = resolve_skill_dir(&temp_path, parsed.subpath.as_deref(), None)?;
+        let all_dirs = collect_git_skill_dirs(&skill_dir);
+        let revision = git_fetcher::get_head_revision(&temp_path).map_err(AppError::git)?;
+        let active = store.get_active_scenario_id().ok().flatten();
+
+        for dir in &all_dirs {
+            let dir_name_entry = dir.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let item = match items.iter().find(|i| i.dir_name == dir_name_entry) {
+                Some(i) => i,
+                None => continue,
+            };
+            let custom_name = item.name.trim();
+            let install_name = if custom_name.is_empty() { None } else { Some(custom_name) };
+            let result = installer::install_from_git_dir(dir, install_name).map_err(AppError::io)?;
+            let subpath = git_fetcher::relative_subpath(&temp_path, dir);
+            let metadata = InstallSourceMetadata {
+                source_type: "git".to_string(),
+                source_ref: Some(repo_url.clone()),
+                source_ref_resolved: Some(parsed.clone_url.clone()),
+                source_subpath: subpath,
+                source_branch: parsed.branch.clone(),
+                source_revision: Some(revision.clone()),
+                remote_revision: Some(revision.clone()),
+                update_status: "up_to_date".to_string(),
+            };
+            store_installed_skill(&store, &result, &metadata, active.as_deref())?;
+        }
+
+        git_fetcher::cleanup_temp(&temp_path);
         Ok(())
     })
     .await?
@@ -869,6 +1006,28 @@ fn skill_ssh_id(skill: &SkillRecord) -> Option<String> {
     skill.source_ref
         .as_deref()
         .and_then(|source_ref| source_ref.rsplit_once('/').map(|(_, skill_id)| skill_id.to_string()))
+}
+
+/// Return the list of individual skill directories to install from a resolved repo dir.
+/// If `skill_dir` is itself a valid skill, returns `[skill_dir]`.
+/// Otherwise enumerates immediate subdirs that are valid skills; falls back to `[skill_dir]`.
+fn collect_git_skill_dirs(skill_dir: &Path) -> Vec<PathBuf> {
+    if is_valid_skill_dir(skill_dir) {
+        return vec![skill_dir.to_path_buf()];
+    }
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(skill_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && is_valid_skill_dir(p))
+        .collect();
+    dirs.sort();
+    if dirs.is_empty() {
+        vec![skill_dir.to_path_buf()]
+    } else {
+        dirs
+    }
 }
 
 fn resolve_skill_dir(

@@ -133,6 +133,28 @@ export const installLocal = (sourcePath: string, name?: string) =>
 export const installGit = (repoUrl: string, name?: string) =>
   invoke<void>("install_git", { repoUrl, name: name || null });
 
+export interface GitSkillPreview {
+  dir_name: string;
+  name: string;
+  description: string | null;
+}
+
+export interface GitPreviewResult {
+  temp_dir: string;
+  skills: GitSkillPreview[];
+}
+
+export interface SkillInstallItem {
+  dir_name: string;
+  name: string;
+}
+
+export const previewGitInstall = (repoUrl: string) =>
+  invoke<GitPreviewResult>("preview_git_install", { repoUrl });
+
+export const confirmGitInstall = (repoUrl: string, tempDir: string, items: SkillInstallItem[]) =>
+  invoke<void>("confirm_git_install", { repoUrl, tempDir, items });
+
 export const installFromSkillssh = (source: string, skillId: string) =>
   invoke<void>("install_from_skillssh", { source, skillId });
 
