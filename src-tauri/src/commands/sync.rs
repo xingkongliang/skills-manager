@@ -247,14 +247,6 @@ pub async fn set_skill_tool_toggle(
             }
         }
 
-        let default_enabled_keys: Vec<String> = tool_adapters::default_tool_adapters()
-            .into_iter()
-            .filter(|candidate| candidate.is_installed() && !disabled.contains(&candidate.key))
-            .map(|candidate| candidate.key)
-            .collect();
-        store
-            .ensure_scenario_skill_tool_defaults(&scenario_id, &skill_id, &default_enabled_keys)
-            .map_err(AppError::db)?;
         store
             .set_scenario_skill_tool_enabled(&scenario_id, &skill_id, &tool, enabled)
             .map_err(AppError::db)?;
