@@ -245,6 +245,9 @@
     "repoUrl": "Repository URL",
     "repoUrlPlaceholder": "https://github.com/user/repo.git or git@github.com...",
     "gitAlreadyInstalled": "\"{{name}}\" is already installed. Reinstalling will update it.",
+    "aiSearchPlaceholder": "AI search — describe what you need...",
+    "aiSearchNoKey": "Set your SkillsMP API key in Settings to enable AI search",
+    "aiSearchToggle": "AI-powered search (SkillsMP)",
     "installClone": "Clone & Preview",
     "gitPreview": {
       "title": "Select Skills to Import",
@@ -337,6 +340,10 @@
     "gitSyncConfig": "Git Sync Configuration",
     "gitSyncConfigDesc": "This page stores remote repository preferences only. Initialize and run sync from the My Skills page.",
     "gitConfigSaved": "Git sync configuration saved",
+    "skillsmpTitle": "SkillsMP AI Search",
+    "skillsmpApiKey": "API Key",
+    "skillsmpDesc": "Enter your SkillsMP API key to enable AI-powered skill search.",
+    "skillsmpGetKey": "Get your API key",
     "gitStartBackup": "Start Backup",
     "gitStartHint": "If Remote URL is filled, it will clone from remote; otherwise it initializes a local repository.",
     "gitNotInitialized": "Not initialized",
@@ -415,7 +422,8 @@
     "rename": "Rename",
     "save": "Save",
     "create": "Create",
-    "search": "Search"
+    "search": "Search",
+    "goToSettings": "Settings"
   },
   "scenario": {
     "create": "New Scenario",

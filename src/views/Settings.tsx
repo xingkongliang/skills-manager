@@ -626,11 +626,11 @@ export function Settings() {
         {/* SkillsMP API Key */}
         <section>
           <h2 className="app-section-title mb-3">
-            SkillsMP AI Search
+            {t("settings.skillsmpTitle", { defaultValue: "SkillsMP AI Search" })}
           </h2>
           <div className="app-panel overflow-hidden divide-y divide-border-subtle">
             <div className="px-4 py-3">
-              <h3 className="text-[13px] text-secondary font-medium mb-0.5">API Key</h3>
+              <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.skillsmpApiKey", { defaultValue: "API Key" })}</h3>
               <p className="text-[13px] text-muted mb-2">
                 {t("settings.skillsmpDesc", { defaultValue: "Enter your SkillsMP API key to enable AI-powered skill search." })}{" "}
                 <button

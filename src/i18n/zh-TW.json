@@ -225,6 +225,9 @@
     "customNameOptional": "選填",
     "customNamePlaceholder": "留空則使用倉庫名稱",
     "gitAlreadyInstalled": "「{{name}}」已安裝，重新安裝將會更新。",
+    "aiSearchPlaceholder": "AI 搜尋 — 描述你需要什麼...",
+    "aiSearchNoKey": "請在設定中配置 SkillsMP API Key 以啟用 AI 搜尋",
+    "aiSearchToggle": "AI 搜尋（SkillsMP）",
     "gitReinstall": "重新安裝並更新",
     "installClone": "安裝並複製",
     "scan": {
@@ -299,6 +302,10 @@
     "gitSyncConfig": "Git 同步設定",
     "gitSyncConfigDesc": "這裡只儲存遠端倉庫位址等偏好；初始化與同步操作請在「我的 Skills」頁面執行。",
     "gitConfigSaved": "Git 同步設定已儲存",
+    "skillsmpTitle": "SkillsMP AI 搜尋",
+    "skillsmpApiKey": "API Key",
+    "skillsmpDesc": "輸入你的 SkillsMP API Key 以啟用 AI 搜尋。",
+    "skillsmpGetKey": "取得 API Key",
     "gitStartBackup": "開始備份",
     "gitStartHint": "填寫遠端位址會從遠端複製；留空則初始化本機倉庫。",
     "gitNotInitialized": "尚未初始化",
@@ -359,7 +366,8 @@
     "delete": "刪除",
     "rename": "重新命名",
     "save": "儲存",
-    "create": "建立"
+    "create": "建立",
+    "goToSettings": "設定"
   },
   "scenario": {
     "create": "新增場景",

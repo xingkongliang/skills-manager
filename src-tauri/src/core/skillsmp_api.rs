@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::skillssh_api::SkillsShSkill;
+use super::skillssh_api::{build_http_client, SkillsShSkill};
 
 #[derive(Debug, Deserialize)]
 struct SkillsMpSkill {
@@ -32,10 +32,9 @@ pub fn search(
     mode: SearchMode,
     page: Option<u32>,
     limit: Option<u32>,
+    proxy_url: Option<&str>,
 ) -> Result<Vec<SkillsShSkill>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
+    let client = build_http_client(proxy_url, 15);
 
     let mut url = format!(
         "{}?q={}",
@@ -52,9 +51,10 @@ pub fn search(
     let resp: serde_json::Value = client
         .get(&url)
         .header("Authorization", format!("Bearer {}", api_key))
-        .header("User-Agent", "skills-manager/1.0.0")
         .send()
         .context("Failed to fetch skillsmp.com")?
+        .error_for_status()
+        .context("SkillsMP request failed")?
         .json()
         .context("Failed to parse SkillsMP response")?;
 
@@ -73,11 +73,14 @@ pub fn search(
 
     // Parse skills from response — try "skills" array first, then "results"
     let raw_skills: Vec<SkillsMpSkill> = if let Some(arr) = resp.get("skills").and_then(|v| v.as_array()) {
-        serde_json::from_value(serde_json::Value::Array(arr.clone())).unwrap_or_default()
+        serde_json::from_value(serde_json::Value::Array(arr.clone()))
+            .unwrap_or_else(|e| { log::warn!("SkillsMP: failed to parse skills array: {e}"); Vec::new() })
     } else if let Some(arr) = resp.get("results").and_then(|v| v.as_array()) {
-        serde_json::from_value(serde_json::Value::Array(arr.clone())).unwrap_or_default()
+        serde_json::from_value(serde_json::Value::Array(arr.clone()))
+            .unwrap_or_else(|e| { log::warn!("SkillsMP: failed to parse results array: {e}"); Vec::new() })
     } else if let Some(arr) = resp.as_array() {
-        serde_json::from_value(serde_json::Value::Array(arr.clone())).unwrap_or_default()
+        serde_json::from_value(serde_json::Value::Array(arr.clone()))
+            .unwrap_or_else(|e| { log::warn!("SkillsMP: failed to parse root array: {e}"); Vec::new() })
     } else {
         Vec::new()
     };
@@ -87,12 +90,17 @@ pub fn search(
         .filter_map(|s| {
             let source = s.source?;
             let name = s.name?;
-            // SkillsMP uses "owner/repo/skill" or "owner/repo" as source
-            // We need to split into source + skill_id
-            let (src, skill_id) = if let Some(pos) = source.rfind('/') {
-                let (a, b) = source.split_at(pos);
-                (a.to_string(), b[1..].to_string())
+            // SkillsMP source formats:
+            //   "owner/repo/skill" → source="owner/repo", skill_id="skill"
+            //   "owner/repo"       → source="owner/repo", skill_id=name
+            //   "owner"            → source="owner", skill_id=name
+            let slash_count = source.matches('/').count();
+            let (src, skill_id) = if slash_count >= 2 {
+                // Split at last slash: "owner/repo/skill" → ("owner/repo", "skill")
+                let pos = source.rfind('/').unwrap();
+                (source[..pos].to_string(), source[pos + 1..].to_string())
             } else {
+                // "owner/repo" or "owner" — keep full source, use name as skill_id
                 (source.clone(), name.clone())
             };
             let id = format!("{}/{}", src, skill_id);

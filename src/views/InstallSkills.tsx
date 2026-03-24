@@ -108,11 +108,9 @@ export function InstallSkills() {
       (s) => s.name === skillName || s.source_ref === skillName
     );
     if (skill) {
-      navigate("/my-skills");
-      setTimeout(() => openSkillDetailById(skill.id), 150);
-    } else {
-      navigate("/my-skills");
+      openSkillDetailById(skill.id);
     }
+    navigate("/my-skills");
   }, [navigate, openSkillDetailById]);
 
   const pruneMarketSearchCache = useCallback(() => {
@@ -223,7 +221,7 @@ export function InstallSkills() {
       marketSearchLimit > marketSkillsLengthRef.current;
 
     if (query.length > 0 && !loadingMore) {
-      const cacheKey = `${query.toLowerCase()}|${marketSearchLimit}`;
+      const cacheKey = `${query.toLowerCase()}|${aiSearch ? "ai" : "kw"}|${marketSearchLimit}`;
       const cached = marketSearchCacheRef.current.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < MARKET_SEARCH_CACHE_TTL_MS) {
         setMarketSkills(cached.data);
@@ -244,8 +242,8 @@ export function InstallSkills() {
 
     let stale = false;
     const request = query
-      ? (aiSearch && skillsmpApiKey
-        ? api.searchSkillsmp(query, skillsmpApiKey, true, undefined, marketSearchLimit)
+      ? (aiSearch
+        ? api.searchSkillsmp(query, true, undefined, marketSearchLimit)
         : api.searchSkillssh(query, marketSearchLimit))
       : api.fetchLeaderboard(marketTab);
 
@@ -254,7 +252,7 @@ export function InstallSkills() {
         if (stale) return;
         setMarketSkills(result);
         if (query.length > 0 && !loadingMore) {
-          const cacheKey = `${query.toLowerCase()}|${marketSearchLimit}`;
+          const cacheKey = `${query.toLowerCase()}|${aiSearch ? "ai" : "kw"}|${marketSearchLimit}`;
           marketSearchCacheRef.current.set(cacheKey, { timestamp: Date.now(), data: result });
           pruneMarketSearchCache();
         }
@@ -276,7 +274,7 @@ export function InstallSkills() {
       });
 
     return () => { stale = true; };
-  }, [activeTab, aiSearch, skillsmpApiKey, debouncedMarketQuery, marketReloadKey, marketSearchLimit, marketTab, pruneMarketSearchCache, t]);
+  }, [activeTab, aiSearch, debouncedMarketQuery, marketReloadKey, marketSearchLimit, marketTab, pruneMarketSearchCache, t]);
 
   useEffect(() => {
     if (activeTab === "local" && !scanResult && !scanLoading) {

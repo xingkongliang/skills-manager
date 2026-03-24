@@ -245,6 +245,9 @@
     "repoUrl": "仓库地址",
     "repoUrlPlaceholder": "https://github.com/user/repo.git 或 git@github.com...",
     "gitAlreadyInstalled": "\"{{name}}\" 已安装，重新安装将会更新。",
+    "aiSearchPlaceholder": "AI 搜索 — 描述你需要什么...",
+    "aiSearchNoKey": "请在设置中配置 SkillsMP API Key 以启用 AI 搜索",
+    "aiSearchToggle": "AI 搜索（SkillsMP）",
     "installClone": "克隆并预览",
     "gitPreview": {
       "title": "选择要导入的技能",
@@ -337,6 +340,10 @@
     "gitSyncConfig": "Git 同步配置",
     "gitSyncConfigDesc": "这里只保存远程仓库地址等偏好；初始化与同步操作请在“我的 Skills”页面执行。",
     "gitConfigSaved": "Git 同步配置已保存",
+    "skillsmpTitle": "SkillsMP AI 搜索",
+    "skillsmpApiKey": "API Key",
+    "skillsmpDesc": "输入你的 SkillsMP API Key 以启用 AI 搜索。",
+    "skillsmpGetKey": "获取 API Key",
     "gitStartBackup": "开始备份",
     "gitStartHint": "填写远程地址会从远程克隆；留空则初始化本地仓库。",
     "gitNotInitialized": "尚未初始化",
@@ -415,7 +422,8 @@
     "rename": "重命名",
     "save": "保存",
     "create": "创建",
-    "search": "搜索"
+    "search": "搜索",
+    "goToSettings": "设置"
   },
   "scenario": {
     "create": "新建场景",

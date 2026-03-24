@@ -253,14 +253,12 @@ export const searchSkillssh = (query: string, limit?: number) =>
 
 export const searchSkillsmp = (
   query: string,
-  apiKey: string,
   ai?: boolean,
   page?: number,
   limit?: number,
 ) =>
   invoke<SkillsShSkill[]>("search_skillsmp", {
     query,
-    apiKey,
     ai: ai ?? null,
     page: page ?? null,
     limit: limit ?? null,

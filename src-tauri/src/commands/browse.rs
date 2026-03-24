@@ -58,18 +58,25 @@ pub async fn search_skillssh(
 #[tauri::command]
 pub async fn search_skillsmp(
     query: String,
-    api_key: String,
     ai: Option<bool>,
     page: Option<u32>,
     limit: Option<u32>,
+    store: State<'_, Arc<SkillStore>>,
 ) -> Result<Vec<SkillsShSkill>, AppError> {
+    let api_key = store
+        .get_setting("skillsmp_api_key")
+        .map_err(AppError::db)?
+        .filter(|k| !k.is_empty())
+        .ok_or_else(|| AppError::network(anyhow::anyhow!("SkillsMP API key not configured")))?;
+    let proxy_url = store.proxy_url();
     let mode = if ai.unwrap_or(false) {
         skillsmp_api::SearchMode::Ai
     } else {
         skillsmp_api::SearchMode::Keyword
     };
     tauri::async_runtime::spawn_blocking(move || {
-        skillsmp_api::search(&api_key, &query, mode, page, limit).map_err(AppError::network)
+        skillsmp_api::search(&api_key, &query, mode, page, limit, proxy_url.as_deref())
+            .map_err(AppError::network)
     })
     .await?
 }

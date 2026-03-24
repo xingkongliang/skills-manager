@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use super::crypto;
 
 /// Settings keys whose values are encrypted at rest with AES-256-GCM.
-const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url"];
+const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url", "skillsmp_api_key"];
 
 pub struct SkillStore {
     conn: Mutex<Connection>,
@@ -638,12 +638,14 @@ impl SkillStore {
 
     pub fn reorder_scenario_skills(&self, scenario_id: &str, skill_ids: &[String]) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
         for (i, skill_id) in skill_ids.iter().enumerate() {
-            conn.execute(
+            tx.execute(
                 "UPDATE scenario_skills SET sort_order = ?1 WHERE scenario_id = ?2 AND skill_id = ?3",
                 params![i as i32, scenario_id, skill_id],
             )?;
         }
+        tx.commit()?;
         Ok(())
     }
 

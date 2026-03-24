@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 2;
+const LATEST_VERSION: u32 = 3;
 
 /// Run all pending migrations on the database.
 ///
@@ -49,7 +49,8 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
     match from_version {
         0 => migrate_v0_to_v1(conn),
         1 => migrate_v1_to_v2(conn),
-        _ => unreachable!("unknown migration version: {from_version}"),
+        2 => migrate_v2_to_v3(conn),
+        _ => bail!("unknown migration version: {from_version}"),
     }
 }
 
@@ -181,7 +182,7 @@ fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// v1 → v2: Add per-scenario, per-skill tool toggle table + sort_order column.
+/// v1 → v2: Add per-scenario, per-skill tool toggle table.
 fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
@@ -195,6 +196,11 @@ fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
         );
         ",
     )?;
+    Ok(())
+}
+
+/// v2 → v3: Add sort_order to scenario_skills for drag-and-drop reordering.
+fn migrate_v2_to_v3(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "scenario_skills", "sort_order", "INTEGER DEFAULT 0")?;
     Ok(())
 }
