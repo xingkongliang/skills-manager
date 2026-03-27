@@ -20,6 +20,7 @@ const tauriConfPath = path.join(root, 'src-tauri', 'tauri.conf.json');
 const enI18nPath = path.join(root, 'src', 'i18n', 'en.json');
 const zhI18nPath = path.join(root, 'src', 'i18n', 'zh.json');
 const changelogPath = path.join(root, 'CHANGELOG.md');
+const changelogZhPath = path.join(root, 'CHANGELOG-zh.md');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -65,28 +66,17 @@ function updateSettingsVersion(i18nObj, nextVersion, fileLabel) {
   i18nObj.settings.version = i18nObj.settings.version.replace(/\d+\.\d+\.\d+/, nextVersion);
 }
 
-function ensureChangelogEntry(changelog, nextVersion) {
+function ensureChangelogEntry(changelog, nextVersion, { zh = false } = {}) {
   const heading = `## [${nextVersion}] - ${dateStr}`;
   if (changelog.includes(heading) || changelog.includes(`## [${nextVersion}] -`)) {
     return changelog;
   }
 
-  const entry = [
-    heading,
-    '',
-    '### Added',
-    '- ',
-    '',
-    '### Changed',
-    '- ',
-    '',
-    '### Fixed',
-    '- ',
-    '',
-    '### Removed',
-    '- ',
-    '',
-  ].join('\n');
+  const sections = zh
+    ? ['### 新增', '- ', '', '### 变更', '- ', '', '### 修复', '- ', '', '### 移除', '- ']
+    : ['### Added', '- ', '', '### Changed', '- ', '', '### Fixed', '- ', '', '### Removed', '- '];
+
+  const entry = [heading, '', ...sections, ''].join('\n');
 
   const firstReleaseHeading = changelog.search(/^## \[/m);
   if (firstReleaseHeading === -1) {
@@ -102,6 +92,7 @@ function main() {
   const en = readJson(enI18nPath);
   const zh = readJson(zhI18nPath);
   const changelog = fs.readFileSync(changelogPath, 'utf8');
+  const changelogZh = fs.readFileSync(changelogZhPath, 'utf8');
 
   const currentVersion = pkg.version;
   const nextVersion = bumpVersion(currentVersion, releaseArg);
@@ -111,6 +102,7 @@ function main() {
   updateSettingsVersion(en, nextVersion, 'src/i18n/en.json');
   updateSettingsVersion(zh, nextVersion, 'src/i18n/zh.json');
   const nextChangelog = ensureChangelogEntry(changelog, nextVersion);
+  const nextChangelogZh = ensureChangelogEntry(changelogZh, nextVersion, { zh: true });
 
   if (dryRun) {
     console.log(`[dry-run] ${currentVersion} -> ${nextVersion}`);
@@ -122,10 +114,12 @@ function main() {
   writeJson(enI18nPath, en);
   writeJson(zhI18nPath, zh);
   fs.writeFileSync(changelogPath, nextChangelog);
+  fs.writeFileSync(changelogZhPath, nextChangelogZh);
 
   console.log(`Prepared release ${nextVersion}`);
   console.log('Updated:');
   console.log('- CHANGELOG.md');
+  console.log('- CHANGELOG-zh.md');
   console.log('- package.json');
   console.log('- src-tauri/tauri.conf.json');
   console.log('- src/i18n/en.json');

@@ -42,6 +42,7 @@
 - **Skill tagging** — Tag skills and filter by tag for quick lookup.
 - **Update tracking** — Check for upstream updates on Git-based skills; re-import local ones.
 - **Skill preview** — Read `SKILL.md` / `README.md` docs right inside the app.
+- **Custom tools** — Add your own agents/tools with custom skills directories, or override the default path for any built-in tool.
 - **Git backup** — Version-control your skill library with Git for backup and multi-machine sync.
 
 ## Git Backup
@@ -71,6 +72,8 @@ Each successful sync now creates a snapshot version tag. You can open **Version 
 ## Supported Tools
 
 Cursor · Claude Code · Codex · OpenCode · Amp · Kilo Code · Roo Code · Goose · Gemini CLI · GitHub Copilot · Windsurf · TRAE IDE · Antigravity · Clawdbot · Droid
+
+You can also add custom tools in **Settings** and manage their skills the same way.
 
 ## Tech Stack
 

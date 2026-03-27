@@ -30,6 +30,7 @@
 - **技能标签** — 为技能添加标签并按标签筛选，快速定位。
 - **更新检查** — 为 Git 类技能检查远端更新；本地技能支持重新导入。
 - **文档预览** — 直接在应用内查看 `SKILL.md` / `README.md`。
+- **自定义工具** — 添加自定义 Agent/工具并指定 Skills 目录，也可覆盖内置工具的默认路径。
 - **Git 备份** — 用 Git 管理技能库，支持版本控制和多机同步。
 
 ## Git 备份
@@ -59,6 +60,8 @@
 ## 支持的工具
 
 Cursor · Claude Code · Codex · OpenCode · Amp · Kilo Code · Roo Code · Goose · Gemini CLI · GitHub Copilot · Windsurf · TRAE IDE · Antigravity · Clawdbot · Droid
+
+你也可以在**设置**中添加自定义工具，以相同方式管理其 Skills。
 
 ## 技术栈
 
