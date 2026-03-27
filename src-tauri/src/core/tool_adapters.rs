@@ -79,7 +79,8 @@ impl ToolAdapter {
     }
 
     pub fn is_installed(&self) -> bool {
-        // Custom tools with an override path are always considered installed.
+        // Product decision: when users explicitly provide a skills path (override/custom),
+        // we treat the tool as available so sync can proceed without probing vendor install state.
         if self.is_custom || self.override_skills_dir.is_some() {
             return true;
         }
@@ -238,7 +239,7 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
 }
 
 /// Read custom tool path overrides from store.
-fn custom_tool_paths(store: &crate::core::skill_store::SkillStore) -> HashMap<String, String> {
+pub fn custom_tool_paths(store: &crate::core::skill_store::SkillStore) -> HashMap<String, String> {
     store
         .get_setting("custom_tool_paths")
         .ok()
@@ -248,7 +249,7 @@ fn custom_tool_paths(store: &crate::core::skill_store::SkillStore) -> HashMap<St
 }
 
 /// Read user-defined custom tools from store.
-fn custom_tools(store: &crate::core::skill_store::SkillStore) -> Vec<CustomToolDef> {
+pub fn custom_tools(store: &crate::core::skill_store::SkillStore) -> Vec<CustomToolDef> {
     store
         .get_setting("custom_tools")
         .ok()
@@ -297,7 +298,25 @@ pub fn find_adapter_with_store(
     store: &crate::core::skill_store::SkillStore,
     key: &str,
 ) -> Option<ToolAdapter> {
-    all_tool_adapters(store).into_iter().find(|a| a.key == key)
+    if let Some(mut adapter) = default_tool_adapters().into_iter().find(|a| a.key == key) {
+        if let Some(path) = custom_tool_paths(store).get(key) {
+            adapter.override_skills_dir = Some(path.clone());
+        }
+        return Some(adapter);
+    }
+
+    custom_tools(store)
+        .into_iter()
+        .find(|ct| ct.key == key)
+        .map(|ct| ToolAdapter {
+            key: ct.key,
+            display_name: ct.display_name,
+            relative_skills_dir: String::new(),
+            relative_detect_dir: String::new(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: Some(ct.skills_dir),
+            is_custom: true,
+        })
 }
 
 /// Returns adapters that are installed and not in the disabled list.

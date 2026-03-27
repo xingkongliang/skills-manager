@@ -40,12 +40,7 @@ fn set_disabled_tools(store: &SkillStore, disabled: &[String]) -> Result<(), App
 }
 
 fn get_custom_tool_paths(store: &SkillStore) -> HashMap<String, String> {
-    store
-        .get_setting("custom_tool_paths")
-        .ok()
-        .flatten()
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default()
+    tool_adapters::custom_tool_paths(store)
 }
 
 fn set_custom_tool_paths(
@@ -60,12 +55,7 @@ fn set_custom_tool_paths(
 }
 
 fn get_custom_tools(store: &SkillStore) -> Vec<CustomToolDef> {
-    store
-        .get_setting("custom_tools")
-        .ok()
-        .flatten()
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default()
+    tool_adapters::custom_tools(store)
 }
 
 fn set_custom_tools(store: &SkillStore, custom_tools: &[CustomToolDef]) -> Result<(), AppError> {
@@ -93,12 +83,11 @@ fn normalize_skills_dir_input(path: &str) -> Result<String, AppError> {
             .join(rest)
             .to_string_lossy()
             .to_string()
+    } else if !std::path::Path::new(raw).is_absolute() {
+        return Err(AppError::invalid_input(
+            "Skills path must be absolute (or start with ~/)",
+        ));
     } else {
-        if !std::path::Path::new(raw).is_absolute() {
-            return Err(AppError::invalid_input(
-                "Skills path must be absolute (or start with ~/)",
-            ));
-        }
         raw.to_string()
     };
 
@@ -464,10 +453,16 @@ pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {
         set_custom_tools(store, &normalized_customs)?;
     }
 
-    // Migrate historical per-tool records in DB tables.
-    store
-        .remap_tool_key_references(OLD_KEY, NEW_KEY)
-        .map_err(AppError::db)?;
+    if changed
+        || store
+            .has_tool_key_references(OLD_KEY)
+            .map_err(AppError::db)?
+    {
+        // Migrate historical per-tool records in DB tables only when needed.
+        store
+            .remap_tool_key_references(OLD_KEY, NEW_KEY)
+            .map_err(AppError::db)?;
+    }
     if changed {
         log::info!("Migrated legacy tool key {OLD_KEY} -> {NEW_KEY}");
     }

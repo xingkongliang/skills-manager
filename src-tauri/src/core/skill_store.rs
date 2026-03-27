@@ -537,14 +537,14 @@ impl SkillStore {
         // scenario_skill_tools has a composite PK (scenario_id, skill_id, tool). If both old/new
         // rows exist for the same skill in the same scenario, keep the new-key row.
         conn.execute(
-            "DELETE FROM scenario_skill_tools AS dst
-             WHERE dst.tool = ?2
+            "DELETE FROM scenario_skill_tools AS old_rows
+             WHERE old_rows.tool = ?1
                AND EXISTS (
                  SELECT 1
-                 FROM scenario_skill_tools AS src
-                 WHERE src.tool = ?1
-                   AND src.scenario_id = dst.scenario_id
-                   AND src.skill_id = dst.skill_id
+                 FROM scenario_skill_tools AS new_rows
+                 WHERE new_rows.tool = ?2
+                   AND new_rows.scenario_id = old_rows.scenario_id
+                   AND new_rows.skill_id = old_rows.skill_id
                )",
             params![old_key, new_key],
         )?;
@@ -555,13 +555,13 @@ impl SkillStore {
 
         // skill_targets has UNIQUE(skill_id, tool). Same strategy: keep existing new-key rows.
         conn.execute(
-            "DELETE FROM skill_targets AS dst
-             WHERE dst.tool = ?2
+            "DELETE FROM skill_targets AS old_rows
+             WHERE old_rows.tool = ?1
                AND EXISTS (
                  SELECT 1
-                 FROM skill_targets AS src
-                 WHERE src.tool = ?1
-                   AND src.skill_id = dst.skill_id
+                 FROM skill_targets AS new_rows
+                 WHERE new_rows.tool = ?2
+                   AND new_rows.skill_id = old_rows.skill_id
                )",
             params![old_key, new_key],
         )?;
@@ -575,6 +575,17 @@ impl SkillStore {
             params![old_key, new_key],
         )?;
         Ok(())
+    }
+
+    pub fn has_tool_key_references(&self, key: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT EXISTS(SELECT 1 FROM skill_targets WHERE tool = ?1)
+             OR EXISTS(SELECT 1 FROM discovered_skills WHERE tool = ?1)
+             OR EXISTS(SELECT 1 FROM scenario_skill_tools WHERE tool = ?1)",
+        )?;
+        let exists: i64 = stmt.query_row(params![key], |row| row.get(0))?;
+        Ok(exists != 0)
     }
 
     // ── Scenarios ──

@@ -30,7 +30,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check as checkUpdater } from "@tauri-apps/plugin-updater";
-import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
+import { open as dialogOpen, confirm as dialogConfirm } from "@tauri-apps/plugin-dialog";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
@@ -142,7 +142,8 @@ export function Settings() {
   };
 
   const handleRemoveCustomAgent = async (key: string, name: string) => {
-    if (!confirm(t("settings.removeCustomAgentConfirm", { name }))) return;
+    const shouldRemove = await dialogConfirm(t("settings.removeCustomAgentConfirm", { name }));
+    if (!shouldRemove) return;
     try {
       await api.removeCustomTool(key);
       await refreshTools();
