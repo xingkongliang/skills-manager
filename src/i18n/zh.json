@@ -198,15 +198,19 @@
     "batchEnabled": "已启用 {{count}} 个 Skill",
     "batchDisabled": "已停用 {{count}} 个 Skill",
     "promptEditor": {
-      "title": "提示词模板",
-      "placeholder": "在此编写提示词模板... 使用 [skill::名称] 引用 Skill。",
-      "saved": "提示词模板已保存",
-      "cleared": "提示词模板已清除",
-      "skillTag": "插入 Skill 引用",
-      "noSkills": "没有可插入的 Skill",
-      "usedSkills": "已引用的 Skills",
-      "toggleButton": "提示词编辑器",
-      "backToSkills": "返回 Skills"
+      "button": "Prompt 编辑",
+      "title": "Prompt 编辑器",
+      "placeholder": "在此输入 Prompt 文本，点击左侧 Skill 的箭头按钮插入到光标位置...",
+      "dragHint": "点击箭头按钮插入 Skill 到编辑区",
+      "used": "已插入",
+      "save": "保存模板",
+      "saved": "Prompt 模板已保存",
+      "copy": "复制 Prompt",
+      "copied": "已复制到剪贴板",
+      "exit": "退出编辑",
+      "preview": "预览",
+      "emptySkills": "当前场景没有已启用的 Skills",
+      "dropZone": "将 Skill 拖拽到此处"
     }
   },
   "install": {

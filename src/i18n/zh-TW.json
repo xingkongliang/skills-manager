@@ -175,15 +175,19 @@
       "tagsUpdated": "標籤已更新"
     },
     "promptEditor": {
-      "title": "提示詞範本",
-      "placeholder": "在此編寫提示詞範本... 使用 [skill::名稱] 參照 Skill。",
-      "saved": "提示詞範本已儲存",
-      "cleared": "提示詞範本已清除",
-      "skillTag": "插入 Skill 參照",
-      "noSkills": "沒有可插入的 Skill",
-      "usedSkills": "已參照的 Skills",
-      "toggleButton": "提示詞編輯器",
-      "backToSkills": "返回 Skills"
+      "button": "Prompt 編輯",
+      "title": "Prompt 編輯器",
+      "placeholder": "在此輸入 Prompt 文字，點擊左側 Skill 的箭頭按鈕插入到游標位置...",
+      "dragHint": "點擊箭頭按鈕插入 Skill 到編輯區",
+      "used": "已插入",
+      "save": "儲存範本",
+      "saved": "Prompt 範本已儲存",
+      "copy": "複製 Prompt",
+      "copied": "已複製到剪貼簿",
+      "exit": "退出編輯",
+      "preview": "預覽",
+      "emptySkills": "目前場景沒有已啟用的 Skills",
+      "dropZone": "將 Skill 拖曳到此處"
     }
   },
   "install": {

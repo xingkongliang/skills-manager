@@ -22,7 +22,7 @@ import {
   Square,
   GripVertical,
   FileText,
-  ArrowLeft,
+  ArrowRight,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -162,7 +162,7 @@ export function MySkills() {
   const [tagInput, setTagInput] = useState("");
   const tagInputRef = useRef<HTMLInputElement>(null);
   const [isPromptEditorMode, setIsPromptEditorMode] = useState(false);
-  const prevActiveScenarioIdRef = useRef<string | null>(null);
+  const prevActiveScenarioIdRef = useRef<string | undefined>(undefined);
   const promptEditorRef = useRef<ScenarioPromptEditorHandle>(null);
   const [promptUsedSkillNames, setPromptUsedSkillNames] = useState<Set<string>>(new Set());
 
@@ -170,21 +170,20 @@ export function MySkills() {
 
   const activeScenarioName = activeScenario?.name || t("mySkills.currentScenarioFallback");
 
-  // Reset prompt editor when scenario changes
-  useEffect(() => {
-    if (activeScenario?.id !== prevActiveScenarioIdRef.current) {
-      setIsPromptEditorMode(false);
-      setPromptUsedSkillNames(new Set());
-      prevActiveScenarioIdRef.current = activeScenario?.id ?? null;
-    }
-  }, [activeScenario?.id]);
-
   const handlePromptTemplateChange = useCallback((template: string) => {
     setPromptUsedSkillNames(extractUsedSkillNames(template));
   }, []);
 
   // Fetch sort order whenever active scenario changes
   useEffect(() => {
+    // Only reset prompt editor when the actual scenario switches, not on skills refresh
+    const prevId = prevActiveScenarioIdRef.current;
+    const curId = activeScenario?.id;
+    if (prevId !== curId) {
+      setIsPromptEditorMode(false);
+      setPromptUsedSkillNames(new Set());
+      prevActiveScenarioIdRef.current = curId;
+    }
     if (!activeScenario) {
       setScenarioSkillOrder([]);
       return;
@@ -1020,7 +1019,7 @@ export function MySkills() {
                 "rounded-md p-2 transition-colors outline-none",
                 isPromptEditorMode ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
               )}
-              title={t("mySkills.promptEditor.toggleButton")}
+              title={t("mySkills.promptEditor.button")}
             >
               <FileText className="h-4 w-4" />
             </button>
@@ -1161,25 +1160,7 @@ export function MySkills() {
         </div>
       )}
 
-      {isPromptEditorMode && activeScenario ? (
-        <div className="flex-1 overflow-auto">
-          <div className="mb-2 flex items-center gap-2 px-1">
-            <button
-              onClick={() => setIsPromptEditorMode(false)}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              {t("mySkills.promptEditor.backToSkills")}
-            </button>
-          </div>
-          <ScenarioPromptEditor
-            ref={promptEditorRef}
-            scenarioId={activeScenario.id}
-            onExit={() => setIsPromptEditorMode(false)}
-            onTemplateChange={handlePromptTemplateChange}
-          />
-        </div>
-      ) : filtered.length === 0 ? (
+      {filtered.length === 0 && !isPromptEditorMode ? (
         <div className="flex flex-1 flex-col items-center justify-center pb-20 text-center">
           <Layers className="mb-4 h-12 w-12 text-faint" />
           <h3 className="mb-1.5 text-[14px] font-semibold text-tertiary">{t("mySkills.noSkills")}</h3>
@@ -1189,6 +1170,9 @@ export function MySkills() {
         </div>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <div className={cn("flex gap-4", isPromptEditorMode && "flex-1")}>
+          {/* Skills grid/list */}
+          <div className={cn(isPromptEditorMode ? "w-1/2 min-w-0 max-h-[calc(100vh-220px)] overflow-y-auto" : "flex-1")}>
           <SortableContext
             items={filtered.map((s) => s.id)}
             strategy={viewMode === "grid" ? rectSortingStrategy : verticalListSortingStrategy}
@@ -1197,7 +1181,9 @@ export function MySkills() {
             className={cn(
               "pb-8",
               viewMode === "grid"
-                ? "grid grid-cols-2 gap-3 lg:grid-cols-3"
+                ? isPromptEditorMode
+                  ? "grid grid-cols-2 gap-3"
+                  : "grid grid-cols-2 gap-3 lg:grid-cols-3"
                 : "flex flex-col gap-0.5"
             )}
           >
@@ -1217,7 +1203,8 @@ export function MySkills() {
                     "app-panel group relative flex flex-col overflow-hidden transition-all hover:border-border hover:bg-surface-hover",
                     enabledInScenario && "border-l-2 border-l-accent",
                     isMultiSelect && "cursor-pointer",
-                    isMultiSelect && selectedIds.has(skill.id) && "ring-1 ring-accent border-accent/40"
+                    isMultiSelect && selectedIds.has(skill.id) && "ring-1 ring-accent border-accent/40",
+                    isPromptEditorMode && promptUsedSkillNames.has(skill.name) && "opacity-50"
                   )}
                   onClick={isMultiSelect ? () => toggleSelect(skill.id) : undefined}
                 >
@@ -1364,6 +1351,20 @@ export function MySkills() {
                       )}
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
+                      {isPromptEditorMode && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!enabledInScenario) handleToggleScenario(skill);
+                            promptEditorRef.current?.insertSkillAtCursor(skill.name);
+                          }}
+                          disabled={promptUsedSkillNames.has(skill.name)}
+                          className="rounded p-1 text-accent transition-colors hover:bg-accent-bg disabled:opacity-40"
+                          title={promptUsedSkillNames.has(skill.name) ? t("mySkills.promptEditor.used") : t("mySkills.promptEditor.button")}
+                        >
+                          <ArrowRight className="h-4 w-4" />
+                        </button>
+                      )}
                       <button
                         onClick={() => handleToggleScenario(skill)}
                         disabled={!activeScenario}
@@ -1392,7 +1393,8 @@ export function MySkills() {
                   "app-panel group flex items-center gap-3.5 rounded-xl border-transparent px-3.5 py-3 transition-all hover:border-border hover:bg-surface-hover",
                   enabledInScenario && "border-l-2 border-l-accent",
                   isMultiSelect && "cursor-pointer",
-                  isMultiSelect && selectedIds.has(skill.id) && "ring-1 ring-accent border-accent/40"
+                  isMultiSelect && selectedIds.has(skill.id) && "ring-1 ring-accent border-accent/40",
+                  isPromptEditorMode && promptUsedSkillNames.has(skill.name) && "opacity-50"
                 )}
                 onClick={isMultiSelect ? () => toggleSelect(skill.id) : undefined}
               >
@@ -1443,6 +1445,20 @@ export function MySkills() {
                 </div>
 
                 <div className={cn("flex shrink-0 items-center gap-1 opacity-0 transition-opacity", !isMultiSelect && "group-hover:opacity-100")}>
+                  {isPromptEditorMode && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!enabledInScenario) handleToggleScenario(skill);
+                        promptEditorRef.current?.insertSkillAtCursor(skill.name);
+                      }}
+                      disabled={promptUsedSkillNames.has(skill.name)}
+                      className="rounded p-0.5 text-accent transition-colors hover:bg-accent-bg disabled:opacity-40"
+                      title={promptUsedSkillNames.has(skill.name) ? t("mySkills.promptEditor.used") : t("mySkills.promptEditor.button")}
+                    >
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   <button
                     onClick={() => handleToggleScenario(skill)}
                     disabled={!activeScenario}
@@ -1488,6 +1504,18 @@ export function MySkills() {
           })}
         </div>
           </SortableContext>
+          </div>
+          {isPromptEditorMode && activeScenario && (
+            <div className="flex-1 min-w-0 max-h-[calc(100vh-220px)] overflow-y-auto pb-8">
+              <ScenarioPromptEditor
+                ref={promptEditorRef}
+                scenarioId={activeScenario.id}
+                onExit={() => setIsPromptEditorMode(false)}
+                onTemplateChange={handlePromptTemplateChange}
+              />
+            </div>
+          )}
+          </div>
         </DndContext>
       )}
 

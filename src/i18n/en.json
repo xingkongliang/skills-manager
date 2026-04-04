@@ -198,15 +198,19 @@
     "batchEnabled": "{{count}} skills enabled",
     "batchDisabled": "{{count}} skills disabled",
     "promptEditor": {
-      "title": "Prompt Template",
-      "placeholder": "Write your prompt template here... Use [skill::name] to reference skills.",
+      "button": "Prompt Editor",
+      "title": "Prompt Editor",
+      "placeholder": "Type your prompt here, click the arrow on a Skill to insert it at cursor...",
+      "dragHint": "Click the arrow button to insert a Skill",
+      "used": "Already inserted",
+      "save": "Save Template",
       "saved": "Prompt template saved",
-      "cleared": "Prompt template cleared",
-      "skillTag": "Insert skill reference",
-      "noSkills": "No skills available to insert",
-      "usedSkills": "Referenced skills",
-      "toggleButton": "Prompt Editor",
-      "backToSkills": "Back to Skills"
+      "copy": "Copy Prompt",
+      "copied": "Copied to clipboard",
+      "exit": "Exit Editor",
+      "preview": "Preview",
+      "emptySkills": "No Skills enabled in current scenario",
+      "dropZone": "Drop Skill here"
     }
   },
   "install": {
