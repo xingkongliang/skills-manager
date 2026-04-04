@@ -211,6 +211,51 @@ export const updateSkill = (skillId: string) =>
 export const reimportLocalSkill = (skillId: string) =>
   invoke<ManagedSkill>("reimport_local_skill", { skillId });
 
+export interface OnlineMatchResult {
+  skill_id: string;
+  name: string;
+  source: string;
+  origin: string;
+  installs: number;
+  similarity: number;
+}
+
+export const searchOnlineMatches = (skillId: string) =>
+  invoke<OnlineMatchResult[]>("search_online_matches", { skillId });
+
+export const convertImportToOnline = (
+  skillId: string,
+  onlineSource: string,
+  onlineSkillId: string,
+  origin: string,
+) =>
+  invoke<ManagedSkill>("convert_import_to_online", {
+    skillId,
+    onlineSource,
+    onlineSkillId,
+    origin,
+  });
+
+export type BatchOnlineSearchResult = Record<string, OnlineMatchResult[]>;
+
+export const searchBatchOnlineMatches = (skillIds: string[]) =>
+  invoke<BatchOnlineSearchResult>("search_batch_online_matches", { skillIds });
+
+export interface BatchConversionItem {
+  skill_id: string;
+  online_source: string;
+  online_skill_id: string;
+  origin: string;
+}
+
+export interface BatchConvertResult {
+  succeeded: string[];
+  failed: [string, string][];
+}
+
+export const convertBatchImportToOnline = (items: BatchConversionItem[]) =>
+  invoke<BatchConvertResult>("convert_batch_import_to_online", { items });
+
 export interface BatchImportResult {
   imported: number;
   skipped: number;

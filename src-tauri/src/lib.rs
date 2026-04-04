@@ -418,6 +418,10 @@ pub fn run() {
             commands::skills::set_skill_tags,
             commands::skills::cancel_install,
             commands::skills::batch_import_folder,
+            commands::skills::search_online_matches,
+            commands::skills::convert_import_to_online,
+            commands::skills::search_batch_online_matches,
+            commands::skills::convert_batch_import_to_online,
             // Sync
             commands::sync::sync_skill_to_tool,
             commands::sync::unsync_skill_from_tool,

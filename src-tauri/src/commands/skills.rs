@@ -1,4 +1,5 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::State;
@@ -12,6 +13,8 @@ use crate::core::{
     installer,
     skill_metadata::{self, is_valid_skill_dir},
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
+    skillsmp_api,
+    skillssh_api,
     sync_engine,
 };
 
@@ -1455,4 +1458,357 @@ fn remove_path_if_exists(path: &Path) -> Result<(), AppError> {
         std::fs::remove_file(path)?;
     }
     Ok(())
+}
+
+// ── Online match & conversion ───────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct OnlineMatchResult {
+    pub skill_id: String,
+    pub name: String,
+    pub source: String,
+    pub origin: String,
+    pub installs: u64,
+    pub similarity: f64,
+}
+
+#[tauri::command]
+pub async fn search_online_matches(
+    skill_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<OnlineMatchResult>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || search_online_matches_internal(&store, &skill_id))
+        .await?
+}
+
+fn search_online_matches_internal(
+    store: &SkillStore,
+    skill_id: &str,
+) -> Result<Vec<OnlineMatchResult>, AppError> {
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+
+    if skill.source_type != "import" {
+        return Err(AppError::invalid_input(
+            "Only import skills can search online matches",
+        ));
+    }
+
+    let query = &skill.name;
+    let proxy_url = store.proxy_url();
+
+    let ssh_results =
+        skillssh_api::search_skills(query, 30, proxy_url.as_deref()).unwrap_or_default();
+
+    let mp_results = store
+        .get_setting("skillsmp_api_key")
+        .ok()
+        .flatten()
+        .filter(|k| !k.is_empty())
+        .and_then(|api_key| {
+            skillsmp_api::search(
+                &api_key,
+                query,
+                skillsmp_api::SearchMode::Keyword,
+                None,
+                Some(30),
+                proxy_url.as_deref(),
+            )
+            .ok()
+        })
+        .unwrap_or_default();
+
+    let query_lower = query.to_lowercase();
+    let mut matches: Vec<OnlineMatchResult> = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+
+    for s in ssh_results {
+        let sim = normalized_edit_similarity(&query_lower, &s.name.to_lowercase());
+        if sim >= 0.4 {
+            seen_ids.insert(s.id.clone());
+            matches.push(OnlineMatchResult {
+                skill_id: s.id,
+                name: s.name,
+                source: s.source,
+                origin: "skillssh".to_string(),
+                installs: s.installs,
+                similarity: sim,
+            });
+        }
+    }
+
+    for s in mp_results {
+        let sim = normalized_edit_similarity(&query_lower, &s.name.to_lowercase());
+        if sim >= 0.4 && !seen_ids.contains(&s.id) {
+            matches.push(OnlineMatchResult {
+                skill_id: s.id,
+                name: s.name,
+                source: s.source,
+                origin: "skillsmp".to_string(),
+                installs: s.installs,
+                similarity: sim,
+            });
+        }
+    }
+
+    matches.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(matches)
+}
+
+#[tauri::command]
+pub async fn search_batch_online_matches(
+    skill_ids: Vec<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<HashMap<String, Vec<OnlineMatchResult>>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut results: HashMap<String, Vec<OnlineMatchResult>> = HashMap::new();
+        for skill_id in &skill_ids {
+            let matches = search_online_matches_internal(&store, skill_id).unwrap_or_default();
+            results.insert(skill_id.clone(), matches);
+        }
+        Ok(results)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn convert_import_to_online(
+    skill_id: String,
+    online_source: String,
+    online_skill_id: String,
+    origin: String,
+    store: State<'_, Arc<SkillStore>>,
+    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
+    app_handle: tauri::AppHandle,
+) -> Result<ManagedSkillDto, AppError> {
+    let store = store.inner().clone();
+    let proxy_url = store.proxy_url();
+    let registry = cancel_registry.inner().clone();
+    let cancel_key = format!("convert:{}", skill_id);
+    let cancel = registry.register(&cancel_key);
+    let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        convert_import_to_online_internal(
+            &store,
+            &skill_id,
+            &online_source,
+            &online_skill_id,
+            &origin,
+            &cancel,
+            proxy_url.as_deref(),
+            Some(&app_handle),
+        )?;
+        managed_skill_by_id(&store, &skill_id)
+    })
+    .await?
+}
+
+fn convert_import_to_online_internal(
+    store: &SkillStore,
+    skill_id: &str,
+    online_source: &str,
+    online_skill_id: &str,
+    origin: &str,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    proxy_url: Option<&str>,
+    app_handle: Option<&tauri::AppHandle>,
+) -> Result<(), AppError> {
+    use tauri::Emitter;
+
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+
+    if skill.source_type != "import" {
+        return Err(AppError::invalid_input(
+            "Only import skills can be converted",
+        ));
+    }
+
+    let emit_progress = |phase: &str| {
+        if let Some(handle) = app_handle {
+            handle
+                .emit(
+                    "install-progress",
+                    serde_json::json!({
+                        "skill_id": skill_id,
+                        "phase": phase,
+                    }),
+                )
+                .ok();
+        }
+    };
+
+    emit_progress("cloning");
+
+    let repo_url = format!("https://github.com/{}.git", online_source);
+
+    let temp_dir = git_fetcher::clone_repo_ref(&repo_url, None, Some(cancel), proxy_url)
+        .map_err(AppError::git_or_cancelled)?;
+
+    emit_progress("installing");
+    let update_result = (|| -> Result<(), AppError> {
+        let skill_dir = resolve_skill_dir(&temp_dir, None, Some(online_skill_id))?;
+        let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
+
+        let staged_path = staged_path_for(&skill.central_path);
+        let install_result = installer::install_skill_dir_to_destination(
+            &skill_dir,
+            &skill.name,
+            &staged_path,
+        )
+        .map_err(AppError::io)?;
+
+        swap_skill_directory(&staged_path, Path::new(&skill.central_path))?;
+
+        let source_type = if origin == "skillssh" || origin == "skillsmp" {
+            "skillssh"
+        } else {
+            "git"
+        };
+        let source_ref = format!("{}/{}", online_source, online_skill_id);
+        let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
+
+        store
+            .update_skill_after_reinstall(
+                &skill.id,
+                &skill.name,
+                install_result.description.as_deref(),
+                source_type,
+                Some(&source_ref),
+                Some(&repo_url),
+                source_subpath.as_deref(),
+                None,
+                Some(&revision),
+                Some(&revision),
+                Some(&install_result.content_hash),
+                "up_to_date",
+            )
+            .map_err(AppError::db)?;
+
+        resync_copy_targets(store, &skill.id)?;
+        Ok(())
+    })();
+
+    git_fetcher::cleanup_temp(&temp_dir);
+    update_result?;
+
+    emit_progress("done");
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchConversionItem {
+    pub skill_id: String,
+    pub online_source: String,
+    pub online_skill_id: String,
+    pub origin: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchConvertResult {
+    pub succeeded: Vec<String>,
+    pub failed: Vec<(String, String)>,
+}
+
+#[tauri::command]
+pub async fn convert_batch_import_to_online(
+    items: Vec<BatchConversionItem>,
+    store: State<'_, Arc<SkillStore>>,
+    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
+    app_handle: tauri::AppHandle,
+) -> Result<BatchConvertResult, AppError> {
+    let store = store.inner().clone();
+    let proxy_url = store.proxy_url();
+    let registry = cancel_registry.inner().clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Emitter;
+        let total = items.len();
+        let mut succeeded = Vec::new();
+        let mut failed = Vec::new();
+
+        for (idx, item) in items.iter().enumerate() {
+            let cancel_key = format!("batch_convert:{}:{}", idx, item.skill_id);
+            let cancel = registry.register(&cancel_key);
+            let _guard = CancelRegistrationGuard::new(registry.clone(), cancel_key);
+
+            match convert_import_to_online_internal(
+                &store,
+                &item.skill_id,
+                &item.online_source,
+                &item.online_skill_id,
+                &item.origin,
+                &cancel,
+                proxy_url.as_deref(),
+                Some(&app_handle),
+            ) {
+                Ok(()) => {
+                    succeeded.push(item.skill_id.clone());
+                    app_handle
+                        .emit(
+                            "batch-convert-progress",
+                            serde_json::json!({
+                                "total": total,
+                                "completed": succeeded.len() + failed.len(),
+                                "skill_id": item.skill_id,
+                            }),
+                        )
+                        .ok();
+                }
+                Err(err) => {
+                    failed.push((item.skill_id.clone(), err.to_string()));
+                }
+            }
+        }
+
+        Ok(BatchConvertResult { succeeded, failed })
+    })
+    .await?
+}
+
+// ── Fuzzy matching helpers ──────────────────────────────────────────────
+
+fn normalized_edit_similarity(a: &str, b: &str) -> f64 {
+    let a_len = a.len();
+    let b_len = b.len();
+    if a_len == 0 && b_len == 0 {
+        return 1.0;
+    }
+    let max_len = a_len.max(b_len) as f64;
+    let dist = levenshtein_distance(a, b) as f64;
+    1.0 - (dist / max_len)
+}
+
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let m = a.len();
+    let n = b.len();
+    let mut dp = vec![vec![0usize; n + 1]; m + 1];
+    for i in 0..=m {
+        dp[i][0] = i;
+    }
+    for j in 0..=n {
+        dp[0][j] = j;
+    }
+    for i in 1..=m {
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            dp[i][j] = (dp[i - 1][j] + 1)
+                .min(dp[i][j - 1] + 1)
+                .min(dp[i - 1][j - 1] + cost);
+        }
+    }
+    dp[m][n]
 }

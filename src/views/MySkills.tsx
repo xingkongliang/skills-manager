@@ -28,6 +28,8 @@ import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useMultiSelect } from "../hooks/useMultiSelect";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { OnlineMatchDialog } from "../components/OnlineMatchDialog";
+import { BatchOnlineMatchDialog, type BatchMatchItem } from "../components/BatchOnlineMatchDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import * as api from "../lib/tauri";
@@ -37,6 +39,7 @@ import type {
   GitBackupStatus,
   GitBackupVersion,
   SkillToolToggle,
+  OnlineMatchResult,
 } from "../lib/tauri";
 import { getErrorMessage, getErrorKind } from "../lib/error";
 import {
@@ -134,6 +137,13 @@ export function MySkills() {
   const [checkingAll, setCheckingAll] = useState(false);
   const [checkingSkillId, setCheckingSkillId] = useState<string | null>(null);
   const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null);
+  const [onlineMatchTarget, setOnlineMatchTarget] = useState<ManagedSkill | null>(null);
+  const [onlineMatches, setOnlineMatches] = useState<OnlineMatchResult[]>([]);
+  const [searchingOnline, setSearchingOnline] = useState(false);
+  const [batchMatchDialogOpen, setBatchMatchDialogOpen] = useState(false);
+  const [batchMatchItems, setBatchMatchItems] = useState<BatchMatchItem[]>([]);
+  const [batchSearching, setBatchSearching] = useState(false);
+  const [batchConverting, setBatchConverting] = useState(false);
   const [toolToggles, setToolToggles] = useState<SkillToolToggle[] | null>(null);
   const [togglingToolKey, setTogglingToolKey] = useState<string | null>(null);
   const [gitStatus, setGitStatus] = useState<GitBackupStatus | null>(null);
@@ -517,6 +527,35 @@ export function MySkills() {
     try {
       await api.checkAllSkillUpdates(true);
       toast.success(t("mySkills.updateActions.checkedAll"));
+
+      // Check for import skills and search online matches
+      const importSkills = skills.filter((s) => s.source_type === "import");
+      if (importSkills.length > 0) {
+        const skillIds = importSkills.map((s) => s.id);
+        setBatchSearching(true);
+        setBatchMatchDialogOpen(true);
+        try {
+          const searchResults = await api.searchBatchOnlineMatches(skillIds);
+          const items: BatchMatchItem[] = importSkills
+            .map((skill) => ({
+              skill_id: skill.id,
+              skill_name: skill.name,
+              matches: searchResults[skill.id] ?? [],
+            }))
+            .filter((item) => item.matches.length > 0);
+
+          if (items.length > 0) {
+            setBatchMatchItems(items);
+          } else {
+            setBatchMatchDialogOpen(false);
+            toast.info(t("mySkills.updateActions.noImportSkillsWithMatches"));
+          }
+        } catch {
+          setBatchMatchDialogOpen(false);
+        } finally {
+          setBatchSearching(false);
+        }
+      }
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -539,9 +578,24 @@ export function MySkills() {
   };
 
   const handleRefreshSkill = async (skill: ManagedSkill) => {
+    if (skill.source_type === "import") {
+      setOnlineMatchTarget(skill);
+      setSearchingOnline(true);
+      try {
+        const matches = await api.searchOnlineMatches(skill.id);
+        setOnlineMatches(matches);
+      } catch (error: unknown) {
+        toast.error(getErrorMessage(error, t("common.error")));
+        setOnlineMatchTarget(null);
+      } finally {
+        setSearchingOnline(false);
+      }
+      return;
+    }
+
     setUpdatingSkillId(skill.id);
     try {
-      if (skill.source_type === "local" || skill.source_type === "import") {
+      if (skill.source_type === "local") {
         await api.reimportLocalSkill(skill.id);
         toast.success(t("mySkills.updateActions.reimported"));
       } else {
@@ -552,6 +606,28 @@ export function MySkills() {
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
       await refreshManagedSkills();
+    } finally {
+      setUpdatingSkillId(null);
+    }
+  };
+
+  const handleSelectOnlineMatch = async (match: OnlineMatchResult) => {
+    if (!onlineMatchTarget) return;
+    setUpdatingSkillId(onlineMatchTarget.id);
+    try {
+      const origin = match.origin === "skillsmp" ? "skillssh" : match.origin;
+      await api.convertImportToOnline(
+        onlineMatchTarget.id,
+        match.source,
+        match.skill_id.split("/").pop() ?? match.name,
+        origin,
+      );
+      toast.success(t("mySkills.updateActions.convertedToOnline"));
+      setOnlineMatchTarget(null);
+      setOnlineMatches([]);
+      await refreshManagedSkills();
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
     } finally {
       setUpdatingSkillId(null);
     }
@@ -759,7 +835,9 @@ export function MySkills() {
   };
 
   const refreshLabel = (skill: ManagedSkill) =>
-    skill.source_type === "local" || skill.source_type === "import"
+    skill.source_type === "import"
+      ? t("mySkills.updateActions.findOnline")
+      : skill.source_type === "local"
       ? t("mySkills.updateActions.reimport")
       : t("mySkills.updateActions.update");
 
@@ -1391,6 +1469,84 @@ export function MySkills() {
         confirmLabel={t("mySkills.gitVersionRestore")}
         onClose={() => setRestoreVersionTag(null)}
         onConfirm={handleRestoreVersion}
+      />
+      <OnlineMatchDialog
+        open={onlineMatchTarget !== null}
+        skillName={onlineMatchTarget?.name ?? ""}
+        matches={onlineMatches}
+        loading={searchingOnline}
+        onClose={() => {
+          setOnlineMatchTarget(null);
+          setOnlineMatches([]);
+        }}
+        onSelect={handleSelectOnlineMatch}
+      />
+      <BatchOnlineMatchDialog
+        open={batchMatchDialogOpen}
+        items={batchMatchItems}
+        loading={batchSearching}
+        converting={batchConverting}
+        onClose={() => {
+          setBatchMatchDialogOpen(false);
+          setBatchMatchItems([]);
+        }}
+        onItemSelect={(skillId, match) => {
+          setBatchMatchItems((prev) =>
+            prev.map((item) =>
+              item.skill_id === skillId
+                ? { ...item, selectedMatch: match }
+                : item
+            )
+          );
+        }}
+        onAutoSelect={() => {
+          setBatchMatchItems((prev) =>
+            prev.map((item) => ({
+              ...item,
+              selectedMatch: item.matches[0],
+            }))
+          );
+        }}
+        onConvertAll={async () => {
+          const selections = batchMatchItems.filter((i) => i.selectedMatch);
+          if (selections.length === 0) return;
+          setBatchConverting(true);
+          try {
+            const items = selections.map((s) => ({
+              skill_id: s.skill_id,
+              online_source: s.selectedMatch!.source,
+              online_skill_id:
+                s.selectedMatch!.skill_id.split("/").pop() ??
+                s.selectedMatch!.name,
+              origin:
+                s.selectedMatch!.origin === "skillsmp"
+                  ? "skillssh"
+                  : s.selectedMatch!.origin,
+            }));
+            const result = await api.convertBatchImportToOnline(items);
+            if (result.succeeded.length > 0) {
+              toast.success(
+                t("mySkills.updateActions.batchConvertSuccess", {
+                  count: result.succeeded.length,
+                })
+              );
+            }
+            if (result.failed.length > 0) {
+              toast.error(
+                t("mySkills.updateActions.batchConvertPartialFail", {
+                  count: result.failed.length,
+                })
+              );
+            }
+            setBatchMatchDialogOpen(false);
+            setBatchMatchItems([]);
+            await refreshManagedSkills();
+          } catch (error: unknown) {
+            toast.error(getErrorMessage(error, t("common.error")));
+          } finally {
+            setBatchConverting(false);
+          }
+        }}
       />
     </div>
   );
