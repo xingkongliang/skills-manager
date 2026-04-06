@@ -69,6 +69,18 @@ export interface Scenario {
   updated_at: number;
 }
 
+export interface Recipe {
+  id: string;
+  scenario_id: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  prompt_template: string | null;
+  sort_order: number;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface DiscoveredGroup {
   name: string;
   fingerprint: string | null;
@@ -461,6 +473,35 @@ export const saveScenarioPromptTemplate = (scenarioId: string, template: string 
 
 export const getScenarioPromptTemplate = (scenarioId: string) =>
   invoke<string | null>("get_scenario_prompt_template", { scenarioId });
+
+// ── Recipes ──
+
+export const createRecipe = (scenarioId: string, name: string, description?: string | null, icon?: string | null) =>
+  invoke<Recipe>("create_recipe", { scenarioId, name, description: description ?? null, icon: icon ?? null });
+
+export const updateRecipe = (id: string, name: string, description?: string | null, icon?: string | null) =>
+  invoke<void>("update_recipe", { id, name, description: description ?? null, icon: icon ?? null });
+
+export const deleteRecipe = (id: string) =>
+  invoke<void>("delete_recipe", { id });
+
+export const getRecipesForScenario = (scenarioId: string) =>
+  invoke<Recipe[]>("get_recipes_for_scenario", { scenarioId });
+
+export const saveRecipePromptTemplate = (recipeId: string, template: string | null) =>
+  invoke<void>("save_recipe_prompt_template", { recipeId, template });
+
+export const getRecipePromptTemplate = (recipeId: string) =>
+  invoke<string | null>("get_recipe_prompt_template", { recipeId });
+
+export const setRecipeSkills = (recipeId: string, skillIds: string[]) =>
+  invoke<void>("set_recipe_skills", { recipeId, skillIds });
+
+export const getRecipeSkills = (recipeId: string) =>
+  invoke<ManagedSkill[]>("get_recipe_skills", { recipeId });
+
+export const reorderRecipes = (scenarioId: string, recipeIds: string[]) =>
+  invoke<void>("reorder_recipes", { scenarioId, recipeIds });
 
 // ── Projects ──
 

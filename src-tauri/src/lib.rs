@@ -484,6 +484,15 @@ pub fn run() {
             commands::scenarios::save_scenario_prompt_template,
             commands::scenarios::get_scenario_prompt_template,
             commands::scenarios::set_skill_sync_scope,
+            commands::recipes::create_recipe,
+            commands::recipes::update_recipe,
+            commands::recipes::delete_recipe,
+            commands::recipes::get_recipes_for_scenario,
+            commands::recipes::save_recipe_prompt_template,
+            commands::recipes::get_recipe_prompt_template,
+            commands::recipes::set_recipe_skills,
+            commands::recipes::get_recipe_skills,
+            commands::recipes::reorder_recipes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

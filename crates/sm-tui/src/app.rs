@@ -1,19 +1,19 @@
-use crate::db::{self, Db, Scenario, Skill};
+use crate::db::{self, Db, Recipe, Scenario, Skill};
 use anyhow::Result;
 
 /// Which panel is currently focused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Scenarios,
-    Skills,
+    Middle,
     Prompt,
 }
 
 impl Panel {
     pub fn next(self) -> Self {
         match self {
-            Panel::Scenarios => Panel::Skills,
-            Panel::Skills => Panel::Prompt,
+            Panel::Scenarios => Panel::Middle,
+            Panel::Middle => Panel::Prompt,
             Panel::Prompt => Panel::Scenarios,
         }
     }
@@ -21,10 +21,17 @@ impl Panel {
     pub fn prev(self) -> Self {
         match self {
             Panel::Scenarios => Panel::Prompt,
-            Panel::Skills => Panel::Scenarios,
-            Panel::Prompt => Panel::Skills,
+            Panel::Middle => Panel::Scenarios,
+            Panel::Prompt => Panel::Middle,
         }
     }
+}
+
+/// What the middle panel is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MiddleMode {
+    Skills,
+    Recipes,
 }
 
 /// Application state.
@@ -32,7 +39,9 @@ pub struct App {
     pub scenarios: Vec<Scenario>,
     pub scenario_index: usize,
     pub skills: Vec<Skill>,
-    pub skill_index: usize,
+    pub recipes: Vec<Recipe>,
+    pub middle_mode: MiddleMode,
+    pub middle_index: usize,
     pub active_panel: Panel,
     pub prompt_scroll: u16,
     pub search_mode: bool,
@@ -51,23 +60,24 @@ impl App {
         let scenarios = db.scenarios()?;
         let active_id = db.active_scenario_id()?;
 
-        // Find the index of the active scenario
         let scenario_index = active_id
             .as_deref()
             .and_then(|id| scenarios.iter().position(|s| s.id == id))
             .unwrap_or(0);
 
-        let skills = if let Some(s) = scenarios.get(scenario_index) {
-            db.skills_for_scenario(&s.id)?
+        let (skills, recipes, middle_mode) = if let Some(s) = scenarios.get(scenario_index) {
+            load_middle_data(&db, &s.id)
         } else {
-            vec![]
+            (vec![], vec![], MiddleMode::Skills)
         };
 
         Ok(Self {
             scenarios,
             scenario_index,
             skills,
-            skill_index: 0,
+            recipes,
+            middle_mode,
+            middle_index: 0,
             active_panel: Panel::Scenarios,
             prompt_scroll: 0,
             search_mode: false,
@@ -80,14 +90,19 @@ impl App {
         })
     }
 
-    /// Reload skills for the currently selected scenario.
-    fn reload_skills(&mut self) {
+    /// Reload the middle panel data for the currently selected scenario.
+    fn reload_middle(&mut self) {
         if let Some(s) = self.scenarios.get(self.selected_scenario_index()) {
-            self.skills = self.db.skills_for_scenario(&s.id).unwrap_or_default();
+            let (skills, recipes, mode) = load_middle_data(&self.db, &s.id);
+            self.skills = skills;
+            self.recipes = recipes;
+            self.middle_mode = mode;
         } else {
             self.skills = vec![];
+            self.recipes = vec![];
+            self.middle_mode = MiddleMode::Skills;
         }
-        self.skill_index = 0;
+        self.middle_index = 0;
     }
 
     /// The actual scenario index (respects search filter).
@@ -104,12 +119,35 @@ impl App {
         self.scenarios.get(self.selected_scenario_index())
     }
 
-    /// Get the rendered prompt text for the selected scenario.
+    /// Get the rendered prompt text for what's currently shown.
     pub fn prompt_text(&self) -> String {
-        self.selected_scenario()
-            .and_then(|s| s.prompt_template.as_deref())
-            .map(db::render_prompt)
-            .unwrap_or_default()
+        match self.middle_mode {
+            MiddleMode::Recipes => {
+                // Use the selected recipe's prompt, or fall back to scenario prompt
+                self.recipes
+                    .get(self.middle_index)
+                    .and_then(|r| r.prompt_template.as_deref())
+                    .or_else(|| {
+                        self.selected_scenario()
+                            .and_then(|s| s.prompt_template.as_deref())
+                    })
+                    .map(db::render_prompt)
+                    .unwrap_or_default()
+            }
+            MiddleMode::Skills => self
+                .selected_scenario()
+                .and_then(|s| s.prompt_template.as_deref())
+                .map(db::render_prompt)
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Count of items in the middle panel.
+    fn middle_len(&self) -> usize {
+        match self.middle_mode {
+            MiddleMode::Skills => self.skills.len(),
+            MiddleMode::Recipes => self.recipes.len(),
+        }
     }
 
     // ── Navigation ──
@@ -120,18 +158,19 @@ impl App {
                 if self.search_mode {
                     if self.filter_cursor > 0 {
                         self.filter_cursor -= 1;
-                        self.reload_skills();
+                        self.reload_middle();
                         self.prompt_scroll = 0;
                     }
                 } else if self.scenario_index > 0 {
                     self.scenario_index -= 1;
-                    self.reload_skills();
+                    self.reload_middle();
                     self.prompt_scroll = 0;
                 }
             }
-            Panel::Skills => {
-                if self.skill_index > 0 {
-                    self.skill_index -= 1;
+            Panel::Middle => {
+                if self.middle_index > 0 {
+                    self.middle_index -= 1;
+                    self.prompt_scroll = 0;
                 }
             }
             Panel::Prompt => {
@@ -148,18 +187,20 @@ impl App {
                         && self.filter_cursor < self.filtered_indices.len() - 1
                     {
                         self.filter_cursor += 1;
-                        self.reload_skills();
+                        self.reload_middle();
                         self.prompt_scroll = 0;
                     }
                 } else if self.scenario_index + 1 < self.scenarios.len() {
                     self.scenario_index += 1;
-                    self.reload_skills();
+                    self.reload_middle();
                     self.prompt_scroll = 0;
                 }
             }
-            Panel::Skills => {
-                if !self.skills.is_empty() && self.skill_index + 1 < self.skills.len() {
-                    self.skill_index += 1;
+            Panel::Middle => {
+                let len = self.middle_len();
+                if len > 0 && self.middle_index + 1 < len {
+                    self.middle_index += 1;
+                    self.prompt_scroll = 0;
                 }
             }
             Panel::Prompt => {
@@ -210,7 +251,7 @@ impl App {
             .map(|(i, _)| i)
             .collect();
         self.filter_cursor = 0;
-        self.reload_skills();
+        self.reload_middle();
         self.prompt_scroll = 0;
     }
 
@@ -223,11 +264,10 @@ impl App {
         }
         let mut clipboard = arboard::Clipboard::new()?;
         clipboard.set_text(&text)?;
-        self.copied_flash = 20; // ~2 seconds at 100ms poll rate
+        self.copied_flash = 20;
         Ok(())
     }
 
-    /// Tick the flash counter down. Returns true if flash was active.
     pub fn tick_flash(&mut self) -> bool {
         if self.copied_flash > 0 {
             self.copied_flash -= 1;
@@ -236,4 +276,16 @@ impl App {
             false
         }
     }
+}
+
+/// Load skills and recipes for a scenario, determine which mode to use.
+fn load_middle_data(db: &Db, scenario_id: &str) -> (Vec<Skill>, Vec<Recipe>, MiddleMode) {
+    let recipes = db.recipes_for_scenario(scenario_id).unwrap_or_default();
+    let skills = db.skills_for_scenario(scenario_id).unwrap_or_default();
+    let mode = if recipes.is_empty() {
+        MiddleMode::Skills
+    } else {
+        MiddleMode::Recipes
+    };
+    (skills, recipes, mode)
 }

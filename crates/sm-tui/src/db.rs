@@ -21,6 +21,15 @@ pub struct Skill {
     pub description: Option<String>,
 }
 
+/// A recipe record from the database.
+#[derive(Debug, Clone)]
+pub struct Recipe {
+    pub id: String,
+    pub name: String,
+    pub icon: Option<String>,
+    pub prompt_template: Option<String>,
+}
+
 /// Read-only access to the skills-manager SQLite database.
 pub struct Db {
     conn: Connection,
@@ -85,6 +94,28 @@ impl Db {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 description: row.get(2)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Get recipes for a scenario. Returns empty vec if table doesn't exist (pre-v5 db).
+    pub fn recipes_for_scenario(&self, scenario_id: &str) -> Result<Vec<Recipe>> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT id, name, icon, prompt_template
+             FROM scenario_recipes
+             WHERE scenario_id = ?1
+             ORDER BY sort_order, name",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Ok(vec![]), // table doesn't exist yet
+        };
+        let rows = stmt.query_map(params![scenario_id], |row| {
+            Ok(Recipe {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                icon: row.get(2)?,
+                prompt_template: row.get(3)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())

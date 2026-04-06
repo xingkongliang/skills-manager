@@ -1,6 +1,7 @@
 pub mod browse;
 pub mod git_backup;
 pub mod projects;
+pub mod recipes;
 pub mod scan;
 pub mod scenarios;
 pub mod settings;

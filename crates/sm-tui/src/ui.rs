@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Panel};
+use crate::app::{App, MiddleMode, Panel};
 
 const ACCENT: Color = Color::Cyan;
 const ACTIVE_BORDER: Color = Color::Cyan;
@@ -23,7 +23,6 @@ pub fn draw(f: &mut Frame, app: &App) {
     let main_area = chunks[0];
     let status_bar = chunks[1];
 
-    // Three-panel split
     let panels = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -34,7 +33,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         .split(main_area);
 
     draw_scenarios(f, app, panels[0]);
-    draw_skills(f, app, panels[1]);
+    draw_middle(f, app, panels[1]);
     draw_prompt(f, app, panels[2]);
     draw_status_bar(f, app, status_bar);
 }
@@ -61,14 +60,11 @@ fn draw_scenarios(f: &mut Frame, app: &App, area: Rect) {
             .iter()
             .map(|&i| {
                 let s = &app.scenarios[i];
-                scenario_list_item(s, false)
+                scenario_list_item(s)
             })
             .collect()
     } else {
-        app.scenarios
-            .iter()
-            .map(|s| scenario_list_item(s, false))
-            .collect()
+        app.scenarios.iter().map(scenario_list_item).collect()
     };
 
     let selected = if app.search_mode {
@@ -98,15 +94,57 @@ fn draw_scenarios(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn scenario_list_item(s: &crate::db::Scenario, _active: bool) -> ListItem<'static> {
+fn scenario_list_item(s: &crate::db::Scenario) -> ListItem<'static> {
     let icon = s.icon.as_deref().unwrap_or("  ");
     let text = format!("{} {}", icon, s.name);
     ListItem::new(text)
 }
 
-fn draw_skills(f: &mut Frame, app: &App, area: Rect) {
-    let focused = app.active_panel == Panel::Skills;
+/// Draw the middle panel: recipes if available, otherwise skills.
+fn draw_middle(f: &mut Frame, app: &App, area: Rect) {
+    let focused = app.active_panel == Panel::Middle;
 
+    match app.middle_mode {
+        MiddleMode::Recipes => draw_recipes(f, app, area, focused),
+        MiddleMode::Skills => draw_skills(f, app, area, focused),
+    }
+}
+
+fn draw_recipes(f: &mut Frame, app: &App, area: Rect, focused: bool) {
+    if app.recipes.is_empty() {
+        let msg = Paragraph::new("No recipes in this scenario")
+            .style(Style::default().fg(MUTED))
+            .block(panel_block("Recipes", focused));
+        f.render_widget(msg, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .recipes
+        .iter()
+        .map(|r| {
+            let icon = r.icon.as_deref().unwrap_or("📋");
+            let text = format!("  {} {}", icon, r.name);
+            ListItem::new(text)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(panel_block("Recipes", focused))
+        .highlight_style(
+            Style::default()
+                .bg(SELECTED_BG)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸");
+
+    let mut state = ListState::default();
+    state.select(Some(app.middle_index));
+    f.render_stateful_widget(list, area, &mut state);
+}
+
+fn draw_skills(f: &mut Frame, app: &App, area: Rect, focused: bool) {
     if app.skills.is_empty() {
         let msg = Paragraph::new("No skills in this scenario")
             .style(Style::default().fg(MUTED))
@@ -153,7 +191,7 @@ fn draw_skills(f: &mut Frame, app: &App, area: Rect) {
         .highlight_symbol("▸");
 
     let mut state = ListState::default();
-    state.select(Some(app.skill_index));
+    state.select(Some(app.middle_index));
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -162,7 +200,7 @@ fn draw_prompt(f: &mut Frame, app: &App, area: Rect) {
     let text = app.prompt_text();
 
     if text.is_empty() {
-        let msg = Paragraph::new("No prompt template for this scenario")
+        let msg = Paragraph::new("No prompt template")
             .style(Style::default().fg(MUTED))
             .block(panel_block("Prompt Preview", focused));
         f.render_widget(msg, area);
@@ -198,7 +236,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("↑↓", Style::default().fg(ACCENT)),
             Span::raw(" select  "),
             Span::styled("Enter", Style::default().fg(ACCENT)),
-            Span::raw(" copy+exit  "),
+            Span::raw(" copy  "),
             Span::styled("/", Style::default().fg(ACCENT)),
             Span::raw(" search  "),
             Span::styled("q", Style::default().fg(ACCENT)),

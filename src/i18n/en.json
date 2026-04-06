@@ -214,6 +214,20 @@
       "preview": "Preview",
       "emptySkills": "No Skills enabled in current scenario",
       "dropZone": "Drop Skill here"
+    },
+    "recipes": {
+      "title": "Recipes",
+      "newRecipe": "New Recipe",
+      "namePlaceholder": "Recipe name",
+      "deleteConfirm": "Delete recipe \"{{name}}\"?",
+      "deleted": "Recipe deleted",
+      "created": "Recipe created",
+      "updated": "Recipe updated",
+      "skillSubset": "Recipe Skills (subset)",
+      "skillSubsetHint": "Check the Skills this Recipe uses",
+      "noRecipes": "No recipes yet. Click the button above to create one.",
+      "scenarioPrompt": "Scenario Default Prompt",
+      "recipePrompt": "Recipe Prompt"
     }
   },
   "install": {

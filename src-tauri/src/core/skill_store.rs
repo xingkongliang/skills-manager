@@ -92,6 +92,19 @@ pub struct ScenarioSkillToolToggleRecord {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RecipeRecord {
+    pub id: String,
+    pub scenario_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    pub prompt_template: Option<String>,
+    pub sort_order: i32,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 impl SkillStore {
     pub fn new(db_path: &PathBuf) -> Result<Self> {
         let conn = Connection::open(db_path)?;
@@ -1191,6 +1204,156 @@ impl SkillStore {
             map.entry(row.0).or_default().push(row.1);
         }
         Ok(map)
+    }
+
+    // ── Recipes CRUD ──
+
+    pub fn create_recipe(
+        &self,
+        scenario_id: &str,
+        name: &str,
+        description: Option<&str>,
+        icon: Option<&str>,
+    ) -> Result<RecipeRecord> {
+        let conn = self.conn.lock().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp_millis();
+        let max_order: i32 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) FROM scenario_recipes WHERE scenario_id = ?1",
+                params![scenario_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(-1);
+        conn.execute(
+            "INSERT INTO scenario_recipes (id, scenario_id, name, description, icon, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, scenario_id, name, description, icon, max_order + 1, now, now],
+        )?;
+        Ok(RecipeRecord {
+            id,
+            scenario_id: scenario_id.to_string(),
+            name: name.to_string(),
+            description: description.map(|s| s.to_string()),
+            icon: icon.map(|s| s.to_string()),
+            prompt_template: None,
+            sort_order: max_order + 1,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub fn update_recipe(
+        &self,
+        id: &str,
+        name: &str,
+        description: Option<&str>,
+        icon: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE scenario_recipes SET name = ?1, description = ?2, icon = ?3, updated_at = ?4 WHERE id = ?5",
+            params![name, description, icon, now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_recipe(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM scenario_recipes WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn get_recipes_for_scenario(&self, scenario_id: &str) -> Result<Vec<RecipeRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, scenario_id, name, description, icon, prompt_template, sort_order, created_at, updated_at
+             FROM scenario_recipes
+             WHERE scenario_id = ?1
+             ORDER BY sort_order, name",
+        )?;
+        let rows = stmt.query_map(params![scenario_id], |row| {
+            Ok(RecipeRecord {
+                id: row.get(0)?,
+                scenario_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                icon: row.get(4)?,
+                prompt_template: row.get(5)?,
+                sort_order: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn save_recipe_prompt_template(
+        &self,
+        recipe_id: &str,
+        template: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE scenario_recipes SET prompt_template = ?1, updated_at = ?2 WHERE id = ?3",
+            params![template, now, recipe_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_recipe_prompt_template(&self, recipe_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT prompt_template FROM scenario_recipes WHERE id = ?1",
+            params![recipe_id],
+            |row| row.get(0),
+        )?;
+        Ok(result)
+    }
+
+    pub fn set_recipe_skills(&self, recipe_id: &str, skill_ids: &[String]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM recipe_skills WHERE recipe_id = ?1",
+            params![recipe_id],
+        )?;
+        let mut stmt = conn.prepare(
+            "INSERT INTO recipe_skills (recipe_id, skill_id, sort_order) VALUES (?1, ?2, ?3)",
+        )?;
+        for (i, skill_id) in skill_ids.iter().enumerate() {
+            stmt.execute(params![recipe_id, skill_id, i as i32])?;
+        }
+        Ok(())
+    }
+
+    pub fn get_recipe_skills(&self, recipe_id: &str) -> Result<Vec<SkillRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT s.id, s.name, s.description, s.source_type, s.source_ref, s.source_ref_resolved,
+                    s.source_subpath, s.source_branch, s.source_revision, s.remote_revision,
+                    s.central_path, s.content_hash, s.enabled, s.created_at, s.updated_at,
+                    s.status, s.update_status, s.last_checked_at, s.last_check_error
+             FROM skills s
+             INNER JOIN recipe_skills rs ON s.id = rs.skill_id
+             WHERE rs.recipe_id = ?1
+             ORDER BY rs.sort_order, s.name",
+        )?;
+        let rows = stmt.query_map(params![recipe_id], map_skill_row)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn reorder_recipes(&self, scenario_id: &str, recipe_ids: &[String]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut stmt = conn.prepare(
+            "UPDATE scenario_recipes SET sort_order = ?1, updated_at = ?2 WHERE id = ?3 AND scenario_id = ?4",
+        )?;
+        for (i, id) in recipe_ids.iter().enumerate() {
+            stmt.execute(params![i as i32, now, id, scenario_id])?;
+        }
+        Ok(())
     }
 }
 

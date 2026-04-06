@@ -191,6 +191,20 @@
       "preview": "預覽",
       "emptySkills": "目前場景沒有已啟用的 Skills",
       "dropZone": "將 Skill 拖曳到此處"
+    },
+    "recipes": {
+      "title": "Recipes",
+      "newRecipe": "新建 Recipe",
+      "namePlaceholder": "Recipe 名稱",
+      "deleteConfirm": "確定要刪除 Recipe「{{name}}」嗎？",
+      "deleted": "Recipe 已刪除",
+      "created": "Recipe 已建立",
+      "updated": "Recipe 已更新",
+      "skillSubset": "Recipe Skills（子集）",
+      "skillSubsetHint": "勾選此 Recipe 使用的 Skills",
+      "noRecipes": "尚無 Recipe，點擊上方按鈕建立",
+      "scenarioPrompt": "場景預設 Prompt",
+      "recipePrompt": "Recipe Prompt"
     }
   },
   "install": {

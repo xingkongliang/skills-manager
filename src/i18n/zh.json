@@ -214,6 +214,20 @@
       "preview": "预览",
       "emptySkills": "当前场景没有已启用的 Skills",
       "dropZone": "将 Skill 拖拽到此处"
+    },
+    "recipes": {
+      "title": "Recipes",
+      "newRecipe": "新建 Recipe",
+      "namePlaceholder": "Recipe 名称",
+      "deleteConfirm": "确定要删除 Recipe「{{name}}」吗？",
+      "deleted": "Recipe 已删除",
+      "created": "Recipe 已创建",
+      "updated": "Recipe 已更新",
+      "skillSubset": "Recipe Skills（子集）",
+      "skillSubsetHint": "勾选此 Recipe 使用的 Skills",
+      "noRecipes": "暂无 Recipe，点击上方按钮创建",
+      "scenarioPrompt": "场景默认 Prompt",
+      "recipePrompt": "Recipe Prompt"
     }
   },
   "install": {

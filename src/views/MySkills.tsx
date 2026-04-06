@@ -1552,6 +1552,7 @@ export function MySkills() {
               <ScenarioPromptEditor
                 ref={promptEditorRef}
                 scenarioId={activeScenario.id}
+                scenarioSkills={skills.filter((s) => s.scenario_ids.includes(activeScenario.id))}
                 onExit={() => setIsPromptEditorMode(false)}
                 onTemplateChange={handlePromptTemplateChange}
               />
