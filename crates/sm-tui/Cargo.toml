@@ -1,0 +1,17 @@
+[package]
+name = "sm-tui"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal UI for Skills Manager — quick scenario prompt access"
+
+[[bin]]
+name = "sm"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+arboard = "3"
+rusqlite = { version = "0.31", features = ["bundled"] }
+dirs = "5.0"
+anyhow = "1.0"
