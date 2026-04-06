@@ -329,7 +329,7 @@ export const ScenarioPromptEditor = forwardRef<
                   >
                     {recipe.icon ? `${recipe.icon} ` : ""}{recipe.name}
                   </button>
-                  <div className="absolute -top-1.5 -right-1.5 hidden items-center gap-px rounded bg-surface-hover/90 px-0.5 py-0.5 shadow-sm group-hover/recipe:flex">
+                  <div className="absolute -top-2 -right-2 z-10 hidden items-center gap-px rounded-full bg-surface-hover px-1 py-0.5 shadow group-hover/recipe:flex">
                     <button
                       onClick={() => { setEditingRecipeId(recipe.id); setEditingName(recipe.name); }}
                       className="rounded p-0.5 text-faint transition-colors hover:text-secondary"
