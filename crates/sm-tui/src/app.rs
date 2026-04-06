@@ -10,6 +10,24 @@ pub enum Panel {
     Prompt,
 }
 
+impl Panel {
+    pub fn next(self) -> Self {
+        match self {
+            Panel::Scenarios => Panel::Middle,
+            Panel::Middle => Panel::Prompt,
+            Panel::Prompt => Panel::Scenarios,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Panel::Scenarios => Panel::Prompt,
+            Panel::Middle => Panel::Scenarios,
+            Panel::Prompt => Panel::Middle,
+        }
+    }
+}
+
 /// What the middle panel is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MiddleMode {
@@ -151,7 +169,37 @@ impl App {
         }
     }
 
-    // ── Internal navigation helpers (called by mouse handlers) ──
+    // ── Keyboard navigation (panel-aware) ──
+
+    pub fn move_up(&mut self) {
+        match self.active_panel {
+            Panel::Scenarios => self.move_scenario_up(),
+            Panel::Middle => self.move_middle_up(),
+            Panel::Prompt => {
+                self.prompt_scroll = self.prompt_scroll.saturating_sub(1);
+            }
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        match self.active_panel {
+            Panel::Scenarios => self.move_scenario_down(),
+            Panel::Middle => self.move_middle_down(),
+            Panel::Prompt => {
+                self.prompt_scroll += 1;
+            }
+        }
+    }
+
+    pub fn focus_next(&mut self) {
+        self.active_panel = self.active_panel.next();
+    }
+
+    pub fn focus_prev(&mut self) {
+        self.active_panel = self.active_panel.prev();
+    }
+
+    // ── Internal navigation helpers (called by mouse and keyboard handlers) ──
 
     fn move_scenario_up(&mut self) {
         if self.search_mode {

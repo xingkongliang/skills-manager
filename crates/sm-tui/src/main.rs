@@ -60,7 +60,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut app::App
                         continue;
                     }
 
-                    // Normal mode (keyboard: only quit, copy, search)
+                    // Normal mode
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => {
                             app.should_quit = true;
@@ -72,6 +72,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut app::App
                             app.should_quit = true;
                             break;
                         }
+                        KeyCode::Up | KeyCode::Char('k') => app.move_up(),
+                        KeyCode::Down | KeyCode::Char('j') => app.move_down(),
+                        KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => app.focus_next(),
+                        KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => app.focus_prev(),
                         KeyCode::Char('/') => app.enter_search(),
                         KeyCode::Enter => {
                             app.copy_prompt()?;

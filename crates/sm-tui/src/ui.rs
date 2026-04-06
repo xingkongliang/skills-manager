@@ -307,6 +307,10 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         ]
     } else {
         vec![
+            Span::styled("←→", Style::default().fg(ACCENT)),
+            Span::raw(" panel  "),
+            Span::styled("↑↓", Style::default().fg(ACCENT)),
+            Span::raw(" select  "),
             Span::styled("Enter", Style::default().fg(ACCENT)),
             Span::raw(" copy  "),
             Span::styled("/", Style::default().fg(ACCENT)),
