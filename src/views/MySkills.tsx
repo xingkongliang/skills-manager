@@ -141,6 +141,7 @@ export function MySkills() {
   const [checkingAll, setCheckingAll] = useState(false);
   const [checkingSkillId, setCheckingSkillId] = useState<string | null>(null);
   const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null);
+  const [updatingAll, setUpdatingAll] = useState(false);
   const [onlineMatchTarget, setOnlineMatchTarget] = useState<ManagedSkill | null>(null);
   const [onlineMatches, setOnlineMatches] = useState<OnlineMatchResult[]>([]);
   const [searchingOnline, setSearchingOnline] = useState(false);
@@ -584,6 +585,35 @@ export function MySkills() {
     }
   };
 
+  const handleUpdateAll = async () => {
+    const updatable = skills.filter(
+      (s) => s.update_status === "update_available" && (s.source_type === "git" || s.source_type === "skillssh")
+    );
+    if (updatable.length === 0) return;
+    setUpdatingAll(true);
+    let succeeded = 0;
+    let failed = 0;
+    for (const skill of updatable) {
+      try {
+        setUpdatingSkillId(skill.id);
+        await api.updateSkill(skill.id);
+        succeeded++;
+      } catch {
+        failed++;
+      } finally {
+        setUpdatingSkillId(null);
+      }
+    }
+    if (succeeded > 0) {
+      toast.success(t("mySkills.updateActions.updatedAll", { count: succeeded }));
+    }
+    if (failed > 0) {
+      toast.error(t("mySkills.updateActions.updateAllFailed", { count: failed }));
+    }
+    await refreshManagedSkills();
+    setUpdatingAll(false);
+  };
+
   const handleCheckUpdate = async (skill: ManagedSkill) => {
     setCheckingSkillId(skill.id);
     try {
@@ -984,6 +1014,18 @@ export function MySkills() {
             <RefreshCw className={cn("h-3.5 w-3.5", checkingAll && "animate-spin")} />
             {t("mySkills.updateActions.checkAll")}
           </button>
+          {skills.some((s) => s.update_status === "update_available") && (
+            <button
+              onClick={handleUpdateAll}
+              disabled={updatingAll || checkingAll}
+              className="inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-accent transition-colors hover:bg-accent-bg disabled:opacity-50"
+            >
+              <ArrowUpCircle className={cn("h-3.5 w-3.5", updatingAll && "animate-spin")} />
+              {t("mySkills.updateActions.updateAll", {
+                count: skills.filter((s) => s.update_status === "update_available").length,
+              })}
+            </button>
+          )}
           <button
             onClick={() => setViewMode("grid")}
             className={cn(
@@ -1172,7 +1214,7 @@ export function MySkills() {
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <div className={cn("flex gap-4", isPromptEditorMode && "flex-1")}>
           {/* Skills grid/list */}
-          <div className={cn(isPromptEditorMode ? "w-1/2 min-w-0 max-h-[calc(100vh-220px)] overflow-y-auto" : "flex-1")}>
+          <div className={cn(isPromptEditorMode ? "w-1/2 min-w-0 max-h-[calc(100vh-220px)] overflow-y-auto scrollbar-hide" : "flex-1")}>
           <SortableContext
             items={filtered.map((s) => s.id)}
             strategy={viewMode === "grid" ? rectSortingStrategy : verticalListSortingStrategy}
@@ -1506,7 +1548,7 @@ export function MySkills() {
           </SortableContext>
           </div>
           {isPromptEditorMode && activeScenario && (
-            <div className="flex-1 min-w-0 max-h-[calc(100vh-220px)] overflow-y-auto pb-8">
+            <div className="flex-1 min-w-0 max-h-[calc(100vh-220px)] overflow-y-auto scrollbar-hide pb-8">
               <ScenarioPromptEditor
                 ref={promptEditorRef}
                 scenarioId={activeScenario.id}

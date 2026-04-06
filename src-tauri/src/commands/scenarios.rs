@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::core::{
     error::AppError,
@@ -245,16 +245,24 @@ pub async fn switch_scenario(
     let store_bg = store.clone();
     let id_bg = id.clone();
 
+    // Check if global sync scope — skip file operations if so
+    let is_global = store
+        .get_setting("skill_sync_scope")
+        .unwrap_or(None)
+        .map_or(false, |v| v == "global");
+
     // Phase 1: DB-only operations (fast) — synchronous
     tauri::async_runtime::spawn_blocking(move || {
         ensure_scenario_exists(&store, &id)?;
 
-        // Unsync old scenario skills — file removal
-        if let Ok(Some(old_id)) = store.get_active_scenario_id() {
-            if old_id != id {
-                let t0 = std::time::Instant::now();
-                unsync_scenario_skills(&store, &old_id)?;
-                log::info!("unsync_scenario_skills took {:?}", t0.elapsed());
+        if !is_global {
+            // Unsync old scenario skills — file removal
+            if let Ok(Some(old_id)) = store.get_active_scenario_id() {
+                if old_id != id {
+                    let t0 = std::time::Instant::now();
+                    unsync_scenario_skills(&store, &old_id)?;
+                    log::info!("unsync_scenario_skills took {:?}", t0.elapsed());
+                }
             }
         }
 
@@ -266,13 +274,30 @@ pub async fn switch_scenario(
     .await??;
 
     // Phase 2: File sync in background — don't block the UI
-    tauri::async_runtime::spawn_blocking(move || {
-        let t0 = std::time::Instant::now();
-        if let Err(e) = sync_scenario_skills(&store_bg, &id_bg) {
-            log::error!("Background sync_scenario_skills failed: {e}");
+    // In global mode, all skills are already synced — skip file operations
+    let app_bg = app.clone();
+    if !is_global {
+        tauri::async_runtime::spawn(async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                let t0 = std::time::Instant::now();
+                if let Err(e) = sync_scenario_skills(&store_bg, &id_bg) {
+                    log::error!("Background sync_scenario_skills failed: {e}");
+                }
+                log::info!("sync_scenario_skills (background) took {:?}", t0.elapsed());
+            })
+            .await
+            .ok();
+            // Notify frontend that file sync is done so it can refresh targets
+            if let Err(e) = app_bg.emit("scenario-sync-complete", ()) {
+                log::warn!("Failed to emit scenario-sync-complete: {e}");
+            }
+        });
+    } else {
+        // Global mode: just notify frontend to refresh (scenario metadata changed)
+        if let Err(e) = app_bg.emit("scenario-sync-complete", ()) {
+            log::warn!("Failed to emit scenario-sync-complete: {e}");
         }
-        log::info!("sync_scenario_skills (background) took {:?}", t0.elapsed());
-    });
+    }
 
     refresh_tray_menu_best_effort(&app);
     Ok(())
@@ -606,6 +631,167 @@ pub(crate) fn unsync_scenario_skills(
         log::warn!("Failed to batch-delete target records: {e}");
     }
 
+    Ok(())
+}
+
+/// Sync ALL managed skills to all enabled/installed tool adapters (global mode).
+pub(crate) fn sync_all_skills(store: &SkillStore) -> Result<(), AppError> {
+    let t_total = std::time::Instant::now();
+
+    let skills = store.get_all_skills().map_err(AppError::db)?;
+    if skills.is_empty() {
+        return Ok(());
+    }
+
+    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+    let all_adapters = tool_adapters::enabled_installed_adapters(store);
+
+    // Pre-create adapter skills directories
+    for adapter in &all_adapters {
+        let skills_dir = adapter.skills_dir();
+        if let Some(parent) = skills_dir.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+
+    // Build sync tasks: every skill × every adapter
+    struct SyncTask {
+        source: PathBuf,
+        target: PathBuf,
+        mode: sync_engine::SyncMode,
+        skill_id: String,
+        tool_key: String,
+    }
+
+    let mut sync_tasks = Vec::new();
+    for skill in &skills {
+        let source = PathBuf::from(&skill.central_path);
+        for adapter in &all_adapters {
+            let target = adapter.skills_dir().join(&skill.name);
+            let mode =
+                sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
+            sync_tasks.push(SyncTask {
+                source: source.clone(),
+                target,
+                mode,
+                skill_id: skill.id.clone(),
+                tool_key: adapter.key.clone(),
+            });
+        }
+    }
+    log::info!(
+        "[sync_all] {} tasks ({} skills × {} adapters)",
+        sync_tasks.len(),
+        skills.len(),
+        all_adapters.len()
+    );
+
+    // Parallel file sync
+    let sync_results: Vec<_> = sync_tasks
+        .par_iter()
+        .map(|task| {
+            let result = sync_engine::sync_skill_fast(&task.source, &task.target, task.mode);
+            (task, result)
+        })
+        .collect();
+
+    // Batch insert target records
+    let now = chrono::Utc::now().timestamp_millis();
+    let target_records: Vec<SkillTargetRecord> = sync_results
+        .iter()
+        .filter_map(|(task, result)| match result {
+            Ok(actual_mode) => Some(SkillTargetRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                skill_id: task.skill_id.clone(),
+                tool: task.tool_key.clone(),
+                target_path: task.target.to_string_lossy().to_string(),
+                mode: actual_mode.as_str().to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(now),
+                last_error: None,
+            }),
+            Err(e) => {
+                log::warn!(
+                    "Failed to sync skill {} to {}: {e}",
+                    task.skill_id,
+                    task.target.display()
+                );
+                None
+            }
+        })
+        .collect();
+
+    if let Err(e) = store.insert_targets_batch(&target_records) {
+        log::warn!("Failed to batch-insert sync targets: {e}");
+    }
+    log::info!("[sync_all] TOTAL: {:?}", t_total.elapsed());
+
+    Ok(())
+}
+
+/// Remove ALL sync targets from the filesystem and database.
+fn unsync_all_skills(store: &SkillStore) -> Result<(), AppError> {
+    let all_targets = store.get_all_targets().unwrap_or_default();
+
+    all_targets.par_iter().for_each(|target| {
+        let path = PathBuf::from(&target.target_path);
+        if let Err(e) = sync_engine::remove_target(&path) {
+            log::warn!("Failed to remove sync target {}: {e}", path.display());
+        }
+    });
+
+    // Delete all target records — collect all unique skill IDs
+    let skill_ids: Vec<String> = all_targets
+        .iter()
+        .map(|t| t.skill_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    if !skill_ids.is_empty() {
+        if let Err(e) = store.delete_targets_for_skills_batch(&skill_ids) {
+            log::warn!("Failed to batch-delete target records: {e}");
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_skill_sync_scope(
+    app: tauri::AppHandle,
+    scope: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    let app_bg = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        // Save the new scope setting
+        store
+            .set_setting("skill_sync_scope", &scope)
+            .map_err(AppError::db)?;
+
+        if scope == "global" {
+            // Switching to global: sync ALL skills to all adapters
+            let t0 = std::time::Instant::now();
+            sync_all_skills(&store)?;
+            log::info!("set_skill_sync_scope → global: sync_all_skills took {:?}", t0.elapsed());
+        } else {
+            // Switching to scenario: unsync everything, then sync active scenario only
+            unsync_all_skills(&store)?;
+            if let Ok(Some(active_id)) = store.get_active_scenario_id() {
+                sync_scenario_skills(&store, &active_id)?;
+            }
+        }
+
+        Ok::<(), AppError>(())
+    })
+    .await??;
+
+    if let Err(e) = app_bg.emit("scenario-sync-complete", ()) {
+        log::warn!("Failed to emit scenario-sync-complete: {e}");
+    }
+    refresh_tray_menu_best_effort(&app);
     Ok(())
 }
 

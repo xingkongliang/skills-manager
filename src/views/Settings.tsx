@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Circle,
   Globe,
+  Layers,
   Link as LinkIcon,
   Copy,
   Settings2,
@@ -56,6 +57,7 @@ export function Settings() {
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const { theme, setTheme } = useThemeContext();
   const [syncMode, setSyncMode] = useState("symlink");
+  const [syncScope, setSyncScope] = useState("scenario");
   const [defaultScenario, setDefaultScenario] = useState("");
   const [closeAction, setCloseAction] = useState("");
   const [showTrayIcon, setShowTrayIcon] = useState(true);
@@ -170,6 +172,7 @@ export function Settings() {
 
   useEffect(() => {
     api.getSettings("sync_mode").then((v) => { if (v) setSyncMode(v); });
+    api.getSettings("skill_sync_scope").then((v) => { if (v) setSyncScope(v); });
     api.getSettings("default_scenario").then((v) => { if (v) setDefaultScenario(v); });
     api.getSettings("proxy_url").then((v) => { setProxyInput(v ?? ""); });
     api.getSettings("close_action").then((v) => { setCloseAction(v ?? ""); });
@@ -659,6 +662,40 @@ export function Settings() {
                   )}
                 >
                   <Copy className="w-3 h-3" /> {t("settings.copy")}
+                </button>
+              </div>
+            </div>
+
+            {/* Sync scope */}
+            <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.syncScope")}</h3>
+                <p className="text-[13px] text-muted">{t("settings.syncScopeDesc")}</p>
+              </div>
+              <div className="flex flex-wrap rounded-[4px] border border-border-subtle bg-background p-px">
+                <button
+                  onClick={async () => {
+                    setSyncScope("scenario");
+                    await api.setSkillSyncScope("scenario");
+                  }}
+                  className={cn(
+                    segmentedButtonClass,
+                    syncScope === "scenario" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+                  )}
+                >
+                  <Layers className="w-3 h-3" /> {t("settings.syncScope_scenario")}
+                </button>
+                <button
+                  onClick={async () => {
+                    setSyncScope("global");
+                    await api.setSkillSyncScope("global");
+                  }}
+                  className={cn(
+                    segmentedButtonClass,
+                    syncScope === "global" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+                  )}
+                >
+                  <Globe className="w-3 h-3" /> {t("settings.syncScope_global")}
                 </button>
               </div>
             </div>

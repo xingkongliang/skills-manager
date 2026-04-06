@@ -483,6 +483,7 @@ pub fn run() {
             commands::scenarios::reorder_scenario_skills,
             commands::scenarios::save_scenario_prompt_template,
             commands::scenarios::get_scenario_prompt_template,
+            commands::scenarios::set_skill_sync_scope,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

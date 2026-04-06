@@ -435,6 +435,9 @@ export const deleteScenario = (id: string) =>
 export const switchScenario = (id: string) =>
   invoke<void>("switch_scenario", { id });
 
+export const setSkillSyncScope = (scope: string) =>
+  invoke<void>("set_skill_sync_scope", { scope });
+
 export const addSkillToScenario = (skillId: string, scenarioId: string) =>
   invoke<void>("add_skill_to_scenario", { skillId, scenarioId });
 

@@ -106,9 +106,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         console.log(`[perf] switchScenario IPC: ${(performance.now() - t0).toFixed(0)}ms`);
         
         const t1 = performance.now();
-        await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-        console.log(`[perf] refreshScenarios+refreshManagedSkills: ${(performance.now() - t1).toFixed(0)}ms`);
-        console.log(`[perf] TOTAL switch: ${(performance.now() - t0).toFixed(0)}ms`);
+        await refreshScenarios();
+        console.log(`[perf] refreshScenarios: ${(performance.now() - t1).toFixed(0)}ms`);
+        console.log(`[perf] TOTAL switch (skills refresh deferred to scenario-sync-complete): ${(performance.now() - t0).toFixed(0)}ms`);
         
         setAppError(null);
       } catch (e) {
@@ -116,7 +116,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setTranslatedError("common.scenarios");
       }
     },
-    [refreshManagedSkills, refreshScenarios, setTranslatedError]
+    [refreshScenarios, setTranslatedError]
   );
 
   useEffect(() => {
@@ -145,6 +145,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
     };
   }, [refreshManagedSkills, refreshScenarios]);
+
+  // Refresh skills after background file sync completes (targets updated)
+  useEffect(() => {
+    const unlistenPromise = listen("scenario-sync-complete", async () => {
+      await refreshManagedSkills();
+    });
+
+    return () => {
+      unlistenPromise
+        .then((unlisten) => unlisten())
+        .catch((error) => {
+          console.error("Failed to unlisten scenario-sync-complete:", error);
+        });
+    };
+  }, [refreshManagedSkills]);
 
   // Auto-check skill updates on startup (non-blocking, silent)
   useEffect(() => {
