@@ -304,7 +304,7 @@ export const ScenarioPromptEditor = forwardRef<
 
           {/* Recipe buttons */}
           {recipes.map((recipe) => (
-            <div key={recipe.id} className="group flex items-center gap-0.5">
+            <div key={recipe.id} className="relative group/recipe">
               {editingRecipeId === recipe.id ? (
                 <input
                   autoFocus
@@ -318,29 +318,33 @@ export const ScenarioPromptEditor = forwardRef<
                   className="rounded-md border border-accent bg-transparent px-2 py-1 text-[12px] font-medium text-primary outline-none"
                 />
               ) : (
-                <button
-                  onClick={() => setSelectedRecipeId(recipe.id)}
-                  className={`rounded-md border px-2 py-1 text-[12px] font-medium transition-colors ${
-                    selectedRecipeId === recipe.id
-                      ? "border-accent bg-accent/10 text-accent"
-                      : "border-border-subtle text-muted hover:border-accent/50 hover:text-secondary"
-                  }`}
-                >
-                  {recipe.icon ? `${recipe.icon} ` : ""}{recipe.name}
-                </button>
+                <>
+                  <button
+                    onClick={() => setSelectedRecipeId(recipe.id)}
+                    className={`rounded-md border px-2 py-1 text-[12px] font-medium transition-colors ${
+                      selectedRecipeId === recipe.id
+                        ? "border-accent bg-accent/10 text-accent"
+                        : "border-border-subtle text-muted hover:border-accent/50 hover:text-secondary"
+                    }`}
+                  >
+                    {recipe.icon ? `${recipe.icon} ` : ""}{recipe.name}
+                  </button>
+                  <div className="absolute -top-1.5 -right-1.5 hidden items-center gap-px rounded bg-surface-hover/90 px-0.5 py-0.5 shadow-sm group-hover/recipe:flex">
+                    <button
+                      onClick={() => { setEditingRecipeId(recipe.id); setEditingName(recipe.name); }}
+                      className="rounded p-0.5 text-faint transition-colors hover:text-secondary"
+                    >
+                      <Pencil className="h-2.5 w-2.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteRecipe(recipe)}
+                      className="rounded p-0.5 text-faint transition-colors hover:text-red-400"
+                    >
+                      <Trash2 className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                </>
               )}
-              <button
-                onClick={() => { setEditingRecipeId(recipe.id); setEditingName(recipe.name); }}
-                className="rounded p-0.5 text-faint opacity-0 transition-all hover:text-secondary group-hover:opacity-100"
-              >
-                <Pencil className="h-3 w-3" />
-              </button>
-              <button
-                onClick={() => handleDeleteRecipe(recipe)}
-                className="rounded p-0.5 text-faint opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
             </div>
           ))}
 
@@ -354,7 +358,7 @@ export const ScenarioPromptEditor = forwardRef<
                 if (e.key === "Enter") handleCreateRecipe();
                 if (e.key === "Escape") { setShowNewRecipeInput(false); setNewRecipeName(""); }
               }}
-              onBlur={() => { if (!newRecipeName.trim()) { setShowNewRecipeInput(false); setNewRecipeName(""); } }}
+              onBlur={() => { if (newRecipeName.trim()) { handleCreateRecipe(); } else { setShowNewRecipeInput(false); setNewRecipeName(""); } }}
               placeholder={t("mySkills.recipes.namePlaceholder")}
               className="rounded-md border border-accent bg-transparent px-2 py-1 text-[12px] font-medium text-primary outline-none placeholder:text-faint"
             />
