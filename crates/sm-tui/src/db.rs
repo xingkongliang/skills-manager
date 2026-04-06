@@ -7,15 +7,18 @@ use std::path::PathBuf;
 pub struct Scenario {
     pub id: String,
     pub name: String,
+    #[allow(dead_code)]
     pub description: Option<String>,
     pub icon: Option<String>,
     pub prompt_template: Option<String>,
+    #[allow(dead_code)]
     pub sort_order: i32,
 }
 
 /// A skill record from the database.
 #[derive(Debug, Clone)]
 pub struct Skill {
+    #[allow(dead_code)]
     pub id: String,
     pub name: String,
     pub description: Option<String>,
@@ -24,6 +27,7 @@ pub struct Skill {
 /// A recipe record from the database.
 #[derive(Debug, Clone)]
 pub struct Recipe {
+    #[allow(dead_code)]
     pub id: String,
     pub name: String,
     pub icon: Option<String>,
