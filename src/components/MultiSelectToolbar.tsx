@@ -1,4 +1,4 @@
-import { Trash2, CheckCircle2, Circle } from "lucide-react";
+import { Trash2, CheckCircle2, Circle, Sparkles, Loader2 } from "lucide-react";
 import { cn } from "../utils";
 
 interface MultiSelectToolbarLabels {
@@ -10,6 +10,7 @@ interface MultiSelectToolbarLabels {
   selectAll: string;
   deselectAll: string;
   cancel: string;
+  aiTag?: string;
 }
 
 interface MultiSelectToolbarProps {
@@ -22,6 +23,8 @@ interface MultiSelectToolbarProps {
   onToggle: () => void;
   onSelectAll: () => void;
   onCancel: () => void;
+  onAiTag?: () => void;
+  aiTagging?: boolean;
 }
 
 export function MultiSelectToolbar({
@@ -34,6 +37,8 @@ export function MultiSelectToolbar({
   onToggle,
   onSelectAll,
   onCancel,
+  onAiTag,
+  aiTagging,
 }: MultiSelectToolbarProps) {
   return (
     <div className="flex items-center gap-2 px-1 py-1.5">
@@ -63,6 +68,18 @@ export function MultiSelectToolbar({
                 ? <CheckCircle2 className="h-3.5 w-3.5" />
                 : <Circle className="h-3.5 w-3.5" />}
               {anyDisabled ? labels.enable : labels.disable}
+            </button>
+          )}
+          {onAiTag && (
+            <button
+              onClick={onAiTag}
+              disabled={aiTagging}
+              className="inline-flex items-center gap-1.5 rounded-md bg-accent/90 px-2.5 py-1 text-[13px] font-medium text-white hover:bg-accent transition-colors disabled:opacity-50"
+            >
+              {aiTagging
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <Sparkles className="h-3.5 w-3.5" />}
+              {labels.aiTag}
             </button>
           )}
         </>

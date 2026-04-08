@@ -61,6 +61,7 @@ export function Settings() {
   const [defaultScenario, setDefaultScenario] = useState("");
   const [closeAction, setCloseAction] = useState("");
   const [showTrayIcon, setShowTrayIcon] = useState(true);
+  const [developerMode, setDeveloperMode] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [openingRepo, setOpeningRepo] = useState(false);
   const [openingGithub, setOpeningGithub] = useState(false);
@@ -180,6 +181,9 @@ export function Settings() {
       const normalized = (v ?? "true").trim().toLowerCase();
       setShowTrayIcon(!(normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off"));
     });
+    api.getSettings("developer_mode").then((v) => {
+      setDeveloperMode(v === "true");
+    });
     api.getSettings("text_size").then((v) => { if (v) { setTextSize(v); applyTextSize(v); } });
     api.getSettings("skillsmp_api_key").then((v) => { if (v) setSkillsmpApiKey(v); });
     api.getCentralRepoPath().then(setCentralRepoPath).catch(() => {});
@@ -257,6 +261,11 @@ export function Settings() {
       setCloseAction("close");
       await api.setSettings("close_action", "close");
     }
+  };
+
+  const handleDeveloperModeChange = async (enabled: boolean) => {
+    setDeveloperMode(enabled);
+    await api.setSettings("developer_mode", enabled ? "true" : "false");
   };
 
   const handleLanguageChange = (lng: string) => {
@@ -844,6 +853,34 @@ export function Settings() {
                   )}
                 >
                   {t("settings.trayIcon_off")}
+                </button>
+              </div>
+            </div>
+
+            {/* Developer mode */}
+            <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.developerMode")}</h3>
+                <p className="text-[13px] text-muted">{t("settings.developerModeDesc")}</p>
+              </div>
+              <div className="flex flex-wrap rounded-[4px] border border-border-subtle bg-background p-px">
+                <button
+                  onClick={() => handleDeveloperModeChange(true)}
+                  className={cn(
+                    segmentedButtonClass,
+                    developerMode ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+                  )}
+                >
+                  {t("settings.developerMode_on")}
+                </button>
+                <button
+                  onClick={() => handleDeveloperModeChange(false)}
+                  className={cn(
+                    segmentedButtonClass,
+                    !developerMode ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+                  )}
+                >
+                  {t("settings.developerMode_off")}
                 </button>
               </div>
             </div>

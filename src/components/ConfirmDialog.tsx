@@ -8,6 +8,7 @@ interface Props {
   message: string;
   details?: string[];
   confirmLabel?: string;
+  cancelLabel?: string;
   tone?: "danger" | "warning";
   onClose: () => void;
   onConfirm: () => Promise<void>;
@@ -19,6 +20,7 @@ export function ConfirmDialog({
   message,
   details,
   confirmLabel,
+  cancelLabel,
   tone = "danger",
   onClose,
   onConfirm,
@@ -71,7 +73,7 @@ export function ConfirmDialog({
             onClick={onClose}
             className="px-3 py-1.5 rounded-[4px] text-[13px] font-medium text-tertiary hover:text-secondary hover:bg-surface-hover transition-colors outline-none"
           >
-            {t("common.cancel")}
+            {cancelLabel || t("common.cancel")}
           </button>
           <button
             onClick={handleConfirm}

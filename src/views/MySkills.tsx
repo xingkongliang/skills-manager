@@ -23,10 +23,11 @@ import {
   GripVertical,
   FileText,
   ArrowRight,
+  Sparkles,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { cn } from "../utils";
+import { cn, mergeTags, truncateSkillContent, applyTagMapping } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useMultiSelect } from "../hooks/useMultiSelect";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -160,6 +161,9 @@ export function MySkills() {
   const [restoreVersionTag, setRestoreVersionTag] = useState<string | null>(null);
   const [restoringVersionTag, setRestoringVersionTag] = useState<string | null>(null);
   const [tagEditSkillId, setTagEditSkillId] = useState<string | null>(null);
+  const [aiTaggingSkillId, setAiTaggingSkillId] = useState<string | null>(null);
+  const [batchTagging, setBatchTagging] = useState(false);
+  const [batchTagProgress, setBatchTagProgress] = useState<{ current: number; total: number } | null>(null);
   const [tagInput, setTagInput] = useState("");
   const tagInputRef = useRef<HTMLInputElement>(null);
   const [isPromptEditorMode, setIsPromptEditorMode] = useState(false);
@@ -249,6 +253,8 @@ export function MySkills() {
 
     return result;
   }, [skills, search, sourceFilters, tagFilters, filterMode, activeScenario, scenarioSkillOrder]);
+
+  const hasUntaggedSkills = useMemo(() => skills.some((s) => s.tags.length === 0), [skills]);
 
   const {
     isMultiSelect, setIsMultiSelect,
@@ -700,6 +706,163 @@ export function MySkills() {
     }
   };
 
+  const handleAiTag = async (skill: ManagedSkill) => {
+    const apiKeyCheck = await api.getSettings("codebuddy_api_key");
+    if (!apiKeyCheck) {
+      toast.error(t("mySkills.aiTaggingNoApiKey"));
+      return;
+    }
+    setAiTaggingSkillId(skill.id);
+    try {
+      let skillContent = "";
+      try {
+        const doc = await api.getSkillDocument(skill.id);
+        if (doc) skillContent = doc.content;
+      } catch {
+        // no doc available
+      }
+      const result = await api.invokeCodebuddyAgent("tag_skill", {
+        skillName: skill.name,
+        skillContent: skillContent || `${skill.name}\n${skill.description || ""}`,
+      });
+      if (result.tags && result.tags.length > 0) {
+        await api.setSkillTags(skill.id, mergeTags(skill.tags, result.tags));
+        toast.success(t("mySkills.aiTaggingSuccess"));
+        await refreshManagedSkills();
+      }
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : t("mySkills.aiTaggingError");
+      toast.error(msg);
+    } finally {
+      setAiTaggingSkillId(null);
+    }
+  };
+
+  const handleBatchAiTag = async (targetSkills?: ManagedSkill[]) => {
+    const apiKeyCheck = await api.getSettings("codebuddy_api_key");
+    if (!apiKeyCheck) {
+      toast.error(t("mySkills.aiTaggingNoApiKey"));
+      return;
+    }
+
+    const targets = targetSkills ?? skills.filter((s) => s.tags.length === 0);
+    if (targets.length === 0) return;
+
+    setBatchTagging(true);
+    const BATCH_SIZE = 5;
+    let succeeded = 0;
+    let failed = 0;
+    const toastId = toast.loading(t("mySkills.batchTaggingProgress", { current: 0, total: targets.length }));
+    const targetsById = new Map(targets.map((s) => [s.id, s]));
+
+    try {
+      // Fetch all skill documents in parallel
+      const skillContents = await Promise.all(
+        targets.map(async (skill) => {
+          let content = "";
+          try {
+            const doc = await api.getSkillDocument(skill.id);
+            if (doc) content = truncateSkillContent(doc.content);
+          } catch {
+            // fallback below
+          }
+          return {
+            id: skill.id,
+            name: skill.name,
+            content: content || `${skill.name}\n${skill.description || ""}`,
+          };
+        })
+      );
+
+      // Process in batches
+      for (let i = 0; i < skillContents.length; i += BATCH_SIZE) {
+        const batch = skillContents.slice(i, i + BATCH_SIZE);
+        const batchEnd = Math.min(i + BATCH_SIZE, skillContents.length);
+        setBatchTagProgress({ current: batchEnd, total: skillContents.length });
+        toast.loading(t("mySkills.batchTaggingProgress", { current: batchEnd, total: skillContents.length }), { id: toastId });
+
+        try {
+          const result = await api.invokeCodebuddyAgent("batch_tag_skills", {
+            skills: batch.map((s) => ({ name: s.name, content: s.content })),
+          });
+
+          if (result.results) {
+            // Build a case-insensitive lookup for AI response keys
+            const resultsByNormalizedName = new Map<string, string[]>();
+            for (const [key, tags] of Object.entries(result.results)) {
+              resultsByNormalizedName.set(key.toLowerCase().trim(), tags);
+            }
+
+            const updates: Promise<void>[] = [];
+            for (const item of batch) {
+              const newTags = resultsByNormalizedName.get(item.name.toLowerCase().trim());
+              if (newTags && newTags.length > 0) {
+                const skill = targetsById.get(item.id);
+                const merged = mergeTags(skill?.tags ?? [], newTags);
+                updates.push(api.setSkillTags(item.id, merged));
+                succeeded++;
+              }
+            }
+            await Promise.all(updates);
+          }
+        } catch (err) {
+          const devMode = await api.getSettings("developer_mode") === "true";
+          if (devMode) {
+            const msg = err instanceof Error ? err.message : JSON.stringify(err);
+            toast.error(`Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${msg}`);
+          }
+          failed += batch.length;
+        }
+
+        await refreshManagedSkills();
+      }
+
+      // Auto-consolidate tags after successful batch tagging
+      if (succeeded > 0) {
+        setBatchTagProgress(null);
+        toast.loading(t("mySkills.consolidatingTags"), { id: toastId });
+        try {
+          const freshSkills = await api.getManagedSkills();
+          const freshTags = [...new Set(freshSkills.flatMap((s) => s.tags))];
+          if (freshTags.length >= 10) {
+            const consolidateResult = await api.invokeCodebuddyAgent("consolidate_tags", {
+              tags: freshTags,
+            });
+            if (consolidateResult.mapping) {
+              const updates: Promise<void>[] = [];
+              for (const skill of freshSkills) {
+                if (skill.tags.length === 0) continue;
+                const mapped = applyTagMapping(consolidateResult.mapping, skill.tags);
+                if (mapped) updates.push(api.setSkillTags(skill.id, mapped));
+              }
+              await Promise.all(updates);
+            }
+          }
+        } catch {
+          // Consolidation failure is non-critical; tags are already saved
+        }
+        await refreshManagedSkills();
+      }
+
+      toast.dismiss(toastId);
+      if (succeeded > 0) {
+        toast.success(t("mySkills.batchTaggingSuccess", { count: succeeded }));
+      }
+      if (failed > 0) {
+        toast.error(t("mySkills.batchTaggingFailed", { count: failed }));
+      }
+    } catch (error: unknown) {
+      toast.dismiss(toastId);
+      const msg = error instanceof Error ? error.message : t("mySkills.aiTaggingError");
+      toast.error(msg);
+    } finally {
+      setBatchTagging(false);
+      setBatchTagProgress(null);
+      if (isMultiSelect) exitMultiSelect();
+    }
+  };
+
+
   const handleRemoveTag = async (skill: ManagedSkill, tagToRemove: string) => {
     try {
       await api.setSkillTags(skill.id, skill.tags.filter((t) => t !== tagToRemove));
@@ -1007,6 +1170,21 @@ export function MySkills() {
             })()
           )}
           <button
+            onClick={() => handleBatchAiTag()}
+            disabled={batchTagging || !hasUntaggedSkills}
+            className="inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-accent transition-colors hover:bg-accent-bg disabled:opacity-50"
+            title={t("mySkills.batchAiTagAll")}
+          >
+            {batchTagging
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <Sparkles className="h-3.5 w-3.5" />}
+            {batchTagging
+              ? (batchTagProgress
+                  ? t("mySkills.batchTaggingProgress", batchTagProgress)
+                  : t("mySkills.consolidatingTags"))
+              : t("mySkills.batchAiTagAll")}
+          </button>
+          <button
             onClick={handleCheckAllUpdates}
             disabled={checkingAll}
             className="ml-2 mr-2 inline-flex items-center gap-1 rounded-md border-l border-border-subtle pl-4 pr-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
@@ -1142,11 +1320,17 @@ export function MySkills() {
             selectAll: t("mySkills.selectAll"),
             deselectAll: t("mySkills.deselectAll"),
             cancel: t("common.cancel"),
+            aiTag: t("mySkills.batchAiTag", { count: selectedIds.size }),
           }}
           onDelete={() => setBatchDeleteConfirm(true)}
           onToggle={handleBatchToggleScenario}
           onSelectAll={handleSelectAll}
           onCancel={exitMultiSelect}
+          onAiTag={() => {
+            const selected = skills.filter((s) => selectedIds.has(s.id));
+            handleBatchAiTag(selected);
+          }}
+          aiTagging={batchTagging}
         />
       )}
 
@@ -1374,6 +1558,18 @@ export function MySkills() {
                           <Plus className="h-3 w-3" />
                         </button>
                       )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleAiTag(skill); }}
+                        disabled={aiTaggingSkillId === skill.id}
+                        className="inline-flex items-center gap-0.5 rounded-full bg-accent-bg/50 px-1.5 py-0.5 text-[11px] font-medium text-accent-light hover:bg-accent-bg transition-colors disabled:opacity-50"
+                        title={t("mySkills.aiTagging")}
+                      >
+                        {aiTaggingSkillId === skill.id ? (
+                          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-2.5 w-2.5" />
+                        )}
+                      </button>
                     </div>
                   </div>
 
@@ -1472,6 +1668,18 @@ export function MySkills() {
                       {tag}
                     </span>
                   ))}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleAiTag(skill); }}
+                    disabled={aiTaggingSkillId === skill.id}
+                    className="inline-flex items-center gap-0.5 rounded-full bg-accent-bg/50 px-1.5 py-0.5 text-[11px] font-medium text-accent-light hover:bg-accent-bg transition-colors disabled:opacity-50"
+                    title={t("mySkills.aiTagging")}
+                  >
+                    {aiTaggingSkillId === skill.id ? (
+                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-2.5 w-2.5" />
+                    )}
+                  </button>
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2.5">
@@ -1552,6 +1760,7 @@ export function MySkills() {
               <ScenarioPromptEditor
                 ref={promptEditorRef}
                 scenarioId={activeScenario.id}
+                scenarioName={activeScenario.name}
                 onExit={() => setIsPromptEditorMode(false)}
                 onTemplateChange={handlePromptTemplateChange}
               />

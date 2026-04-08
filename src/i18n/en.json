@@ -228,7 +228,23 @@
       "noRecipes": "No recipes yet. Click the button above to create one.",
       "scenarioPrompt": "Scenario Default Prompt",
       "recipePrompt": "Recipe Prompt"
-    }
+    },
+    "aiTagging": "AI Tag",
+    "aiTaggingLoading": "Analyzing...",
+    "aiTaggingSuccess": "Tags generated successfully",
+    "aiTaggingError": "Failed to generate tags",
+    "aiTaggingConfirm": "Apply these tags?",
+    "aiTaggingNoApiKey": "Please configure CodeBuddy API Key in Settings first",
+    "batchAiTag": "AI Tag ({{count}})",
+    "batchAiTagAll": "AI Tag All",
+    "batchTaggingProgress": "Tagging {{current}}/{{total}}...",
+    "batchTaggingSuccess": "Successfully tagged {{count}} skill(s)",
+    "batchTaggingFailed": "{{count}} skill(s) failed to tag",
+    "consolidatingTags": "Consolidating tags...",
+    "aiGeneratePrompt": "AI Generate",
+    "aiGeneratePromptLoading": "Generating...",
+    "aiGeneratePromptSuccess": "Prompt generated successfully",
+    "aiGeneratePromptError": "Failed to generate prompt"
   },
   "install": {
     "title": "Install Skills",
@@ -419,6 +435,14 @@
     "skillsmpApiKey": "API Key",
     "skillsmpDesc": "Enter your SkillsMP API key to enable AI-powered skill search.",
     "skillsmpGetKey": "Get your API key",
+    "aiConfigTitle": "AI Configuration",
+    "codebuddyApiKey": "CodeBuddy API Key",
+    "codebuddyApiKeyDesc": "Enter your CodeBuddy API key to enable AI-powered features (auto-tagging, scenario generation).",
+    "codebuddyGetKey": "Get your API key",
+    "aiConfigTitle": "AI Configuration",
+    "codebuddyApiKey": "CodeBuddy API Key",
+    "codebuddyApiKeyDesc": "Enter your CodeBuddy API key to enable AI-powered features (auto-tagging, scenario generation).",
+    "codebuddyGetKey": "Get your API key",
     "gitStartBackup": "Start Backup",
     "gitStartHint": "If Remote URL is filled, it will clone from remote; otherwise it initializes a local repository.",
     "gitNotInitialized": "Not initialized",
@@ -470,7 +494,11 @@
     "trayIconDesc": "Show an icon in the system tray for quick Show and Quit actions.",
     "trayIcon_on": "Show",
     "trayIcon_off": "Hide",
-    "trayIconOffHint": "Tray icon is hidden, so closing the window will quit the app."
+    "trayIconOffHint": "Tray icon is hidden, so closing the window will quit the app.",
+    "developerMode": "Developer Mode",
+    "developerModeDesc": "Show detailed error messages in toast notifications for debugging.",
+    "developerMode_on": "On",
+    "developerMode_off": "Off"
   },
   "closeAction": {
     "title": "Close behavior",
@@ -511,7 +539,17 @@
     "renamed": "Scenario renamed",
     "deleted": "Scenario deleted",
     "created": "Scenario created",
-    "switched": "Switched to \"{{name}}\""
+    "switched": "Switched to \"{{name}}\"",
+    "aiCreateScenario": "AI Create",
+    "aiCreateScenarioLoading": "Analyzing skills...",
+    "aiCreateScenarioSuccess": "Scenarios created successfully",
+    "aiCreateScenarioError": "Failed to create scenarios",
+    "aiCreateScenarioConfirm": "AI suggests the following scenarios. Review and confirm:",
+    "aiCreateScenarioEmpty": "No scenarios suggested",
+    "untaggedWarningTitle": "Many skills have no tags",
+    "untaggedWarningMessage": "Over half of your skills have no tags. AI uses tags to group skills into scenarios — tagging first will produce better results.",
+    "goTagFirst": "Tag first",
+    "continueAnyway": "Continue anyway"
   },
   "project": {
     "title": "Project Skills",

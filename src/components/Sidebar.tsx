@@ -11,6 +11,8 @@ import {
   Trash2,
   FolderOpen,
   GripVertical,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -33,6 +35,8 @@ export function Sidebar() {
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; icon?: string | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleteProjectTarget, setDeleteProjectTarget] = useState<{ id: string; name: string } | null>(null);
+  const [aiCreating, setAiCreating] = useState(false);
+  const [untaggedWarning, setUntaggedWarning] = useState(false);
   const [orderedScenarios, setOrderedScenarios] = useState(scenarios);
   const [orderedProjects, setOrderedProjects] = useState(projects);
   const scenarioReorderQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -101,6 +105,64 @@ export function Sidebar() {
       navigate("/my-skills");
     }
     toast.success(t("scenario.created"));
+  };
+
+  const handleAiCreateScenario = async () => {
+    const apiKeyCheck = await api.getSettings("codebuddy_api_key");
+    if (!apiKeyCheck) {
+      toast.error(t("mySkills.aiTaggingNoApiKey"));
+      return;
+    }
+
+    // Check untagged ratio — warn if > 50%
+    const allSkills = await api.getManagedSkills();
+    const untaggedCount = allSkills.filter((s) => !s.tags || s.tags.length === 0).length;
+    if (allSkills.length > 0 && untaggedCount / allSkills.length > 0.5) {
+      setUntaggedWarning(true);
+      return;
+    }
+
+    await doAiCreateScenario();
+  };
+
+  const doAiCreateScenario = async () => {
+    setAiCreating(true);
+    try {
+      const skills = await api.getManagedSkills();
+      const skillList = skills.map((s) => ({
+        name: s.name,
+        description: s.description || "",
+        tags: s.tags || [],
+      }));
+      const result = await api.invokeCodebuddyAgent("create_scenario", {
+        skills: skillList,
+        existingScenarios: scenarios.map((s) => s.name),
+      });
+      if (result.scenarios && result.scenarios.length > 0) {
+        for (const suggestion of result.scenarios) {
+          const created = await api.createScenario(
+            suggestion.name,
+            suggestion.description,
+            suggestion.icon
+          );
+          for (const skillName of suggestion.skillNames) {
+            const matchedSkill = skills.find((s) => s.name === skillName);
+            if (matchedSkill) {
+              await api.addSkillToScenario(matchedSkill.id, created.id);
+            }
+          }
+        }
+        await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+        toast.success(t("scenario.aiCreateScenarioSuccess"));
+      } else {
+        toast.info(t("scenario.aiCreateScenarioEmpty"));
+      }
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : t("scenario.aiCreateScenarioError");
+      toast.error(msg);
+    } finally {
+      setAiCreating(false);
+    }
   };
 
   const handleRenameScenario = async (newName: string, icon?: string) => {
@@ -288,13 +350,27 @@ export function Sidebar() {
             </Droppable>
           </DragDropContext>
 
-          <button
-            onClick={() => setShowCreate(true)}
-            className="flex items-center gap-2 px-2.5 py-[7px] mt-0.5 rounded-[5px] text-[13px] text-muted hover:text-secondary hover:bg-surface-hover transition-colors w-full outline-none"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            {t("sidebar.newScenario")}
-          </button>
+          <div className="flex items-center gap-0.5 mt-0.5">
+            <button
+              onClick={() => setShowCreate(true)}
+              className="flex items-center gap-2 px-2.5 py-[7px] rounded-[5px] text-[13px] text-muted hover:text-secondary hover:bg-surface-hover transition-colors flex-1 outline-none"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              {t("sidebar.newScenario")}
+            </button>
+            <button
+              onClick={handleAiCreateScenario}
+              disabled={aiCreating}
+              className="rounded p-1 text-accent-light/70 hover:text-accent-light hover:bg-accent-bg/50 transition-colors disabled:opacity-50"
+              title={t("scenario.aiCreateScenario")}
+            >
+              {aiCreating ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
 
           {/* Divider */}
           <div className="mx-0.5 mt-3.5 mb-2.5 border-t border-border-subtle" />
@@ -452,6 +528,23 @@ export function Sidebar() {
         message={t("project.removeConfirm", { name: deleteProjectTarget?.name || "" })}
         onClose={() => setDeleteProjectTarget(null)}
         onConfirm={handleDeleteProject}
+      />
+
+      <ConfirmDialog
+        open={untaggedWarning}
+        tone="warning"
+        title={t("scenario.untaggedWarningTitle")}
+        message={t("scenario.untaggedWarningMessage")}
+        cancelLabel={t("scenario.goTagFirst")}
+        confirmLabel={t("scenario.continueAnyway")}
+        onClose={() => {
+          setUntaggedWarning(false);
+          navigate("/my-skills");
+        }}
+        onConfirm={async () => {
+          setUntaggedWarning(false);
+          await doAiCreateScenario();
+        }}
       />
     </>
   );

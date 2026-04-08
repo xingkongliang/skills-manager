@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { Copy, Save, X, FileText, Plus, Pencil, Trash2, ChefHat } from "lucide-react";
+import { Copy, Save, X, FileText, Plus, Pencil, Trash2, ChefHat, Sparkles, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import * as api from "../lib/tauri";
@@ -11,6 +11,7 @@ export interface ScenarioPromptEditorHandle {
 
 interface ScenarioPromptEditorProps {
   scenarioId: string;
+  scenarioName: string;
   onExit: () => void;
   onTemplateChange?: (template: string) => void;
 }
@@ -41,9 +42,10 @@ export function extractUsedSkillNames(text: string): Set<string> {
 export const ScenarioPromptEditor = forwardRef<
   ScenarioPromptEditorHandle,
   ScenarioPromptEditorProps
->(function ScenarioPromptEditor({ scenarioId, onExit, onTemplateChange }, ref) {
+>(function ScenarioPromptEditor({ scenarioId, scenarioName, onExit, onTemplateChange }, ref) {
   const { t } = useTranslation();
   const [template, setTemplate] = useState("");
+  const [aiGenerating, setAiGenerating] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -145,6 +147,36 @@ export const ScenarioPromptEditor = forwardRef<
       toast.success(t("mySkills.promptEditor.copied"));
     } catch {
       toast.error(t("common.error"));
+    }
+  };
+
+  const handleAiGenerate = async () => {
+    const apiKeyCheck = await api.getSettings("codebuddy_api_key");
+    if (!apiKeyCheck) {
+      toast.error(t("mySkills.aiTaggingNoApiKey"));
+      return;
+    }
+    setAiGenerating(true);
+    try {
+      const skills = await api.getSkillsForScenario(scenarioId);
+      const skillList = skills.map((s: { name: string; description: string | null }) => ({
+        name: s.name,
+        description: s.description || "",
+      }));
+      const result = await api.invokeCodebuddyAgent("generate_scenario_prompt", {
+        scenarioName,
+        skills: skillList,
+      });
+      if (result.prompt) {
+        setTemplate(result.prompt);
+        onTemplateChange?.(result.prompt);
+        toast.success(t("mySkills.aiGeneratePromptSuccess"));
+      }
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : t("mySkills.aiGeneratePromptError");
+      toast.error(msg);
+    } finally {
+      setAiGenerating(false);
     }
   };
 
@@ -262,6 +294,20 @@ export const ScenarioPromptEditor = forwardRef<
           >
             <Copy className="h-3 w-3 shrink-0" />
             {t("mySkills.promptEditor.copy")}
+          </button>
+          <button
+            onClick={handleAiGenerate}
+            disabled={aiGenerating}
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-[12px] font-medium text-accent transition-colors hover:bg-accent-bg disabled:opacity-40"
+          >
+            {aiGenerating ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Sparkles className="h-3 w-3" />
+            )}
+            {aiGenerating
+              ? t("mySkills.aiGeneratePromptLoading")
+              : t("mySkills.aiGeneratePrompt")}
           </button>
           <button
             onClick={() => { handleSave(); onExit(); }}

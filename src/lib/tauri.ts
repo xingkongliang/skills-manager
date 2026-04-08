@@ -363,6 +363,24 @@ export interface AppUpdateInfo {
 export const checkAppUpdate = () =>
   invoke<AppUpdateInfo>("check_app_update");
 
+// ── AI ──
+
+export interface AiResult {
+  tags?: string[];
+  prompt?: string;
+  scenarios?: {
+    name: string;
+    description: string;
+    icon: string;
+    skillNames: string[];
+  }[];
+  results?: Record<string, string[]>;
+  mapping?: Record<string, string[]>;
+}
+
+export const invokeCodebuddyAgent = (task: string, payload: Record<string, unknown>) =>
+  invoke<AiResult>("invoke_codebuddy_agent", { task, payload });
+
 // ── Git Backup ──
 
 export interface GitBackupStatus {

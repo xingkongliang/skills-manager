@@ -228,7 +228,23 @@
       "noRecipes": "暂无 Recipe，点击上方按钮创建",
       "scenarioPrompt": "场景默认 Prompt",
       "recipePrompt": "Recipe Prompt"
-    }
+    },
+    "aiTagging": "AI 打标签",
+    "aiTaggingLoading": "分析中...",
+    "aiTaggingSuccess": "标签生成成功",
+    "aiTaggingError": "标签生成失败",
+    "aiTaggingConfirm": "应用这些标签？",
+    "aiTaggingNoApiKey": "请先在设置中配置 CodeBuddy API Key",
+    "batchAiTag": "AI 打标签 ({{count}})",
+    "batchAiTagAll": "AI 全部打标签",
+    "batchTaggingProgress": "正在打标签 {{current}}/{{total}}...",
+    "batchTaggingSuccess": "成功为 {{count}} 个技能生成标签",
+    "batchTaggingFailed": "{{count}} 个技能标签生成失败",
+    "consolidatingTags": "正在整理标签...",
+    "aiGeneratePrompt": "AI 生成",
+    "aiGeneratePromptLoading": "生成中...",
+    "aiGeneratePromptSuccess": "Prompt 生成成功",
+    "aiGeneratePromptError": "Prompt 生成失败"
   },
   "install": {
     "title": "安装 Skills",
@@ -419,6 +435,14 @@
     "skillsmpApiKey": "API Key",
     "skillsmpDesc": "输入你的 SkillsMP API Key 以启用 AI 搜索。",
     "skillsmpGetKey": "获取 API Key",
+    "aiConfigTitle": "AI 配置",
+    "codebuddyApiKey": "CodeBuddy API Key",
+    "codebuddyApiKeyDesc": "输入 CodeBuddy API Key 以启用 AI 功能（自动打标签、场景生成等）。",
+    "codebuddyGetKey": "获取 API Key",
+    "aiConfigTitle": "AI 配置",
+    "codebuddyApiKey": "CodeBuddy API Key",
+    "codebuddyApiKeyDesc": "输入 CodeBuddy API Key 以启用 AI 功能（自动打标签、场景生成等）。",
+    "codebuddyGetKey": "获取 API Key",
     "gitStartBackup": "开始备份",
     "gitStartHint": "填写远程地址会从远程克隆；留空则初始化本地仓库。",
     "gitNotInitialized": "尚未初始化",
@@ -470,7 +494,11 @@
     "trayIconDesc": "在系统托盘中显示图标，便于快速执行显示和退出操作。",
     "trayIcon_on": "显示",
     "trayIcon_off": "隐藏",
-    "trayIconOffHint": "托盘图标已隐藏，关闭窗口时将直接退出应用。"
+    "trayIconOffHint": "托盘图标已隐藏，关闭窗口时将直接退出应用。",
+    "developerMode": "开发者模式",
+    "developerModeDesc": "在通知中显示详细的错误信息，方便调试。",
+    "developerMode_on": "开启",
+    "developerMode_off": "关闭"
   },
   "closeAction": {
     "title": "关闭行为",
@@ -511,7 +539,17 @@
     "renamed": "场景已重命名",
     "deleted": "场景已删除",
     "created": "场景已创建",
-    "switched": "已切换到 \"{{name}}\""
+    "switched": "已切换到 \"{{name}}\"",
+    "aiCreateScenario": "AI 创建",
+    "aiCreateScenarioLoading": "分析技能中...",
+    "aiCreateScenarioSuccess": "场景创建成功",
+    "aiCreateScenarioError": "场景创建失败",
+    "aiCreateScenarioConfirm": "AI 建议以下场景分组，请确认：",
+    "aiCreateScenarioEmpty": "未生成场景建议",
+    "untaggedWarningTitle": "大量技能未打标签",
+    "untaggedWarningMessage": "超过半数的技能还没有标签。AI 会根据标签来分组——建议先打标签以获得更准确的场景分组。",
+    "goTagFirst": "先打标签",
+    "continueAnyway": "仍然继续"
   },
   "project": {
     "title": "项目 Skills",
