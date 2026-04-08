@@ -374,32 +374,39 @@ export function MySkills() {
     }
   }, [gitStatus?.is_repo]);
 
+  const refreshGitRemoteConfig = useCallback(async () => {
+    const saved = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
+    if (saved) {
+      setGitRemoteConfig(saved);
+      return;
+    }
+    const status = await api.gitBackupStatus().catch(() => null);
+    const detected = status?.remote_url?.trim() || "";
+    if (detected) {
+      setGitRemoteConfig(detected);
+      api.setSettings("git_backup_remote_url", detected).catch(() => {});
+    }
+  }, []);
+
   useEffect(() => {
     (async () => {
-      const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
-      const status = await api.gitBackupStatus().catch(() => null);
+      const [, status] = await Promise.all([
+        refreshGitRemoteConfig(),
+        api.gitBackupStatus().catch(() => null),
+      ]);
       setGitStatus(status);
-
-      if (savedRemote) {
-        setGitRemoteConfig(savedRemote);
-        return;
-      }
-
-      const detectedRemote = status?.remote_url?.trim() || "";
-      if (detectedRemote) {
-        setGitRemoteConfig(detectedRemote);
-        api.setSettings("git_backup_remote_url", detectedRemote).catch(() => {});
-      }
     })();
-  }, []);
+  }, [refreshGitRemoteConfig]);
 
   useEffect(() => {
     const handleWindowFocus = () => {
       refreshGitStatus();
+      refreshGitRemoteConfig();
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         refreshGitStatus();
+        refreshGitRemoteConfig();
       }
     };
 
@@ -409,7 +416,7 @@ export function MySkills() {
       window.removeEventListener("focus", handleWindowFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [refreshGitStatus]);
+  }, [refreshGitStatus, refreshGitRemoteConfig]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -982,7 +989,12 @@ export function MySkills() {
         toneClassName: "text-red-500",
       };
     }
-    if (gitStatus.has_changes || gitStatus.ahead > 0 || gitStatus.behind > 0) {
+    if (
+      (!gitStatus.remote_url && gitRemoteConfig) ||
+      gitStatus.has_changes ||
+      gitStatus.ahead > 0 ||
+      gitStatus.behind > 0
+    ) {
       return {
         label: t("mySkills.gitRepoSync"),
         disabled: false,
