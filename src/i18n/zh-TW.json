@@ -154,7 +154,8 @@
       "batchConvertPartialFail": "{{count}} 個 Skill 轉換失敗",
       "noImportSkillsWithMatches": "未找到有線上匹配的匯入 Skill",
       "autoSelectBest": "自動選擇最佳",
-      "selectFromMatches": "選擇一個匹配的版本"
+      "selectFromMatches": "選擇一個匹配的版本",
+      "alreadyUpToDate": "Skill 內容未變化（版本已同步）"
     },
     "gitConfigEntry": "同步設定",
     "filters": {

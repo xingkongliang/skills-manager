@@ -29,6 +29,15 @@ pub fn hash_directory(dir: &Path) -> Result<String> {
         if let Ok(content) = std::fs::read(entry.path()) {
             hasher.update(&content);
         }
+        // Include executable bit so permission-only changes are detected.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = entry.path().metadata() {
+                let mode = meta.permissions().mode();
+                hasher.update(&(mode & 0o111).to_le_bytes());
+            }
+        }
     }
 
     Ok(hex::encode(hasher.finalize()))

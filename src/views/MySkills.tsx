@@ -665,8 +665,12 @@ export function MySkills() {
         await api.reimportLocalSkill(skill.id);
         toast.success(t("mySkills.updateActions.reimported"));
       } else {
-        await api.updateSkill(skill.id);
-        toast.success(t("mySkills.updateActions.updated"));
+        const result = await api.updateSkill(skill.id);
+        if (result.content_changed) {
+          toast.success(t("mySkills.updateActions.updated"));
+        } else {
+          toast.info(t("mySkills.updateActions.alreadyUpToDate"));
+        }
       }
       await refreshManagedSkills();
     } catch (error: unknown) {

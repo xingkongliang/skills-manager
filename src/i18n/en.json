@@ -160,9 +160,10 @@
       "batchConvert": "Convert All",
       "batchConvertSuccess": "Successfully converted {{count}} skill(s) to online source",
       "batchConvertPartialFail": "Failed to convert {{count}} skill(s)",
-      "noImportSkillsWithMatches": "No imported skills with online matches found",
+      "noImportSkillsWithMatches": "No imported skills with online skills with online matches found",
       "autoSelectBest": "Auto-select Best",
-      "selectFromMatches": "Select a matching version below"
+      "selectFromMatches": "Select a matching version below",
+      "alreadyUpToDate": "Skill content unchanged (version synced)"
     },
     "gitConfigEntry": "Sync Config",
     "filters": {

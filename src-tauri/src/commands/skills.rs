@@ -19,6 +19,14 @@ use crate::core::{
 };
 
 #[derive(Debug, Serialize)]
+pub struct UpdateSkillResult {
+    pub skill: ManagedSkillDto,
+    /// Whether the skill's file content actually changed.
+    /// False when a monorepo commit didn't touch this skill's subdirectory.
+    pub content_changed: bool,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ManagedSkillDto {
     pub id: String,
     pub name: String,
@@ -651,7 +659,7 @@ pub async fn update_skill(
     skill_id: String,
     store: State<'_, Arc<SkillStore>>,
     cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
-) -> Result<ManagedSkillDto, AppError> {
+) -> Result<UpdateSkillResult, AppError> {
     let store = store.inner().clone();
     let proxy_url = store.proxy_url();
     let registry = cancel_registry.inner().clone();
@@ -700,47 +708,88 @@ pub async fn update_skill(
             proxy_url.as_deref(),
         )
         .map_err(AppError::classify_git_error)?;
-        let update_result = (|| -> Result<(), AppError> {
+        let update_result = (|| -> Result<bool, AppError> {
             git_fetcher::checkout_revision(&temp_dir, &remote_revision).map_err(AppError::git)?;
             let skill_dir = resolve_skill_dir(
                 &temp_dir,
                 git_source.subpath.as_deref(),
                 git_source.locator_skill_id.as_deref(),
             )?;
-            let staged_path = staged_path_for(&skill.central_path);
-            let install_result =
-                installer::install_skill_dir_to_destination(&skill_dir, &skill.name, &staged_path)
-                    .map_err(AppError::io)?;
-            swap_skill_directory(&staged_path, Path::new(&skill.central_path))?;
+
+            // Compare content hash before and after to detect no-op updates
+            // (e.g. monorepo commit that didn't change this skill's subdirectory).
+            let new_hash =
+                crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
+            let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
 
             let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
-            store
-                .update_skill_source_metadata(
-                    &skill.id,
-                    Some(&git_source.clone_url),
-                    source_subpath.as_deref(),
-                    git_source.branch.as_deref(),
-                    Some(&remote_revision),
-                )
-                .map_err(AppError::db)?;
-            store
-                .update_skill_after_install(
-                    &skill.id,
-                    &skill.name,
-                    install_result.description.as_deref(),
-                    Some(&remote_revision),
-                    Some(&remote_revision),
-                    Some(&install_result.content_hash),
-                    "up_to_date",
-                )
-                .map_err(AppError::db)?;
-            resync_copy_targets(&store, &skill.id)?;
-            Ok(())
+
+            if content_changed {
+                let staged_path = staged_path_for(&skill.central_path);
+                let install_result =
+                    installer::install_skill_dir_to_destination(
+                        &skill_dir,
+                        &skill.name,
+                        &staged_path,
+                    )
+                    .map_err(AppError::io)?;
+                swap_skill_directory(&staged_path, Path::new(&skill.central_path))?;
+
+                store
+                    .update_skill_source_metadata(
+                        &skill.id,
+                        Some(&git_source.clone_url),
+                        source_subpath.as_deref(),
+                        git_source.branch.as_deref(),
+                        Some(&remote_revision),
+                    )
+                    .map_err(AppError::db)?;
+                store
+                    .update_skill_after_install(
+                        &skill.id,
+                        &skill.name,
+                        install_result.description.as_deref(),
+                        Some(&remote_revision),
+                        Some(&remote_revision),
+                        Some(&install_result.content_hash),
+                        "up_to_date",
+                    )
+                    .map_err(AppError::db)?;
+                resync_copy_targets(&store, &skill.id)?;
+            } else {
+                // Content identical — just update git metadata, skip file swap.
+                store
+                    .update_skill_source_metadata(
+                        &skill.id,
+                        Some(&git_source.clone_url),
+                        source_subpath.as_deref(),
+                        git_source.branch.as_deref(),
+                        Some(&remote_revision),
+                    )
+                    .map_err(AppError::db)?;
+                store
+                    .update_skill_check_state(
+                        &skill.id,
+                        Some(&remote_revision),
+                        "up_to_date",
+                        None,
+                    )
+                    .map_err(AppError::db)?;
+                // Still resync copy targets — user may have locally modified/deleted them.
+                resync_copy_targets(&store, &skill.id)?;
+            }
+            Ok(content_changed)
         })();
         git_fetcher::cleanup_temp(&temp_dir);
 
         match update_result {
-            Ok(()) => managed_skill_by_id(&store, &skill_id),
+            Ok(content_changed) => {
+                let skill = managed_skill_by_id(&store, &skill_id)?;
+                Ok(UpdateSkillResult {
+                    skill,
+                    content_changed,
+                })
+            }
             Err(e) => {
                 let _ = store.update_skill_check_state(
                     &skill_id,

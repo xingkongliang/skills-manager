@@ -226,8 +226,14 @@ export const checkAllSkillUpdates = (force?: boolean) =>
     force: force ?? false,
   });
 
+export interface UpdateSkillResult {
+  skill: ManagedSkill;
+  /** False when a monorepo commit didn't touch this skill's subdirectory. */
+  content_changed: boolean;
+}
+
 export const updateSkill = (skillId: string) =>
-  invoke<ManagedSkill>("update_skill", { skillId });
+  invoke<UpdateSkillResult>("update_skill", { skillId });
 
 export const reimportLocalSkill = (skillId: string) =>
   invoke<ManagedSkill>("reimport_local_skill", { skillId });
