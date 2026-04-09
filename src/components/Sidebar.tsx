@@ -23,7 +23,22 @@ import { RenameScenarioDialog } from "./RenameScenarioDialog";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import * as api from "../lib/tauri";
+import type { SyncHealth } from "../lib/tauri";
 import { getScenarioIconOption } from "../lib/scenarioIcons";
+
+function getSyncHealthIndicator(health: SyncHealth, skillCount: number): { color: string; title: string } | null {
+  if (skillCount === 0) return null;
+  if (health.diverged > 0) return { color: "bg-red-400", title: `${health.diverged} diverged` };
+  if (health.project_newer > 0 || health.center_newer > 0) {
+    const parts: string[] = [];
+    if (health.project_newer > 0) parts.push(`${health.project_newer} project newer`);
+    if (health.center_newer > 0) parts.push(`${health.center_newer} center newer`);
+    return { color: "bg-amber-400", title: parts.join(", ") };
+  }
+  if (health.project_only > 0) return { color: "bg-blue-400", title: `${health.project_only} project only` };
+  if (health.in_sync === skillCount) return { color: "bg-emerald-400", title: "All in sync" };
+  return null;
+}
 
 export function Sidebar() {
   const { t } = useTranslation();
@@ -392,6 +407,7 @@ export function Sidebar() {
                 >
                   {orderedProjects.map((project, index) => {
                     const isActive = location.pathname === `/project/${project.id}`;
+                    const healthIndicator = getSyncHealthIndicator(project.sync_health, project.skill_count);
                     return (
                       <Draggable key={project.id} draggableId={project.id} index={index}>
                         {(provided) => (
@@ -421,6 +437,9 @@ export function Sidebar() {
                                 <FolderOpen className="h-3 w-3" />
                               </span>
                               <span className="flex-1 truncate">{project.name}</span>
+                              {healthIndicator && (
+                                <span className={cn("shrink-0 h-1.5 w-1.5 rounded-full group-hover:hidden", healthIndicator.color)} title={healthIndicator.title} />
+                              )}
                               {project.skill_count > 0 && (
                                 <span
                                   className={cn(

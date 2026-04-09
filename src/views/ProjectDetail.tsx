@@ -64,7 +64,7 @@ export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { projects, managedSkills, refreshManagedSkills, refreshScenarios } = useApp();
+  const { projects, managedSkills, refreshManagedSkills, refreshScenarios, refreshProjects } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -173,7 +173,7 @@ export function ProjectDetail() {
       } else {
         toast.success(t("project.updateProjectSuccess", { name: skill.name }));
       }
-      await loadSkills();
+      await Promise.all([loadSkills(), refreshProjects()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -205,7 +205,7 @@ export function ProjectDetail() {
       await api.exportSkillToProject(managedSkill.id, id);
       toast.success(t("project.importFromCenterSuccess", { name: managedSkill.name }));
       setShowExportDialog(false);
-      await loadSkills();
+      await Promise.all([loadSkills(), refreshProjects()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     }
@@ -233,7 +233,7 @@ export function ProjectDetail() {
     if (imported > 0) {
       setShowExportDialog(false);
     }
-    await loadSkills();
+    await Promise.all([loadSkills(), refreshProjects()]);
   };
 
   const handleDeleteSkill = async () => {
@@ -241,7 +241,7 @@ export function ProjectDetail() {
     try {
       await api.deleteProjectSkill(id, deleteTarget.dir_name);
       toast.success(t("project.skillDeleted", { name: deleteTarget.name }));
-      await loadSkills();
+      await Promise.all([loadSkills(), refreshProjects()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     }
@@ -269,7 +269,7 @@ export function ProjectDetail() {
     }
     exitMultiSelect();
     setBatchDeleteConfirm(false);
-    await loadSkills();
+    await Promise.all([loadSkills(), refreshProjects()]);
   };
 
   const handleBatchToggleProject = async () => {

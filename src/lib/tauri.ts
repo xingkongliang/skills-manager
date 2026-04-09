@@ -103,12 +103,21 @@ export interface SkillsShSkill {
   installs: number;
 }
 
+export interface SyncHealth {
+  in_sync: number;
+  project_newer: number;
+  center_newer: number;
+  diverged: number;
+  project_only: number;
+}
+
 export interface Project {
   id: string;
   name: string;
   path: string;
   sort_order: number;
   skill_count: number;
+  sync_health: SyncHealth;
   created_at: number;
   updated_at: number;
 }

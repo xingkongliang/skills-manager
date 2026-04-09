@@ -72,6 +72,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [setTranslatedError]);
 
+  const refreshProjects = useCallback(async () => {
+    try {
+      const p = await api.getProjects();
+      setProjects(p);
+    } catch (e) {
+      console.error("Failed to load projects:", e);
+    }
+  }, []);
+
   const refreshManagedSkills = useCallback(async () => {
     try {
       const skills = await api.getManagedSkills();
@@ -81,16 +90,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.error("Failed to load managed skills:", e);
       setTranslatedError("common.skills");
     }
-  }, [setTranslatedError]);
-
-  const refreshProjects = useCallback(async () => {
-    try {
-      const p = await api.getProjects();
-      setProjects(p);
-    } catch (e) {
-      console.error("Failed to load projects:", e);
-    }
-  }, []);
+    // Managed skill changes affect project sync health badges
+    refreshProjects();
+  }, [setTranslatedError, refreshProjects]);
 
   const refreshAppData = useCallback(async () => {
     setLoading(true);

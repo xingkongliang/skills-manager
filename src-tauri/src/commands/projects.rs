@@ -7,6 +7,15 @@ use tauri::State;
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
 use crate::core::{error::AppError, installer, project_scanner, sync_engine};
 
+#[derive(Serialize, Default)]
+pub struct SyncHealthDto {
+    pub in_sync: usize,
+    pub project_newer: usize,
+    pub center_newer: usize,
+    pub diverged: usize,
+    pub project_only: usize,
+}
+
 #[derive(Serialize)]
 pub struct ProjectDto {
     pub id: String,
@@ -14,6 +23,7 @@ pub struct ProjectDto {
     pub path: String,
     pub sort_order: i32,
     pub skill_count: usize,
+    pub sync_health: SyncHealthDto,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -25,14 +35,30 @@ pub struct ProjectSkillDocumentDto {
     pub content: String,
 }
 
-fn project_to_dto(rec: &ProjectRecord) -> ProjectDto {
-    let skill_count = project_scanner::read_project_skills(Path::new(&rec.path)).len();
+fn project_to_dto(rec: &ProjectRecord, all_managed: &[SkillRecord]) -> ProjectDto {
+    let skills = project_scanner::read_project_skills(Path::new(&rec.path));
+    let skill_count = skills.len();
+
+    let mut health = SyncHealthDto::default();
+    for skill in &skills {
+        let matched = find_best_center_match(skill, all_managed);
+        let status = classify_sync_status(skill, matched);
+        match status.as_str() {
+            "in_sync" => health.in_sync += 1,
+            "project_newer" => health.project_newer += 1,
+            "center_newer" => health.center_newer += 1,
+            "diverged" => health.diverged += 1,
+            _ => health.project_only += 1,
+        }
+    }
+
     ProjectDto {
         id: rec.id.clone(),
         name: rec.name.clone(),
         path: rec.path.clone(),
         sort_order: rec.sort_order,
         skill_count,
+        sync_health: health,
         created_at: rec.created_at,
         updated_at: rec.updated_at,
     }
@@ -180,7 +206,8 @@ pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Proje
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let records = store.get_all_projects().map_err(AppError::db)?;
-        Ok(records.iter().map(project_to_dto).collect())
+        let all_managed = store.get_all_skills().map_err(AppError::db)?;
+        Ok(records.iter().map(|r| project_to_dto(r, &all_managed)).collect())
     })
     .await?
 }
@@ -220,7 +247,8 @@ pub async fn add_project(
         };
 
         store.insert_project(&record).map_err(AppError::db)?;
-        Ok(project_to_dto(&record))
+        let all_managed = store.get_all_skills().map_err(AppError::db)?;
+        Ok(project_to_dto(&record, &all_managed))
     })
     .await?
 }
