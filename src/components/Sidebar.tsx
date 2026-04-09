@@ -232,7 +232,7 @@ export function Sidebar() {
         </div>
 
         {/* Nav */}
-        <div className="px-2.5 space-y-0.5">
+        <div className="px-2.5 space-y-0.5 shrink-0">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;

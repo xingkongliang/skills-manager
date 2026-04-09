@@ -1,4 +1,5 @@
-import { Outlet } from "react-router-dom";
+import { useEffect } from "react";
+import { Outlet, useNavigate } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { StatusBanner } from "./StatusBanner";
 import { useApp } from "../context/AppContext";
@@ -9,6 +10,21 @@ export function Layout() {
   const { t } = useTranslation();
   const { appError, refreshAppData } = useApp();
   const onDrag = useDragWindow();
+  const navigate = useNavigate();
+
+  // Cmd+, to open Settings
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+        e.preventDefault();
+        navigate("/settings");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [navigate]);
 
   return (
     <div className="relative flex h-screen w-full overflow-hidden bg-background text-primary">
