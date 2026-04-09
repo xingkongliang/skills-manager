@@ -31,16 +31,21 @@ export function SkillDetailPanel({
   const [loading, setLoading] = useState(false);
   const [isAgentSectionExpanded, setIsAgentSectionExpanded] = useState(false);
   const requestIdRef = useRef(0);
+  const skillId = skill?.id ?? null;
 
   useEffect(() => {
-    if (!skill) return;
+    if (!skillId) {
+      setDoc(null);
+      setLoading(false);
+      return;
+    }
     requestIdRef.current += 1;
     const requestId = requestIdRef.current;
 
     // Loading state is intentionally toggled when input skill changes.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
-    getSkillDocument(skill.id)
+    getSkillDocument(skillId)
       .then((nextDoc) => {
         if (requestId === requestIdRef.current) {
           setDoc(nextDoc);
@@ -56,7 +61,7 @@ export function SkillDetailPanel({
           setLoading(false);
         }
       });
-  }, [skill]);
+  }, [skillId]);
 
   if (!skill) return null;
   const activeDoc = doc?.skill_id === skill.id ? doc : null;
