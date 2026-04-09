@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-04-10
+
+### Added
+- Skill source diff viewer to compare source changes before updating local skills
+- Richer skill detail metadata panel with source and update context
+- Missing local skill source handling to keep installed skills manageable even when source files disappear
+- Project improvements including empty project initialization, tag-filtered batch export, and sidebar sync health indicator
+- Expanded agent support and refined agent settings management
+
+### Changed
+- Clarified project workspace wording and add-skill actions across project flows
+- Improved routing for startup skill update notifications and refined parts of the settings and sidebar UI
+
+### Fixed
+- Prevent skill detail markdown refreshes from resetting the current view
+- Avoid incorrect file swaps for monorepo no-op updates and show the correct update toast
+- Improved project sync status accuracy, git sync error messages, and network error detection
+- Fixed grid card height alignment, sidebar action button layout shift, larger text clipping, and scenario sync mode persistence
 ## [1.11.1] - 2026-03-28
 
 ### Changed
