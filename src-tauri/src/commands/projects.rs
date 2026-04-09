@@ -180,10 +180,22 @@ fn classify_sync_status(
         return "project_only".to_string();
     };
 
+    // Fast path: compare project hash against DB-stored center hash
     if skill.content_hash.is_some()
         && managed.content_hash.as_deref() == skill.content_hash.as_deref()
     {
         return "in_sync".to_string();
+    }
+
+    // DB hash may be stale — recompute center hash from disk as fallback
+    if let Some(project_hash) = skill.content_hash.as_deref() {
+        if let Ok(live_center_hash) =
+            crate::core::content_hash::hash_directory(Path::new(&managed.central_path))
+        {
+            if project_hash == live_center_hash {
+                return "in_sync".to_string();
+            }
+        }
     }
 
     let Some(project_modified_at) = skill.last_modified_at else {
@@ -207,7 +219,10 @@ pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Proje
     tauri::async_runtime::spawn_blocking(move || {
         let records = store.get_all_projects().map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        Ok(records.iter().map(|r| project_to_dto(r, &all_managed)).collect())
+        Ok(records
+            .iter()
+            .map(|r| project_to_dto(r, &all_managed))
+            .collect())
     })
     .await?
 }
@@ -637,4 +652,108 @@ pub async fn delete_project_skill(
         Ok(())
     })
     .await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_sync_status;
+    use crate::core::content_hash;
+    use crate::core::project_scanner::ProjectSkillInfo;
+    use crate::core::skill_store::SkillRecord;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn sample_managed_skill(
+        central_path: String,
+        content_hash: Option<String>,
+        updated_at: i64,
+    ) -> SkillRecord {
+        SkillRecord {
+            id: "skill-1".to_string(),
+            name: "Example Skill".to_string(),
+            description: None,
+            source_type: "local".to_string(),
+            source_ref: None,
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path,
+            content_hash,
+            enabled: true,
+            created_at: 0,
+            updated_at,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        }
+    }
+
+    fn sample_project_skill(
+        path: String,
+        content_hash: Option<String>,
+        last_modified_at: Option<i64>,
+    ) -> ProjectSkillInfo {
+        ProjectSkillInfo {
+            name: "Example Skill".to_string(),
+            dir_name: "example-skill".to_string(),
+            description: None,
+            path,
+            files: vec!["SKILL.md".to_string()],
+            enabled: true,
+            in_center: true,
+            sync_status: "project_only".to_string(),
+            center_skill_id: Some("skill-1".to_string()),
+            last_modified_at,
+            content_hash,
+        }
+    }
+
+    #[test]
+    fn classify_sync_status_uses_live_center_hash_when_db_hash_is_stale() {
+        let center_dir = tempdir().unwrap();
+        fs::write(center_dir.path().join("SKILL.md"), "# Example\n").unwrap();
+        let live_hash = content_hash::hash_directory(center_dir.path()).unwrap();
+
+        let managed = sample_managed_skill(
+            center_dir.path().to_string_lossy().to_string(),
+            Some("stale-db-hash".to_string()),
+            1_000,
+        );
+        let project = sample_project_skill(
+            center_dir.path().to_string_lossy().to_string(),
+            Some(live_hash),
+            Some(5_000),
+        );
+
+        assert_eq!(classify_sync_status(&project, Some(&managed)), "in_sync");
+    }
+
+    #[test]
+    fn classify_sync_status_falls_back_to_timestamps_when_live_hash_differs() {
+        let center_dir = tempdir().unwrap();
+        fs::write(center_dir.path().join("SKILL.md"), "# Center\n").unwrap();
+
+        let project_dir = tempdir().unwrap();
+        fs::write(project_dir.path().join("SKILL.md"), "# Project changed\n").unwrap();
+        let project_hash = content_hash::hash_directory(project_dir.path()).unwrap();
+
+        let managed = sample_managed_skill(
+            center_dir.path().to_string_lossy().to_string(),
+            Some("stale-db-hash".to_string()),
+            1_000,
+        );
+        let project = sample_project_skill(
+            project_dir.path().to_string_lossy().to_string(),
+            Some(project_hash),
+            Some(5_000),
+        );
+
+        assert_eq!(
+            classify_sync_status(&project, Some(&managed)),
+            "project_newer"
+        );
+    }
 }

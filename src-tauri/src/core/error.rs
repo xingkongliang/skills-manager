@@ -183,7 +183,9 @@ mod tests {
 
     #[test]
     fn classify_git_error_detects_could_not_resolve_host() {
-        let err = AppError::classify_git_error("fatal: unable to access: Could not resolve host: example.com");
+        let err = AppError::classify_git_error(
+            "fatal: unable to access: Could not resolve host: example.com",
+        );
         assert!(matches!(err.kind, ErrorKind::Network));
     }
 

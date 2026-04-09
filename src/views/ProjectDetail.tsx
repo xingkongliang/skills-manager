@@ -359,7 +359,7 @@ export function ProjectDetail() {
             className="inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
           >
             <Download className="h-3.5 w-3.5" />
-            {t("project.updateProject")}
+            {t("project.addSkill")}
           </button>
           <button
             onClick={loadSkills}

@@ -726,13 +726,12 @@ pub async fn update_skill(
 
             if content_changed {
                 let staged_path = staged_path_for(&skill.central_path);
-                let install_result =
-                    installer::install_skill_dir_to_destination(
-                        &skill_dir,
-                        &skill.name,
-                        &staged_path,
-                    )
-                    .map_err(AppError::io)?;
+                let install_result = installer::install_skill_dir_to_destination(
+                    &skill_dir,
+                    &skill.name,
+                    &staged_path,
+                )
+                .map_err(AppError::io)?;
                 swap_skill_directory(&staged_path, Path::new(&skill.central_path))?;
 
                 store
@@ -768,12 +767,7 @@ pub async fn update_skill(
                     )
                     .map_err(AppError::db)?;
                 store
-                    .update_skill_check_state(
-                        &skill.id,
-                        Some(&remote_revision),
-                        "up_to_date",
-                        None,
-                    )
+                    .update_skill_check_state(&skill.id, Some(&remote_revision), "up_to_date", None)
                     .map_err(AppError::db)?;
                 // Still resync copy targets — user may have locally modified/deleted them.
                 resync_copy_targets(&store, &skill.id)?;
