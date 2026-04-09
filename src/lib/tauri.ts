@@ -18,6 +18,9 @@ export interface ManagedSkill {
   description: string | null;
   source_type: string;
   source_ref: string | null;
+  source_ref_resolved: string | null;
+  source_subpath: string | null;
+  source_branch: string | null;
   source_revision: string | null;
   remote_revision: string | null;
   update_status: string;
