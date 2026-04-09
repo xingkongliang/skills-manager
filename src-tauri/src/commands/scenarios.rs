@@ -288,14 +288,14 @@ pub async fn add_skill_to_scenario(
                             configured_mode.as_deref(),
                         );
                         match sync_engine::sync_skill(&source, &target, mode) {
-                            Ok(_actual_mode) => {
+                            Ok(actual_mode) => {
                                 let now = chrono::Utc::now().timestamp_millis();
                                 let target_record = crate::core::skill_store::SkillTargetRecord {
                                     id: uuid::Uuid::new_v4().to_string(),
                                     skill_id: skill_id.clone(),
                                     tool: adapter.key.clone(),
                                     target_path: target.to_string_lossy().to_string(),
-                                    mode: mode.as_str().to_string(),
+                                    mode: actual_mode.as_str().to_string(),
                                     status: "ok".to_string(),
                                     synced_at: Some(now),
                                     last_error: None,
