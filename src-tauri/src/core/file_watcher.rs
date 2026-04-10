@@ -26,15 +26,9 @@ fn collect_watch_paths(store: &SkillStore) -> Vec<PathBuf> {
         for project in projects {
             if project.workspace_type == "linked" {
                 let skills_dir = PathBuf::from(&project.path);
-                if let Some(parent) = skills_dir.parent() {
-                    paths.push(parent.to_path_buf());
-                }
                 paths.push(skills_dir);
                 if let Some(disabled_path) = project.disabled_path {
                     let disabled_dir = PathBuf::from(disabled_path);
-                    if let Some(parent) = disabled_dir.parent() {
-                        paths.push(parent.to_path_buf());
-                    }
                     paths.push(disabled_dir);
                 }
                 continue;
@@ -157,4 +151,44 @@ pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Ar
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_watch_paths;
+    use crate::core::skill_store::{ProjectRecord, SkillStore};
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn linked_workspace_watch_paths_only_include_selected_roots() {
+        let tmp = tempdir().unwrap();
+        let db_path = tmp.path().join("watcher.db");
+        let skills_root = tmp.path().join("external").join("skills");
+        let disabled_root = tmp.path().join("external").join("skills-disabled");
+        fs::create_dir_all(&skills_root).unwrap();
+        fs::create_dir_all(&disabled_root).unwrap();
+
+        let store = SkillStore::new(&db_path).unwrap();
+        store
+            .insert_project(&ProjectRecord {
+                id: "linked-1".to_string(),
+                name: "External".to_string(),
+                path: skills_root.to_string_lossy().to_string(),
+                workspace_type: "linked".to_string(),
+                linked_agent_key: Some("external".to_string()),
+                linked_agent_name: Some("External".to_string()),
+                disabled_path: Some(disabled_root.to_string_lossy().to_string()),
+                sort_order: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+
+        let paths = collect_watch_paths(&store);
+        assert!(paths.contains(&skills_root));
+        assert!(paths.contains(&disabled_root));
+        assert!(!paths.contains(&skills_root.parent().unwrap().to_path_buf()));
+        assert!(!paths.contains(&disabled_root.parent().unwrap().to_path_buf()));
+    }
 }

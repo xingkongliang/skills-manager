@@ -249,6 +249,25 @@ fn ensure_dir_within_root(path: &Path, root: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+fn ensure_distinct_linked_workspace_roots(
+    skills_root: &Path,
+    disabled_root: &Path,
+) -> Result<(), AppError> {
+    let skills_canonical = std::fs::canonicalize(skills_root)?;
+    let disabled_canonical = std::fs::canonicalize(disabled_root)?;
+
+    if skills_canonical == disabled_canonical
+        || skills_canonical.starts_with(&disabled_canonical)
+        || disabled_canonical.starts_with(&skills_canonical)
+    {
+        return Err(AppError::invalid_input(
+            "Skills directory and disabled skills directory must not overlap",
+        ));
+    }
+
+    Ok(())
+}
+
 fn slugify_skill_dir_name(name: &str) -> String {
     let mut out = String::new();
     let mut prev_dash = false;
@@ -456,6 +475,7 @@ pub async fn add_linked_workspace(
                     "Disabled skills directory does not exist",
                 ));
             }
+            ensure_distinct_linked_workspace_roots(&skills_root, &disabled_root)?;
         }
 
         let now = chrono::Utc::now().timestamp_millis();
@@ -945,7 +965,7 @@ pub async fn delete_project_skill(
 
 #[cfg(test)]
 mod tests {
-    use super::classify_sync_status;
+    use super::{classify_sync_status, ensure_distinct_linked_workspace_roots};
     use crate::core::content_hash;
     use crate::core::project_scanner::ProjectSkillInfo;
     use crate::core::skill_store::SkillRecord;
@@ -1047,5 +1067,43 @@ mod tests {
             classify_sync_status(&project, Some(&managed)),
             "project_newer"
         );
+    }
+
+    #[test]
+    fn linked_workspace_roots_reject_same_directory() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("skills");
+        fs::create_dir_all(&root).unwrap();
+
+        let err = ensure_distinct_linked_workspace_roots(&root, &root).unwrap_err();
+        assert!(
+            err.to_string().contains("must not overlap"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn linked_workspace_roots_reject_nested_directory() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("skills");
+        let nested = root.join("disabled");
+        fs::create_dir_all(&nested).unwrap();
+
+        let err = ensure_distinct_linked_workspace_roots(&root, &nested).unwrap_err();
+        assert!(
+            err.to_string().contains("must not overlap"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn linked_workspace_roots_allow_distinct_directories() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("skills");
+        let disabled = tmp.path().join("skills-disabled");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&disabled).unwrap();
+
+        ensure_distinct_linked_workspace_roots(&root, &disabled).unwrap();
     }
 }
