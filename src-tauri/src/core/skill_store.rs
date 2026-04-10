@@ -303,6 +303,15 @@ impl SkillStore {
         Ok(())
     }
 
+    pub fn update_skill_source_ref(&self, id: &str, source_ref: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE skills SET source_ref = ?1 WHERE id = ?2",
+            params![source_ref, id],
+        )?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn update_skill_after_reinstall(
         &self,

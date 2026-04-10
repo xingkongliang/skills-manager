@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{content_hash, skill_metadata};
 
@@ -108,7 +108,11 @@ fn read_skills_from_dir(
     if !dir.is_dir() {
         return;
     }
-    read_skills_from_dir_recursive(dir, dir, enabled, agent, agent_display_name, skills);
+    let mut visited = std::collections::HashSet::new();
+    if let Ok(canon) = std::fs::canonicalize(dir) {
+        visited.insert(canon);
+    }
+    read_skills_from_dir_recursive(dir, dir, enabled, agent, agent_display_name, skills, &mut visited);
 }
 
 fn read_skills_from_dir_recursive(
@@ -118,6 +122,7 @@ fn read_skills_from_dir_recursive(
     agent: &str,
     agent_display_name: &str,
     skills: &mut Vec<ProjectSkillInfo>,
+    visited: &mut std::collections::HashSet<PathBuf>,
 ) {
     let Ok(entries) = std::fs::read_dir(current) else {
         return;
@@ -167,7 +172,17 @@ fn read_skills_from_dir_recursive(
             continue;
         }
 
-        read_skills_from_dir_recursive(root, &path, enabled, agent, agent_display_name, skills);
+        // Only check visited set before recursing into namespace dirs
+        // to prevent symlink cycles. Skill dirs (above) are leaf nodes and
+        // are allowed to alias the same canonical target.
+        let canon = match std::fs::canonicalize(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if !visited.insert(canon) {
+            continue;
+        }
+        read_skills_from_dir_recursive(root, &path, enabled, agent, agent_display_name, skills, visited);
     }
 }
 
@@ -246,7 +261,19 @@ fn list_files(dir: &Path) -> Vec<String> {
 }
 
 fn latest_modified_millis(dir: &Path) -> Option<i64> {
-    fn walk(path: &Path, current: &mut Option<i64>) {
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    fn walk(path: &Path, current: &mut Option<i64>, visited: &mut HashSet<PathBuf>) {
+        // Canonicalize to detect symlink cycles
+        let canon = match std::fs::canonicalize(path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if !visited.insert(canon) {
+            return;
+        }
+
         let Ok(meta) = std::fs::metadata(path) else {
             return;
         };
@@ -267,12 +294,13 @@ fn latest_modified_millis(dir: &Path) -> Option<i64> {
             return;
         };
         for entry in entries.filter_map(|e| e.ok()) {
-            walk(&entry.path(), current);
+            walk(&entry.path(), current, visited);
         }
     }
 
     let mut latest = None;
-    walk(dir, &mut latest);
+    let mut visited = HashSet::new();
+    walk(dir, &mut latest, &mut visited);
     latest
 }
 

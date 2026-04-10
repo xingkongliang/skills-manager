@@ -164,22 +164,23 @@ fn project_agent_targets_for_record(
 
     agent_skill_configs(store)
         .into_iter()
-        .map(|config| ProjectAgentTargetDto {
-            enabled: !disabled_tools.contains(&config.key),
-            installed: tool_adapters::find_adapter_with_store(store, &config.key)
-                .map(|adapter| adapter.is_installed())
-                .unwrap_or(false),
-            is_custom: tool_adapters::find_adapter_with_store(store, &config.key)
-                .map(|adapter| adapter.is_custom)
-                .unwrap_or(false),
-            key: config.key,
-            display_name: config.display_name,
+        .map(|config| {
+            let adapter = tool_adapters::find_adapter_with_store(store, &config.key);
+            ProjectAgentTargetDto {
+                enabled: !disabled_tools.contains(&config.key),
+                installed: adapter
+                    .as_ref()
+                    .map(|a| a.is_installed())
+                    .unwrap_or(false),
+                is_custom: adapter.as_ref().map(|a| a.is_custom).unwrap_or(false),
+                key: config.key,
+                display_name: config.display_name,
+            }
         })
         .collect()
 }
 
 fn project_to_dto(
-    _store: &SkillStore,
     rec: &ProjectRecord,
     all_managed: &[SkillRecord],
     configs: &[project_scanner::AgentSkillConfig],
@@ -233,6 +234,8 @@ fn ensure_safe_skill_relative_path(skill_relative_path: &str) -> Result<(), AppE
 }
 
 fn ensure_dir_within_root(path: &Path, root: &Path) -> Result<(), AppError> {
+    // First check that the lexical path (before symlink resolution) is under root.
+    // This ensures the link itself lives where expected.
     let abs_path = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -335,13 +338,6 @@ fn find_best_center_match<'a>(
         .map(|(managed, _)| managed)
 }
 
-fn find_source_ref_match<'a>(
-    skill: &project_scanner::ProjectSkillInfo,
-    all_managed: &'a [SkillRecord],
-) -> Option<&'a SkillRecord> {
-    find_best_center_match(skill, all_managed)
-}
-
 fn classify_sync_status(
     skill: &project_scanner::ProjectSkillInfo,
     managed: Option<&SkillRecord>,
@@ -392,7 +388,7 @@ pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Proje
         let configs = agent_skill_configs(&store);
         Ok(records
             .iter()
-            .map(|r| project_to_dto(&store, r, &all_managed, &configs))
+            .map(|r| project_to_dto(r, &all_managed, &configs))
             .collect())
     })
     .await?
@@ -439,7 +435,7 @@ pub async fn add_project(
         store.insert_project(&record).map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
         let configs = agent_skill_configs(&store);
-        Ok(project_to_dto(&store, &record, &all_managed, &configs))
+        Ok(project_to_dto(&record, &all_managed, &configs))
     })
     .await?
 }
@@ -495,7 +491,7 @@ pub async fn add_linked_workspace(
         store.insert_project(&record).map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
         let configs = agent_skill_configs(&store);
-        Ok(project_to_dto(&store, &record, &all_managed, &configs))
+        Ok(project_to_dto(&record, &all_managed, &configs))
     })
     .await?
 }
@@ -599,6 +595,7 @@ pub async fn get_project_skill_document(
         let (skills_root, disabled_root) =
             resolve_agent_skills_roots(&store, &record, &agent)
                 .ok_or_else(|| AppError::not_found(format!("Unknown workspace agent: {}", agent)))?;
+        let disabled_root_copy = disabled_root.clone();
         let skill_dir = skills_root.join(&skill_relative_path);
         let skill_dir = if skill_dir.is_dir() {
             ensure_dir_within_root(&skill_dir, &skills_root)?;
@@ -615,9 +612,39 @@ pub async fn get_project_skill_document(
             return Err(AppError::not_found("Skill directory not found"));
         };
 
+        // Collect all allowed roots for symlink target validation
+        let mut allowed_roots: Vec<PathBuf> = vec![skills_root.clone()];
+        if let Some(dr) = disabled_root_copy {
+            allowed_roots.push(dr);
+        }
+        // For project workspaces, also allow the project root itself
+        if record.workspace_type != "linked" {
+            allowed_roots.push(PathBuf::from(&record.path));
+        }
+
         let candidates = ["SKILL.md", "skill.md", "CLAUDE.md", "README.md"];
         for candidate in &candidates {
             let file_path = skill_dir.join(candidate);
+            if !file_path.exists() {
+                continue;
+            }
+            // For symlinks, verify the resolved target stays within an allowed root
+            if let Ok(meta) = std::fs::symlink_metadata(&file_path) {
+                if meta.file_type().is_symlink() {
+                    let resolved = match std::fs::canonicalize(&file_path) {
+                        Ok(r) => r,
+                        Err(_) => continue, // broken symlink
+                    };
+                    let in_allowed_root = allowed_roots.iter().any(|root| {
+                        std::fs::canonicalize(root)
+                            .map(|canon| resolved.starts_with(&canon))
+                            .unwrap_or(false)
+                    });
+                    if !in_allowed_root {
+                        continue;
+                    }
+                }
+            }
             if file_path.is_file() {
                 let content = std::fs::read_to_string(&file_path)?;
                 return Ok(ProjectSkillDocumentDto {
@@ -660,7 +687,10 @@ pub async fn import_project_skill_to_center(
 
         let source_path = PathBuf::from(&skill.path);
         let all_managed = store.get_all_skills().unwrap_or_default();
-        if let Some(existing) = find_source_ref_match(skill, &all_managed) {
+        // Use the same matching logic as the UI (find_best_center_match) to
+        // stay consistent with sync-status display. After updating, bind
+        // source_ref so future imports match by exact path.
+        if let Some(existing) = find_best_center_match(skill, &all_managed) {
             let result = installer::install_from_local_to_destination(
                 &source_path,
                 Some(&existing.name),
@@ -678,6 +708,19 @@ pub async fn import_project_skill_to_center(
                     "local_only",
                 )
                 .map_err(AppError::db)?;
+            // Only update source_ref when the match was already by source_ref
+            // path (not by hash or name). This avoids permanently rebinding
+            // unrelated center skills that merely share a name or content.
+            let already_matched_by_ref = source_ref_matches_skill_path(
+                &skill.path,
+                std::fs::canonicalize(&skill.path).ok().as_ref(),
+                existing,
+            );
+            if existing.source_type == "local" && already_matched_by_ref {
+                store
+                    .update_skill_source_ref(&existing.id, &skill.path)
+                    .map_err(AppError::db)?;
+            }
             return Ok(());
         }
 
