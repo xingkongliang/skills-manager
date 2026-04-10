@@ -460,6 +460,7 @@ pub fn run() {
             commands::projects::add_project,
             commands::projects::remove_project,
             commands::projects::scan_projects,
+            commands::projects::get_project_agent_targets,
             commands::projects::get_project_skills,
             commands::projects::get_project_skill_document,
             commands::projects::import_project_skill_to_center,

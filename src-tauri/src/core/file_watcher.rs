@@ -21,11 +21,28 @@ fn collect_watch_paths(store: &SkillStore) -> Vec<PathBuf> {
     }
 
     if let Ok(projects) = store.get_all_projects() {
+        let adapters = tool_adapters::all_tool_adapters(store);
+        let mut seen_dirs = std::collections::HashSet::new();
         for project in projects {
-            let claude_dir = PathBuf::from(project.path).join(".claude");
-            paths.push(claude_dir.clone());
-            paths.push(claude_dir.join("skills"));
-            paths.push(claude_dir.join("skills-disabled"));
+            let project_path = PathBuf::from(&project.path);
+            seen_dirs.clear();
+            for adapter in &adapters {
+                if adapter.relative_skills_dir.is_empty() {
+                    continue;
+                }
+                if !seen_dirs.insert(adapter.relative_skills_dir.clone()) {
+                    continue;
+                }
+                let skills_dir = project_path.join(&adapter.relative_skills_dir);
+                let disabled_dir =
+                    project_path.join(format!("{}-disabled", &adapter.relative_skills_dir));
+                // Watch the parent directory so we detect creation of new skills dirs.
+                if let Some(parent) = skills_dir.parent() {
+                    paths.push(parent.to_path_buf());
+                }
+                paths.push(skills_dir);
+                paths.push(disabled_dir);
+            }
         }
     }
 

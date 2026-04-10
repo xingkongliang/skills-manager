@@ -26,6 +26,8 @@ pub struct CustomToolDef {
     pub key: String,
     pub display_name: String,
     pub skills_dir: String,
+    #[serde(default)]
+    pub project_relative_skills_dir: Option<String>,
 }
 
 impl ToolAdapter {
@@ -538,7 +540,7 @@ pub fn all_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<To
         adapters.push(ToolAdapter {
             key: ct.key,
             display_name: ct.display_name,
-            relative_skills_dir: String::new(),
+            relative_skills_dir: ct.project_relative_skills_dir.unwrap_or_default(),
             relative_detect_dir: String::new(),
             additional_scan_dirs: vec![],
             override_skills_dir: Some(ct.skills_dir),
@@ -572,7 +574,7 @@ pub fn find_adapter_with_store(
         .map(|ct| ToolAdapter {
             key: ct.key,
             display_name: ct.display_name,
-            relative_skills_dir: String::new(),
+            relative_skills_dir: ct.project_relative_skills_dir.unwrap_or_default(),
             relative_detect_dir: String::new(),
             additional_scan_dirs: vec![],
             override_skills_dir: Some(ct.skills_dir),

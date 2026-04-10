@@ -45,6 +45,15 @@
 - **Custom tools** — Add your own agents/tools with custom skills directories, or override the default path for any built-in tool.
 - **Git backup** — Version-control your skill library with Git for backup and multi-machine sync.
 
+## Quick Start
+
+1. Create or switch to a scenario for the workflow you want to use.
+2. Install skills from local folders, Git repositories, archives, or the marketplace.
+3. Open **My Skills** to decide which skills belong to the current scenario.
+4. Sync enabled skills to detected tools, or use **Project Workspaces** for project-local skill folders.
+5. Configure agent paths, custom tools, proxy, and Git preferences in **Settings**.
+6. If you want history or multi-machine sync, set a Git remote in **Settings** and run **Start Backup** or **Sync to Git** from **My Skills**.
+
 ## Git Backup
 
 Back up `~/.skills-manager/skills/` to a Git repo for version history and multi-machine sync.
@@ -74,6 +83,10 @@ Each successful sync now creates a snapshot version tag. You can open **Version 
 Cursor · Claude Code · Codex · OpenCode · Amp · Kilo Code · Roo Code · Goose · Gemini CLI · GitHub Copilot · Windsurf · TRAE IDE · Antigravity · Clawdbot · Droid
 
 You can also add custom tools in **Settings** and manage their skills the same way.
+
+## In-App Help
+
+The **Help** button in **Settings** summarizes the same workflow as above, so new users can get oriented without leaving the app.
 
 ## Tech Stack
 

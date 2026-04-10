@@ -5,7 +5,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
-use crate::core::{error::AppError, installer, project_scanner, sync_engine};
+use crate::core::{error::AppError, installer, project_scanner, sync_engine, tool_adapters};
 
 #[derive(Serialize, Default)]
 pub struct SyncHealthDto {
@@ -35,8 +35,102 @@ pub struct ProjectSkillDocumentDto {
     pub content: String,
 }
 
-fn project_to_dto(rec: &ProjectRecord, all_managed: &[SkillRecord]) -> ProjectDto {
-    let skills = project_scanner::read_project_skills(Path::new(&rec.path));
+#[derive(Serialize, Clone)]
+pub struct ProjectAgentTargetDto {
+    pub key: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub installed: bool,
+    pub is_custom: bool,
+}
+
+fn agent_skill_configs(store: &SkillStore) -> Vec<project_scanner::AgentSkillConfig> {
+    let mut grouped: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for adapter in tool_adapters::all_tool_adapters(store) {
+        if adapter.relative_skills_dir.is_empty() {
+            continue;
+        }
+        if let Some((_, agents)) = grouped
+            .iter_mut()
+            .find(|(dir, _)| *dir == adapter.relative_skills_dir)
+        {
+            agents.push((adapter.key, adapter.display_name));
+        } else {
+            grouped.push((
+                adapter.relative_skills_dir,
+                vec![(adapter.key, adapter.display_name)],
+            ));
+        }
+    }
+
+    grouped
+        .into_iter()
+        .filter_map(|(relative_skills_dir, agents)| {
+            let (key, first_display_name) = agents.first()?.clone();
+            let display_name = if agents.len() == 1 {
+                first_display_name
+            } else {
+                agents
+                    .into_iter()
+                    .map(|(_, display_name)| display_name)
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            };
+            Some(project_scanner::AgentSkillConfig {
+                key,
+                display_name,
+                relative_skills_dir,
+            })
+        })
+        .collect()
+}
+
+/// Resolve the enabled and disabled skills root directories for a given agent in a project.
+fn resolve_agent_skills_roots(
+    store: &SkillStore,
+    project_path: &Path,
+    agent: &str,
+) -> Option<(PathBuf, PathBuf)> {
+    let adapter = tool_adapters::all_tool_adapters(store)
+        .into_iter()
+        .find(|adapter| adapter.key == agent)?;
+    let skills_root = project_path.join(&adapter.relative_skills_dir);
+    let disabled_root = project_path.join(format!("{}-disabled", &adapter.relative_skills_dir));
+    Some((skills_root, disabled_root))
+}
+
+fn project_agent_targets(store: &SkillStore) -> Vec<ProjectAgentTargetDto> {
+    let disabled_tools: std::collections::HashSet<String> = store
+        .get_setting("disabled_tools")
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    agent_skill_configs(store)
+        .into_iter()
+        .map(|config| ProjectAgentTargetDto {
+            enabled: !disabled_tools.contains(&config.key),
+            installed: tool_adapters::find_adapter_with_store(store, &config.key)
+                .map(|adapter| adapter.is_installed())
+                .unwrap_or(false),
+            is_custom: tool_adapters::find_adapter_with_store(store, &config.key)
+                .map(|adapter| adapter.is_custom)
+                .unwrap_or(false),
+            key: config.key,
+            display_name: config.display_name,
+        })
+        .collect()
+}
+
+fn project_to_dto(
+    rec: &ProjectRecord,
+    all_managed: &[SkillRecord],
+    configs: &[project_scanner::AgentSkillConfig],
+) -> ProjectDto {
+    let skills = project_scanner::read_project_skills(Path::new(&rec.path), configs);
     let skill_count = skills.len();
 
     let mut health = SyncHealthDto::default();
@@ -219,9 +313,10 @@ pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Proje
     tauri::async_runtime::spawn_blocking(move || {
         let records = store.get_all_projects().map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
+        let configs = agent_skill_configs(&store);
         Ok(records
             .iter()
-            .map(|r| project_to_dto(r, &all_managed))
+            .map(|r| project_to_dto(r, &all_managed, &configs))
             .collect())
     })
     .await?
@@ -263,7 +358,8 @@ pub async fn add_project(
 
         store.insert_project(&record).map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        Ok(project_to_dto(&record, &all_managed))
+        let configs = agent_skill_configs(&store);
+        Ok(project_to_dto(&record, &all_managed, &configs))
     })
     .await?
 }
@@ -286,15 +382,30 @@ pub async fn reorder_projects(
 }
 
 #[tauri::command]
-pub async fn scan_projects(root: String) -> Result<Vec<String>, AppError> {
+pub async fn scan_projects(
+    root: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<String>, AppError> {
+    let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let root_path = Path::new(&root);
         if !root_path.is_dir() {
             return Err(AppError::invalid_input("Directory does not exist"));
         }
-        Ok(project_scanner::scan_projects_in_dir(root_path, 4))
+        let configs = agent_skill_configs(&store);
+        Ok(project_scanner::scan_projects_in_dir(
+            root_path, 4, &configs,
+        ))
     })
     .await?
+}
+
+#[tauri::command]
+pub async fn get_project_agent_targets(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<ProjectAgentTargetDto>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(project_agent_targets(&store))).await?
 }
 
 #[tauri::command]
@@ -309,7 +420,8 @@ pub async fn get_project_skills(
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Project not found"))?;
 
-        let mut skills = project_scanner::read_project_skills(Path::new(&record.path));
+        let configs = agent_skill_configs(&store);
+        let mut skills = project_scanner::read_project_skills(Path::new(&record.path), &configs);
 
         let all_managed = store.get_all_skills().unwrap_or_default();
         for skill in &mut skills {
@@ -328,13 +440,16 @@ pub async fn get_project_skills(
 pub async fn get_project_skill_document(
     project_path: String,
     skill_dir_name: String,
+    agent: String,
+    store: State<'_, Arc<SkillStore>>,
 ) -> Result<ProjectSkillDocumentDto, AppError> {
+    let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         ensure_safe_skill_dir_name(&skill_dir_name)?;
 
-        let claude_dir = Path::new(&project_path).join(".claude");
-        let skills_root = claude_dir.join("skills");
-        let disabled_root = claude_dir.join("skills-disabled");
+        let (skills_root, disabled_root) =
+            resolve_agent_skills_roots(&store, Path::new(&project_path), &agent)
+                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
         let skill_dir = skills_root.join(&skill_dir_name);
         let skill_dir = if skill_dir.is_dir() {
             ensure_dir_within_root(&skill_dir, &skills_root)?;
@@ -374,6 +489,7 @@ pub async fn import_project_skill_to_center(
     store: State<'_, Arc<SkillStore>>,
     project_id: String,
     skill_dir_name: String,
+    agent: String,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -384,10 +500,11 @@ pub async fn import_project_skill_to_center(
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Project not found"))?;
 
-        let skills = project_scanner::read_project_skills(Path::new(&record.path));
+        let configs = agent_skill_configs(&store);
+        let skills = project_scanner::read_project_skills(Path::new(&record.path), &configs);
         let skill = skills
             .iter()
-            .find(|s| s.dir_name == skill_dir_name)
+            .find(|s| s.dir_name == skill_dir_name && s.agent == agent)
             .ok_or_else(|| AppError::not_found("Skill not found in project"))?;
 
         let source_path = PathBuf::from(&skill.path);
@@ -460,8 +577,9 @@ pub async fn update_project_skill_to_center(
     store: State<'_, Arc<SkillStore>>,
     project_id: String,
     skill_dir_name: String,
+    agent: String,
 ) -> Result<(), AppError> {
-    import_project_skill_to_center(store, project_id, skill_dir_name).await
+    import_project_skill_to_center(store, project_id, skill_dir_name, agent).await
 }
 
 #[tauri::command]
@@ -474,6 +592,7 @@ pub async fn export_skill_to_project(
     store: State<'_, Arc<SkillStore>>,
     skill_id: String,
     project_id: String,
+    agents: Option<Vec<String>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -490,25 +609,37 @@ pub async fn export_skill_to_project(
         let dir_name = slugify_skill_dir_name(&skill.name);
         ensure_safe_skill_dir_name(&dir_name)?;
 
-        let claude_dir = Path::new(&project.path).join(".claude");
-        let skills_root = claude_dir.join("skills");
-        let disabled_root = claude_dir.join("skills-disabled");
-        let target_dir = skills_root.join(&dir_name);
-
-        if target_dir.strip_prefix(&skills_root).is_err() {
-            return Err(AppError::invalid_input("Invalid skill directory path"));
-        }
-
-        if target_dir.exists() || disabled_root.join(&dir_name).exists() {
-            return Err(AppError::invalid_input(format!(
-                "Skill \"{}\" already exists in this project",
-                skill.name
-            )));
-        }
-
         let source = PathBuf::from(&skill.central_path);
-        sync_engine::sync_skill(&source, &target_dir, sync_engine::SyncMode::Copy)
-            .map_err(AppError::io)?;
+        let agent_keys = agents
+            .filter(|items| !items.is_empty())
+            .unwrap_or_else(|| vec!["claude_code".to_string()]);
+
+        for agent_key in &agent_keys {
+            let (skills_root, disabled_root) =
+                resolve_agent_skills_roots(&store, Path::new(&project.path), agent_key)
+                    .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
+            let target_dir = skills_root.join(&dir_name);
+
+            if target_dir.strip_prefix(&skills_root).is_err() {
+                return Err(AppError::invalid_input("Invalid skill directory path"));
+            }
+
+            if target_dir.exists() || disabled_root.join(&dir_name).exists() {
+                return Err(AppError::invalid_input(format!(
+                    "Skill \"{}\" already exists in this project for agent {}",
+                    skill.name, agent_key
+                )));
+            }
+        }
+
+        for agent_key in &agent_keys {
+            let (skills_root, _) = resolve_agent_skills_roots(&store, Path::new(&project.path), agent_key)
+                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
+            let target_dir = skills_root.join(&dir_name);
+            std::fs::create_dir_all(&skills_root)?;
+            sync_engine::sync_skill(&source, &target_dir, sync_engine::SyncMode::Copy)
+                .map_err(AppError::io)?;
+        }
 
         Ok(())
     })
@@ -520,6 +651,7 @@ pub async fn update_project_skill_from_center(
     store: State<'_, Arc<SkillStore>>,
     project_id: String,
     skill_dir_name: String,
+    agent: String,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -530,19 +662,20 @@ pub async fn update_project_skill_from_center(
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Project not found"))?;
 
-        let skills = project_scanner::read_project_skills(Path::new(&record.path));
+        let configs = agent_skill_configs(&store);
+        let skills = project_scanner::read_project_skills(Path::new(&record.path), &configs);
         let skill = skills
             .iter()
-            .find(|s| s.dir_name == skill_dir_name)
+            .find(|s| s.dir_name == skill_dir_name && s.agent == agent)
             .ok_or_else(|| AppError::not_found("Skill not found in project"))?;
 
         let all_managed = store.get_all_skills().unwrap_or_default();
         let managed = find_best_center_match(skill, &all_managed)
             .ok_or_else(|| AppError::not_found("No matching skill in center"))?;
 
-        let claude_dir = Path::new(&record.path).join(".claude");
-        let skills_root = claude_dir.join("skills");
-        let disabled_root = claude_dir.join("skills-disabled");
+        let (skills_root, disabled_root) =
+            resolve_agent_skills_roots(&store, Path::new(&record.path), &agent)
+                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
         let target_path = PathBuf::from(&skill.path);
         if target_path.starts_with(&skills_root) {
             ensure_dir_within_root(&target_path, &skills_root)?;
@@ -565,6 +698,7 @@ pub async fn toggle_project_skill(
     store: State<'_, Arc<SkillStore>>,
     project_id: String,
     skill_dir_name: String,
+    agent: String,
     enabled: bool,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
@@ -576,9 +710,9 @@ pub async fn toggle_project_skill(
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Project not found"))?;
 
-        let claude_dir = Path::new(&record.path).join(".claude");
-        let skills_dir = claude_dir.join("skills");
-        let disabled_dir = claude_dir.join("skills-disabled");
+        let (skills_dir, disabled_dir) =
+            resolve_agent_skills_roots(&store, Path::new(&record.path), &agent)
+                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
 
         if enabled {
             let from = disabled_dir.join(&skill_dir_name);
@@ -623,6 +757,7 @@ pub async fn delete_project_skill(
     store: State<'_, Arc<SkillStore>>,
     project_id: String,
     skill_dir_name: String,
+    agent: String,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -633,9 +768,9 @@ pub async fn delete_project_skill(
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Project not found"))?;
 
-        let claude_dir = Path::new(&record.path).join(".claude");
-        let skills_root = claude_dir.join("skills");
-        let disabled_root = claude_dir.join("skills-disabled");
+        let (skills_root, disabled_root) =
+            resolve_agent_skills_roots(&store, Path::new(&record.path), &agent)
+                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
         let skills_dir = skills_root.join(&skill_dir_name);
         let disabled_dir = disabled_root.join(&skill_dir_name);
 
@@ -703,6 +838,8 @@ mod tests {
             path,
             files: vec!["SKILL.md".to_string()],
             enabled: true,
+            agent: "claude_code".to_string(),
+            agent_display_name: "Claude Code".to_string(),
             in_center: true,
             sync_status: "project_only".to_string(),
             center_skill_id: Some("skill-1".to_string()),

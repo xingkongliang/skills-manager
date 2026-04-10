@@ -1,8 +1,8 @@
-import { BookOpen, Layers3, RefreshCw, Settings2, Sparkles, X } from "lucide-react";
+import { BookOpen, FolderTree, Layers3, RefreshCw, Settings2, Sparkles, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useApp } from "../context/AppContext";
 
-const GUIDE_ICONS = [Layers3, RefreshCw, BookOpen, Sparkles, Settings2];
+const GUIDE_ICONS = [Layers3, BookOpen, Sparkles, FolderTree, RefreshCw, Settings2];
 
 export function HelpDialog() {
   const { t } = useTranslation();
@@ -13,7 +13,7 @@ export function HelpDialog() {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 px-6 backdrop-blur-sm">
       <div className="absolute inset-0" onClick={closeHelp} />
-      <div className="relative w-full max-w-[560px] overflow-hidden rounded-[28px] border border-border bg-bg-secondary shadow-[0_40px_90px_rgba(0,0,0,0.45)]">
+      <div className="relative w-full max-w-[640px] overflow-hidden rounded-[28px] border border-border bg-bg-secondary shadow-[0_40px_90px_rgba(0,0,0,0.45)]">
         <div className="border-b border-border-subtle bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.18),transparent_45%),radial-gradient(circle_at_top_right,rgba(16,185,129,0.16),transparent_40%)] px-6 py-5">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -33,8 +33,8 @@ export function HelpDialog() {
           </div>
         </div>
 
-        <div className="space-y-3 px-5 py-5">
-          {(["scenarios", "switching", "install", "sync", "settings"] as const).map((key, index) => {
+        <div className="max-h-[min(72vh,720px)] space-y-3 overflow-y-auto px-5 py-5">
+          {(["scenarios", "install", "sync", "projects", "backup", "settings"] as const).map((key, index) => {
             const Icon = GUIDE_ICONS[index];
             return (
               <div

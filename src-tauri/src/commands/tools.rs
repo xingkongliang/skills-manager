@@ -20,6 +20,7 @@ pub struct ToolInfoDto {
     pub enabled: bool,
     pub is_custom: bool,
     pub has_path_override: bool,
+    pub project_relative_skills_dir: Option<String>,
 }
 
 fn get_disabled_tools(store: &SkillStore) -> Vec<String> {
@@ -92,6 +93,28 @@ fn normalize_skills_dir_input(path: &str) -> Result<String, AppError> {
     };
 
     Ok(expanded)
+}
+
+fn normalize_project_relative_skills_dir_input(path: &str) -> Result<Option<String>, AppError> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let candidate = std::path::Path::new(trimmed);
+    if candidate.is_absolute() {
+        return Err(AppError::invalid_input(
+            "Project skills path must be relative to the project root",
+        ));
+    }
+    if candidate
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(AppError::invalid_input(
+            "Project skills path cannot contain parent directory segments",
+        ));
+    }
+    Ok(Some(trimmed.trim_matches('/').to_string()))
 }
 
 /// Sync active scenario skills to a single tool.
@@ -187,6 +210,11 @@ pub async fn get_tool_status(
                 enabled: !disabled.contains(&a.key),
                 is_custom: a.is_custom,
                 has_path_override: a.has_path_override(),
+                project_relative_skills_dir: if a.relative_skills_dir.is_empty() {
+                    None
+                } else {
+                    Some(a.relative_skills_dir.clone())
+                },
             })
             .collect();
         Ok(result)
@@ -313,6 +341,7 @@ pub async fn add_custom_tool(
     key: String,
     display_name: String,
     skills_dir: String,
+    project_relative_skills_dir: Option<String>,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
@@ -320,6 +349,9 @@ pub async fn add_custom_tool(
         let key = key.trim().to_string();
         let display_name = display_name.trim().to_string();
         let skills_dir = normalize_skills_dir_input(&skills_dir)?;
+        let project_relative_skills_dir = normalize_project_relative_skills_dir_input(
+            project_relative_skills_dir.as_deref().unwrap_or_default(),
+        )?;
         if key.is_empty() || display_name.is_empty() || skills_dir.is_empty() {
             return Err(AppError::invalid_input(
                 "Agent key, name and skills path are required",
@@ -338,6 +370,7 @@ pub async fn add_custom_tool(
             key: key.clone(),
             display_name,
             skills_dir,
+            project_relative_skills_dir,
         });
         set_custom_tools(&store, &customs)?;
         reconcile_tool_sync_after_path_change(&store, &key);

@@ -102,6 +102,7 @@ export function Settings() {
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [customName, setCustomName] = useState("");
   const [customPath, setCustomPath] = useState("");
+  const [customProjectPath, setCustomProjectPath] = useState("");
   const [addingCustom, setAddingCustom] = useState(false);
   const [showMoreAgents, setShowMoreAgents] = useState(false);
 
@@ -162,16 +163,18 @@ export function Settings() {
   const handleAddCustomAgent = async () => {
     const trimName = customName.trim();
     const trimPath = customPath.trim();
+    const trimProjectPath = customProjectPath.trim();
     if (!trimName || !trimPath) return;
     const trimKey = generateCustomAgentKey(trimName);
     setAddingCustom(true);
     try {
-      await api.addCustomTool(trimKey, trimName, trimPath);
+      await api.addCustomTool(trimKey, trimName, trimPath, trimProjectPath || undefined);
       await refreshTools();
       toast.success(t("settings.customAgentAdded"));
       setShowAddCustom(false);
       setCustomName("");
       setCustomPath("");
+      setCustomProjectPath("");
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -531,6 +534,11 @@ export function Settings() {
                 {t("settings.customAgent")}
               </span>
             )}
+            {agent.is_custom && agent.project_relative_skills_dir && (
+              <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+                {t("settings.projectAgentSupported")}
+              </span>
+            )}
             {agent.has_path_override && !agent.is_custom && (
               <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
                 {t("settings.pathOverridden")}
@@ -574,9 +582,19 @@ export function Settings() {
           </button>
         </div>
       ) : (
-        <p className="truncate text-[12px] font-mono leading-tight text-muted" title={agent.skills_dir}>
-          {agent.installed ? compactHomePath(agent.skills_dir) : t("settings.notInstalled")}
-        </p>
+        <div className="space-y-1">
+          <p className="truncate text-[12px] font-mono leading-tight text-muted" title={agent.skills_dir}>
+            {agent.installed ? compactHomePath(agent.skills_dir) : t("settings.notInstalled")}
+          </p>
+          {agent.is_custom && agent.project_relative_skills_dir && (
+            <p
+              className="truncate text-[12px] font-mono leading-tight text-muted"
+              title={agent.project_relative_skills_dir}
+            >
+              {t("settings.projectSkillsPathValue", { path: agent.project_relative_skills_dir })}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );
@@ -692,15 +710,32 @@ export function Settings() {
                     <FolderOpen className="w-3 h-3" />
                     {t("settings.selectFolder")}
                   </button>
-                  <button
-                    onClick={handleAddCustomAgent}
-                    disabled={addingCustom || !customName.trim() || !customPath.trim()}
-                    className={`${actionButtonClass} bg-accent text-white border-accent hover:opacity-90 disabled:opacity-50`}
-                  >
-                    {addingCustom ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-                    {t("settings.addAgent")}
-                  </button>
                 </div>
+              </div>
+              <div>
+                <label className="text-[12px] text-muted mb-1 block">
+                  {t("settings.projectSkillsPath")}
+                </label>
+                <input
+                  type="text"
+                  value={customProjectPath}
+                  onChange={(e) => setCustomProjectPath(e.target.value)}
+                  placeholder={t("settings.projectSkillsPathPlaceholder")}
+                  className={`${fieldClass} w-full font-mono`}
+                />
+                <p className="mt-1 text-[12px] text-muted">
+                  {t("settings.projectSkillsPathDesc")}
+                </p>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  onClick={handleAddCustomAgent}
+                  disabled={addingCustom || !customName.trim() || !customPath.trim()}
+                  className={`${actionButtonClass} bg-accent text-white border-accent hover:opacity-90 disabled:opacity-50`}
+                >
+                  {addingCustom ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                  {t("settings.addAgent")}
+                </button>
               </div>
             </div>
           )}

@@ -33,6 +33,15 @@
 - **自定义工具** — 添加自定义 Agent/工具并指定 Skills 目录，也可覆盖内置工具的默认路径。
 - **Git 备份** — 用 Git 管理技能库，支持版本控制和多机同步。
 
+## 快速上手
+
+1. 先创建或切换到一个适合当前工作的场景。
+2. 从本地目录、Git 仓库、压缩包或市场安装 Skills。
+3. 打开 **我的 Skills**，决定哪些 Skill 属于当前场景。
+4. 将已启用的 Skill 同步到已检测到的工具；如果是项目内本地 Skills，则使用 **项目工作区** 管理。
+5. 在 **设置** 中配置 Agent 路径、自定义工具、代理和 Git 偏好。
+6. 如果需要历史版本或多机同步，先在 **设置** 保存 Git 远程地址，再到 **我的 Skills** 执行 **开始备份** 或 **同步到 Git**。
+
 ## Git 备份
 
 将 `~/.skills-manager/skills/` 备份到 Git 仓库，用于版本管理和多机同步。
@@ -62,6 +71,10 @@
 Cursor · Claude Code · Codex · OpenCode · Amp · Kilo Code · Roo Code · Goose · Gemini CLI · GitHub Copilot · Windsurf · TRAE IDE · Antigravity · Clawdbot · Droid
 
 你也可以在**设置**中添加自定义工具，以相同方式管理其 Skills。
+
+## 应用内帮助
+
+设置页中的 **帮助** 按钮会展示与上面一致的快速流程，方便用户不离开应用也能快速理解使用方式。
 
 ## 技术栈
 

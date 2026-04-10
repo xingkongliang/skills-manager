@@ -3,6 +3,15 @@ use std::path::Path;
 
 use super::{content_hash, skill_metadata};
 
+/// Lightweight config describing where an agent keeps project-level skills.
+#[derive(Debug, Clone)]
+pub struct AgentSkillConfig {
+    pub key: String,
+    pub display_name: String,
+    /// Relative path from project root to the skills directory (e.g. ".claude/skills").
+    pub relative_skills_dir: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectSkillInfo {
     pub name: String,
@@ -11,6 +20,12 @@ pub struct ProjectSkillInfo {
     pub path: String,
     pub files: Vec<String>,
     pub enabled: bool,
+    /// Agent key that owns this skill (e.g. "claude_code", "cursor").
+    #[serde(default)]
+    pub agent: String,
+    /// Human-readable agent name (e.g. "Claude Code", "Cursor").
+    #[serde(default)]
+    pub agent_display_name: String,
     #[serde(default)]
     pub in_center: bool,
     #[serde(default)]
@@ -23,22 +38,44 @@ pub struct ProjectSkillInfo {
     pub content_hash: Option<String>,
 }
 
-/// Read all skills under `<project_path>/.claude/skills/` and `.claude/skills-disabled/`.
-pub fn read_project_skills(project_path: &Path) -> Vec<ProjectSkillInfo> {
-    let claude_dir = project_path.join(".claude");
-    let skills_dir = claude_dir.join("skills");
-    let disabled_dir = claude_dir.join("skills-disabled");
-
+/// Read skills from all configured agents' project-level skill directories.
+pub fn read_project_skills(
+    project_path: &Path,
+    agent_configs: &[AgentSkillConfig],
+) -> Vec<ProjectSkillInfo> {
     let mut skills = Vec::new();
 
-    read_skills_from_dir(&skills_dir, true, &mut skills);
-    read_skills_from_dir(&disabled_dir, false, &mut skills);
+    for config in agent_configs {
+        let skills_dir = project_path.join(&config.relative_skills_dir);
+        let disabled_dir = project_path.join(format!("{}-disabled", &config.relative_skills_dir));
+
+        read_skills_from_dir(
+            &skills_dir,
+            true,
+            &config.key,
+            &config.display_name,
+            &mut skills,
+        );
+        read_skills_from_dir(
+            &disabled_dir,
+            false,
+            &config.key,
+            &config.display_name,
+            &mut skills,
+        );
+    }
 
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     skills
 }
 
-fn read_skills_from_dir(dir: &Path, enabled: bool, skills: &mut Vec<ProjectSkillInfo>) {
+fn read_skills_from_dir(
+    dir: &Path,
+    enabled: bool,
+    agent: &str,
+    agent_display_name: &str,
+    skills: &mut Vec<ProjectSkillInfo>,
+) {
     if !dir.is_dir() {
         return;
     }
@@ -68,6 +105,8 @@ fn read_skills_from_dir(dir: &Path, enabled: bool, skills: &mut Vec<ProjectSkill
                 path: path.to_string_lossy().to_string(),
                 files,
                 enabled,
+                agent: agent.to_string(),
+                agent_display_name: agent_display_name.to_string(),
                 in_center: false,
                 sync_status: "project_only".to_string(),
                 center_skill_id: None,
@@ -78,21 +117,36 @@ fn read_skills_from_dir(dir: &Path, enabled: bool, skills: &mut Vec<ProjectSkill
     }
 }
 
-/// Scan a root directory for projects containing `.claude/skills/`.
-pub fn scan_projects_in_dir(root: &Path, max_depth: usize) -> Vec<String> {
+/// Scan a root directory for projects containing any agent's skills directory.
+pub fn scan_projects_in_dir(
+    root: &Path,
+    max_depth: usize,
+    agent_configs: &[AgentSkillConfig],
+) -> Vec<String> {
     let mut results = Vec::new();
-    scan_recursive(root, 0, max_depth, &mut results);
+    scan_recursive(root, 0, max_depth, agent_configs, &mut results);
     results.sort();
     results
 }
 
-fn scan_recursive(dir: &Path, depth: usize, max_depth: usize, results: &mut Vec<String>) {
+fn has_any_agent_skills(dir: &Path, agent_configs: &[AgentSkillConfig]) -> bool {
+    agent_configs
+        .iter()
+        .any(|config| dir.join(&config.relative_skills_dir).is_dir())
+}
+
+fn scan_recursive(
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    agent_configs: &[AgentSkillConfig],
+    results: &mut Vec<String>,
+) {
     if depth > max_depth {
         return;
     }
 
-    let claude_skills = dir.join(".claude").join("skills");
-    if claude_skills.is_dir() {
+    if has_any_agent_skills(dir, agent_configs) {
         results.push(dir.to_string_lossy().to_string());
         return; // don't recurse into subdirectories of a matched project
     }
@@ -116,7 +170,7 @@ fn scan_recursive(dir: &Path, depth: usize, max_depth: usize, results: &mut Vec<
             {
                 continue;
             }
-            scan_recursive(&path, depth + 1, max_depth, results);
+            scan_recursive(&path, depth + 1, max_depth, agent_configs, results);
         }
     }
 }

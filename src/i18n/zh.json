@@ -15,27 +15,31 @@
   "help": {
     "eyebrow": "操作指南",
     "title": "快速上手 Skills Manager",
-    "description": "主流程是：选场景、装 Skill、在“我的 Skills”里管理启用与同步；需要环境配置时到“设置”统一处理。",
+    "description": "最快的使用路径是：先选场景，再安装 Skill，在“我的 Skills”里决定当前场景要启用什么；需要同步、备份或环境配置时，再去对应页面处理。",
     "items": {
       "scenarios": {
-        "title": "场景就是一组 Skill 组合",
-        "description": "把工作、学习、开源项目分成不同场景，每个场景维护自己的启用列表和 Agent 同步开关。"
-      },
-      "switching": {
-        "title": "切换场景会自动切换同步结果",
-        "description": "点击左侧场景后，应用会取消旧场景同步，并把当前场景的 Skills 同步到已检测到的 Agent。"
+        "title": "先选一个场景，或新建一个场景",
+        "description": "把工作、学习、客户项目拆成不同场景。每个场景维护自己的启用列表和 Agent 开关。"
       },
       "install": {
-        "title": "从本地、Git 或市场安装",
-        "description": "安装完成后，Skill 会进入中央仓库，并可立即加入当前场景。"
+        "title": "把 Skill 安装进中央仓库",
+        "description": "支持从本地目录、Git 仓库、压缩包或市场导入。安装后会统一进入中央仓库，可随时加入当前场景。"
       },
       "sync": {
-        "title": "在“我的 Skills”里管理启用与同步",
-        "description": "你可以决定某个 Skill 是否属于当前场景，也可以手动同步或取消同步到各个 Agent。"
+        "title": "在“我的 Skills”里决定当前场景启用什么",
+        "description": "在这里启用或移除 Skill、查看文档、检查更新，也可以按 Agent 手动同步或取消同步。"
+      },
+      "projects": {
+        "title": "项目工作区适合管理仓库内的本地 Skills",
+        "description": "关联项目后，可以查看项目内的 Skills 目录，对照中央仓库，并在两边之间做双向同步。"
+      },
+      "backup": {
+        "title": "需要历史版本或多机同步时，用 Git 备份",
+        "description": "先在设置里保存远程仓库地址，再去“我的 Skills”执行“开始备份”或“同步到 Git”。每次成功同步都会生成一个可恢复的快照。"
       },
       "settings": {
-        "title": "设置页集中管理环境配置",
-        "description": "在设置里可以检查 Agent 状态、切换主题和语言、设置默认场景、配置关闭行为与托盘图标、保存代理和 Git 远程，并检查应用更新。"
+        "title": "环境配置统一放在设置页",
+        "description": "在这里检查 Agent 路径、添加自定义工具、切换主题和语言、配置代理与 Git 偏好，并检查应用更新。"
       }
     }
   },
@@ -331,6 +335,11 @@
     "agentNamePlaceholder": "My Agent",
     "agentKeyPlaceholder": "my_agent",
     "skillsPathPlaceholder": "/path/to/skills",
+    "projectSkillsPath": "项目工作区 Skills 路径",
+    "projectSkillsPathPlaceholder": ".my-agent/skills",
+    "projectSkillsPathDesc": "可选。填写相对项目根目录的路径后，这个自定义 Agent 才会出现在项目工作区的目标 Agent 列表中。",
+    "projectSkillsPathValue": "项目路径：{{path}}",
+    "projectAgentSupported": "支持项目工作区",
     "pathSaved": "Agent 路径已更新",
     "pathReset": "Agent 路径已恢复默认",
     "defaultPathHint": "当前使用默认 skills 路径",
@@ -487,22 +496,22 @@
   "project": {
     "title": "项目 Skills",
     "path": "项目路径",
-    "workspaceHint": "管理该仓库中的 .claude/skills 本地副本，并与 Skills 中心双向同步。",
+    "workspaceHint": "管理该仓库中各 Agent 的本地 Skills，并与 Skills 中心双向同步。",
     "skills": "Skills",
     "noSkills": "该项目下没有 Skills",
-    "noSkillsHint": "在项目目录下创建 .claude/skills/ 子目录并添加 Skill 文件夹。",
+    "noSkillsHint": "未发现任何 Agent 的 Skills 目录。可创建 .claude/skills/ 等目录并添加 Skill 文件夹。",
     "addManual": "选择仓库目录",
     "scanDir": "扫描目录",
     "scanDirPlaceholder": "输入要扫描的根目录路径，如 ~/Work",
     "scanResult": "发现 {{count}} 个项目",
-    "scanNoResult": "没有发现包含 .claude/skills/ 的项目",
+    "scanNoResult": "没有发现包含 Agent Skills 目录的项目",
     "scanning": "扫描中...",
     "removeConfirm": "确定从列表中移除项目 \"{{name}}\" 吗？不会删除项目文件。",
     "added": "项目已添加",
     "removed": "项目已移除",
     "notFound": "项目不存在",
     "alreadyExists": "已存在",
-    "invalidDir": "目录中没有 .claude/skills/",
+    "invalidDir": "目录中没有任何 Agent Skills",
     "addProjectTitle": "关联项目工作区",
     "tabManual": "手动添加",
     "tabScan": "扫描发现",
@@ -517,7 +526,7 @@
     "updateCenter": "更新中心",
     "updateProject": "更新项目",
     "importToCenterSuccess": "\"{{name}}\" 已更新到 Skills 中心",
-    "importFromCenterSuccess": "\"{{name}}\" 已添加到项目",
+    "importFromCenterSuccess": "\"{{name}}\" 已添加到项目的 {{count}} 个 Agent",
     "updateCenterSuccess": "\"{{name}}\" 已更新到 Skills 中心",
     "updateProjectSuccess": "\"{{name}}\" 已更新到项目",
     "resetFromCenter": "恢复中心版本",
@@ -545,6 +554,16 @@
     },
     "selectSkillToExport": "选择要添加到项目的 Skill",
     "searchCenterSkills": "搜索中央仓库中的 Skills...",
+    "targetAgent": "目标 Agent",
+    "targetAgents": "目标 Agents",
+    "selectTargetAgents": "请至少选择一个目标 Agent",
+    "agentPickerHint": "默认仅展开设置中已启用的 Agent",
+    "saveDefaultAgents": "保存为默认",
+    "defaultAgentsSaved": "默认 Agent 候选已保存",
+    "selectedAgentCount": "已选 {{count}} 个 Agent",
+    "enabledAgents": "已启用 Agent",
+    "moreAgents": "更多 Agent（{{count}}）",
+    "customAssignment": "{{assigned}} / {{total}} Agents",
     "noSkillsToExport": "中央仓库中没有可添加到项目的 Skill",
     "import": "添加",
     "updateSelected": "添加 {{count}} 个",

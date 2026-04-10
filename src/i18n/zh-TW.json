@@ -15,27 +15,31 @@
   "help": {
     "eyebrow": "操作指南",
     "title": "快速上手 Skills Manager",
-    "description": "現在的主流程很簡單：選場景、裝 Skill、在「我的 Skills」裡管理啟用和同步。",
+    "description": "最快的使用路徑是：先選場景，再安裝 Skill，在「我的 Skills」裡決定目前場景要啟用什麼；需要同步、備份或環境設定時，再到對應頁面處理。",
     "items": {
       "scenarios": {
-        "title": "場景就是一組 Skill 組合",
-        "description": "把工作、學習、開源專案分成不同場景，每個場景維護自己的啟用清單。"
-      },
-      "switching": {
-        "title": "切換場景會自動切換同步結果",
-        "description": "點擊左側場景後，應用會取消舊場景同步，並把當前場景的 Skills 同步到已偵測到的 Agent。"
+        "title": "先選一個場景，或新增一個場景",
+        "description": "把工作、學習、客戶專案拆成不同場景。每個場景維護自己的啟用清單和 Agent 開關。"
       },
       "install": {
-        "title": "從本機、Git 或市集安裝",
-        "description": "安裝完成後，Skill 會進入中央倉庫，並可立即加入當前場景。"
+        "title": "把 Skill 安裝進中央倉庫",
+        "description": "支援從本機資料夾、Git 倉庫、壓縮檔或市集匯入。安裝後會統一進入中央倉庫，可隨時加入目前場景。"
       },
       "sync": {
-        "title": "在「我的 Skills」裡管理啟用與同步",
-        "description": "你可以決定某個 Skill 是否屬於當前場景，也可以手動同步或取消同步到各個 Agent。"
+        "title": "在「我的 Skills」裡決定目前場景啟用什麼",
+        "description": "在這裡啟用或移除 Skill、檢視文件、檢查更新，也可以依 Agent 手動同步或取消同步。"
+      },
+      "projects": {
+        "title": "專案工作區適合管理倉庫內的本地 Skills",
+        "description": "關聯專案後，可以檢視專案內的 Skills 目錄、對照中央倉庫，並在兩邊之間做雙向同步。"
+      },
+      "backup": {
+        "title": "需要歷史版本或多機同步時，用 Git 備份",
+        "description": "先在設定裡儲存遠端倉庫位址，再去「我的 Skills」執行「開始備份」或「同步到 Git」。每次成功同步都會建立一個可還原的快照。"
       },
       "settings": {
-        "title": "設定頁負責環境和偏好",
-        "description": "在設定裡檢查 Agent 安裝狀態、切換主題和語言、修改預設場景，也可以從這裡重新開啟這份說明。"
+        "title": "環境設定統一放在設定頁",
+        "description": "在這裡檢查 Agent 路徑、加入自訂工具、切換主題和語言、設定代理與 Git 偏好，並檢查應用更新。"
       }
     }
   },
@@ -292,6 +296,11 @@
     "agentNamePlaceholder": "My Agent",
     "agentKeyPlaceholder": "my_agent",
     "skillsPathPlaceholder": "/path/to/skills",
+    "projectSkillsPath": "專案工作區 Skills 路徑",
+    "projectSkillsPathPlaceholder": ".my-agent/skills",
+    "projectSkillsPathDesc": "選填。填入相對專案根目錄的路徑後，這個自訂 Agent 才會出現在專案工作區的目標 Agent 清單中。",
+    "projectSkillsPathValue": "專案路徑：{{path}}",
+    "projectAgentSupported": "支援專案工作區",
     "pathSaved": "Agent 路徑已更新",
     "pathReset": "Agent 路徑已恢復預設",
     "defaultPathHint": "目前使用預設 skills 路徑",
@@ -424,22 +433,22 @@
   "project": {
     "title": "專案 Skills",
     "path": "專案路徑",
-    "workspaceHint": "管理此倉庫中的 .claude/skills 本機副本，並與 Skills 中心雙向同步。",
+    "workspaceHint": "管理此倉庫中各 Agent 的本機 Skills，並與 Skills 中心雙向同步。",
     "skills": "Skills",
     "noSkills": "該專案下沒有 Skills",
-    "noSkillsHint": "在專案目錄下建立 .claude/skills/ 子目錄並新增 Skill 資料夾。",
+    "noSkillsHint": "未發現任何 Agent 的 Skills 目錄。可建立 .claude/skills/ 等目錄並新增 Skill 資料夾。",
     "addManual": "選擇倉庫目錄",
     "scanDir": "掃描目錄",
     "scanDirPlaceholder": "輸入要掃描的根目錄路徑，如 ~/Work",
     "scanResult": "發現 {{count}} 個專案",
-    "scanNoResult": "沒有發現包含 .claude/skills/ 的專案",
+    "scanNoResult": "沒有發現包含 Agent Skills 目錄的專案",
     "scanning": "掃描中...",
     "removeConfirm": "確定從清單中移除專案「{{name}}」嗎？不會刪除專案檔案。",
     "added": "專案已新增",
     "removed": "專案已移除",
     "notFound": "專案不存在",
     "alreadyExists": "已存在",
-    "invalidDir": "目錄中沒有 .claude/skills/",
+    "invalidDir": "目錄中沒有任何 Agent Skills",
     "addProjectTitle": "關聯專案工作區",
     "tabManual": "手動新增",
     "tabScan": "掃描發現",
@@ -453,7 +462,7 @@
     "updateCenter": "更新中心",
     "updateProject": "更新專案",
     "importToCenterSuccess": "「{{name}}」已更新到 Skills 中心",
-    "importFromCenterSuccess": "「{{name}}」已更新到專案",
+    "importFromCenterSuccess": "「{{name}}」已加入專案的 {{count}} 個 Agent",
     "updateCenterSuccess": "「{{name}}」已更新到 Skills 中心",
     "updateProjectSuccess": "「{{name}}」已更新到專案",
     "resetFromCenter": "還原中心版本",
@@ -481,6 +490,16 @@
     },
     "selectSkillToExport": "選擇要更新到專案的 Skill",
     "searchCenterSkills": "搜尋中央倉庫中的 Skills...",
+    "targetAgent": "目標 Agent",
+    "targetAgents": "目標 Agents",
+    "selectTargetAgents": "請至少選擇一個目標 Agent",
+    "agentPickerHint": "預設僅展開設定中已啟用的 Agent",
+    "saveDefaultAgents": "儲存為預設",
+    "defaultAgentsSaved": "預設 Agent 候選已儲存",
+    "selectedAgentCount": "已選 {{count}} 個 Agent",
+    "enabledAgents": "已啟用 Agent",
+    "moreAgents": "更多 Agent（{{count}}）",
+    "customAssignment": "{{assigned}} / {{total}} 個 Agents",
     "noSkillsToExport": "中央倉庫中沒有可更新到專案的 Skill",
     "import": "更新",
     "deleteSkill": "刪除 Skill",

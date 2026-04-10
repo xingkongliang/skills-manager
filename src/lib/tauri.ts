@@ -10,6 +10,7 @@ export interface ToolInfo {
   enabled: boolean;
   is_custom: boolean;
   has_path_override: boolean;
+  project_relative_skills_dir: string | null;
 }
 
 export interface ManagedSkill {
@@ -121,6 +122,14 @@ export interface Project {
   updated_at: number;
 }
 
+export interface ProjectAgentTarget {
+  key: string;
+  display_name: string;
+  enabled: boolean;
+  installed: boolean;
+  is_custom: boolean;
+}
+
 export interface ProjectSkill {
   name: string;
   dir_name: string;
@@ -128,6 +137,8 @@ export interface ProjectSkill {
   path: string;
   files: string[];
   enabled: boolean;
+  agent: string;
+  agent_display_name: string;
   in_center: boolean;
   sync_status: "project_only" | "in_sync" | "project_newer" | "center_newer" | "diverged";
   center_skill_id: string | null;
@@ -155,8 +166,18 @@ export const setCustomToolPath = (key: string, path: string) =>
 export const resetCustomToolPath = (key: string) =>
   invoke<void>("reset_custom_tool_path", { key });
 
-export const addCustomTool = (key: string, displayName: string, skillsDir: string) =>
-  invoke<void>("add_custom_tool", { key, displayName, skillsDir });
+export const addCustomTool = (
+  key: string,
+  displayName: string,
+  skillsDir: string,
+  projectRelativeSkillsDir?: string,
+) =>
+  invoke<void>("add_custom_tool", {
+    key,
+    displayName,
+    skillsDir,
+    projectRelativeSkillsDir: projectRelativeSkillsDir ?? null,
+  });
 
 export const removeCustomTool = (key: string) =>
   invoke<void>("remove_custom_tool", { key });
@@ -456,29 +477,32 @@ export const removeProject = (id: string) =>
 export const scanProjects = (root: string) =>
   invoke<string[]>("scan_projects", { root });
 
+export const getProjectAgentTargets = () =>
+  invoke<ProjectAgentTarget[]>("get_project_agent_targets");
+
 export const getProjectSkills = (projectId: string) =>
   invoke<ProjectSkill[]>("get_project_skills", { projectId });
 
-export const getProjectSkillDocument = (projectPath: string, skillDirName: string) =>
-  invoke<ProjectSkillDocument>("get_project_skill_document", { projectPath, skillDirName });
+export const getProjectSkillDocument = (projectPath: string, skillDirName: string, agent: string) =>
+  invoke<ProjectSkillDocument>("get_project_skill_document", { projectPath, skillDirName, agent });
 
-export const importProjectSkillToCenter = (projectId: string, skillDirName: string) =>
-  invoke<void>("import_project_skill_to_center", { projectId, skillDirName });
+export const importProjectSkillToCenter = (projectId: string, skillDirName: string, agent: string) =>
+  invoke<void>("import_project_skill_to_center", { projectId, skillDirName, agent });
 
-export const exportSkillToProject = (skillId: string, projectId: string) =>
-  invoke<void>("export_skill_to_project", { skillId, projectId });
+export const exportSkillToProject = (skillId: string, projectId: string, agents?: string[]) =>
+  invoke<void>("export_skill_to_project", { skillId, projectId, agents: agents ?? null });
 
-export const updateProjectSkillToCenter = (projectId: string, skillDirName: string) =>
-  invoke<void>("update_project_skill_to_center", { projectId, skillDirName });
+export const updateProjectSkillToCenter = (projectId: string, skillDirName: string, agent: string) =>
+  invoke<void>("update_project_skill_to_center", { projectId, skillDirName, agent });
 
-export const updateProjectSkillFromCenter = (projectId: string, skillDirName: string) =>
-  invoke<void>("update_project_skill_from_center", { projectId, skillDirName });
+export const updateProjectSkillFromCenter = (projectId: string, skillDirName: string, agent: string) =>
+  invoke<void>("update_project_skill_from_center", { projectId, skillDirName, agent });
 
-export const toggleProjectSkill = (projectId: string, skillDirName: string, enabled: boolean) =>
-  invoke<void>("toggle_project_skill", { projectId, skillDirName, enabled });
+export const toggleProjectSkill = (projectId: string, skillDirName: string, agent: string, enabled: boolean) =>
+  invoke<void>("toggle_project_skill", { projectId, skillDirName, agent, enabled });
 
-export const deleteProjectSkill = (projectId: string, skillDirName: string) =>
-  invoke<void>("delete_project_skill", { projectId, skillDirName });
+export const deleteProjectSkill = (projectId: string, skillDirName: string, agent: string) =>
+  invoke<void>("delete_project_skill", { projectId, skillDirName, agent });
 
 export const slugifySkillNames = (names: string[]) =>
   invoke<string[]>("slugify_skill_names", { names });
