@@ -15,31 +15,31 @@
   "help": {
     "eyebrow": "Guide",
     "title": "Quick Start for Skills Manager",
-    "description": "The fastest path is: pick a scenario, install skills, enable what belongs to that scenario, then sync or back up when needed. Settings is where environment-level configuration lives.",
+    "description": "The fastest path is: pick a scenario, install skills into the central library, decide what stays active in My Skills, then use Project Workspaces, Git backup, or Settings only when that workflow needs them.",
     "items": {
       "scenarios": {
         "title": "Start by picking or creating a scenario",
-        "description": "Use separate scenarios for work, learning, or client projects. Each scenario keeps its own enabled skills and agent toggles."
+        "description": "Use separate scenarios for work, learning, or client projects. Each scenario keeps its own enabled skills, per-agent toggles, and skill order."
       },
       "install": {
         "title": "Install skills into the central library",
-        "description": "Import from local folders, Git repositories, archives, or the marketplace. New skills land in the central repo and are ready to be added to the current scenario."
+        "description": "Import from local folders, Git repositories, archives, or the marketplace. If you add a SkillsMP API key in Settings, marketplace search can also use AI."
       },
       "sync": {
         "title": "Use My Skills to decide what is active",
-        "description": "Enable or remove skills for the current scenario, review docs, check updates, and sync or unsync them for detected agents."
+        "description": "Enable or remove skills for the current scenario, add tags, review docs and source details, check updates, open Version History, and sync or unsync them for detected agents."
       },
       "projects": {
         "title": "Use Project Workspaces for repo-specific skills",
-        "description": "Link a project to inspect its local skills directory, compare it with the central library, and sync changes in either direction."
+        "description": "Link a project to inspect project-local skill folders, compare them with the central library, and import or export changes for the agents you care about."
       },
       "backup": {
         "title": "Use Git backup when you need history or multi-machine sync",
-        "description": "Save the remote URL in Settings, then run Start Backup or Sync to Git from My Skills. Each successful sync creates a snapshot you can restore later."
+        "description": "Save the remote URL in Settings, then run Start Backup or Sync to Git from My Skills. Each successful sync creates a snapshot tag that can be restored later from Version History."
       },
       "settings": {
         "title": "Keep environment settings in one place",
-        "description": "Use Settings to review agent paths, add custom tools, change theme or language, configure proxy and Git preferences, and check for app updates."
+        "description": "Use Settings to review agent paths, add custom tools, change sync mode, theme, text size, language, default scenario, tray behavior, proxy, Git remote, AI search key, and app updates."
       }
     }
   },
