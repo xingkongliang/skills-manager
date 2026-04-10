@@ -310,7 +310,7 @@ pub fn find_skill_dir(repo_dir: &Path, skill_id: Option<&str>) -> Result<PathBuf
     }
 
     // Check if root is a skill
-    let has_skill_md = ["SKILL.md", "skill.md", "CLAUDE.md"]
+    let has_skill_md = ["SKILL.md", "skill.md"]
         .iter()
         .any(|f| repo_dir.join(f).exists());
     if has_skill_md {

@@ -5,14 +5,40 @@ pub struct SkillMeta {
     pub description: Option<String>,
 }
 
+fn read_named_file_exact(dir: &Path, target_name: &str) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        if !entry.file_type().ok()?.is_file() {
+            continue;
+        }
+        if entry.file_name().to_string_lossy() == target_name {
+            return std::fs::read_to_string(entry.path()).ok();
+        }
+    }
+    None
+}
+
+fn has_named_file_exact(dir: &Path, target_name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry
+            .file_type()
+            .map(|ft| ft.is_file())
+            .unwrap_or(false)
+            && entry.file_name().to_string_lossy() == target_name
+    })
+}
+
 pub fn parse_skill_md(dir: &Path) -> SkillMeta {
-    let candidates = ["SKILL.md", "skill.md", "CLAUDE.md"];
-    for candidate in &candidates {
-        let path = dir.join(candidate);
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                return parse_frontmatter(&content);
-            }
+    parse_skill_md_with_candidates(dir, &["SKILL.md", "skill.md"])
+}
+
+fn parse_skill_md_with_candidates(dir: &Path, candidates: &[&str]) -> SkillMeta {
+    for candidate in candidates {
+        if let Some(content) = read_named_file_exact(dir, candidate) {
+            return parse_frontmatter(&content);
         }
     }
     SkillMeta {
@@ -53,18 +79,15 @@ fn parse_frontmatter(content: &str) -> SkillMeta {
 }
 
 /// Skill directory marker files used across the application.
-const SKILL_DIR_MARKERS: &[&str] = &[
-    "SKILL.md",
-    "skill.md",
-    "CLAUDE.md",
-    "README.md",
-    "readme.md",
-];
+const SKILL_DIR_MARKERS: &[&str] = &["SKILL.md", "skill.md"];
 
 /// Check whether a directory looks like a valid skill directory
 /// (contains at least one recognised marker file).
 pub fn is_valid_skill_dir(dir: &Path) -> bool {
-    dir.is_dir() && SKILL_DIR_MARKERS.iter().any(|name| dir.join(name).exists())
+    dir.is_dir()
+        && SKILL_DIR_MARKERS
+            .iter()
+            .any(|name| has_named_file_exact(dir, name))
 }
 
 /// Characters that are invalid in Windows file/directory names.
@@ -216,7 +239,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_skill_md_reads_claude_md_as_fallback() {
+    fn parse_skill_md_reads_lowercase_skill_md() {
+        let tmp = tempdir().unwrap();
+        fs::write(
+            tmp.path().join("skill.md"),
+            "---\nname: from-lowercase\ndescription: desc\n---\n",
+        )
+        .unwrap();
+
+        let meta = parse_skill_md(tmp.path());
+        assert_eq!(meta.name.as_deref(), Some("from-lowercase"));
+        assert_eq!(meta.description.as_deref(), Some("desc"));
+    }
+
+    #[test]
+    fn parse_skill_md_ignores_claude_md() {
         let tmp = tempdir().unwrap();
         fs::write(
             tmp.path().join("CLAUDE.md"),
@@ -225,11 +262,11 @@ mod tests {
         .unwrap();
 
         let meta = parse_skill_md(tmp.path());
-        assert_eq!(meta.name.as_deref(), Some("from-claude"));
+        assert_eq!(meta.name, None);
     }
 
     #[test]
-    fn parse_skill_md_prefers_skill_md_over_claude_md() {
+    fn parse_skill_md_prefers_skill_md_when_claude_md_is_present() {
         let tmp = tempdir().unwrap();
         fs::write(tmp.path().join("SKILL.md"), "---\nname: from-skill\n---\n").unwrap();
         fs::write(
@@ -260,10 +297,24 @@ mod tests {
     }
 
     #[test]
-    fn is_valid_skill_dir_with_readme() {
+    fn is_valid_skill_dir_accepts_lowercase_skill_md() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("skill.md"), "content").unwrap();
+        assert!(is_valid_skill_dir(tmp.path()));
+    }
+
+    #[test]
+    fn is_valid_skill_dir_ignores_readme_only_dirs() {
         let tmp = tempdir().unwrap();
         fs::write(tmp.path().join("README.md"), "content").unwrap();
-        assert!(is_valid_skill_dir(tmp.path()));
+        assert!(!is_valid_skill_dir(tmp.path()));
+    }
+
+    #[test]
+    fn is_valid_skill_dir_ignores_claude_only_dirs() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "content").unwrap();
+        assert!(!is_valid_skill_dir(tmp.path()));
     }
 
     #[test]

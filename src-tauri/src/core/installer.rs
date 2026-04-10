@@ -44,12 +44,12 @@ impl PreparedSource {
         let mut archive = zip::ZipArchive::new(file)?;
         safe_extract(&mut archive, temp_dir.path())?;
 
-        // Find SKILL.md
+        // Find supported skill markers for local/archive import flows.
         let mut found = Vec::new();
         for entry in WalkDir::new(temp_dir.path()).max_depth(4) {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy();
-            if name == "SKILL.md" || name == "skill.md" || name == "CLAUDE.md" {
+            if name == "SKILL.md" || name == "skill.md" {
                 if let Some(parent) = entry.path().parent() {
                     found.push(parent.to_path_buf());
                 }

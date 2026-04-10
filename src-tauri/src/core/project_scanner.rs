@@ -16,6 +16,8 @@ pub struct AgentSkillConfig {
 pub struct ProjectSkillInfo {
     pub name: String,
     pub dir_name: String,
+    #[serde(default)]
+    pub relative_path: String,
     pub description: Option<String>,
     pub path: String,
     pub files: Vec<String>,
@@ -79,16 +81,37 @@ fn read_skills_from_dir(
     if !dir.is_dir() {
         return;
     }
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
+    read_skills_from_dir_recursive(dir, dir, enabled, agent, agent_display_name, skills);
+}
+
+fn read_skills_from_dir_recursive(
+    root: &Path,
+    current: &Path,
+    enabled: bool,
+    agent: &str,
+    agent_display_name: &str,
+    skills: &mut Vec<ProjectSkillInfo>,
+) {
+    let Ok(entries) = std::fs::read_dir(current) else {
+        return;
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        if skill_metadata::is_valid_skill_dir(&path) {
             let dir_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
+            let relative_path = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
 
             let meta = skill_metadata::parse_skill_md(&path);
             let name = meta
@@ -101,6 +124,7 @@ fn read_skills_from_dir(
             skills.push(ProjectSkillInfo {
                 name,
                 dir_name: dir_name.clone(),
+                relative_path,
                 description: meta.description,
                 path: path.to_string_lossy().to_string(),
                 files,
@@ -113,7 +137,10 @@ fn read_skills_from_dir(
                 last_modified_at: latest_modified_millis(&path),
                 content_hash: content_hash::hash_directory(&path).ok(),
             });
+            continue;
         }
+
+        read_skills_from_dir_recursive(root, &path, enabled, agent, agent_display_name, skills);
     }
 }
 
@@ -220,4 +247,57 @@ fn latest_modified_millis(dir: &Path) -> Option<i64> {
     let mut latest = None;
     walk(dir, &mut latest);
     latest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_project_skills, AgentSkillConfig};
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn reads_nested_project_skills_recursively() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join(".hermes").join("skills");
+        let nested_skill = root.join("research").join("web-search");
+        fs::create_dir_all(&nested_skill).unwrap();
+        fs::write(
+            nested_skill.join("SKILL.md"),
+            "---\nname: Web Search\ndescription: Nested skill\n---\n",
+        )
+        .unwrap();
+
+        let configs = vec![AgentSkillConfig {
+            key: "hermes".to_string(),
+            display_name: "Hermes".to_string(),
+            relative_skills_dir: ".hermes/skills".to_string(),
+        }];
+
+        let skills = read_project_skills(tmp.path(), &configs);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].dir_name, "web-search");
+        assert_eq!(skills[0].relative_path, "research/web-search");
+        assert_eq!(skills[0].name, "Web Search");
+    }
+
+    #[test]
+    fn prefers_skill_dir_over_namespace_parent_dir() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join(".hermes").join("skills");
+        let namespace = root.join("research");
+        let nested_skill = namespace.join("web-search");
+        fs::create_dir_all(&nested_skill).unwrap();
+        fs::write(namespace.join("notes.txt"), "namespace").unwrap();
+        fs::write(nested_skill.join("SKILL.md"), "# Nested").unwrap();
+
+        let configs = vec![AgentSkillConfig {
+            key: "hermes".to_string(),
+            display_name: "Hermes".to_string(),
+            relative_skills_dir: ".hermes/skills".to_string(),
+        }];
+
+        let skills = read_project_skills(tmp.path(), &configs);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].relative_path, "research/web-search");
+    }
 }
