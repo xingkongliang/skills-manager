@@ -15,31 +15,31 @@
   "help": {
     "eyebrow": "操作指南",
     "title": "快速上手 Skills Manager",
-    "description": "最快的使用路徑是：先選場景，再安裝 Skill，在「我的 Skills」裡決定目前場景要啟用什麼；需要同步、備份或環境設定時，再到對應頁面處理。",
+    "description": "最快的使用路徑是：先選場景，把 Skill 安裝進中央倉庫，再在「我的 Skills」裡決定目前場景要啟用什麼；只有在需要專案內協作、Git 備份或環境設定時，再到對應頁面處理。",
     "items": {
       "scenarios": {
         "title": "先選一個場景，或新增一個場景",
-        "description": "把工作、學習、客戶專案拆成不同場景。每個場景維護自己的啟用清單和 Agent 開關。"
+        "description": "把工作、學習、客戶專案拆成不同場景。每個場景維護自己的啟用清單、Agent 開關，以及已啟用 Skill 的排序。"
       },
       "install": {
         "title": "把 Skill 安裝進中央倉庫",
-        "description": "支援從本機資料夾、Git 倉庫、壓縮檔或市集匯入。安裝後會統一進入中央倉庫，可隨時加入目前場景。"
+        "description": "支援從本機資料夾、Git 倉庫、壓縮檔或市集匯入。若你在設定裡填入 SkillsMP API Key，市集搜尋還可以切換為 AI 搜尋。"
       },
       "sync": {
         "title": "在「我的 Skills」裡決定目前場景啟用什麼",
-        "description": "在這裡啟用或移除 Skill、檢視文件、檢查更新，也可以依 Agent 手動同步或取消同步。"
+        "description": "在這裡啟用或移除 Skill、加入標籤、檢視文件與來源資訊、檢查更新、查看版本歷史，也可以依 Agent 手動同步或取消同步。"
       },
       "projects": {
         "title": "專案工作區適合管理倉庫內的本地 Skills",
-        "description": "關聯專案後，可以檢視專案內的 Skills 目錄、對照中央倉庫，並在兩邊之間做雙向同步。"
+        "description": "關聯專案後，可以檢視專案內各 Agent 的本地 Skills 目錄、對照中央倉庫，並依需求雙向匯入或匯出。"
       },
       "backup": {
         "title": "需要歷史版本或多機同步時，用 Git 備份",
-        "description": "先在設定裡儲存遠端倉庫位址，再去「我的 Skills」執行「開始備份」或「同步到 Git」。每次成功同步都會建立一個可還原的快照。"
+        "description": "先在設定裡儲存遠端倉庫位址，再去「我的 Skills」執行「開始備份」或「同步到 Git」。每次成功同步都會建立一個可從版本歷史還原的快照標籤。"
       },
       "settings": {
         "title": "環境設定統一放在設定頁",
-        "description": "在這裡檢查 Agent 路徑、加入自訂工具、切換主題和語言、設定代理與 Git 偏好，並檢查應用更新。"
+        "description": "在這裡檢查 Agent 路徑、加入自訂工具、切換同步模式、主題、字級、語言和預設場景，設定托盤、代理、Git 遠端、AI 搜尋 Key，並檢查應用更新。"
       }
     }
   },

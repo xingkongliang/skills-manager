@@ -15,31 +15,31 @@
   "help": {
     "eyebrow": "操作指南",
     "title": "快速上手 Skills Manager",
-    "description": "最快的使用路径是：先选场景，再安装 Skill，在“我的 Skills”里决定当前场景要启用什么；需要同步、备份或环境配置时，再去对应页面处理。",
+    "description": "最快的使用路径是：先选场景，把 Skill 安装进中央仓库，再在“我的 Skills”里决定当前场景要启用什么；只有在需要项目内协作、Git 备份或环境配置时，再去对应页面处理。",
     "items": {
       "scenarios": {
         "title": "先选一个场景，或新建一个场景",
-        "description": "把工作、学习、客户项目拆成不同场景。每个场景维护自己的启用列表和 Agent 开关。"
+        "description": "把工作、学习、客户项目拆成不同场景。每个场景维护自己的启用列表、Agent 开关，以及已启用 Skill 的排序。"
       },
       "install": {
         "title": "把 Skill 安装进中央仓库",
-        "description": "支持从本地目录、Git 仓库、压缩包或市场导入。安装后会统一进入中央仓库，可随时加入当前场景。"
+        "description": "支持从本地目录、Git 仓库、压缩包或市场导入。若你在设置里填入 SkillsMP API Key，市场搜索还可以切换为 AI 搜索。"
       },
       "sync": {
         "title": "在“我的 Skills”里决定当前场景启用什么",
-        "description": "在这里启用或移除 Skill、查看文档、检查更新，也可以按 Agent 手动同步或取消同步。"
+        "description": "在这里启用或移除 Skill、添加标签、查看文档与来源信息、检查更新、查看版本历史，也可以按 Agent 手动同步或取消同步。"
       },
       "projects": {
         "title": "项目工作区适合管理仓库内的本地 Skills",
-        "description": "关联项目后，可以查看项目内的 Skills 目录，对照中央仓库，并在两边之间做双向同步。"
+        "description": "关联项目后，可以查看项目内各 Agent 的本地 Skills 目录，对照中央仓库，并按需双向导入或导出。"
       },
       "backup": {
         "title": "需要历史版本或多机同步时，用 Git 备份",
-        "description": "先在设置里保存远程仓库地址，再去“我的 Skills”执行“开始备份”或“同步到 Git”。每次成功同步都会生成一个可恢复的快照。"
+        "description": "先在设置里保存远程仓库地址，再去“我的 Skills”执行“开始备份”或“同步到 Git”。每次成功同步都会生成一个可从版本历史恢复的快照标签。"
       },
       "settings": {
         "title": "环境配置统一放在设置页",
-        "description": "在这里检查 Agent 路径、添加自定义工具、切换主题和语言、配置代理与 Git 偏好，并检查应用更新。"
+        "description": "在这里检查 Agent 路径、添加自定义工具、切换同步模式、主题、字号、语言和默认场景，配置托盘、代理、Git 远程、AI 搜索 Key，并检查应用更新。"
       }
     }
   },
