@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-04-10
+
+### Added
+- Improved agent assignment controls in project workspaces for clearer setup and management flows
+
+### Changed
+- Refined sidebar typography and alignment for a cleaner, more consistent app layout
+- Refreshed in-app help content and guidance copy for a clearer user experience
+
+### Fixed
+- No user-facing bug fixes in this release
+
+### Removed
+- No removals in this release
 ## [1.12.0] - 2026-04-10
 
 ### Added
