@@ -464,15 +464,35 @@ pub async fn add_linked_workspace(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string);
-        if let Some(ref disabled) = disabled_path {
-            let disabled_root = PathBuf::from(disabled);
+        let disabled_path = if let Some(disabled) = disabled_path {
+            let disabled_root = PathBuf::from(&disabled);
             if !disabled_root.is_dir() {
                 return Err(AppError::invalid_input(
                     "Disabled skills directory does not exist",
                 ));
             }
             ensure_distinct_linked_workspace_roots(&skills_root, &disabled_root)?;
-        }
+            Some(disabled)
+        } else {
+            let mut disabled_root = skills_root.clone();
+            let derived = disabled_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|name| format!("{}-disabled", name));
+            match derived {
+                Some(name) => {
+                    disabled_root.set_file_name(name);
+                    match std::fs::create_dir_all(&disabled_root) {
+                        Ok(()) => {
+                            ensure_distinct_linked_workspace_roots(&skills_root, &disabled_root)?;
+                            Some(disabled_root.to_string_lossy().to_string())
+                        }
+                        Err(_) => None,
+                    }
+                }
+                None => None,
+            }
+        };
 
         let now = chrono::Utc::now().timestamp_millis();
         let record = ProjectRecord {

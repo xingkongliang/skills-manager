@@ -22,7 +22,6 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
   const [scanned, setScanned] = useState(false);
   const [linkedName, setLinkedName] = useState("");
   const [linkedPath, setLinkedPath] = useState("");
-  const [linkedDisabledPath, setLinkedDisabledPath] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -35,7 +34,6 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
     setScanned(false);
     setLinkedName("");
     setLinkedPath("");
-    setLinkedDisabledPath("");
   }, [open]);
 
   if (!open) return null;
@@ -107,11 +105,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
     if (!linkedName.trim() || !linkedPath.trim()) return;
     setAdding(true);
     try {
-      await api.addLinkedWorkspace(
-        linkedName.trim(),
-        linkedPath.trim(),
-        linkedDisabledPath.trim() || undefined,
-      );
+      await api.addLinkedWorkspace(linkedName.trim(), linkedPath.trim());
       await onAdded();
       onClose();
     } catch {
@@ -303,25 +297,6 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
                 }}
                 className="px-2.5 rounded-[4px] border border-border-subtle bg-background text-muted hover:text-secondary hover:border-border transition-all outline-none"
                 title={t("project.selectSkillsDir")}
-              >
-                <FolderOpen className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={linkedDisabledPath}
-                onChange={(e) => setLinkedDisabledPath(e.target.value)}
-                placeholder={t("project.linkedDisabledPathPlaceholder")}
-                className={cn(inputClass, "flex-1")}
-              />
-              <button
-                onClick={async () => {
-                  const dir = await dialogOpen({ directory: true, multiple: false });
-                  if (dir) setLinkedDisabledPath(dir as string);
-                }}
-                className="px-2.5 rounded-[4px] border border-border-subtle bg-background text-muted hover:text-secondary hover:border-border transition-all outline-none"
-                title={t("project.selectDisabledSkillsDir")}
               >
                 <FolderOpen className="w-4 h-4" />
               </button>
