@@ -5,6 +5,11 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.13.2] - 2026-04-11
+
+### 修复
+- 在 Linux 上退出 Skills Manager 不会再误杀其他正在运行的应用或整个桌面会话（#47）
+
 ## [1.13.1] - 2026-04-10
 
 ### 修复
