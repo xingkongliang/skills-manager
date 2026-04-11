@@ -5,6 +5,11 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.13.3] - 2026-04-11
+
+### 变更
+- 关联外部工作区时不再需要手动填写"停用 Skills 目录"。Skills Manager 现在会自动创建并使用同级的 `*-disabled` 目录；若该目录无法创建（例如只读位置），将优雅降级为只读模式。
+
 ## [1.13.2] - 2026-04-11
 
 ### 修复
