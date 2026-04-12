@@ -481,6 +481,11 @@ pub fn run() {
             commands::packs::add_pack_to_scenario,
             commands::packs::remove_pack_from_scenario,
             commands::packs::get_effective_skills_for_scenario,
+            // Plugins
+            commands::plugins::get_managed_plugins,
+            commands::plugins::scan_plugins,
+            commands::plugins::get_scenario_plugins,
+            commands::plugins::set_scenario_plugin_enabled,
             // Scenarios
             commands::scenarios::get_scenarios,
             commands::scenarios::get_active_scenario,

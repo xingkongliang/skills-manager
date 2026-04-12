@@ -5,6 +5,7 @@ use tauri::State;
 
 use crate::core::{
     error::AppError,
+    plugins,
     skill_store::{ScenarioRecord, SkillStore},
     sync_engine, tool_adapters,
 };
@@ -463,6 +464,11 @@ pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Res
         }
     }
 
+    // Apply per-scenario plugin state to installed_plugins.json
+    if let Err(e) = plugins::apply_scenario_plugins(store, scenario_id) {
+        log::warn!("Failed to apply scenario plugin state: {e}");
+    }
+
     Ok(())
 }
 
@@ -488,6 +494,11 @@ pub(crate) fn unsync_scenario_skills(
                 );
             }
         }
+    }
+
+    // Restore all plugins when unsyncing (back to "all enabled" default)
+    if let Err(e) = plugins::restore_all_plugins(store) {
+        log::warn!("Failed to restore plugins during unsync: {e}");
     }
 
     Ok(())
