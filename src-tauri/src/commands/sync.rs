@@ -161,11 +161,11 @@ pub async fn get_skill_tool_toggles(
 ) -> Result<Vec<SkillToolToggleDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let skill_ids = store
-            .get_skill_ids_for_scenario(&scenario_id)
+        let is_effective = store
+            .is_skill_in_effective_scenario(&scenario_id, &skill_id)
             .map_err(AppError::db)?;
-        if !skill_ids.contains(&skill_id) {
-            return Err(AppError::not_found("Skill is not enabled in this scenario"));
+        if !is_effective {
+            return Err(AppError::not_found("Skill is not in the effective skill set for this scenario"));
         }
 
         let disabled = disabled_tools(&store);
@@ -220,11 +220,11 @@ pub async fn set_skill_tool_toggle(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let skill_ids = store
-            .get_skill_ids_for_scenario(&scenario_id)
+        let is_effective = store
+            .is_skill_in_effective_scenario(&scenario_id, &skill_id)
             .map_err(AppError::db)?;
-        if !skill_ids.contains(&skill_id) {
-            return Err(AppError::not_found("Skill is not enabled in this scenario"));
+        if !is_effective {
+            return Err(AppError::not_found("Skill is not in the effective skill set for this scenario"));
         }
 
         let adapter = tool_adapters::find_adapter_with_store(&store, &tool)
