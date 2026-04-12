@@ -25,24 +25,16 @@ tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-single-instance = "2"
-rusqlite = { version = "0.31", features = ["bundled"] }
-uuid = { version = "1", features = ["v4"] }
-sha2 = "0.10"
-dirs = "5.0"
-walkdir = "2.5"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+tokio = { version = "1", features = ["full"] }
+notify = "6.1.1"
 anyhow = "1.0"
 chrono = "0.4"
-serde_yaml = "0.9"
-git2 = { version = "0.19", features = ["vendored-openssl"] }
-tokio = { version = "1", features = ["full"] }
-regex = "1"
-hex = "0.4"
-urlencoding = "2"
-zip = "2"
-tempfile = "3.26.0"
-semver = "1"
-aes-gcm = "0.10"
-rand = "0.8"
+dirs = "5.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
-notify = "6.1.1"
+semver = "1"
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2.5"
+skills-manager-core = { path = "../crates/skills-manager-core", features = ["tauri-compat", "tokio-compat"] }
+
+[dev-dependencies]
+tempfile = "3.26.0"

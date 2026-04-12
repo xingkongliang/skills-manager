@@ -129,6 +129,7 @@ impl From<std::io::Error> for AppError {
     }
 }
 
+#[cfg(feature = "tokio-compat")]
 impl From<tokio::task::JoinError> for AppError {
     fn from(e: tokio::task::JoinError) -> Self {
         Self {
@@ -138,6 +139,7 @@ impl From<tokio::task::JoinError> for AppError {
     }
 }
 
+#[cfg(feature = "tauri-compat")]
 impl From<tauri::Error> for AppError {
     fn from(e: tauri::Error) -> Self {
         Self {
