@@ -517,3 +517,91 @@ export const deleteProjectSkill = (projectId: string, skillRelativePath: string,
 
 export const slugifySkillNames = (names: string[]) =>
   invoke<string[]>("slugify_skill_names", { names });
+
+// ── Packs ──
+
+export interface PackRecord {
+  id: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  color: string | null;
+  sort_order: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SkillRecord {
+  id: string;
+  name: string;
+  description: string | null;
+  source_type: string;
+  source_ref: string | null;
+  source_ref_resolved: string | null;
+  source_subpath: string | null;
+  source_branch: string | null;
+  source_revision: string | null;
+  remote_revision: string | null;
+  central_path: string;
+  content_hash: string | null;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export const getAllPacks = () => invoke<PackRecord[]>("get_all_packs");
+
+export const getPackById = (id: string) =>
+  invoke<PackRecord | null>("get_pack_by_id", { id });
+
+export const createPack = (
+  name: string,
+  description?: string,
+  icon?: string,
+  color?: string
+) =>
+  invoke<PackRecord>("create_pack", {
+    name,
+    description: description || null,
+    icon: icon || null,
+    color: color || null,
+  });
+
+export const updatePack = (
+  id: string,
+  name: string,
+  description?: string,
+  icon?: string,
+  color?: string
+) =>
+  invoke<void>("update_pack", {
+    id,
+    name,
+    description: description || null,
+    icon: icon || null,
+    color: color || null,
+  });
+
+export const deletePack = (id: string) =>
+  invoke<void>("delete_pack", { id });
+
+export const addSkillToPack = (packId: string, skillId: string) =>
+  invoke<void>("add_skill_to_pack", { packId, skillId });
+
+export const removeSkillFromPack = (packId: string, skillId: string) =>
+  invoke<void>("remove_skill_from_pack", { packId, skillId });
+
+export const getSkillsForPack = (packId: string) =>
+  invoke<SkillRecord[]>("get_skills_for_pack", { packId });
+
+export const getPacksForScenario = (scenarioId: string) =>
+  invoke<PackRecord[]>("get_packs_for_scenario", { scenarioId });
+
+export const addPackToScenario = (scenarioId: string, packId: string) =>
+  invoke<void>("add_pack_to_scenario", { scenarioId, packId });
+
+export const removePackFromScenario = (scenarioId: string, packId: string) =>
+  invoke<void>("remove_pack_from_scenario", { scenarioId, packId });
+
+export const getEffectiveSkillsForScenario = (scenarioId: string) =>
+  invoke<SkillRecord[]>("get_effective_skills_for_scenario", { scenarioId });
