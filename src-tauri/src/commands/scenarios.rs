@@ -340,20 +340,26 @@ pub async fn remove_skill_from_scenario(
             .remove_skill_from_scenario(&scenario_id, &skill_id)
             .map_err(AppError::db)?;
 
-        // If this is the active scenario, unsync the skill
+        // If this is the active scenario, unsync the skill only if it is no longer
+        // in the effective skill set (i.e. not still inherited via a pack).
         if let Ok(Some(active_id)) = store.get_active_scenario_id() {
             if active_id == scenario_id {
-                let targets = store.get_targets_for_skill(&skill_id).unwrap_or_default();
-                for target in &targets {
-                    let path = PathBuf::from(&target.target_path);
-                    if let Err(e) = sync_engine::remove_target(&path) {
-                        log::warn!("Failed to remove sync target {}: {e}", path.display());
-                    }
-                    if let Err(e) = store.delete_target(&skill_id, &target.tool) {
-                        log::warn!(
-                            "Failed to delete target record for skill {skill_id}, tool {}: {e}",
-                            target.tool
-                        );
+                let still_effective = store
+                    .is_skill_in_effective_scenario(&scenario_id, &skill_id)
+                    .unwrap_or(false);
+                if !still_effective {
+                    let targets = store.get_targets_for_skill(&skill_id).unwrap_or_default();
+                    for target in &targets {
+                        let path = PathBuf::from(&target.target_path);
+                        if let Err(e) = sync_engine::remove_target(&path) {
+                            log::warn!("Failed to remove sync target {}: {e}", path.display());
+                        }
+                        if let Err(e) = store.delete_target(&skill_id, &target.tool) {
+                            log::warn!(
+                                "Failed to delete target record for skill {skill_id}, tool {}: {e}",
+                                target.tool
+                            );
+                        }
                     }
                 }
             }
@@ -418,7 +424,7 @@ pub async fn reorder_scenario_skills(
 
 pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), AppError> {
     let skills = store
-        .get_skills_for_scenario(scenario_id)
+        .get_effective_skills_for_scenario(scenario_id)
         .map_err(AppError::db)?;
     let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
 
@@ -464,9 +470,12 @@ pub(crate) fn unsync_scenario_skills(
     store: &SkillStore,
     scenario_id: &str,
 ) -> Result<(), AppError> {
-    let skill_ids = store
-        .get_skill_ids_for_scenario(scenario_id)
-        .map_err(AppError::db)?;
+    let skill_ids: Vec<String> = store
+        .get_effective_skills_for_scenario(scenario_id)
+        .map_err(AppError::db)?
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
 
     for skill_id in &skill_ids {
         let targets = store.get_targets_for_skill(skill_id).unwrap_or_default();
