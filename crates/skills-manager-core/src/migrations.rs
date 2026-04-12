@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 4;
+const LATEST_VERSION: u32 = 5;
 
 /// Run all pending migrations on the database.
 ///
@@ -51,6 +51,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         1 => migrate_v1_to_v2(conn),
         2 => migrate_v2_to_v3(conn),
         3 => migrate_v3_to_v4(conn),
+        4 => migrate_v4_to_v5(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -170,6 +171,31 @@ fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
             PRIMARY KEY(skill_id, tag)
         );
         CREATE INDEX IF NOT EXISTS idx_skill_tags_tag ON skill_tags(tag);
+
+        CREATE TABLE IF NOT EXISTS packs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            icon TEXT,
+            color TEXT,
+            sort_order INTEGER DEFAULT 0,
+            created_at INTEGER,
+            updated_at INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS pack_skills (
+            pack_id TEXT NOT NULL REFERENCES packs(id) ON DELETE CASCADE,
+            skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+            sort_order INTEGER DEFAULT 0,
+            PRIMARY KEY(pack_id, skill_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS scenario_packs (
+            scenario_id TEXT NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+            pack_id TEXT NOT NULL REFERENCES packs(id) ON DELETE CASCADE,
+            sort_order INTEGER DEFAULT 0,
+            PRIMARY KEY(scenario_id, pack_id)
+        );
         ",
     )?;
 
@@ -237,6 +263,37 @@ fn migrate_v3_to_v4(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "projects", "linked_agent_key", "TEXT")?;
     add_column_if_missing(conn, "projects", "linked_agent_name", "TEXT")?;
     add_column_if_missing(conn, "projects", "disabled_path", "TEXT")?;
+    Ok(())
+}
+
+/// v4 → v5: Add packs, pack_skills, and scenario_packs tables.
+fn migrate_v4_to_v5(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS packs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            icon TEXT,
+            color TEXT,
+            sort_order INTEGER DEFAULT 0,
+            created_at INTEGER,
+            updated_at INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS pack_skills (
+            pack_id TEXT NOT NULL REFERENCES packs(id) ON DELETE CASCADE,
+            skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+            sort_order INTEGER DEFAULT 0,
+            PRIMARY KEY(pack_id, skill_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS scenario_packs (
+            scenario_id TEXT NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+            pack_id TEXT NOT NULL REFERENCES packs(id) ON DELETE CASCADE,
+            sort_order INTEGER DEFAULT 0,
+            PRIMARY KEY(scenario_id, pack_id)
+        );",
+    )?;
     Ok(())
 }
 
@@ -446,5 +503,115 @@ mod tests {
             msg.contains("newer than this app supports"),
             "unexpected error: {msg}"
         );
+    }
+
+    #[test]
+    fn fresh_db_creates_packs_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+
+        // Verify packs table exists
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM packs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // Verify pack_skills table exists
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM pack_skills", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // Verify scenario_packs table exists
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM scenario_packs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // Verify schema version is 5
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 5);
+    }
+
+    #[test]
+    fn v4_to_v5_migration_adds_packs_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "user_version", 4).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS scenarios (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+             CREATE TABLE IF NOT EXISTS scenario_skills (
+                 scenario_id TEXT NOT NULL, skill_id TEXT NOT NULL,
+                 added_at INTEGER, sort_order INTEGER DEFAULT 0,
+                 PRIMARY KEY(scenario_id, skill_id)
+             );",
+        )
+        .unwrap();
+
+        // Pre-seed valid rows required for FK constraints (FK enforcement is always on).
+        conn.execute(
+            "INSERT INTO skills (id, name) VALUES ('s1', 'test-skill')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO scenarios (id, name) VALUES ('sc1', 'test-scenario')",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO packs (id, name, sort_order, created_at, updated_at) VALUES ('p1', 'test', 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO pack_skills (pack_id, skill_id, sort_order) VALUES ('p1', 's1', 0)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO scenario_packs (scenario_id, pack_id, sort_order) VALUES ('sc1', 'p1', 0)",
+            [],
+        )
+        .unwrap();
+
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 5);
+    }
+
+    #[test]
+    fn packs_cascade_delete() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_migrations(&conn).unwrap();
+
+        conn.execute("INSERT INTO skills (id, name, description, source_type, source_ref, central_path, content_hash, enabled, created_at, updated_at, status, update_status) VALUES ('s1', 'test-skill', '', 'local', '', '', '', 1, 0, 0, 'installed', 'none')", []).unwrap();
+        conn.execute("INSERT INTO packs (id, name, sort_order, created_at, updated_at) VALUES ('p1', 'test-pack', 0, 0, 0)", []).unwrap();
+        conn.execute(
+            "INSERT INTO pack_skills (pack_id, skill_id, sort_order) VALUES ('p1', 's1', 0)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM packs WHERE id = 'p1'", [])
+            .unwrap();
+
+        let count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pack_skills WHERE pack_id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
