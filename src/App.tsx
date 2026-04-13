@@ -13,6 +13,7 @@ import { PluginsView } from "./views/PluginsView";
 import { Settings } from "./views/Settings";
 import { ProjectDetail } from "./views/ProjectDetail";
 import { PacksView } from "./views/PacksView";
+import { AgentDetail } from "./views/AgentDetail";
 
 function ThemedToaster() {
   const { resolvedTheme } = useThemeContext();
@@ -45,6 +46,7 @@ function App() {
               <Route path="/matrix" element={<MatrixView />} />
               <Route path="/plugins" element={<PluginsView />} />
               <Route path="/project/:id" element={<ProjectDetail />} />
+              <Route path="/agent/:toolKey" element={<AgentDetail />} />
               <Route path="/settings" element={<Settings />} />
             </Route>
           </Routes>
