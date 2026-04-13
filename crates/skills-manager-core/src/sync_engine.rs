@@ -75,7 +75,20 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         let entry = entry?;
         let ft = entry.file_type()?;
         let dest_path = dst.join(entry.file_name());
-        if ft.is_dir() {
+        if ft.is_symlink() {
+            // Recreate symlinks as-is instead of trying to copy them as files.
+            // Many skills contain internal symlinks (e.g., skill-name/skill-name -> parent).
+            // Skip circular symlinks that point back to src or an ancestor.
+            if let Ok(link_target) = std::fs::read_link(entry.path()) {
+                if let Ok(resolved) = entry.path().canonicalize() {
+                    if src.starts_with(&resolved) {
+                        continue;
+                    }
+                }
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&link_target, &dest_path).ok();
+            }
+        } else if ft.is_dir() {
             let name = entry.file_name();
             if name == ".git" {
                 continue;
