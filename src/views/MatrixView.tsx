@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   ChevronRight,
   ChevronDown,
@@ -10,6 +11,8 @@ import {
   ToggleLeft,
   ToggleRight,
   FileText,
+  Info,
+  ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "../utils";
@@ -20,6 +23,7 @@ import type {
   PackSkillRecord,
   ToolInfo,
   SkillToolToggle,
+  AgentConfigDto,
 } from "../lib/tauri";
 
 // ── Types ──
@@ -42,11 +46,25 @@ export function MatrixView() {
   const [loading, setLoading] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [togglingCell, setTogglingCell] = useState<string | null>(null);
+  const [agentConfigs, setAgentConfigs] = useState<AgentConfigDto[]>([]);
 
   // Toggles loaded per skill (skill_id -> SkillToolToggle[])
   const [skillToggles, setSkillToggles] = useState<
     Record<string, SkillToolToggle[]>
   >({});
+
+  // Load agent configs whenever the active scenario changes
+  useEffect(() => {
+    api.getAllAgentConfigs().then(setAgentConfigs).catch(() => {});
+  }, [activeScenario]);
+
+  // Agents with a custom scenario (different from the global active scenario)
+  const agentsWithCustomConfig = useMemo(() => {
+    if (!activeScenario) return [];
+    return agentConfigs.filter(
+      (a) => a.managed && a.scenario_id !== null && a.scenario_id !== activeScenario.id,
+    );
+  }, [agentConfigs, activeScenario]);
 
   // Only show installed + enabled tools as columns
   const columns = useMemo(
@@ -502,25 +520,65 @@ export function MatrixView() {
   return (
     <div className="app-page">
       <div className="app-page-header pr-2 pb-1">
-        <h1 className="app-page-title flex items-center gap-2">
-          <Grid3X3 className="h-5 w-5 text-accent" />
-          Agent Matrix
-          <span className="app-badge">{totalSkills} skills</span>
-        </h1>
-        {activeScenario && (
-          <p className="app-page-subtitle text-tertiary">
-            Showing toggles for scenario:{" "}
-            <span className="font-medium text-secondary">
-              {activeScenario.name}
-            </span>
-          </p>
-        )}
-        {!activeScenario && (
-          <p className="app-page-subtitle text-amber-600 dark:text-amber-400">
-            No active scenario. Select a scenario to manage toggles.
-          </p>
-        )}
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="app-page-title flex items-center gap-2">
+              <Grid3X3 className="h-5 w-5 text-accent" />
+              Agent Matrix
+              <span className="app-badge">{totalSkills} skills</span>
+            </h1>
+            {activeScenario && (
+              <p className="app-page-subtitle text-tertiary">
+                Showing toggles for scenario:{" "}
+                <span className="font-medium text-secondary">
+                  {activeScenario.name}
+                </span>
+              </p>
+            )}
+            {!activeScenario && (
+              <p className="app-page-subtitle text-amber-600 dark:text-amber-400">
+                No active scenario. Select a scenario to manage toggles.
+              </p>
+            )}
+          </div>
+          <Link
+            to="/packs"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-[13px] font-medium text-secondary transition-colors hover:bg-surface-hover hover:text-primary shrink-0"
+          >
+            <Package className="h-3.5 w-3.5" />
+            Manage Packs
+            <ExternalLink className="h-3 w-3 text-faint" />
+          </Link>
+        </div>
       </div>
+
+      {agentsWithCustomConfig.length > 0 && (
+        <div className="mb-3 flex items-start gap-2.5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-[13px] dark:border-blue-800 dark:bg-blue-950/40">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-500 dark:text-blue-400" />
+          <div className="min-w-0">
+            <p className="font-medium text-blue-800 dark:text-blue-300">
+              Some agents have custom configurations:
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {agentsWithCustomConfig.map((a) => (
+                <li key={a.tool_key} className="text-blue-700 dark:text-blue-400">
+                  <Link
+                    to={`/agent/${a.tool_key}`}
+                    className="font-medium underline-offset-2 hover:underline"
+                  >
+                    {a.display_name}
+                  </Link>
+                  {": "}
+                  {a.scenario_name ?? "custom"} ({a.effective_skill_count} skills)
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1.5 text-blue-600 dark:text-blue-500">
+              Click an agent above for details. The matrix below shows the global scenario.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="overflow-x-auto rounded-xl border border-border-subtle bg-surface">
         <table className="w-full text-sm">
