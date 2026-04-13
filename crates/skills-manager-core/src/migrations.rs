@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 6;
+const LATEST_VERSION: u32 = 7;
 
 const PLUGINS_SCHEMA_DDL: &str = "
     CREATE TABLE IF NOT EXISTS managed_plugins (
@@ -19,6 +19,21 @@ const PLUGINS_SCHEMA_DDL: &str = "
         plugin_id TEXT NOT NULL REFERENCES managed_plugins(id) ON DELETE CASCADE,
         enabled INTEGER NOT NULL DEFAULT 1,
         PRIMARY KEY(scenario_id, plugin_id)
+    );
+";
+
+const AGENT_CONFIG_SCHEMA_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS agent_configs (
+        tool_key TEXT PRIMARY KEY,
+        scenario_id TEXT REFERENCES scenarios(id) ON DELETE SET NULL,
+        managed INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_extra_packs (
+        tool_key TEXT NOT NULL,
+        pack_id TEXT NOT NULL REFERENCES packs(id) ON DELETE CASCADE,
+        PRIMARY KEY(tool_key, pack_id)
     );
 ";
 
@@ -98,6 +113,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         3 => migrate_v3_to_v4(conn),
         4 => migrate_v4_to_v5(conn),
         5 => migrate_v5_to_v6(conn),
+        6 => migrate_v6_to_v7(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -222,6 +238,7 @@ fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
     )?;
     conn.execute_batch(PACKS_SCHEMA_DDL)?;
     conn.execute_batch(PLUGINS_SCHEMA_DDL)?;
+    conn.execute_batch(AGENT_CONFIG_SCHEMA_DDL)?;
 
     // For pre-migration databases: add columns that didn't exist in the original schema.
     // For new databases these are already in the CREATE TABLE, so the calls are no-ops.
@@ -300,6 +317,13 @@ fn migrate_v4_to_v5(conn: &Connection) -> Result<()> {
 /// plugin enable/disable.
 fn migrate_v5_to_v6(conn: &Connection) -> Result<()> {
     conn.execute_batch(PLUGINS_SCHEMA_DDL)?;
+    Ok(())
+}
+
+/// v6 → v7: Add agent_configs and agent_extra_packs tables for per-agent
+/// scenario assignment and extra pack layering.
+fn migrate_v6_to_v7(conn: &Connection) -> Result<()> {
+    conn.execute_batch(AGENT_CONFIG_SCHEMA_DDL)?;
     Ok(())
 }
 
@@ -707,6 +731,114 @@ mod tests {
         let count: i32 = conn
             .query_row(
                 "SELECT COUNT(*) FROM scenario_plugins WHERE scenario_id = 'sc1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn fresh_db_creates_agent_config_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+
+        // Verify agent_configs table exists
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM agent_configs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // Verify agent_extra_packs table exists
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM agent_extra_packs", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn v6_to_v7_migration_adds_agent_config_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conn.pragma_update(None, "user_version", 6).unwrap();
+        // Create prerequisite tables needed by FK references
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS scenarios (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+             CREATE TABLE IF NOT EXISTS packs (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
+                 description TEXT, icon TEXT, color TEXT, sort_order INTEGER DEFAULT 0,
+                 created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE IF NOT EXISTS managed_plugins (id TEXT PRIMARY KEY,
+                 plugin_key TEXT NOT NULL UNIQUE, display_name TEXT,
+                 plugin_data TEXT NOT NULL, created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE IF NOT EXISTS scenario_plugins (
+                 scenario_id TEXT NOT NULL, plugin_id TEXT NOT NULL,
+                 enabled INTEGER NOT NULL DEFAULT 1,
+                 PRIMARY KEY(scenario_id, plugin_id));",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        // Insert test data to verify tables work
+        conn.execute(
+            "INSERT INTO scenarios (id, name) VALUES ('sc1', 'test-scenario')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_configs (tool_key, scenario_id, managed, updated_at) VALUES ('claude', 'sc1', 1, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO packs (id, name, sort_order, created_at, updated_at) VALUES ('p1', 'test-pack', 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_extra_packs (tool_key, pack_id) VALUES ('claude', 'p1')",
+            [],
+        )
+        .unwrap();
+
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, LATEST_VERSION);
+    }
+
+    #[test]
+    fn agent_extra_packs_cascade_on_pack_delete() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO packs (id, name, sort_order, created_at, updated_at) VALUES ('p1', 'test-pack', 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_extra_packs (tool_key, pack_id) VALUES ('claude', 'p1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_extra_packs (tool_key, pack_id) VALUES ('windsurf', 'p1')",
+            [],
+        )
+        .unwrap();
+
+        // Delete the pack — should cascade to agent_extra_packs
+        conn.execute("DELETE FROM packs WHERE id = 'p1'", [])
+            .unwrap();
+
+        let count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_extra_packs WHERE pack_id = 'p1'",
                 [],
                 |row| row.get(0),
             )
