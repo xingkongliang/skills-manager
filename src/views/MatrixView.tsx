@@ -9,6 +9,7 @@ import {
   X,
   ToggleLeft,
   ToggleRight,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "../utils";
@@ -16,7 +17,6 @@ import { useApp } from "../context/AppContext";
 import { getErrorMessage } from "../lib/error";
 import * as api from "../lib/tauri";
 import type {
-  PackRecord,
   PackSkillRecord,
   ToolInfo,
   SkillToolToggle,
@@ -24,19 +24,23 @@ import type {
 
 // ── Types ──
 
-interface PackWithSkills {
-  pack: PackRecord;
+interface SkillGroup {
+  id: string; // pack.id or "__ungrouped__"
+  name: string;
+  icon: "pack" | "ungrouped";
   skills: PackSkillRecord[];
 }
+
+const UNGROUPED_ID = "__ungrouped__";
 
 // ── Component ──
 
 export function MatrixView() {
   const { activeScenario, tools, refreshManagedSkills } = useApp();
 
-  const [packs, setPacks] = useState<PackWithSkills[]>([]);
+  const [groups, setGroups] = useState<SkillGroup[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expandedPacks, setExpandedPacks] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [togglingCell, setTogglingCell] = useState<string | null>(null);
 
   // Toggles loaded per skill (skill_id -> SkillToolToggle[])
@@ -50,32 +54,122 @@ export function MatrixView() {
     [tools],
   );
 
+  // All effective skill IDs (for toggle-all operations)
+  const allSkillIds = useMemo(
+    () => groups.flatMap((g) => g.skills.map((s) => s.id)),
+    [groups],
+  );
+
   // ── Data loading ──
 
-  const loadPacks = useCallback(async () => {
+  const loadData = useCallback(async () => {
+    if (!activeScenario) {
+      setGroups([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
-      const allPacks = await api.getAllPacks();
-      const packsWithSkills: PackWithSkills[] = await Promise.all(
+      // Load effective skills and all packs in parallel
+      const [effectiveSkills, allPacks] = await Promise.all([
+        api.getEffectiveSkillsForScenario(activeScenario.id),
+        api.getAllPacks(),
+      ]);
+
+      // Load skills for each pack
+      const packSkillsMap = new Map<string, PackSkillRecord[]>();
+      await Promise.all(
         allPacks.map(async (pack) => {
           const skills = await api.getSkillsForPack(pack.id);
-          return { pack, skills };
+          packSkillsMap.set(pack.id, skills);
         }),
       );
-      setPacks(packsWithSkills);
+
+      // Build a set of effective skill IDs for quick lookup
+      const effectiveIds = new Set(effectiveSkills.map((s) => s.id));
+
+      // Track which effective skills are claimed by a pack
+      const claimedIds = new Set<string>();
+
+      // Build groups from packs (only include skills that are effective)
+      const packGroups: SkillGroup[] = [];
+      for (const pack of allPacks) {
+        const packSkills = packSkillsMap.get(pack.id) ?? [];
+        const effectivePackSkills = packSkills.filter((s) =>
+          effectiveIds.has(s.id),
+        );
+        if (effectivePackSkills.length === 0) continue;
+
+        for (const s of effectivePackSkills) {
+          claimedIds.add(s.id);
+        }
+
+        packGroups.push({
+          id: pack.id,
+          name: pack.name,
+          icon: "pack",
+          skills: effectivePackSkills,
+        });
+      }
+
+      // Build ungrouped group from effective skills not in any pack
+      const ungroupedSkills = effectiveSkills.filter(
+        (s) => !claimedIds.has(s.id),
+      );
+
+      const result: SkillGroup[] = [...packGroups];
+      if (ungroupedSkills.length > 0) {
+        result.push({
+          id: UNGROUPED_ID,
+          name: "Ungrouped",
+          icon: "ungrouped",
+          skills: ungroupedSkills,
+        });
+      }
+
+      setGroups(result);
     } catch (error) {
-      toast.error(getErrorMessage(error, "Failed to load packs"));
+      toast.error(getErrorMessage(error, "Failed to load matrix data"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeScenario]);
 
   useEffect(() => {
-    loadPacks();
-  }, [loadPacks]);
+    loadData();
+  }, [loadData]);
 
-  // Load toggles for skills in expanded packs
-  const loadSkillToggles = useCallback(
+  // Load toggles for ALL effective skills upfront when groups change
+  const loadAllToggles = useCallback(async () => {
+    if (!activeScenario || groups.length === 0) return;
+
+    const allIds = groups.flatMap((g) => g.skills.map((s) => s.id));
+    if (allIds.length === 0) return;
+
+    const results: Record<string, SkillToolToggle[]> = {};
+    await Promise.all(
+      allIds.map(async (skillId) => {
+        try {
+          const toggles = await api.getSkillToolToggles(
+            skillId,
+            activeScenario.id,
+          );
+          results[skillId] = toggles;
+        } catch {
+          // skill may have been removed between load and toggle fetch
+        }
+      }),
+    );
+    setSkillToggles(results);
+  }, [activeScenario, groups]);
+
+  useEffect(() => {
+    loadAllToggles();
+  }, [loadAllToggles]);
+
+  // Reload toggles for specific skills (used after mutations)
+  const reloadSkillToggles = useCallback(
     async (skillIds: string[]) => {
       if (!activeScenario) return;
       const results: Record<string, SkillToolToggle[]> = {};
@@ -88,7 +182,7 @@ export function MatrixView() {
             );
             results[skillId] = toggles;
           } catch {
-            // skill may not be in this scenario
+            // ignore
           }
         }),
       );
@@ -97,42 +191,25 @@ export function MatrixView() {
     [activeScenario],
   );
 
-  // When a pack is expanded, load its skill toggles
-  useEffect(() => {
-    const skillIds: string[] = [];
-    for (const { pack, skills } of packs) {
-      if (expandedPacks.has(pack.id)) {
-        for (const skill of skills) {
-          if (!skillToggles[skill.id]) {
-            skillIds.push(skill.id);
-          }
-        }
-      }
-    }
-    if (skillIds.length > 0) {
-      loadSkillToggles(skillIds);
-    }
-  }, [expandedPacks, packs, loadSkillToggles, skillToggles]);
-
   // ── Helpers ──
 
-  const togglePackExpand = (packId: string) => {
-    setExpandedPacks((prev) => {
+  const toggleGroupExpand = (groupId: string) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(packId)) next.delete(packId);
-      else next.add(packId);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
       return next;
     });
   };
 
-  /** Calculate pack-level status for a tool column: all/some/none enabled */
-  const getPackToolStatus = (
-    packSkills: PackSkillRecord[],
+  /** Calculate group-level status for a tool column: all/some/none enabled */
+  const getGroupToolStatus = (
+    groupSkills: PackSkillRecord[],
     toolKey: string,
   ): "all" | "some" | "none" => {
     let enabled = 0;
     let total = 0;
-    for (const skill of packSkills) {
+    for (const skill of groupSkills) {
       const toggles = skillToggles[skill.id];
       if (!toggles) continue;
       const toggle = toggles.find((t) => t.tool === toolKey);
@@ -176,17 +253,17 @@ export function MatrixView() {
     }
   };
 
-  const handleTogglePackTool = async (
-    pack: PackWithSkills,
+  const handleToggleGroupTool = async (
+    group: SkillGroup,
     toolKey: string,
   ) => {
     if (!activeScenario) return;
-    const status = getPackToolStatus(pack.skills, toolKey);
+    const status = getGroupToolStatus(group.skills, toolKey);
     const newEnabled = status !== "all";
 
-    setTogglingCell(`pack-${pack.pack.id}-${toolKey}`);
+    setTogglingCell(`group-${group.id}-${toolKey}`);
     try {
-      for (const skill of pack.skills) {
+      for (const skill of group.skills) {
         const toggles = skillToggles[skill.id];
         if (!toggles) continue;
         const toggle = toggles.find((t) => t.tool === toolKey);
@@ -199,16 +276,16 @@ export function MatrixView() {
           );
         }
       }
-      // Reload all toggles for this pack's skills
-      await loadSkillToggles(pack.skills.map((s) => s.id));
+      // Reload all toggles for this group's skills
+      await reloadSkillToggles(group.skills.map((s) => s.id));
       await refreshManagedSkills();
       toast.success(
         newEnabled
-          ? `${pack.pack.name} enabled for ${toolKey}`
-          : `${pack.pack.name} disabled for ${toolKey}`,
+          ? `${group.name} enabled for ${toolKey}`
+          : `${group.name} disabled for ${toolKey}`,
       );
     } catch (error) {
-      toast.error(getErrorMessage(error, "Failed to toggle pack"));
+      toast.error(getErrorMessage(error, "Failed to toggle group"));
     } finally {
       setTogglingCell(null);
     }
@@ -218,7 +295,7 @@ export function MatrixView() {
     if (!activeScenario) return;
     // Determine if we should enable or disable all
     let allEnabled = true;
-    for (const { skills } of packs) {
+    for (const { skills } of groups) {
       for (const skill of skills) {
         const toggles = skillToggles[skill.id];
         if (!toggles) continue;
@@ -236,7 +313,7 @@ export function MatrixView() {
 
     setTogglingCell(`col-${toolKey}`);
     try {
-      for (const { skills } of packs) {
+      for (const { skills } of groups) {
         for (const skill of skills) {
           const toggles = skillToggles[skill.id];
           if (!toggles) continue;
@@ -252,10 +329,7 @@ export function MatrixView() {
         }
       }
       // Reload all skill toggles
-      const allSkillIds = packs.flatMap(({ skills }) =>
-        skills.map((s) => s.id),
-      );
-      await loadSkillToggles(allSkillIds);
+      await reloadSkillToggles(allSkillIds);
       await refreshManagedSkills();
       toast.success(
         newEnabled
@@ -271,15 +345,15 @@ export function MatrixView() {
 
   // ── Render helpers ──
 
-  const renderPackToolCell = (pack: PackWithSkills, tool: ToolInfo) => {
-    const status = getPackToolStatus(pack.skills, tool.key);
+  const renderGroupToolCell = (group: SkillGroup, tool: ToolInfo) => {
+    const status = getGroupToolStatus(group.skills, tool.key);
     const isToggling =
-      togglingCell === `pack-${pack.pack.id}-${tool.key}`;
+      togglingCell === `group-${group.id}-${tool.key}`;
 
     return (
       <td key={tool.key} className="px-2 py-2 text-center">
         <button
-          onClick={() => handleTogglePackTool(pack, tool.key)}
+          onClick={() => handleToggleGroupTool(group, tool.key)}
           disabled={isToggling || !activeScenario}
           className={cn(
             "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
@@ -293,10 +367,10 @@ export function MatrixView() {
           )}
           title={
             status === "all"
-              ? `All skills in ${pack.pack.name} enabled for ${tool.display_name}`
+              ? `All skills in ${group.name} enabled for ${tool.display_name}`
               : status === "some"
-                ? `Some skills in ${pack.pack.name} enabled for ${tool.display_name}`
-                : `No skills in ${pack.pack.name} enabled for ${tool.display_name}`
+                ? `Some skills in ${group.name} enabled for ${tool.display_name}`
+                : `No skills in ${group.name} enabled for ${tool.display_name}`
           }
         >
           {isToggling ? (
@@ -378,7 +452,7 @@ export function MatrixView() {
     );
   }
 
-  if (packs.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="app-page">
         <div className="app-page-header">
@@ -390,10 +464,11 @@ export function MatrixView() {
         <div className="flex flex-1 flex-col items-center justify-center pb-20 text-center">
           <Package className="mb-4 h-12 w-12 text-faint" />
           <h3 className="mb-1.5 text-[14px] font-semibold text-tertiary">
-            No packs configured
+            No skills in this scenario
           </h3>
           <p className="text-[13px] text-muted">
-            Create packs and assign skills to see the agent matrix view.
+            Add skills or packs to the active scenario to see the agent matrix
+            view.
           </p>
         </div>
       </div>
@@ -422,13 +497,15 @@ export function MatrixView() {
     );
   }
 
+  const totalSkills = groups.reduce((sum, g) => sum + g.skills.length, 0);
+
   return (
     <div className="app-page">
       <div className="app-page-header pr-2 pb-1">
         <h1 className="app-page-title flex items-center gap-2">
           <Grid3X3 className="h-5 w-5 text-accent" />
           Agent Matrix
-          <span className="app-badge">{packs.length} packs</span>
+          <span className="app-badge">{totalSkills} skills</span>
         </h1>
         {activeScenario && (
           <p className="app-page-subtitle text-tertiary">
@@ -476,18 +553,17 @@ export function MatrixView() {
             </tr>
           </thead>
           <tbody>
-            {packs.map(({ pack, skills }) => {
-              const isExpanded = expandedPacks.has(pack.id);
-              const packData = { pack, skills };
+            {groups.map((group) => {
+              const isExpanded = expandedGroups.has(group.id);
 
               return (
-                <PackRows
-                  key={pack.id}
-                  packData={packData}
+                <GroupRows
+                  key={group.id}
+                  group={group}
                   isExpanded={isExpanded}
                   columns={columns}
-                  onToggleExpand={() => togglePackExpand(pack.id)}
-                  renderPackToolCell={renderPackToolCell}
+                  onToggleExpand={() => toggleGroupExpand(group.id)}
+                  renderGroupToolCell={renderGroupToolCell}
                   renderSkillToolCell={renderSkillToolCell}
                 />
               );
@@ -501,31 +577,31 @@ export function MatrixView() {
 
 // ── Sub-components ──
 
-interface PackRowsProps {
-  packData: PackWithSkills;
+interface GroupRowsProps {
+  group: SkillGroup;
   isExpanded: boolean;
   columns: ToolInfo[];
   onToggleExpand: () => void;
-  renderPackToolCell: (pack: PackWithSkills, tool: ToolInfo) => React.ReactNode;
+  renderGroupToolCell: (group: SkillGroup, tool: ToolInfo) => React.ReactNode;
   renderSkillToolCell: (
     skill: PackSkillRecord,
     tool: ToolInfo,
   ) => React.ReactNode;
 }
 
-function PackRows({
-  packData,
+function GroupRows({
+  group,
   isExpanded,
   columns,
   onToggleExpand,
-  renderPackToolCell,
+  renderGroupToolCell,
   renderSkillToolCell,
-}: PackRowsProps) {
-  const { pack, skills } = packData;
+}: GroupRowsProps) {
+  const isUngrouped = group.id === UNGROUPED_ID;
 
   return (
     <>
-      {/* Pack header row */}
+      {/* Group header row */}
       <tr
         className={cn(
           "group cursor-pointer border-b border-border-subtle transition-colors hover:bg-surface-hover",
@@ -540,21 +616,31 @@ function PackRows({
             ) : (
               <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" />
             )}
-            <Package className="h-3.5 w-3.5 shrink-0 text-accent" />
-            <span className="text-[13px] font-semibold text-primary">
-              {pack.name}
+            {isUngrouped ? (
+              <FileText className="h-3.5 w-3.5 shrink-0 text-muted" />
+            ) : (
+              <Package className="h-3.5 w-3.5 shrink-0 text-accent" />
+            )}
+            <span
+              className={cn(
+                "text-[13px] font-semibold",
+                isUngrouped ? "text-secondary italic" : "text-primary",
+              )}
+            >
+              {group.name}
             </span>
             <span className="text-[12px] text-faint">
-              {skills.length} {skills.length === 1 ? "skill" : "skills"}
+              {group.skills.length}{" "}
+              {group.skills.length === 1 ? "skill" : "skills"}
             </span>
           </div>
         </td>
-        {columns.map((tool) => renderPackToolCell(packData, tool))}
+        {columns.map((tool) => renderGroupToolCell(group, tool))}
       </tr>
 
       {/* Expanded skill rows */}
       {isExpanded &&
-        skills.map((skill) => (
+        group.skills.map((skill) => (
           <tr
             key={skill.id}
             className="border-b border-border-subtle/50 bg-bg-secondary/30"

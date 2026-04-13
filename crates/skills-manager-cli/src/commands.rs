@@ -307,6 +307,11 @@ fn sync_scenario(
         for skill in &skills {
             let source = PathBuf::from(&skill.central_path);
             if !source.exists() {
+                eprintln!(
+                    "  Warning: skipping '{}' — source path does not exist: {}",
+                    skill.name,
+                    source.display()
+                );
                 continue;
             }
             let target_path = skills_dir.join(&skill.name);
