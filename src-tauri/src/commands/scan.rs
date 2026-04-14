@@ -29,15 +29,31 @@ pub async fn scan_local_skills(
         let mut plan = scanner::scan_local_skills_with_adapters(&managed_paths, &adapters)
             .map_err(AppError::io)?;
 
+        // Preserve imported_skill_id and is_native from previous scans
+        let old_discovered = store.get_all_discovered().map_err(AppError::db)?;
         for rec in &mut plan.discovered {
-            if let Some(name) = rec.name_guess.as_deref() {
-                if let Some(existing) = managed_skills.iter().find(|skill| skill.name == name) {
-                    rec.imported_skill_id = Some(existing.id.clone());
+            // Check if this skill was previously discovered with import/native state
+            if let Some(old) = old_discovered.iter().find(|d| {
+                d.tool == rec.tool && d.found_path == rec.found_path
+            }) {
+                if old.imported_skill_id.is_some() {
+                    rec.imported_skill_id = old.imported_skill_id.clone();
+                }
+                if old.is_native {
+                    rec.is_native = true;
+                }
+            }
+            // Also check by name against managed skills
+            if rec.imported_skill_id.is_none() {
+                if let Some(name) = rec.name_guess.as_deref() {
+                    if let Some(existing) = managed_skills.iter().find(|skill| skill.name == name) {
+                        rec.imported_skill_id = Some(existing.id.clone());
+                    }
                 }
             }
         }
 
-        // Clear and repopulate discovered
+        // Clear and repopulate discovered (now with preserved state)
         store.clear_discovered().map_err(AppError::db)?;
         for rec in &plan.discovered {
             store.insert_discovered(rec).map_err(AppError::db)?;
