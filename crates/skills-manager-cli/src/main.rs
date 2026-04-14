@@ -90,6 +90,11 @@ enum PackAction {
 
 #[derive(Subcommand)]
 enum AgentAction {
+    /// Show detailed info about an agent (skills breakdown)
+    Info {
+        /// Agent key (e.g., claude_code)
+        agent: String,
+    },
     /// Add an extra pack to an agent
     AddPack {
         /// Agent key (e.g., claude_code)
@@ -122,6 +127,7 @@ fn main() {
         },
         Commands::Agents => commands::cmd_agents(),
         Commands::Agent { action } => match action {
+            AgentAction::Info { agent } => commands::cmd_agent_info(&agent),
             AgentAction::AddPack { agent, pack } => commands::cmd_agent_add_pack(&agent, &pack),
             AgentAction::RemovePack { agent, pack } => {
                 commands::cmd_agent_remove_pack(&agent, &pack)

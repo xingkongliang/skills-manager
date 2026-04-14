@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::core::{
     error::AppError,
-    skill_store::{PackRecord, SkillRecord, SkillStore},
+    skill_store::{AgentSkillOwnership, PackRecord, SkillRecord, SkillStore},
     tool_adapters,
 };
 
@@ -221,6 +221,22 @@ pub async fn get_agent_extra_packs(
     tauri::async_runtime::spawn_blocking(move || {
         store
             .get_agent_extra_packs(&tool_key)
+            .map_err(AppError::db)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn get_agent_skill_ownership(
+    tool_key: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<AgentSkillOwnership, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let adapter = tool_adapters::find_adapter_with_store(&store, &tool_key)
+            .ok_or_else(|| AppError::not_found(format!("Unknown tool: {tool_key}")))?;
+        store
+            .scan_agent_skill_ownership(&tool_key, &adapter.skills_dir())
             .map_err(AppError::db)
     })
     .await?

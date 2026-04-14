@@ -20,8 +20,8 @@ pub mod tool_adapters;
 // Re-export commonly used types
 pub use error::{AppError, ErrorKind};
 pub use skill_store::{
-    AgentConfigRecord, DiscoveredSkillRecord, ManagedPluginRecord, PackRecord, ProjectRecord,
-    ScenarioPluginRecord, ScenarioRecord, ScenarioSkillToolToggleRecord, SkillRecord, SkillStore,
-    SkillTargetRecord,
+    AgentConfigRecord, AgentSkillOwnership, DiscoveredSkillRecord, ManagedPluginRecord, PackRecord,
+    ProjectRecord, ScenarioPluginRecord, ScenarioRecord, ScenarioSkillToolToggleRecord,
+    SkillRecord, SkillStore, SkillTargetRecord,
 };
 pub use sync_engine::SyncMode;

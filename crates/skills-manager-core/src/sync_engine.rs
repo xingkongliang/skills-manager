@@ -16,14 +16,11 @@ impl SyncMode {
     }
 }
 
-pub fn sync_mode_for_tool(tool_key: &str, configured_mode: Option<&str>) -> SyncMode {
+pub fn sync_mode_for_tool(_tool_key: &str, configured_mode: Option<&str>) -> SyncMode {
     match configured_mode {
         Some("copy") => SyncMode::Copy,
         Some("symlink") => SyncMode::Symlink,
-        _ => match tool_key {
-            "cursor" => SyncMode::Copy,
-            _ => SyncMode::Symlink,
-        },
+        _ => SyncMode::Symlink,
     }
 }
 
@@ -118,8 +115,11 @@ mod tests {
     }
 
     #[test]
-    fn sync_mode_cursor_defaults_to_copy() {
-        assert!(matches!(sync_mode_for_tool("cursor", None), SyncMode::Copy));
+    fn sync_mode_cursor_defaults_to_symlink() {
+        assert!(matches!(
+            sync_mode_for_tool("cursor", None),
+            SyncMode::Symlink
+        ));
     }
 
     #[test]
@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_mode_explicit_symlink_overrides_cursor_default() {
+    fn sync_mode_explicit_symlink_is_respected() {
         assert!(matches!(
             sync_mode_for_tool("cursor", Some("symlink")),
             SyncMode::Symlink
@@ -139,10 +139,10 @@ mod tests {
     }
 
     #[test]
-    fn sync_mode_unknown_config_falls_back_to_tool_default() {
+    fn sync_mode_unknown_config_falls_back_to_symlink() {
         assert!(matches!(
             sync_mode_for_tool("cursor", Some("invalid")),
-            SyncMode::Copy
+            SyncMode::Symlink
         ));
         assert!(matches!(
             sync_mode_for_tool("claude-code", Some("invalid")),

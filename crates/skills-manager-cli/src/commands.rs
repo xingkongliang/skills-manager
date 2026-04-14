@@ -364,6 +364,46 @@ pub fn cmd_agents() -> Result<()> {
     Ok(())
 }
 
+pub fn cmd_agent_info(agent_key: &str) -> Result<()> {
+    let store = open_store()?;
+    let config = store
+        .get_agent_config(agent_key)?
+        .context(format!("Agent '{}' not found", agent_key))?;
+    let adapter = tool_adapters::find_adapter_with_store(&store, agent_key)
+        .context(format!("Unknown tool: {}", agent_key))?;
+    let ownership = store.scan_agent_skill_ownership(agent_key, &adapter.skills_dir())?;
+
+    let scenario_name = config
+        .scenario_id
+        .and_then(|id| {
+            store
+                .get_all_scenarios()
+                .ok()?
+                .into_iter()
+                .find(|s| s.id == id)
+        })
+        .map(|s| s.name)
+        .unwrap_or_else(|| "none".to_string());
+
+    println!("{} ({}):", adapter.display_name, agent_key);
+    println!(
+        "  Scenario:   {} ({} skills)",
+        scenario_name,
+        ownership.managed.len()
+    );
+    println!(
+        "  Discovered: {} skills (not imported)",
+        ownership.discovered.len()
+    );
+    println!("  Native:     {} skills", ownership.native.len());
+    if !ownership.native.is_empty() {
+        for name in &ownership.native {
+            println!("    {}", name);
+        }
+    }
+    Ok(())
+}
+
 pub fn cmd_agent_add_pack(agent: &str, pack_name: &str) -> Result<()> {
     let store = open_store()?;
 
