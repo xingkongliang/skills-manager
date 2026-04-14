@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::central_repo;
 use crate::content_hash;
+use crate::installer;
 use crate::skill_store::SkillStore;
 use crate::sync_engine;
 
@@ -150,6 +151,93 @@ pub fn dedup_all_agents(
     }
 
     results
+}
+
+/// Result of importing a discovered skill with dedup awareness.
+#[derive(Debug, Clone, Serialize)]
+pub enum ImportAction {
+    /// Skill was new -- copied to central store.
+    Imported { skill_id: String },
+    /// Identical skill already in central -- linked discovered record to existing.
+    LinkedToExisting { skill_id: String },
+    /// Same name but different content -- marked as native, not imported.
+    MarkedNative,
+}
+
+/// Import a discovered skill with dedup logic:
+/// - If central store has same name + same hash: link to existing, skip copy.
+/// - If central store has same name + different hash: mark as native.
+/// - If central store doesn't have this name: copy to central, create skill record.
+///
+/// Returns the action taken.
+pub fn import_with_dedup(store: &SkillStore, discovered_id: &str) -> Result<ImportAction> {
+    let discovered = store
+        .get_all_discovered()?
+        .into_iter()
+        .find(|d| d.id == discovered_id)
+        .ok_or_else(|| anyhow::anyhow!("Discovered skill '{}' not found", discovered_id))?;
+
+    let source_path = PathBuf::from(&discovered.found_path);
+    if !source_path.exists() {
+        anyhow::bail!("Source path no longer exists: {}", discovered.found_path);
+    }
+
+    let name = discovered
+        .name_guess
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("Discovered skill has no name_guess"))?;
+
+    let central_skills_dir = central_repo::skills_dir();
+    let central_path = central_skills_dir.join(name);
+
+    if central_path.exists() {
+        let source_hash = content_hash::hash_directory(&source_path)?;
+        let central_hash = content_hash::hash_directory(&central_path)?;
+
+        if source_hash == central_hash {
+            // Already in central with same content. Link the discovered record.
+            if let Some(skill) = store.get_skill_by_central_path(&central_path.to_string_lossy())? {
+                store.link_discovered_to_skill(discovered_id, &skill.id)?;
+                return Ok(ImportAction::LinkedToExisting { skill_id: skill.id });
+            }
+            // Central path exists on disk but no DB record -- fall through to import.
+        } else {
+            // Different content -- mark as native.
+            store.mark_discovered_as_native(discovered_id)?;
+            return Ok(ImportAction::MarkedNative);
+        }
+    }
+
+    // New skill or no DB record for existing central path -- do a normal import.
+    let install_result = installer::install_from_local(&source_path, Some(name))?;
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let skill_id = uuid::Uuid::new_v4().to_string();
+    let skill_record = crate::skill_store::SkillRecord {
+        id: skill_id.clone(),
+        name: install_result.name.clone(),
+        description: install_result.description.clone(),
+        source_type: "local".to_string(),
+        source_ref: Some(discovered.found_path.clone()),
+        source_ref_resolved: None,
+        source_subpath: None,
+        source_branch: None,
+        source_revision: None,
+        remote_revision: None,
+        central_path: install_result.central_path.to_string_lossy().to_string(),
+        content_hash: Some(install_result.content_hash),
+        enabled: true,
+        created_at: now,
+        updated_at: now,
+        status: "ok".to_string(),
+        update_status: "unknown".to_string(),
+        last_checked_at: None,
+        last_check_error: None,
+    };
+    store.insert_skill(&skill_record)?;
+    store.link_discovered_to_skill(discovered_id, &skill_id)?;
+
+    Ok(ImportAction::Imported { skill_id })
 }
 
 /// Replace a real directory with a symlink to the central store copy.
