@@ -1,6 +1,7 @@
 pub mod central_repo;
 pub mod content_hash;
 pub mod crypto;
+pub mod dedup;
 pub mod error;
 pub mod git_backup;
 pub mod git_fetcher;
@@ -18,6 +19,7 @@ pub mod sync_engine;
 pub mod tool_adapters;
 
 // Re-export commonly used types
+pub use dedup::DedupResult;
 pub use error::{AppError, ErrorKind};
 pub use skill_store::{
     AgentConfigRecord, AgentSkillOwnership, DiscoveredSkillRecord, ManagedPluginRecord, PackRecord,
