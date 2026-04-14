@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { Bot, ToggleLeft, ToggleRight } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, Download, Eye, Puzzle, ToggleLeft, ToggleRight } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import * as api from "../lib/tauri";
-import type { AgentConfigDto, PackRecord, PackSkillRecord } from "../lib/tauri";
+import type { AgentConfigDto, AgentSkillOwnership, PackRecord, PackSkillRecord } from "../lib/tauri";
 
 // ─── Skill Tag Cloud ─────────────────────────────────────────────────────────
 
@@ -59,6 +59,43 @@ function SkillProgressBar({ scenarioCount, extraCount, total }: SkillProgressBar
   );
 }
 
+// ─── Breakdown Row ──────────────────────────────────────────────────────────
+
+interface BreakdownRowProps {
+  icon: React.ReactNode;
+  label: string;
+  count: number;
+  suffix?: string;
+  expanded: boolean;
+  onToggle: () => void;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}
+
+function BreakdownRow({ icon, label, count, suffix, expanded, onToggle, action, children }: BreakdownRowProps) {
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className="flex w-full items-center justify-between px-4 py-3 hover:bg-surface-hover transition-colors text-left"
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-muted shrink-0" />}
+          {icon}
+          <span className="text-[13px] font-medium text-secondary">{label}</span>
+          <span className="text-[12px] text-muted">
+            {count}{suffix ? ` (${suffix})` : ""}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {action}
+        </div>
+      </button>
+      {expanded && count > 0 && children}
+    </div>
+  );
+}
+
 // ─── Main View ───────────────────────────────────────────────────────────────
 
 export function AgentDetail() {
@@ -75,20 +112,24 @@ export function AgentDetail() {
   const [pendingScenarioId, setPendingScenarioId] = useState<string>("");
   const [togglingPack, setTogglingPack] = useState<string | null>(null);
   const [togglingManaged, setTogglingManaged] = useState(false);
+  const [ownership, setOwnership] = useState<AgentSkillOwnership | null>(null);
+  const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
   const loadAgent = useCallback(async () => {
     if (!toolKey) return;
     try {
-      const [cfg, skills, packs, all] = await Promise.all([
+      const [cfg, skills, packs, all, own] = await Promise.all([
         api.getAgentConfig(toolKey),
         api.getEffectiveSkillsForAgent(toolKey),
         api.getAgentExtraPacks(toolKey),
         api.getAllPacks(),
+        api.getAgentSkillOwnership(toolKey).catch(() => null),
       ]);
       setAgent(cfg);
       setEffectiveSkills(skills);
       setExtraPacks(packs);
       setAllPacks(all);
+      setOwnership(own);
       setPendingScenarioId(cfg?.scenario_id ?? "");
 
       // Load the base scenario's packs so we can exclude them from extra picks
@@ -359,6 +400,97 @@ export function AgentDetail() {
           <SkillTagCloud skills={effectiveSkills} extraPackIds={extraPackIds} />
         </div>
       </div>
+
+      {/* Skills Breakdown */}
+      {ownership && (
+        <div>
+          <h2 className="app-section-title mb-3">Skills Breakdown</h2>
+          <div className="app-panel overflow-hidden divide-y divide-border-subtle">
+            {/* Managed */}
+            <BreakdownRow
+              icon={<Puzzle className="h-3.5 w-3.5 text-emerald-400" />}
+              label="SM-Managed"
+              count={ownership.managed.length}
+              expanded={expandedSection === "managed"}
+              onToggle={() => setExpandedSection(expandedSection === "managed" ? null : "managed")}
+            >
+              <div className="flex flex-wrap gap-1.5 px-4 pb-3">
+                {ownership.managed.map((s) => (
+                  <span
+                    key={s.id}
+                    className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 text-[11px] font-medium text-emerald-400"
+                    title={s.description || undefined}
+                  >
+                    {s.name}
+                  </span>
+                ))}
+              </div>
+            </BreakdownRow>
+
+            {/* Discovered */}
+            <BreakdownRow
+              icon={<Eye className="h-3.5 w-3.5 text-amber-400" />}
+              label="Discovered"
+              count={ownership.discovered.length}
+              suffix="not imported"
+              expanded={expandedSection === "discovered"}
+              onToggle={() => setExpandedSection(expandedSection === "discovered" ? null : "discovered")}
+              action={
+                ownership.discovered.length > 0 ? (
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      try {
+                        await api.importAllDiscovered();
+                        toast.success("Imported all discovered skills");
+                        await loadAgent();
+                      } catch {
+                        toast.error("Failed to import discovered skills");
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
+                  >
+                    <Download className="h-3 w-3" />
+                    Import All
+                  </button>
+                ) : undefined
+              }
+            >
+              <div className="flex flex-wrap gap-1.5 px-4 pb-3">
+                {ownership.discovered.map((d) => (
+                  <span
+                    key={d.id}
+                    className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/5 px-2 py-0.5 text-[11px] font-medium text-amber-400"
+                    title={d.found_path}
+                  >
+                    {d.name_guess || "(unnamed)"}
+                  </span>
+                ))}
+              </div>
+            </BreakdownRow>
+
+            {/* Native */}
+            <BreakdownRow
+              icon={<Bot className="h-3.5 w-3.5 text-muted" />}
+              label="Native"
+              count={ownership.native.length}
+              expanded={expandedSection === "native"}
+              onToggle={() => setExpandedSection(expandedSection === "native" ? null : "native")}
+            >
+              <div className="flex flex-wrap gap-1.5 px-4 pb-3">
+                {ownership.native.map((name) => (
+                  <span
+                    key={name}
+                    className="inline-flex items-center rounded-full border border-border-subtle bg-surface-hover px-2 py-0.5 text-[11px] font-medium text-muted"
+                  >
+                    {name}
+                  </span>
+                ))}
+              </div>
+            </BreakdownRow>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -637,6 +637,23 @@ export const getEffectiveSkillsForAgent = (toolKey: string) =>
 export const getAgentExtraPacks = (toolKey: string) =>
   invoke<PackRecord[]>("get_agent_extra_packs", { toolKey });
 
+export interface AgentSkillOwnership {
+  managed: PackSkillRecord[];
+  discovered: {
+    id: string;
+    tool: string;
+    found_path: string;
+    name_guess: string | null;
+    fingerprint: string | null;
+    found_at: number;
+    imported_skill_id: string | null;
+  }[];
+  native: string[];
+}
+
+export const getAgentSkillOwnership = (toolKey: string) =>
+  invoke<AgentSkillOwnership>("get_agent_skill_ownership", { toolKey });
+
 // ── Plugins (Phase 3 — stubs until backend is merged) ──
 
 export interface ManagedPlugin {
