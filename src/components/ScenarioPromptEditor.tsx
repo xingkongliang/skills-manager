@@ -182,6 +182,7 @@ export const ScenarioPromptEditor = forwardRef<
         );
         let created = 0;
         let skipped = 0;
+        let failed = 0;
         const newRecipes: typeof recipes = [];
         for (const r of results) {
           if (r.status === "fulfilled") {
@@ -189,14 +190,18 @@ export const ScenarioPromptEditor = forwardRef<
             newRecipes.push(r.value);
           } else {
             const errMsg = getErrorMessage(r.reason, "");
-            if (!errMsg.includes("UNIQUE")) {
+            if (errMsg.includes("UNIQUE")) {
+              skipped++;
+            } else {
+              failed++;
               console.error("[AI Generate Recipe]", errMsg);
             }
-            skipped++;
           }
         }
         setRecipes((prev) => [...prev, ...newRecipes]);
-        if (created > 0 || skipped > 0) {
+        if (failed > 0) {
+          toast.warning(t("mySkills.aiGeneratePromptWithRecipes", { created, skipped: skipped + failed }));
+        } else if (created > 0 || skipped > 0) {
           toast.success(t("mySkills.aiGeneratePromptWithRecipes", { created, skipped }));
         }
       } else {

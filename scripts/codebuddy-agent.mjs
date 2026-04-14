@@ -127,10 +127,13 @@ function formatResult(task, rawText) {
       // Expected shape: { prompt: string, recipes: [{ name, prompt_template }] }
       const parsed = extractJson(text);
       if (parsed && typeof parsed.prompt === "string") {
+        const prompt = parsed.prompt.trim().slice(0, MAX_PROMPT);
         const recipes = Array.isArray(parsed.recipes)
-          ? parsed.recipes.filter((r) => r && typeof r.name === "string" && typeof r.prompt_template === "string")
+          ? parsed.recipes
+              .filter((r) => r && typeof r.name === "string" && typeof r.prompt_template === "string")
+              .map((r) => ({ ...r, prompt_template: r.prompt_template.trim().slice(0, MAX_PROMPT) }))
           : [];
-        return { prompt: parsed.prompt, recipes };
+        return { prompt, recipes };
       }
       // Fallback: treat as plain text (backward compatibility)
       if (text.length <= MAX_PROMPT) return { prompt: text };
@@ -191,7 +194,6 @@ async function main() {
   }
 
   const { task, apiKey, payload, internetEnvironment } = input;
-  if (apiKey) { process.stderr.write(`[agent] apiKey received, len=${apiKey.length}\n`); }
 
   if (!PROMPTS[task]) {
     console.log(JSON.stringify({ ok: false, error: `Unknown task: ${task}` }));

@@ -58,7 +58,7 @@ pub async fn invoke_codebuddy_agent(
         .filter(|k| !k.is_empty())
         .ok_or_else(|| AppError::invalid_input("CodeBuddy API key not configured"))?;
 
-    log::info!("[AI] using api_key len={}, env={:?}", api_key.len(), internet_env);
+    log::debug!("[AI] task={}, env={:?}", task, internet_env);
 
     let script_path = resolve_script_path(&app)?;
 
