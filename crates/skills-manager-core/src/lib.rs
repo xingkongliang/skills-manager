@@ -8,6 +8,7 @@ pub mod git_fetcher;
 pub mod install_cancel;
 pub mod installer;
 pub mod migrations;
+pub mod pack_seeder;
 pub mod plugins;
 pub mod project_scanner;
 pub mod scanner;
@@ -21,6 +22,7 @@ pub mod tool_adapters;
 // Re-export commonly used types
 pub use dedup::DedupResult;
 pub use error::{AppError, ErrorKind};
+pub use pack_seeder::SeedResult;
 pub use skill_store::{
     AgentConfigRecord, AgentSkillOwnership, DiscoveredSkillRecord, ManagedPluginRecord, PackRecord,
     ProjectRecord, ScenarioPluginRecord, ScenarioRecord, ScenarioSkillToolToggleRecord,
