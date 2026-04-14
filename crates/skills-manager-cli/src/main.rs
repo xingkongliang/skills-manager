@@ -86,6 +86,10 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+
+    /// Import orphan skills from central store that have no DB record
+    #[command(alias = "fo")]
+    FixOrphans,
 }
 
 #[derive(Subcommand)]
@@ -153,6 +157,7 @@ fn main() {
         },
         Commands::Dedup { apply, agent } => commands::cmd_dedup(apply, agent.as_deref()),
         Commands::SeedPacks { force } => commands::cmd_seed_packs(force),
+        Commands::FixOrphans => commands::cmd_fix_orphans(),
     };
 
     if let Err(e) = result {

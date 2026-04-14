@@ -37,6 +37,12 @@ fn is_symlink_to_central(path: &Path) -> bool {
     false
 }
 
+/// Skip plugin directories — managed by plugin system, not SM.
+fn is_plugin_path(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    path_str.contains("/.claude/plugins/") || path_str.contains("\\.claude\\plugins\\")
+}
+
 #[allow(dead_code)]
 pub fn scan_local_skills(managed_paths: &[String]) -> Result<ScanPlan> {
     scan_local_skills_with_adapters(managed_paths, &tool_adapters::default_tool_adapters())
@@ -73,6 +79,10 @@ pub fn scan_local_skills_with_adapters(
                 }
 
                 if is_symlink_to_central(&path) {
+                    continue;
+                }
+
+                if is_plugin_path(&path) {
                     continue;
                 }
 

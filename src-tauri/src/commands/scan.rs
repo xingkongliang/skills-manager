@@ -57,6 +57,19 @@ pub async fn scan_local_skills(
                 }
             }
 
+            // 2b. When matching by hash, also preserve is_native from old scan
+            if !rec.is_native {
+                if let Some(old) = old_discovered.iter().find(|d| {
+                    d.fingerprint.as_deref() == rec.fingerprint.as_deref()
+                        && d.fingerprint.is_some()
+                        && d.tool == rec.tool
+                }) {
+                    if old.is_native {
+                        rec.is_native = true;
+                    }
+                }
+            }
+
             // 3. Fallback: match by name (for skills without hash)
             if rec.imported_skill_id.is_none() {
                 if let Some(name) = rec.name_guess.as_deref() {

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::central_repo;
 use crate::content_hash;
 use crate::installer;
+use crate::skill_metadata;
 use crate::skill_store::SkillStore;
 use crate::sync_engine;
 
@@ -238,6 +239,66 @@ pub fn import_with_dedup(store: &SkillStore, discovered_id: &str) -> Result<Impo
     store.link_discovered_to_skill(discovered_id, &skill_id)?;
 
     Ok(ImportAction::Imported { skill_id })
+}
+
+/// Scan ~/.skills-manager/skills/ for directories that have no matching
+/// record in the `skills` table. For each orphan, create a DB record so
+/// SM knows about it. Returns the number of newly imported orphans.
+pub fn import_orphan_central_skills(store: &SkillStore) -> Result<usize> {
+    let central_dir = central_repo::skills_dir();
+    if !central_dir.exists() {
+        return Ok(0);
+    }
+
+    let all_skills = store.get_all_skills()?;
+    let known_names: std::collections::HashSet<String> =
+        all_skills.iter().map(|s| s.name.clone()).collect();
+
+    let mut imported = 0;
+    let entries = std::fs::read_dir(&central_dir)
+        .with_context(|| format!("Failed to read central skills dir: {:?}", central_dir))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().trim().to_string();
+        if name.is_empty() || known_names.contains(&name) {
+            continue;
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp_millis();
+        let hash = content_hash::hash_directory(&path).ok();
+        let meta = skill_metadata::parse_skill_md(&path);
+
+        let record = crate::skill_store::SkillRecord {
+            id,
+            name: name.clone(),
+            description: meta.description,
+            source_type: "import".to_string(),
+            source_ref: Some(path.to_string_lossy().to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: path.to_string_lossy().to_string(),
+            content_hash: hash,
+            enabled: true,
+            created_at: now,
+            updated_at: now,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: Some(now),
+            last_check_error: None,
+        };
+        store.insert_skill(&record)?;
+        imported += 1;
+    }
+
+    Ok(imported)
 }
 
 /// Replace a real directory with a symlink to the central store copy.

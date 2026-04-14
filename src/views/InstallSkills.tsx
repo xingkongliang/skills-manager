@@ -1283,7 +1283,7 @@ export function InstallSkills() {
                   <Loader2 className="h-4 w-4 animate-spin" />
                   <span className="text-[13px]">{t("install.scan.scanning")}</span>
                 </div>
-              ) : scanResult && scanGroups.length === 0 ? (
+              ) : scanResult && pendingGroups.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-center">
                   <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-surface-hover">
                     <FolderSearch className="h-5 w-5 text-muted" />
@@ -1296,7 +1296,7 @@ export function InstallSkills() {
               ) : (
                 <>
                   <div className="app-panel-muted overflow-hidden">
-                    {scanGroups.map((group) => {
+                    {pendingGroups.map((group) => {
                       const [primaryLocation, ...otherLocations] = group.locations;
                       const primaryPath = primaryLocation?.found_path;
                       const isImporting = !!primaryPath && importingPaths.has(primaryPath);

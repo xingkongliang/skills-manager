@@ -598,6 +598,17 @@ fn initialize_startup_scenario(store: &Arc<core::skill_store::SkillStore>) -> Re
         }
     }
 
+    // Import orphan central skills (directories in ~/.skills-manager/skills/ with no DB record)
+    match core::dedup::import_orphan_central_skills(store) {
+        Ok(0) => {} // No orphans, nothing to do
+        Ok(n) => {
+            log::info!("Imported {} orphan central skills into DB", n);
+        }
+        Err(e) => {
+            log::warn!("Failed to import orphan central skills: {}", e);
+        }
+    }
+
     commands::scenarios::sync_scenario_skills(store, &desired_active).map_err(|e| e.to_string())?;
     Ok(())
 }

@@ -778,3 +778,20 @@ pub fn cmd_seed_packs(force: bool) -> Result<()> {
 
     Ok(())
 }
+
+// ── Fix Orphans command ────────────────────────────────
+
+pub fn cmd_fix_orphans() -> Result<()> {
+    let store = open_store()?;
+
+    println!("Scanning central store for orphan skills...");
+    let imported = dedup::import_orphan_central_skills(&store)?;
+
+    if imported == 0 {
+        println!("No orphans found. All central skills have DB records.");
+    } else {
+        println!("Imported {} orphan skill(s) into the database.", imported);
+    }
+
+    Ok(())
+}
