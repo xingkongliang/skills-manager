@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::core::{
+    dedup,
     error::AppError,
     skill_store::{AgentSkillOwnership, PackRecord, SkillRecord, SkillStore},
     tool_adapters,
@@ -240,4 +241,34 @@ pub async fn get_agent_skill_ownership(
             .map_err(AppError::db)
     })
     .await?
+}
+
+#[tauri::command]
+pub async fn dedup_agent_skills(
+    tool_key: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<dedup::DedupResult, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let adapter = tool_adapters::find_adapter_with_store(&store, &tool_key)
+            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", tool_key)))?;
+        let skills_dir = adapter.skills_dir();
+        dedup::dedup_agent_skills(&store, &tool_key, &skills_dir, false)
+            .map_err(AppError::internal)
+    })
+    .await
+    .map_err(AppError::internal)?
+}
+
+#[tauri::command]
+pub async fn dedup_all_agents(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<(String, dedup::DedupResult)>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let adapters = tool_adapters::enabled_installed_adapters(&store);
+        Ok(dedup::dedup_all_agents(&store, &adapters, false))
+    })
+    .await
+    .map_err(AppError::internal)?
 }
