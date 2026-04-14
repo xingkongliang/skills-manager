@@ -509,6 +509,9 @@ pub fn run() {
             commands::agents::get_agent_skill_ownership,
             commands::agents::dedup_agent_skills,
             commands::agents::dedup_all_agents,
+            commands::agents::import_discovered_skill,
+            commands::agents::mark_skill_as_native,
+            commands::agents::unmark_skill_as_native,
             // Scenarios
             commands::scenarios::get_scenarios,
             commands::scenarios::get_active_scenario,

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { Bot, ChevronDown, ChevronRight, Download, Eye, Puzzle, ToggleLeft, ToggleRight } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, Download, Eye, Layers, Loader2, Puzzle, Shield, ToggleLeft, ToggleRight, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
@@ -114,6 +114,11 @@ export function AgentDetail() {
   const [togglingManaged, setTogglingManaged] = useState(false);
   const [ownership, setOwnership] = useState<AgentSkillOwnership | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
+  const [deduping, setDeduping] = useState(false);
+  const [importingId, setImportingId] = useState<string | null>(null);
+  const [importingAll, setImportingAll] = useState(false);
+  const [markingNativeId, setMarkingNativeId] = useState<string | null>(null);
+  const [unmarkingNativeId, setUnmarkingNativeId] = useState<string | null>(null);
 
   const loadAgent = useCallback(async () => {
     if (!toolKey) return;
@@ -203,6 +208,86 @@ export function AgentDetail() {
     }
   };
 
+  const handleDedup = async () => {
+    if (!toolKey) return;
+    setDeduping(true);
+    try {
+      const result = await api.dedupAgentSkills(toolKey);
+      const parts: string[] = [];
+      if (result.replaced_with_symlink.length > 0)
+        parts.push(`${result.replaced_with_symlink.length} replaced with symlink`);
+      if (result.marked_native.length > 0)
+        parts.push(`${result.marked_native.length} marked native`);
+      if (result.already_linked.length > 0)
+        parts.push(`${result.already_linked.length} already linked`);
+      if (result.errors.length > 0)
+        parts.push(`${result.errors.length} error${result.errors.length !== 1 ? "s" : ""}`);
+      toast.success(parts.length > 0 ? `Dedup: ${parts.join(", ")}` : "Dedup: nothing to do");
+      await loadAgent();
+    } catch {
+      toast.error("Failed to dedup agent skills");
+    } finally {
+      setDeduping(false);
+    }
+  };
+
+  const handleImportDiscovered = async (discoveredId: string, name: string) => {
+    setImportingId(discoveredId);
+    try {
+      await api.importDiscoveredSkill(discoveredId);
+      toast.success(`Imported "${name}"`);
+      await loadAgent();
+    } catch {
+      toast.error(`Failed to import "${name}"`);
+    } finally {
+      setImportingId(null);
+    }
+  };
+
+  const handleImportAllDiscovered = async () => {
+    if (!ownership) return;
+    const nonNative = ownership.discovered.filter((d) => !d.is_native);
+    if (nonNative.length === 0) return;
+    setImportingAll(true);
+    try {
+      for (const d of nonNative) {
+        await api.importDiscoveredSkill(d.id);
+      }
+      toast.success(`Imported ${nonNative.length} discovered skill${nonNative.length !== 1 ? "s" : ""}`);
+      await loadAgent();
+    } catch {
+      toast.error("Failed to import all discovered skills");
+    } finally {
+      setImportingAll(false);
+    }
+  };
+
+  const handleMarkNative = async (discoveredId: string, name: string) => {
+    setMarkingNativeId(discoveredId);
+    try {
+      await api.markSkillAsNative(discoveredId);
+      toast.success(`Marked "${name}" as native`);
+      await loadAgent();
+    } catch {
+      toast.error(`Failed to mark "${name}" as native`);
+    } finally {
+      setMarkingNativeId(null);
+    }
+  };
+
+  const handleUnmarkNative = async (discoveredId: string, name: string) => {
+    setUnmarkingNativeId(discoveredId);
+    try {
+      await api.unmarkSkillAsNative(discoveredId);
+      toast.success(`Unmarked "${name}" as native`);
+      await loadAgent();
+    } catch {
+      toast.error(`Failed to unmark "${name}"`);
+    } finally {
+      setUnmarkingNativeId(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="app-page app-page-narrow">
@@ -259,6 +344,17 @@ export function AgentDetail() {
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {/* Dedup button */}
+            <button
+              onClick={handleDedup}
+              disabled={deduping}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-[12px] font-medium text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
+            >
+              {deduping
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <Layers className="h-3.5 w-3.5" />}
+              Dedup
+            </button>
             {/* Managed toggle */}
             <button
               onClick={handleToggleManaged}
@@ -427,67 +523,126 @@ export function AgentDetail() {
               </div>
             </BreakdownRow>
 
-            {/* Discovered */}
-            <BreakdownRow
-              icon={<Eye className="h-3.5 w-3.5 text-amber-400" />}
-              label="Discovered"
-              count={ownership.discovered.length}
-              suffix="not imported"
-              expanded={expandedSection === "discovered"}
-              onToggle={() => setExpandedSection(expandedSection === "discovered" ? null : "discovered")}
-              action={
-                ownership.discovered.length > 0 ? (
-                  <button
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      try {
-                        await api.importAllDiscovered();
-                        toast.success("Imported all discovered skills");
-                        await loadAgent();
-                      } catch {
-                        toast.error("Failed to import discovered skills");
-                      }
-                    }}
-                    className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
+            {/* Discovered (non-native only) */}
+            {(() => {
+              const nonNative = ownership.discovered.filter((d) => !d.is_native);
+              const nativeFlagged = ownership.discovered.filter((d) => d.is_native);
+              const totalNative = ownership.native.length + nativeFlagged.length;
+              return (
+                <>
+                  <BreakdownRow
+                    icon={<Eye className="h-3.5 w-3.5 text-amber-400" />}
+                    label="Discovered"
+                    count={nonNative.length}
+                    suffix="not imported"
+                    expanded={expandedSection === "discovered"}
+                    onToggle={() => setExpandedSection(expandedSection === "discovered" ? null : "discovered")}
+                    action={
+                      nonNative.length > 0 ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleImportAllDiscovered();
+                          }}
+                          disabled={importingAll}
+                          className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+                        >
+                          {importingAll
+                            ? <Loader2 className="h-3 w-3 animate-spin" />
+                            : <Download className="h-3 w-3" />}
+                          Import All
+                        </button>
+                      ) : undefined
+                    }
                   >
-                    <Download className="h-3 w-3" />
-                    Import All
-                  </button>
-                ) : undefined
-              }
-            >
-              <div className="flex flex-wrap gap-1.5 px-4 pb-3">
-                {ownership.discovered.map((d) => (
-                  <span
-                    key={d.id}
-                    className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/5 px-2 py-0.5 text-[11px] font-medium text-amber-400"
-                    title={d.found_path}
-                  >
-                    {d.name_guess || "(unnamed)"}
-                  </span>
-                ))}
-              </div>
-            </BreakdownRow>
+                    <div className="space-y-1 px-4 pb-3">
+                      {nonNative.map((d) => (
+                        <div
+                          key={d.id}
+                          className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-surface-hover transition-colors"
+                        >
+                          <span
+                            className="text-[12px] font-medium text-amber-400 truncate min-w-0"
+                            title={d.found_path}
+                          >
+                            {d.name_guess || "(unnamed)"}
+                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              onClick={() => handleImportDiscovered(d.id, d.name_guess || "(unnamed)")}
+                              disabled={importingId === d.id || importingAll}
+                              className="inline-flex items-center gap-1 rounded border border-accent-border bg-accent-dark px-2 py-0.5 text-[11px] font-medium text-white hover:bg-accent transition-colors disabled:opacity-50"
+                            >
+                              {importingId === d.id
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <Download className="h-3 w-3" />}
+                              Import
+                            </button>
+                            <button
+                              onClick={() => handleMarkNative(d.id, d.name_guess || "(unnamed)")}
+                              disabled={markingNativeId === d.id}
+                              className="inline-flex items-center gap-1 rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] font-medium text-muted hover:bg-surface-hover hover:text-secondary transition-colors disabled:opacity-50"
+                            >
+                              {markingNativeId === d.id
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <Shield className="h-3 w-3" />}
+                              Mark Native
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </BreakdownRow>
 
-            {/* Native */}
-            <BreakdownRow
-              icon={<Bot className="h-3.5 w-3.5 text-muted" />}
-              label="Native"
-              count={ownership.native.length}
-              expanded={expandedSection === "native"}
-              onToggle={() => setExpandedSection(expandedSection === "native" ? null : "native")}
-            >
-              <div className="flex flex-wrap gap-1.5 px-4 pb-3">
-                {ownership.native.map((name) => (
-                  <span
-                    key={name}
-                    className="inline-flex items-center rounded-full border border-border-subtle bg-surface-hover px-2 py-0.5 text-[11px] font-medium text-muted"
+                  {/* Native */}
+                  <BreakdownRow
+                    icon={<Bot className="h-3.5 w-3.5 text-muted" />}
+                    label="Native"
+                    count={totalNative}
+                    expanded={expandedSection === "native"}
+                    onToggle={() => setExpandedSection(expandedSection === "native" ? null : "native")}
                   >
-                    {name}
-                  </span>
-                ))}
-              </div>
-            </BreakdownRow>
+                    <div className="space-y-1 px-4 pb-3">
+                      {/* Native-flagged discovered skills (have DB records, can un-mark) */}
+                      {nativeFlagged.map((d) => (
+                        <div
+                          key={d.id}
+                          className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-surface-hover transition-colors"
+                        >
+                          <span
+                            className="text-[12px] font-medium text-muted truncate min-w-0"
+                            title={d.found_path}
+                          >
+                            {d.name_guess || "(unnamed)"}
+                          </span>
+                          <button
+                            onClick={() => handleUnmarkNative(d.id, d.name_guess || "(unnamed)")}
+                            disabled={unmarkingNativeId === d.id}
+                            className="inline-flex items-center gap-1 rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] font-medium text-muted hover:bg-surface-hover hover:text-secondary transition-colors disabled:opacity-50 shrink-0"
+                          >
+                            {unmarkingNativeId === d.id
+                              ? <Loader2 className="h-3 w-3 animate-spin" />
+                              : <Undo2 className="h-3 w-3" />}
+                            Un-mark
+                          </button>
+                        </div>
+                      ))}
+                      {/* Filesystem-only native skills (no DB records, display only) */}
+                      {ownership.native.map((name) => (
+                        <div
+                          key={name}
+                          className="flex items-center rounded-lg px-2 py-1.5"
+                        >
+                          <span className="text-[12px] font-medium text-muted">
+                            {name}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </BreakdownRow>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}

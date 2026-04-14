@@ -1,10 +1,12 @@
 use serde::Serialize;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 
 use crate::core::{
-    dedup,
+    central_repo, dedup,
     error::AppError,
+    installer,
     skill_store::{AgentSkillOwnership, PackRecord, SkillRecord, SkillStore},
     tool_adapters,
 };
@@ -271,4 +273,124 @@ pub async fn dedup_all_agents(
     })
     .await
     .map_err(AppError::internal)?
+}
+
+#[tauri::command]
+pub async fn import_discovered_skill(
+    discovered_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let discovered = store
+            .get_discovered_by_id(&discovered_id)
+            .map_err(AppError::db)?
+            .ok_or_else(|| {
+                AppError::not_found(format!("Discovered skill '{}' not found", discovered_id))
+            })?;
+
+        let source_path = PathBuf::from(&discovered.found_path);
+        if !source_path.exists() {
+            return Err(AppError::not_found(format!(
+                "Source path no longer exists: {}",
+                discovered.found_path
+            )));
+        }
+
+        let name = discovered
+            .name_guess
+            .as_deref()
+            .unwrap_or("unnamed-skill");
+
+        let central_path = central_repo::skills_dir().join(name);
+
+        // Check if already exists in central store
+        if let Some(existing) = store
+            .get_skill_by_central_path(&central_path.to_string_lossy())
+            .map_err(AppError::db)?
+        {
+            // Link discovered to existing skill
+            store
+                .link_discovered_to_skill(&discovered_id, &existing.id)
+                .map_err(AppError::db)?;
+
+            // Add to active scenario
+            if let Ok(Some(scenario_id)) = store.get_active_scenario_id() {
+                store.add_skill_to_scenario(&scenario_id, &existing.id).ok();
+            }
+            return Ok(());
+        }
+
+        // Install to central store
+        let result = installer::install_from_local_to_destination(
+            &source_path,
+            Some(name),
+            &central_path,
+        )
+        .map_err(AppError::io)?;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let skill_id = uuid::Uuid::new_v4().to_string();
+        let record = crate::core::skill_store::SkillRecord {
+            id: skill_id.clone(),
+            name: result.name,
+            description: result.description,
+            source_type: "import".to_string(),
+            source_ref: Some(discovered.found_path),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: result.central_path.to_string_lossy().to_string(),
+            content_hash: Some(result.content_hash),
+            enabled: true,
+            created_at: now,
+            updated_at: now,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: Some(now),
+            last_check_error: None,
+        };
+        store.insert_skill(&record).map_err(AppError::db)?;
+        store
+            .link_discovered_to_skill(&discovered_id, &skill_id)
+            .map_err(AppError::db)?;
+
+        // Add to active scenario
+        if let Ok(Some(scenario_id)) = store.get_active_scenario_id() {
+            store.add_skill_to_scenario(&scenario_id, &skill_id).ok();
+        }
+
+        Ok(())
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn mark_skill_as_native(
+    discovered_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store
+            .mark_discovered_as_native(&discovered_id)
+            .map_err(AppError::db)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn unmark_skill_as_native(
+    discovered_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store
+            .unmark_discovered_as_native(&discovered_id)
+            .map_err(AppError::db)
+    })
+    .await?
 }

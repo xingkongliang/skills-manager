@@ -647,12 +647,33 @@ export interface AgentSkillOwnership {
     fingerprint: string | null;
     found_at: number;
     imported_skill_id: string | null;
+    is_native: boolean;
   }[];
   native: string[];
 }
 
 export const getAgentSkillOwnership = (toolKey: string) =>
   invoke<AgentSkillOwnership>("get_agent_skill_ownership", { toolKey });
+
+export interface DedupResult {
+  already_linked: string[];
+  replaced_with_symlink: string[];
+  marked_native: string[];
+  skipped_unknown: string[];
+  errors: string[];
+}
+
+export const dedupAgentSkills = (toolKey: string) =>
+  invoke<DedupResult>("dedup_agent_skills", { toolKey });
+
+export const importDiscoveredSkill = (discoveredId: string) =>
+  invoke<void>("import_discovered_skill", { discoveredId });
+
+export const markSkillAsNative = (discoveredId: string) =>
+  invoke<void>("mark_skill_as_native", { discoveredId });
+
+export const unmarkSkillAsNative = (discoveredId: string) =>
+  invoke<void>("unmark_skill_as_native", { discoveredId });
 
 // ── Plugins (Phase 3 — stubs until backend is merged) ──
 

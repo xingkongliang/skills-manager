@@ -517,6 +517,36 @@ impl SkillStore {
         Ok(())
     }
 
+    pub fn unmark_discovered_as_native(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE discovered_skills SET is_native = 0 WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_discovered_by_id(&self, id: &str) -> Result<Option<DiscoveredSkillRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, tool, found_path, name_guess, fingerprint, found_at, imported_skill_id, is_native
+             FROM discovered_skills WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(DiscoveredSkillRecord {
+                id: row.get(0)?,
+                tool: row.get(1)?,
+                found_path: row.get(2)?,
+                name_guess: row.get(3)?,
+                fingerprint: row.get(4)?,
+                found_at: row.get(5)?,
+                imported_skill_id: row.get(6)?,
+                is_native: row.get::<_, i32>(7)? != 0,
+            })
+        })?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
     pub fn get_native_skills_for_tool(&self, tool: &str) -> Result<Vec<DiscoveredSkillRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
