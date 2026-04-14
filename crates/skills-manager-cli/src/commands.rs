@@ -1,6 +1,8 @@
 use anyhow::{bail, Context, Result};
 use skills_manager_core::skill_store::SkillStore;
-use skills_manager_core::{central_repo, dedup, sync_engine, tool_adapters, ScenarioRecord};
+use skills_manager_core::{
+    central_repo, dedup, pack_seeder, sync_engine, tool_adapters, ScenarioRecord,
+};
 use std::path::PathBuf;
 
 // ── Helpers ──────────────────────────────────────────────
@@ -744,6 +746,35 @@ pub fn cmd_dedup(apply: bool, agent: Option<&str>) -> Result<()> {
     if total_errors > 0 {
         println!("  Errors:          {}", total_errors);
     }
+
+    Ok(())
+}
+
+// ── Seed Packs command ──────────────────────────────────
+
+pub fn cmd_seed_packs(force: bool) -> Result<()> {
+    let store = open_store()?;
+
+    if force {
+        println!("Force-seeding default packs (replacing any existing)...");
+    } else {
+        println!("Seeding default packs...");
+    }
+
+    let result = pack_seeder::seed_default_packs(&store, force)?;
+
+    if result.skipped {
+        println!("Skipped: packs already exist. Use --force to re-seed.");
+        return Ok(());
+    }
+
+    println!("  Packs created:         {}", result.packs_created);
+    println!("  Skills assigned:       {}", result.skills_assigned);
+    println!(
+        "  Scenario-pack links:   {}",
+        result.scenario_packs_assigned
+    );
+    println!("Done.");
 
     Ok(())
 }

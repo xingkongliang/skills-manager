@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::core::{
     error::AppError,
+    pack_seeder::{self, SeedResult},
     skill_store::{PackRecord, SkillRecord, SkillStore},
 };
 
@@ -167,6 +168,18 @@ pub async fn get_effective_skills_for_scenario(
         store
             .get_effective_skills_for_scenario(&scenario_id)
             .map_err(AppError::db)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn seed_default_packs(
+    force: bool,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<SeedResult, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        pack_seeder::seed_default_packs(&store, force).map_err(AppError::db)
     })
     .await?
 }

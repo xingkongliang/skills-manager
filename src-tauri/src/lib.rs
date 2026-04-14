@@ -492,6 +492,7 @@ pub fn run() {
             commands::packs::add_pack_to_scenario,
             commands::packs::remove_pack_from_scenario,
             commands::packs::get_effective_skills_for_scenario,
+            commands::packs::seed_default_packs,
             // Plugins
             commands::plugins::get_managed_plugins,
             commands::plugins::scan_plugins,
@@ -580,6 +581,22 @@ fn initialize_startup_scenario(store: &Arc<core::skill_store::SkillStore>) -> Re
     store
         .init_agent_configs(&adapter_keys)
         .map_err(|e| e.to_string())?;
+
+    // Seed default packs if none exist yet
+    match core::pack_seeder::seed_default_packs(store, false) {
+        Ok(result) if !result.skipped => {
+            log::info!(
+                "Seeded {} default packs ({} skills assigned, {} scenario-pack links)",
+                result.packs_created,
+                result.skills_assigned,
+                result.scenario_packs_assigned,
+            );
+        }
+        Ok(_) => {} // Already seeded, nothing to do
+        Err(e) => {
+            log::warn!("Failed to seed default packs: {}", e);
+        }
+    }
 
     commands::scenarios::sync_scenario_skills(store, &desired_active).map_err(|e| e.to_string())?;
     Ok(())

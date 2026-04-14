@@ -79,6 +79,13 @@ enum Commands {
         #[arg(long)]
         agent: Option<String>,
     },
+
+    /// Seed default packs (base, gstack, research, etc.)
+    SeedPacks {
+        /// Re-seed even if packs already exist (deletes old packs first)
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -145,6 +152,7 @@ fn main() {
             }
         },
         Commands::Dedup { apply, agent } => commands::cmd_dedup(apply, agent.as_deref()),
+        Commands::SeedPacks { force } => commands::cmd_seed_packs(force),
     };
 
     if let Err(e) = result {
