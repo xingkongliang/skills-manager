@@ -244,7 +244,8 @@
     "aiGeneratePrompt": "AI 生成",
     "aiGeneratePromptLoading": "生成中...",
     "aiGeneratePromptSuccess": "Prompt 生成成功",
-    "aiGeneratePromptError": "Prompt 生成失败"
+    "aiGeneratePromptError": "Prompt 生成失败",
+    "aiGeneratePromptWithRecipes": "Prompt 已更新。已创建 {{created}} 个 recipe，{{skipped}} 个跳过（重复）。"
   },
   "install": {
     "title": "安装 Skills",

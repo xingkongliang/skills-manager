@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use super::crypto;
 
 /// Settings keys whose values are encrypted at rest with AES-256-GCM.
-const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url", "skillsmp_api_key"];
+const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url", "skillsmp_api_key", "codebuddy_api_key"];
 
 pub struct SkillStore {
     conn: Mutex<Connection>,
@@ -766,7 +766,7 @@ impl SkillStore {
                     s.created_at, s.updated_at, s.status, s.update_status, s.last_checked_at, s.last_check_error
              FROM skills s
              INNER JOIN scenario_skills ss ON s.id = ss.skill_id
-             WHERE ss.scenario_id = ?1
+             WHERE ss.scenario_id = ?1 AND s.enabled = 1
              ORDER BY ss.sort_order, s.name",
         )?;
         let rows = stmt.query_map(params![scenario_id], map_skill_row)?;
@@ -776,7 +776,9 @@ impl SkillStore {
     pub fn count_skills_for_scenario(&self, scenario_id: &str) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM scenario_skills WHERE scenario_id = ?1",
+            "SELECT COUNT(*) FROM scenario_skills ss
+             INNER JOIN skills s ON s.id = ss.skill_id
+             WHERE ss.scenario_id = ?1 AND s.enabled = 1",
             params![scenario_id],
             |row| row.get(0),
         )?;
@@ -1214,6 +1216,7 @@ impl SkillStore {
         name: &str,
         description: Option<&str>,
         icon: Option<&str>,
+        prompt_template: Option<&str>,
     ) -> Result<RecipeRecord> {
         let conn = self.conn.lock().unwrap();
         let id = uuid::Uuid::new_v4().to_string();
@@ -1226,9 +1229,9 @@ impl SkillStore {
             )
             .unwrap_or(-1);
         conn.execute(
-            "INSERT INTO scenario_recipes (id, scenario_id, name, description, icon, sort_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, scenario_id, name, description, icon, max_order + 1, now, now],
+            "INSERT INTO scenario_recipes (id, scenario_id, name, description, icon, prompt_template, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, scenario_id, name, description, icon, prompt_template, max_order + 1, now, now],
         )?;
         Ok(RecipeRecord {
             id,
@@ -1236,7 +1239,7 @@ impl SkillStore {
             name: name.to_string(),
             description: description.map(|s| s.to_string()),
             icon: icon.map(|s| s.to_string()),
-            prompt_template: None,
+            prompt_template: prompt_template.map(|s| s.to_string()),
             sort_order: max_order + 1,
             created_at: now,
             updated_at: now,

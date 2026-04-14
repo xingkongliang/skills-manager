@@ -44,10 +44,13 @@ pub async fn invoke_codebuddy_agent(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Value, AppError> {
     let store = store.inner().clone();
-    let api_key = tauri::async_runtime::spawn_blocking(move || {
-        store
-            .get_setting("codebuddy_api_key")
-            .map_err(AppError::db)
+    let (api_key, internet_env): (Option<String>, Option<String>) = tauri::async_runtime::spawn_blocking(move || {
+        let api_key = store.get_setting("codebuddy_api_key").map_err(AppError::db)?;
+        let internet_env = store
+            .get_setting("codebuddy_internet_environment")
+            .map_err(AppError::db)?
+            .filter(|v| !v.is_empty());
+        Ok::<_, AppError>((api_key, internet_env))
     })
     .await??;
 
@@ -55,13 +58,18 @@ pub async fn invoke_codebuddy_agent(
         .filter(|k| !k.is_empty())
         .ok_or_else(|| AppError::invalid_input("CodeBuddy API key not configured"))?;
 
+    log::info!("[AI] using api_key len={}, env={:?}", api_key.len(), internet_env);
+
     let script_path = resolve_script_path(&app)?;
 
-    let input = serde_json::json!({
+    let mut input = serde_json::json!({
         "task": task,
         "apiKey": api_key,
         "payload": payload,
     });
+    if let Some(ref env) = internet_env {
+        input["internetEnvironment"] = serde_json::json!(env);
+    }
     let input_str = serde_json::to_string(&input)
         .map_err(|e| AppError::internal(format!("Failed to serialize input: {e}")))?;
 
@@ -84,6 +92,8 @@ pub async fn invoke_codebuddy_agent(
             .write_all(input_str.as_bytes())
             .await
             .map_err(|e| AppError::internal(format!("Failed to write to stdin: {e}")))?;
+        // 必须显式 drop stdin，否则 Node.js 的 for await 会永远等待
+        drop(stdin);
     }
 
     // tokio::Child is killed on drop, so timeout automatically cleans up the process
@@ -92,22 +102,32 @@ pub async fn invoke_codebuddy_agent(
         .map_err(|_| AppError::internal("AI request timed out (60s)"))?
         .map_err(|e| AppError::internal(format!("Failed to read process output: {e}")))?;
 
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        log::error!(
+            "[AI] Bridge script failed (exit {}):\nstderr: {}\nstdout: {}",
+            output.status.code().unwrap_or(-1),
+            stderr,
+            stdout,
+        );
         let details = if stderr.trim().is_empty() { &stdout } else { &stderr };
         return Err(AppError::internal(format!(
             "Bridge script failed (exit {}): {}",
             output.status.code().unwrap_or(-1),
-            details.chars().take(500).collect::<String>()
+            details.chars().take(1000).collect::<String>()
         )));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stderr.trim().is_empty() {
+        log::warn!("[AI] Bridge script stderr: {stderr}");
+    }
+
     let result: Value = serde_json::from_str(stdout.trim()).map_err(|e| {
         AppError::internal(format!(
-            "Failed to parse bridge output: {e}\nOutput: {}",
-            stdout.chars().take(500).collect::<String>()
+            "Failed to parse bridge output: {e}\nOutput (first 2000 chars):\n{}",
+            stdout.chars().take(2000).collect::<String>()
         ))
     })?;
 

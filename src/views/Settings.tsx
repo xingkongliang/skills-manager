@@ -76,6 +76,9 @@ export function Settings() {
   const [textSize, setTextSize] = useState("default");
   const [skillsmpApiKey, setSkillsmpApiKey] = useState("");
   const [skillsmpSaving, setSkillsmpSaving] = useState(false);
+  const [codebuddyApiKey, setCodebuddyApiKey] = useState("");
+  const [codebuddyEnv, setCodebuddyEnv] = useState("");
+  const [codebuddySaving, setCodebuddySaving] = useState(false);
   // Agent path editing
   const [editingPathKey, setEditingPathKey] = useState<string | null>(null);
   const [editingPathValue, setEditingPathValue] = useState("");
@@ -186,6 +189,8 @@ export function Settings() {
     });
     api.getSettings("text_size").then((v) => { if (v) { setTextSize(v); applyTextSize(v); } });
     api.getSettings("skillsmp_api_key").then((v) => { if (v) setSkillsmpApiKey(v); });
+    api.getSettings("codebuddy_api_key").then((v) => { if (v) setCodebuddyApiKey(v); });
+    api.getSettings("codebuddy_internet_environment").then((v) => { if (v) setCodebuddyEnv(v); });
     api.getCentralRepoPath().then(setCentralRepoPath).catch(() => {});
 
     (async () => {
@@ -352,6 +357,19 @@ export function Settings() {
       toast.error(t("common.error"));
     } finally {
       setSkillsmpSaving(false);
+    }
+  };
+
+  const handleSaveCodebuddy = async () => {
+    setCodebuddySaving(true);
+    try {
+      await api.setSettings("codebuddy_api_key", codebuddyApiKey.trim());
+      await api.setSettings("codebuddy_internet_environment", codebuddyEnv);
+      toast.success(t("common.success"));
+    } catch {
+      toast.error(t("common.error"));
+    } finally {
+      setCodebuddySaving(false);
     }
   };
 
@@ -954,6 +972,67 @@ export function Settings() {
                   className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
                 >
                   {skillsmpSaving ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Key className="w-3 h-3" />
+                  )}
+                  {t("common.save")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* CodeBuddy API Key */}
+        <section>
+          <h2 className="app-section-title mb-3">
+            {t("settings.codebuddyTitle", { defaultValue: "CodeBuddy AI" })}
+          </h2>
+          <div className="app-panel overflow-hidden divide-y divide-border-subtle">
+            <div className="px-4 py-3">
+              <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.codebuddyApiKey", { defaultValue: "API Key" })}</h3>
+              <p className="text-[13px] text-muted mb-2">
+                {t("settings.codebuddyDesc", { defaultValue: "Enter your CodeBuddy API key to enable AI features (skill tagging, scenario generation, etc.)." })}{" "}
+                <button
+                  type="button"
+                  onClick={() => openUrl("https://tencent.sso.copilot.tencent.com/profile/keys")}
+                  className="inline-flex items-center gap-0.5 text-accent-light hover:underline"
+                >
+                  {t("settings.codebuddyGetKey", { defaultValue: "Get your API key" })}
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              </p>
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <input
+                  type="password"
+                  value={codebuddyApiKey}
+                  onChange={(e) => setCodebuddyApiKey(e.target.value)}
+                  placeholder={t("settings.codebuddyApiKeyPlaceholder", { defaultValue: "API key..." })}
+                  className={`${fieldClass} min-w-0 flex-1 font-mono`}
+                />
+              </div>
+              <h3 className="text-[13px] text-secondary font-medium mb-0.5 mt-3">{t("settings.codebuddyEnv", { defaultValue: "Environment" })}</h3>
+              <p className="text-[13px] text-muted mb-2">
+                {t("settings.codebuddyEnvDesc", { defaultValue: "Select the CodeBuddy deployment environment." })}
+              </p>
+              <div className="flex items-center gap-2 mb-2">
+                <select
+                  value={codebuddyEnv}
+                  onChange={(e) => setCodebuddyEnv(e.target.value)}
+                  className={`${fieldClass} min-w-0 w-auto`}
+                >
+                  <option value="">{t("settings.codebuddyEnvAuto", { defaultValue: "Auto (overseas)" })}</option>
+                  <option value="internal">{t("settings.codebuddyEnvInternal", { defaultValue: "China (copilot.tencent.com)" })}</option>
+                  <option value="ioa">{t("settings.codebuddyEnvIoa", { defaultValue: "iOA (tencent.sso.copilot.tencent.com)" })}</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSaveCodebuddy}
+                  disabled={codebuddySaving}
+                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+                >
+                  {codebuddySaving ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   ) : (
                     <Key className="w-3 h-3" />

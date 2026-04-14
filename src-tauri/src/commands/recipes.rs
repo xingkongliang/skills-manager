@@ -12,12 +12,13 @@ pub async fn create_recipe(
     name: String,
     description: Option<String>,
     icon: Option<String>,
+    prompt_template: Option<String>,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<RecipeRecord, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         store
-            .create_recipe(&scenario_id, &name, description.as_deref(), icon.as_deref())
+            .create_recipe(&scenario_id, &name, description.as_deref(), icon.as_deref(), prompt_template.as_deref())
             .map_err(AppError::db)
     })
     .await?

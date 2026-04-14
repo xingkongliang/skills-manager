@@ -3,6 +3,7 @@ import { Copy, Save, X, FileText, Plus, Pencil, Trash2, ChefHat, Sparkles, Loade
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import * as api from "../lib/tauri";
+import { getErrorMessage } from "../lib/error";
 import type { Recipe } from "../lib/tauri";
 
 export interface ScenarioPromptEditorHandle {
@@ -167,14 +168,43 @@ export const ScenarioPromptEditor = forwardRef<
         scenarioName,
         skills: skillList,
       });
-      if (result.prompt) {
-        setTemplate(result.prompt);
-        onTemplateChange?.(result.prompt);
+      if (!result.prompt) {
+        toast.error(t("mySkills.aiGeneratePromptError"));
+        return;
+      }
+      setTemplate(result.prompt);
+      onTemplateChange?.(result.prompt);
+      if (result.recipes?.length) {
+        const results = await Promise.allSettled(
+          result.recipes.map((r) =>
+            api.createRecipe(scenarioId, r.name, null, null, r.prompt_template)
+          )
+        );
+        let created = 0;
+        let skipped = 0;
+        const newRecipes: typeof recipes = [];
+        for (const r of results) {
+          if (r.status === "fulfilled") {
+            created++;
+            newRecipes.push(r.value);
+          } else {
+            const errMsg = getErrorMessage(r.reason, "");
+            if (!errMsg.includes("UNIQUE")) {
+              console.error("[AI Generate Recipe]", errMsg);
+            }
+            skipped++;
+          }
+        }
+        setRecipes((prev) => [...prev, ...newRecipes]);
+        if (created > 0 || skipped > 0) {
+          toast.success(t("mySkills.aiGeneratePromptWithRecipes", { created, skipped }));
+        }
+      } else {
         toast.success(t("mySkills.aiGeneratePromptSuccess"));
       }
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : t("mySkills.aiGeneratePromptError");
-      toast.error(msg);
+      console.error("[AI Generate Prompt]", getErrorMessage(error, ""));
+      toast.error(getErrorMessage(error, t("mySkills.aiGeneratePromptError")));
     } finally {
       setAiGenerating(false);
     }

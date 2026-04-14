@@ -221,7 +221,8 @@
     "aiGeneratePrompt": "AI 生成",
     "aiGeneratePromptLoading": "生成中...",
     "aiGeneratePromptSuccess": "Prompt 生成成功",
-    "aiGeneratePromptError": "Prompt 生成失敗"
+    "aiGeneratePromptError": "Prompt 生成失敗",
+    "aiGeneratePromptWithRecipes": "Prompt 已更新。已建立 {{created}} 個 recipe，{{skipped}} 個跳過（重複）。"
   },
   "install": {
     "title": "安裝 Skills",

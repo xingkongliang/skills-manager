@@ -17,7 +17,11 @@ ${TAG_RULES}
 
 Tags should describe the skill's purpose, applicable tools, or technical domain. Return only a JSON array like ["React", "前端", "状态管理"], nothing else.`,
 
-  generate_scenario_prompt: `You are an AI coding assistant scenario designer. Based on the scenario name and skills list below, write a scenario prompt (200-500 words). Describe the scenario's purpose and how the skills work together. Return only the prompt text, nothing else.`,
+  generate_scenario_prompt: `You are an AI coding assistant. Given the scenario name and skills below, generate a JSON object with two fields:
+- "prompt": a default prompt under 100 characters. It must start with skill names in [skill::name] format separated by commas, followed by a natural lead-in that invites the user to describe their task.
+- "recipes": an array of 2-4 recipe objects, each with "name" (short, 2-4 words) and "prompt_template" (same [skill::name] format as prompt, under 100 characters).
+
+Return ONLY the JSON object, no markdown fences, no explanation. Example: {"prompt": "[skill::brainstorming], [skill::code-review] I need to...", "recipes": [{"name": "Quick Review", "prompt_template": "[skill::code-review] Review briefly:"}]}`,
 
   create_scenario: `You are an AI coding assistant scenario planner. Based on the installed skills list below, suggest 2-5 scenario groupings. Each scenario should have: name (concise), description (one sentence), icon (one emoji), skillNames (array of skill names from the input). Return only a JSON array like [{"name":"...","description":"...","icon":"🎨","skillNames":["..."]}], nothing else.`,
 
@@ -51,7 +55,11 @@ function buildUserContent(task, payload) {
     case "tag_skill":
       return `Skill name: ${payload.skillName}\n\nSkill content:\n${payload.skillContent}`;
     case "generate_scenario_prompt":
-      return `Scenario name: ${payload.scenarioName}\n\nSkills in this scenario:\n${payload.skills.map((s) => `- ${s.name}: ${s.description || "No description"}`).join("\n")}`;
+      return `Scenario: ${payload.scenarioName}\n\nSkills:\n${(payload.skills || []).map((s) => {
+        const desc = (s.description || "").trim();
+        const truncated = desc.length > 80 ? desc.slice(0, 80) + "…" : desc;
+        return truncated ? `- ${s.name}: ${truncated}` : `- ${s.name}`;
+      }).join("\n")}`;
     case "create_scenario": {
       const skillLines = payload.skills.map((s) => {
         const desc = (s.description || "No description").slice(0, 80);
@@ -112,8 +120,32 @@ function formatResult(task, rawText) {
       if (Array.isArray(parsed)) return { tags: deduplicateTags(parsed) };
       return null;
     }
-    case "generate_scenario_prompt":
-      return { prompt: rawText.trim() };
+    case "generate_scenario_prompt": {
+      const text = rawText.trim();
+      const MAX_PROMPT = 100;
+      const MIN_BREAK = 50;
+      // Expected shape: { prompt: string, recipes: [{ name, prompt_template }] }
+      const parsed = extractJson(text);
+      if (parsed && typeof parsed.prompt === "string") {
+        const recipes = Array.isArray(parsed.recipes)
+          ? parsed.recipes.filter((r) => r && typeof r.name === "string" && typeof r.prompt_template === "string")
+          : [];
+        return { prompt: parsed.prompt, recipes };
+      }
+      // Fallback: treat as plain text (backward compatibility)
+      if (text.length <= MAX_PROMPT) return { prompt: text };
+      const cutoff = text.slice(0, MAX_PROMPT);
+      const lastPunct = Math.max(
+        cutoff.lastIndexOf("。"),
+        cutoff.lastIndexOf("，"),
+        cutoff.lastIndexOf("！"),
+        cutoff.lastIndexOf("？"),
+        cutoff.lastIndexOf("."),
+        cutoff.lastIndexOf(","),
+      );
+      const breakPoint = lastPunct > MIN_BREAK ? lastPunct + 1 : MAX_PROMPT;
+      return { prompt: text.slice(0, breakPoint) };
+    }
     case "create_scenario": {
       const parsed = extractJson(rawText);
       if (Array.isArray(parsed)) return { scenarios: parsed };
@@ -158,7 +190,8 @@ async function main() {
     process.exit(1);
   }
 
-  const { task, apiKey, payload } = input;
+  const { task, apiKey, payload, internetEnvironment } = input;
+  if (apiKey) { process.stderr.write(`[agent] apiKey received, len=${apiKey.length}\n`); }
 
   if (!PROMPTS[task]) {
     console.log(JSON.stringify({ ok: false, error: `Unknown task: ${task}` }));
@@ -171,6 +204,7 @@ async function main() {
 
   try {
     const envVars = { CODEBUDDY_API_KEY: apiKey };
+    if (internetEnvironment) envVars.CODEBUDDY_INTERNET_ENVIRONMENT = internetEnvironment;
 
     const maxTurns = (task === "batch_tag_skills" || task === "consolidate_tags" || task === "create_scenario") ? 3 : 1;
 

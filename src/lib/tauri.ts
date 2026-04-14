@@ -368,6 +368,7 @@ export const checkAppUpdate = () =>
 export interface AiResult {
   tags?: string[];
   prompt?: string;
+  recipes?: Array<{ name: string; prompt_template: string }>;
   scenarios?: {
     name: string;
     description: string;
@@ -494,8 +495,8 @@ export const getScenarioPromptTemplate = (scenarioId: string) =>
 
 // ── Recipes ──
 
-export const createRecipe = (scenarioId: string, name: string, description?: string | null, icon?: string | null) =>
-  invoke<Recipe>("create_recipe", { scenarioId, name, description: description ?? null, icon: icon ?? null });
+export const createRecipe = (scenarioId: string, name: string, description?: string | null, icon?: string | null, promptTemplate?: string | null) =>
+  invoke<Recipe>("create_recipe", { scenarioId, name, description: description ?? null, icon: icon ?? null, promptTemplate: promptTemplate ?? null });
 
 export const updateRecipe = (id: string, name: string, description?: string | null, icon?: string | null) =>
   invoke<void>("update_recipe", { id, name, description: description ?? null, icon: icon ?? null });
