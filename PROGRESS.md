@@ -3,141 +3,78 @@
 ## Overall Status
 
 ```
-Phase 1 ✅ → Phase 2 📝 → Phase 3 📝 → Phase 4 📝 → Phase 5 📝
+Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅
+Per-Agent ✅ → Matrix Fix ✅ → Native Skills 🔄 → Pack Seeding ⬜ → Dashboard ⬜ → Tray Menu ⬜
 ```
 
-✅ = merged to main | 📝 = PR open for review
+✅ = merged | 🔄 = in progress | ⬜ = planned
 
 ---
 
-## Phase 1: Core Crate Extraction + Skill Packs ✅
+## Completed Phases
 
-**Completed:** 2026-04-13
-**PR:** knjf/skills-manager#1 (merged)
-**Branch:** phase1/core-extraction-packs → main
+### Phase 1: Core Crate Extraction + Skill Packs ✅
+- **PR:** #1 (merged 2026-04-13)
+- Core crate at `crates/skills-manager-core/`, DB v5, pack CRUD, effective skill resolution
 
-### What was done
-- Extracted 18 core modules into `crates/skills-manager-core/` library crate
-- Created Cargo workspace (core crate + Tauri app)
-- Feature-gated `error.rs` tauri/tokio deps (`tauri-compat`, `tokio-compat`)
-- Added Skill Packs: DB migration v4→v5, pack CRUD, effective skill resolution
-- Pack-aware scenario sync (`remove_skill_from_scenario` checks pack membership)
-- 12 new Tauri IPC commands for pack management
-- 146 tests pass, core builds standalone
+### Phase 2: CLI Binary ✅
+- **PR:** #3 (merged 2026-04-13)
+- `sm` CLI replacing shell script, pack-aware, installed at `~/.local/bin/sm`
 
-### Deferred items
-- Default pack seeding (needs UI or CLI to be useful)
-- 3 reorder methods (reorder_packs, reorder_pack_skills, reorder_scenario_packs) — needed when Phase 4 UI is built
+### Phase 3: Plugin Management ✅
+- **PR:** #4 (merged 2026-04-13)
+- DB v6, plugin discovery, per-scenario enable/disable via `installed_plugins.json`
 
-### Key files
-- `crates/skills-manager-core/src/skill_store.rs` — PackRecord, pack CRUD, effective skill resolution
-- `crates/skills-manager-core/src/migrations.rs` — v4→v5, PACKS_SCHEMA_DDL constant
-- `src-tauri/src/commands/packs.rs` — 12 Tauri IPC wrappers
-- `docs/superpowers/specs/2026-04-13-phase1-core-extraction-packs-design.md` — design spec
-- `docs/superpowers/plans/2026-04-13-phase1-core-extraction-packs.md` — implementation plan
+### Phase 4: Packs UI ✅
+- **PR:** #5 (merged 2026-04-13)
+- PacksView with CRUD, icon/color picker, skill assignment
 
----
+### Phase 5: Matrix View + Plugin UI ✅
+- **PR:** #6 (merged 2026-04-13)
+- MatrixView (agent × pack grid), PluginsView with per-scenario toggles
 
-## Phase 2: CLI Binary 📝
+### Matrix Architecture Fix ✅
+- **PR:** #8 (merged 2026-04-14)
+- Fixed toggle flash/revert for pack-inherited skills
+- MatrixView shows all effective skills + ungrouped section
+- Fixed `copy_dir_recursive` symlink handling for Cursor
 
-**Completed:** 2026-04-13
-**PR:** knjf/skills-manager#3 (open for review)
-**Branch:** phase2/cli-binary
-
-### What was done
-- Rust CLI binary `sm` using `clap` derive API at `crates/skills-manager-cli/`
-- Commands: list, current, switch, skills, diff, packs, pack add/remove
-- Uses `get_effective_skills_for_scenario()` for pack-aware operations
-- Sync logic matches shell script behavior (symlink/copy per agent)
-- Install: `cp target/release/sm ~/.local/bin/sm`
-
-### Known issue
-- Cursor copy mode warns on skills with internal symlinks (pre-existing core crate issue)
-
-### Key files
-- `crates/skills-manager-cli/src/main.rs` — clap structs + entry point
-- `crates/skills-manager-cli/src/commands.rs` — command implementations
-- `docs/superpowers/specs/2026-04-13-phase2-cli-design.md`
+### Per-Agent Scenario Assignment ✅
+- **PR:** #9 (merged 2026-04-15)
+- DB v7: `agent_configs` + `agent_extra_packs` tables
+- Each agent independently has base scenario + extra packs
+- Agent Detail page, Sidebar AGENTS section
+- CLI: `sm agents`, `sm switch <agent> <scenario>`, `sm agent add-pack/remove-pack`
 
 ---
 
-## Phase 3: Plugin Management 📝
+## Current Iteration: Polish + Features
 
-**Completed:** 2026-04-13
-**PR:** knjf/skills-manager#4 (open for review)
-**Branch:** phase3/plugin-management
+### Agent Native Skills Management 🔄
+**Status:** Starting
+**Goal:** Identify and manage agent-native skills (pre-installed by agent, not SM). Show in Agent Detail page. Prevent SM from overwriting native skills.
 
-### What was done
-- DB migration v5→v6: `managed_plugins` + `scenario_plugins` tables
-- New core module: `crates/skills-manager-core/src/plugins.rs` — discovery, apply, restore
-- Plugin discovery reads `~/.claude/plugins/installed_plugins.json`
-- Per-scenario enable/disable by manipulating the JSON manifest
-- 4 new Tauri IPC commands
-- Scenario switch integration: applies plugin state automatically
-- 162 tests pass (16 new plugin tests)
+### Default Pack Seeding ⬜
+**Status:** Planned
+**Goal:** Seed 132 skills into 9 packs (base, gstack, marketing, etc.) on first run
 
-### Key design decisions
-- Never touches plugin cache directories — only manipulates JSON
-- Plugins default to enabled (backward compatible)
-- Full plugin entry JSON saved for restore
+### Dashboard Update ⬜
+**Status:** Planned
+**Goal:** Show per-agent status instead of single global scenario
 
-### Key files
-- `crates/skills-manager-core/src/plugins.rs` — plugin management core
-- `src-tauri/src/commands/plugins.rs` — Tauri IPC wrappers
+### Tray Menu Update ⬜
+**Status:** Planned
+**Goal:** Per-agent quick switch in tray menu
 
----
+### My Skills Retirement ⬜
+**Status:** Planned (low priority)
+**Goal:** Evaluate after new pages are validated
 
-## Phase 4: Packs UI 📝
-
-**Completed:** 2026-04-13
-**PR:** knjf/skills-manager#5 (open for review)
-**Branch:** phase4/packs-ui
-
-### What was done
-- New view: `src/views/PacksView.tsx` — pack CRUD with card grid + detail view
-- PackDialog: create/edit with icon picker (10 icons) + color picker (8 colors)
-- AddSkillsDialog: multi-select searchable skill assignment
-- Sidebar "Packs" nav item added
-- TypeScript interfaces + 11 API wrappers in `tauri.ts`
-
-### Key files
-- `src/views/PacksView.tsx` — main packs page (530 lines)
-- `src/lib/packIcons.tsx` — icon/color definitions
+### Cursor Copy Fix ⬜
+**Status:** Planned (low priority)
+**Goal:** Further improve copy_dir_recursive edge cases
 
 ---
-
-## Phase 5: Matrix View + Plugin UI 📝
-
-**Completed:** 2026-04-13
-**PR:** knjf/skills-manager#6 (open for review)
-**Branch:** phase5/matrix-plugin-ui
-
-### What was done
-- **MatrixView** (`src/views/MatrixView.tsx`) — agent × pack grid with expand/collapse
-  - Pack-level bulk toggles (green/amber/grey status)
-  - Skill-level individual toggles
-  - Column-level "toggle all" headers
-- **PluginsView** (`src/views/PluginsView.tsx`) — plugin list with per-scenario toggles
-  - Graceful fallback when Phase 3 backend not merged (shows placeholder)
-  - Search, scan, scope badges
-- Routes + sidebar items + i18n keys added
-
-### Dependencies
-- MatrixView: works with Phase 1 APIs (on main)
-- PluginsView: requires Phase 3 merge for full functionality
-
----
-
-## Development Workflow
-
-每個 Phase 嘅流程：
-```
-brainstorming → writing-plans → [plan-eng-review]
-→ subagent-driven-development (TDD)
-→ simplify → review → git-commit-push-pr
-```
-
-Skills toolkit 詳見 `CLAUDE.md` → "Development Workflow — Skills Toolkit"
 
 ## References
 
