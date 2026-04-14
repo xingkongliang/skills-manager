@@ -122,6 +122,13 @@ pub struct AgentConfigRecord {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AgentSkillOwnership {
+    pub managed: Vec<SkillRecord>,
+    pub discovered: Vec<DiscoveredSkillRecord>,
+    pub native: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ScenarioSkillToolToggleRecord {
     pub scenario_id: String,
     pub skill_id: String,
@@ -1581,6 +1588,99 @@ impl SkillStore {
             row.get::<_, String>(0)
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    // ── Discovered Skills (per-tool) ──
+
+    /// Returns discovered skills for a specific tool that have not been imported.
+    pub fn get_discovered_for_tool(&self, tool: &str) -> Result<Vec<DiscoveredSkillRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, tool, found_path, name_guess, fingerprint, found_at, imported_skill_id
+             FROM discovered_skills WHERE tool = ?1 AND imported_skill_id IS NULL
+             ORDER BY name_guess",
+        )?;
+        let rows = stmt.query_map(params![tool], |row| {
+            Ok(DiscoveredSkillRecord {
+                id: row.get(0)?,
+                tool: row.get(1)?,
+                found_path: row.get(2)?,
+                name_guess: row.get(3)?,
+                fingerprint: row.get(4)?,
+                found_at: row.get(5)?,
+                imported_skill_id: row.get(6)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    // ── Skill Ownership ──
+
+    /// Classify skills in an agent's directory into three categories:
+    /// - managed: SM-managed skills (from scenario + extra packs)
+    /// - discovered: found by scanner but not yet imported
+    /// - native: present in agent dir but not SM-managed, not discovered
+    pub fn scan_agent_skill_ownership(
+        &self,
+        tool_key: &str,
+        agent_skills_dir: &std::path::Path,
+    ) -> Result<AgentSkillOwnership> {
+        let sm_skills_dir = crate::central_repo::skills_dir();
+        let sm_prefix = sm_skills_dir.to_string_lossy().to_string();
+
+        // 1. Managed: effective skills for this agent
+        let managed = self.get_effective_skills_for_agent(tool_key)?;
+        let managed_names: std::collections::HashSet<String> =
+            managed.iter().map(|s| s.name.clone()).collect();
+
+        // 2. Discovered: from discovered_skills table, not yet imported
+        let discovered = self.get_discovered_for_tool(tool_key)?;
+        let discovered_names: std::collections::HashSet<String> = discovered
+            .iter()
+            .filter_map(|d| d.name_guess.clone())
+            .collect();
+
+        // 3. Native: in agent dir, not a SM symlink, not discovered, not managed
+        let mut native = Vec::new();
+        if agent_skills_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(agent_skills_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let path = entry.path();
+
+                    // Skip SM symlinks
+                    if path.is_symlink() {
+                        if let Ok(target) = std::fs::read_link(&path) {
+                            if target.to_string_lossy().contains(&sm_prefix) {
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Skip if it's a managed skill name (copy mode remnant)
+                    if managed_names.contains(&name) {
+                        continue;
+                    }
+                    // Skip if it's discovered
+                    if discovered_names.contains(&name) {
+                        continue;
+                    }
+                    // Skip non-directories
+                    if !path.is_dir() && !path.is_symlink() {
+                        continue;
+                    }
+
+                    native.push(name);
+                }
+            }
+        }
+        native.sort();
+
+        Ok(AgentSkillOwnership {
+            managed,
+            discovered,
+            native,
+        })
     }
 }
 
