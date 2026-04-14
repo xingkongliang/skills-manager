@@ -29,10 +29,12 @@ pub async fn scan_local_skills(
         let mut plan = scanner::scan_local_skills_with_adapters(&managed_paths, &adapters)
             .map_err(AppError::io)?;
 
-        // Preserve imported_skill_id and is_native from previous scans
+        // Match discovered skills to managed skills using content hash (primary)
+        // and path preservation (secondary). Content hash is authoritative —
+        // same content = same skill, regardless of name differences.
         let old_discovered = store.get_all_discovered().map_err(AppError::db)?;
         for rec in &mut plan.discovered {
-            // Check if this skill was previously discovered with import/native state
+            // 1. Preserve state from previous scan (by path match)
             if let Some(old) = old_discovered.iter().find(|d| {
                 d.tool == rec.tool && d.found_path == rec.found_path
             }) {
@@ -43,10 +45,23 @@ pub async fn scan_local_skills(
                     rec.is_native = true;
                 }
             }
-            // Also check by name against managed skills
+
+            // 2. Match by content hash against managed skills (authoritative)
+            if rec.imported_skill_id.is_none() {
+                if let Some(ref fingerprint) = rec.fingerprint {
+                    if let Some(existing) = managed_skills.iter().find(|skill| {
+                        skill.content_hash.as_deref() == Some(fingerprint.as_str())
+                    }) {
+                        rec.imported_skill_id = Some(existing.id.clone());
+                    }
+                }
+            }
+
+            // 3. Fallback: match by name (for skills without hash)
             if rec.imported_skill_id.is_none() {
                 if let Some(name) = rec.name_guess.as_deref() {
-                    if let Some(existing) = managed_skills.iter().find(|skill| skill.name == name) {
+                    let trimmed = name.trim();
+                    if let Some(existing) = managed_skills.iter().find(|skill| skill.name == trimmed) {
                         rec.imported_skill_id = Some(existing.id.clone());
                     }
                 }
