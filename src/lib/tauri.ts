@@ -600,6 +600,43 @@ export const removePackFromScenario = (scenarioId: string, packId: string) =>
 export const getEffectiveSkillsForScenario = (scenarioId: string) =>
   invoke<PackSkillRecord[]>("get_effective_skills_for_scenario", { scenarioId });
 
+// ── Agent Configs (Phase 5 — per-agent scenario assignment) ──
+
+export interface AgentConfigDto {
+  tool_key: string;
+  display_name: string;
+  scenario_id: string | null;
+  scenario_name: string | null;
+  managed: boolean;
+  installed: boolean;
+  effective_skill_count: number;
+  extra_pack_count: number;
+}
+
+export const getAllAgentConfigs = () =>
+  invoke<AgentConfigDto[]>("get_all_agent_configs");
+
+export const getAgentConfig = (toolKey: string) =>
+  invoke<AgentConfigDto | null>("get_agent_config", { toolKey });
+
+export const setAgentScenario = (toolKey: string, scenarioId: string) =>
+  invoke<void>("set_agent_scenario", { toolKey, scenarioId });
+
+export const setAgentManaged = (toolKey: string, managed: boolean) =>
+  invoke<void>("set_agent_managed", { toolKey, managed });
+
+export const addAgentExtraPack = (toolKey: string, packId: string) =>
+  invoke<void>("add_agent_extra_pack", { toolKey, packId });
+
+export const removeAgentExtraPack = (toolKey: string, packId: string) =>
+  invoke<void>("remove_agent_extra_pack", { toolKey, packId });
+
+export const getEffectiveSkillsForAgent = (toolKey: string) =>
+  invoke<PackSkillRecord[]>("get_effective_skills_for_agent", { toolKey });
+
+export const getAgentExtraPacks = (toolKey: string) =>
+  invoke<PackRecord[]>("get_agent_extra_packs", { toolKey });
+
 // ── Plugins (Phase 3 — stubs until backend is merged) ──
 
 export interface ManagedPlugin {

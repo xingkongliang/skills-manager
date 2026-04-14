@@ -73,34 +73,116 @@ pub fn cmd_current() -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_switch(name: &str) -> Result<()> {
+pub fn cmd_switch(name: &str, scenario: Option<&str>) -> Result<()> {
     let store = open_store()?;
-    let target = find_scenario_by_name(&store, name)?;
 
-    let current_name = get_active_scenario(&store)
-        .map(|s| s.name)
-        .unwrap_or_else(|_| "none".to_string());
+    match scenario {
+        None => {
+            // Global switch: switch ALL managed agents to the named scenario.
+            let target = find_scenario_by_name(&store, name)?;
 
-    println!("Switching: {} -> {}", current_name, target.name);
+            let current_name = get_active_scenario(&store)
+                .map(|s| s.name)
+                .unwrap_or_else(|_| "none".to_string());
 
-    let adapters = tool_adapters::enabled_installed_adapters(&store);
-    let configured_mode = store.get_setting("sync_mode").ok().flatten();
+            println!("Switching all agents: {} -> {}", current_name, target.name);
 
-    if let Ok(Some(old_id)) = store.get_active_scenario_id() {
-        if old_id != target.id {
-            unsync_scenario(&store, &old_id, &adapters, configured_mode.as_deref())?;
+            let adapters = tool_adapters::enabled_installed_adapters(&store);
+            let configured_mode = store.get_setting("sync_mode").ok().flatten();
+
+            if let Ok(Some(old_id)) = store.get_active_scenario_id() {
+                if old_id != target.id {
+                    unsync_scenario(&store, &old_id, &adapters, configured_mode.as_deref())?;
+                }
+            }
+
+            store.set_active_scenario(&target.id)?;
+
+            // Also update all managed agent configs.
+            let agent_configs = store.get_all_agent_configs()?;
+            for config in &agent_configs {
+                if config.managed {
+                    store.set_agent_scenario(&config.tool_key, &target.id)?;
+                }
+            }
+
+            let synced_per_adapter =
+                sync_scenario(&store, &target.id, &adapters, configured_mode.as_deref())?;
+            for (display_name, count) in synced_per_adapter {
+                println!("  + {} ({} skills)", display_name, count);
+            }
+
+            println!("Done. Active: {}", target.name);
+        }
+        Some(scenario_name) => {
+            // Per-agent switch: `name` is the agent key, `scenario_name` is the scenario.
+            let agent_key = name;
+            let target = find_scenario_by_name(&store, scenario_name)?;
+
+            // Validate agent key exists.
+            let all_configs = store.get_all_agent_configs()?;
+            let agent_config = all_configs
+                .iter()
+                .find(|c| c.tool_key == agent_key)
+                .ok_or_else(|| {
+                    let available: Vec<&str> =
+                        all_configs.iter().map(|c| c.tool_key.as_str()).collect();
+                    anyhow::anyhow!(
+                        "Agent '{}' not found. Available: {}",
+                        agent_key,
+                        available.join(", ")
+                    )
+                })?;
+
+            let old_scenario_name = agent_config
+                .scenario_id
+                .as_deref()
+                .and_then(|id| {
+                    store
+                        .get_all_scenarios()
+                        .ok()
+                        .and_then(|ss| ss.into_iter().find(|s| s.id == id).map(|s| s.name))
+                })
+                .unwrap_or_else(|| "none".to_string());
+
+            println!(
+                "Switching {}: {} -> {}",
+                agent_key, old_scenario_name, target.name
+            );
+
+            let all_adapters = tool_adapters::enabled_installed_adapters(&store);
+            let configured_mode = store.get_setting("sync_mode").ok().flatten();
+
+            // Find the adapter for this specific agent.
+            let agent_adapters: Vec<_> = all_adapters
+                .iter()
+                .filter(|a| a.key == agent_key)
+                .cloned()
+                .collect();
+
+            // Unsync old scenario for this agent only.
+            if let Some(old_id) = &agent_config.scenario_id {
+                if old_id != &target.id {
+                    unsync_scenario(&store, old_id, &agent_adapters, configured_mode.as_deref())?;
+                }
+            }
+
+            store.set_agent_scenario(agent_key, &target.id)?;
+
+            let synced_per_adapter = sync_agent(
+                &store,
+                agent_key,
+                &agent_adapters,
+                configured_mode.as_deref(),
+            )?;
+            for (display_name, count) in synced_per_adapter {
+                println!("  + {} ({} skills)", display_name, count);
+            }
+
+            println!("Done. {} active: {}", agent_key, target.name);
         }
     }
 
-    store.set_active_scenario(&target.id)?;
-
-    let synced_per_adapter =
-        sync_scenario(&store, &target.id, &adapters, configured_mode.as_deref())?;
-    for (display_name, count) in synced_per_adapter {
-        println!("  + {} ({} skills)", display_name, count);
-    }
-
-    println!("Done. Active: {}", target.name);
     Ok(())
 }
 
@@ -234,6 +316,151 @@ fn find_pack_by_name(store: &SkillStore, name: &str) -> Result<skills_manager_co
     );
 }
 
+// ── Agent commands ───────────────────────────────────────
+
+pub fn cmd_agents() -> Result<()> {
+    let store = open_store()?;
+    let configs = store.get_all_agent_configs()?;
+    let scenarios = store.get_all_scenarios()?;
+
+    if configs.is_empty() {
+        println!("No agent configs found.");
+        return Ok(());
+    }
+
+    println!("Agents:");
+    for config in &configs {
+        let marker = if config.managed { "●" } else { "○" };
+
+        if !config.managed {
+            println!("  {} {:<20} (unmanaged)", marker, config.tool_key);
+            continue;
+        }
+
+        let scenario_name = config
+            .scenario_id
+            .as_deref()
+            .and_then(|id| {
+                scenarios
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| s.name.as_str())
+            })
+            .unwrap_or("(none)");
+
+        let extra_packs = store.get_agent_extra_packs(&config.tool_key)?;
+        let pack_suffix = match extra_packs.len() {
+            0 => String::new(),
+            1 => " +1 pack".to_string(),
+            n => format!(" +{} packs", n),
+        };
+
+        println!(
+            "  {} {:<20} {}{}",
+            marker, config.tool_key, scenario_name, pack_suffix
+        );
+    }
+
+    Ok(())
+}
+
+pub fn cmd_agent_add_pack(agent: &str, pack_name: &str) -> Result<()> {
+    let store = open_store()?;
+
+    // Validate agent exists.
+    let all_configs = store.get_all_agent_configs()?;
+    if !all_configs.iter().any(|c| c.tool_key == agent) {
+        let available: Vec<&str> = all_configs.iter().map(|c| c.tool_key.as_str()).collect();
+        bail!(
+            "Agent '{}' not found. Available: {}",
+            agent,
+            available.join(", ")
+        );
+    }
+
+    let pack = find_pack_by_name(&store, pack_name)?;
+    store.add_agent_extra_pack(agent, &pack.id)?;
+    println!("Added pack '{}' to agent '{}'", pack.name, agent);
+
+    // Re-sync this agent if it has an adapter.
+    let all_adapters = tool_adapters::enabled_installed_adapters(&store);
+    let agent_adapters: Vec<_> = all_adapters
+        .iter()
+        .filter(|a| a.key == agent)
+        .cloned()
+        .collect();
+    let configured_mode = store.get_setting("sync_mode").ok().flatten();
+
+    if !agent_adapters.is_empty() {
+        // Get the agent's current scenario_id for unsync.
+        if let Some(config) = all_configs.iter().find(|c| c.tool_key == agent) {
+            if let Some(scenario_id) = &config.scenario_id {
+                unsync_scenario(
+                    &store,
+                    scenario_id,
+                    &agent_adapters,
+                    configured_mode.as_deref(),
+                )?;
+            }
+        }
+        let synced = sync_agent(&store, agent, &agent_adapters, configured_mode.as_deref())?;
+        for (display_name, count) in synced {
+            println!("  + {} ({} skills)", display_name, count);
+        }
+        println!("Done.");
+    }
+
+    Ok(())
+}
+
+pub fn cmd_agent_remove_pack(agent: &str, pack_name: &str) -> Result<()> {
+    let store = open_store()?;
+
+    // Validate agent exists.
+    let all_configs = store.get_all_agent_configs()?;
+    if !all_configs.iter().any(|c| c.tool_key == agent) {
+        let available: Vec<&str> = all_configs.iter().map(|c| c.tool_key.as_str()).collect();
+        bail!(
+            "Agent '{}' not found. Available: {}",
+            agent,
+            available.join(", ")
+        );
+    }
+
+    let pack = find_pack_by_name(&store, pack_name)?;
+    store.remove_agent_extra_pack(agent, &pack.id)?;
+    println!("Removed pack '{}' from agent '{}'", pack.name, agent);
+
+    // Re-sync this agent if it has an adapter.
+    let all_adapters = tool_adapters::enabled_installed_adapters(&store);
+    let agent_adapters: Vec<_> = all_adapters
+        .iter()
+        .filter(|a| a.key == agent)
+        .cloned()
+        .collect();
+    let configured_mode = store.get_setting("sync_mode").ok().flatten();
+
+    if !agent_adapters.is_empty() {
+        if let Some(config) = all_configs.iter().find(|c| c.tool_key == agent) {
+            if let Some(scenario_id) = &config.scenario_id {
+                unsync_scenario(
+                    &store,
+                    scenario_id,
+                    &agent_adapters,
+                    configured_mode.as_deref(),
+                )?;
+            }
+        }
+        let synced = sync_agent(&store, agent, &agent_adapters, configured_mode.as_deref())?;
+        for (display_name, count) in synced {
+            println!("  + {} ({} skills)", display_name, count);
+        }
+        println!("Done.");
+    }
+
+    Ok(())
+}
+
 // ── Sync helpers ─────────────────────────────────────────
 
 /// Remove SM-managed entries from all adapters for a given scenario.
@@ -297,6 +524,49 @@ fn sync_scenario(
     configured_mode: Option<&str>,
 ) -> Result<Vec<(String, usize)>> {
     let skills = store.get_effective_skills_for_scenario(scenario_id)?;
+    let mut results = Vec::new();
+
+    for adapter in adapters {
+        let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode);
+        let skills_dir = adapter.skills_dir();
+        let mut synced = 0;
+
+        for skill in &skills {
+            let source = PathBuf::from(&skill.central_path);
+            if !source.exists() {
+                eprintln!(
+                    "  Warning: skipping '{}' — source path does not exist: {}",
+                    skill.name,
+                    source.display()
+                );
+                continue;
+            }
+            let target_path = skills_dir.join(&skill.name);
+            match sync_engine::sync_skill(&source, &target_path, mode) {
+                Ok(_) => synced += 1,
+                Err(e) => eprintln!(
+                    "  Warning: failed to sync '{}' to {}: {}",
+                    skill.name, adapter.display_name, e
+                ),
+            }
+        }
+
+        results.push((adapter.display_name.clone(), synced));
+    }
+
+    Ok(results)
+}
+
+/// Sync all effective skills for a specific agent to its adapter(s).
+/// Uses `get_effective_skills_for_agent` so extra packs are included.
+/// Returns a list of (adapter display name, synced count) pairs.
+fn sync_agent(
+    store: &SkillStore,
+    tool_key: &str,
+    adapters: &[tool_adapters::ToolAdapter],
+    configured_mode: Option<&str>,
+) -> Result<Vec<(String, usize)>> {
+    let skills = store.get_effective_skills_for_agent(tool_key)?;
     let mut results = Vec::new();
 
     for adapter in adapters {

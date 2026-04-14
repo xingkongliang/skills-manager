@@ -207,6 +207,17 @@ fn switch_scenario_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>, scena
             store_for_task
                 .set_active_scenario(&scenario_id_for_task)
                 .map_err(|e| e.to_string())?;
+            // Update all managed agents to use this scenario
+            let configs = store_for_task
+                .get_all_agent_configs()
+                .map_err(|e| e.to_string())?;
+            for config in &configs {
+                if config.managed {
+                    store_for_task
+                        .set_agent_scenario(&config.tool_key, &scenario_id_for_task)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
             commands::scenarios::sync_scenario_skills(&store_for_task, &scenario_id_for_task)
                 .map_err(|e| e.to_string())?;
             Ok::<bool, String>(true)
@@ -486,6 +497,15 @@ pub fn run() {
             commands::plugins::scan_plugins,
             commands::plugins::get_scenario_plugins,
             commands::plugins::set_scenario_plugin_enabled,
+            // Agents
+            commands::agents::get_all_agent_configs,
+            commands::agents::get_agent_config,
+            commands::agents::set_agent_scenario,
+            commands::agents::set_agent_managed,
+            commands::agents::add_agent_extra_pack,
+            commands::agents::remove_agent_extra_pack,
+            commands::agents::get_effective_skills_for_agent,
+            commands::agents::get_agent_extra_packs,
             // Scenarios
             commands::scenarios::get_scenarios,
             commands::scenarios::get_active_scenario,
@@ -545,6 +565,15 @@ fn initialize_startup_scenario(store: &Arc<core::skill_store::SkillStore>) -> Re
             .set_active_scenario(&desired_active)
             .map_err(|e| e.to_string())?;
     }
+
+    // Seed agent_configs for all enabled+installed agents on first run
+    let adapter_keys: Vec<String> = core::tool_adapters::enabled_installed_adapters(store)
+        .iter()
+        .map(|a| a.key.clone())
+        .collect();
+    store
+        .init_agent_configs(&adapter_keys)
+        .map_err(|e| e.to_string())?;
 
     commands::scenarios::sync_scenario_skills(store, &desired_active).map_err(|e| e.to_string())?;
     Ok(())

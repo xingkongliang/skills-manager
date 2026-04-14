@@ -23,11 +23,13 @@ enum Commands {
     #[command(alias = "c")]
     Current,
 
-    /// Switch to a scenario
+    /// Switch scenario. Without agent name, switches all agents.
     #[command(alias = "sw")]
     Switch {
-        /// Scenario name to switch to
+        /// Scenario name (or agent name when used with second arg)
         name: String,
+        /// If provided, first arg is agent name and this is scenario name
+        scenario: Option<String>,
     },
 
     /// List skills in a scenario (default: active)
@@ -57,6 +59,15 @@ enum Commands {
         #[command(subcommand)]
         action: PackAction,
     },
+
+    /// List agents with their assigned scenarios
+    Agents,
+
+    /// Manage a specific agent
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -77,19 +88,44 @@ enum PackAction {
     },
 }
 
+#[derive(Subcommand)]
+enum AgentAction {
+    /// Add an extra pack to an agent
+    AddPack {
+        /// Agent key (e.g., claude_code)
+        agent: String,
+        /// Pack name
+        pack: String,
+    },
+    /// Remove an extra pack from an agent
+    RemovePack {
+        /// Agent key (e.g., claude_code)
+        agent: String,
+        /// Pack name
+        pack: String,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
         Commands::List => commands::cmd_list(),
         Commands::Current => commands::cmd_current(),
-        Commands::Switch { name } => commands::cmd_switch(&name),
+        Commands::Switch { name, scenario } => commands::cmd_switch(&name, scenario.as_deref()),
         Commands::Skills { name } => commands::cmd_skills(name.as_deref()),
         Commands::Diff { a, b } => commands::cmd_diff(&a, &b),
         Commands::Packs { name } => commands::cmd_packs(name.as_deref()),
         Commands::Pack { action } => match action {
             PackAction::Add { pack, scenario } => commands::cmd_pack_add(&pack, &scenario),
             PackAction::Remove { pack, scenario } => commands::cmd_pack_remove(&pack, &scenario),
+        },
+        Commands::Agents => commands::cmd_agents(),
+        Commands::Agent { action } => match action {
+            AgentAction::AddPack { agent, pack } => commands::cmd_agent_add_pack(&agent, &pack),
+            AgentAction::RemovePack { agent, pack } => {
+                commands::cmd_agent_remove_pack(&agent, &pack)
+            }
         },
     };
 

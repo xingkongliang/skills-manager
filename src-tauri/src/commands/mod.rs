@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod browse;
 pub mod git_backup;
 pub mod packs;

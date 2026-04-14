@@ -114,6 +114,14 @@ pub struct ScenarioPluginRecord {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AgentConfigRecord {
+    pub tool_key: String,
+    pub scenario_id: Option<String>,
+    pub managed: bool,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ScenarioSkillToolToggleRecord {
     pub scenario_id: String,
     pub skill_id: String,
@@ -1343,6 +1351,165 @@ impl SkillStore {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
+    // ── Agent Config ──
+
+    pub fn get_agent_config(&self, tool_key: &str) -> Result<Option<AgentConfigRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT tool_key, scenario_id, managed, updated_at FROM agent_configs WHERE tool_key = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![tool_key], |row| {
+            Ok(AgentConfigRecord {
+                tool_key: row.get(0)?,
+                scenario_id: row.get(1)?,
+                managed: row.get::<_, i32>(2)? != 0,
+                updated_at: row.get(3)?,
+            })
+        })?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    pub fn get_all_agent_configs(&self) -> Result<Vec<AgentConfigRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT tool_key, scenario_id, managed, updated_at FROM agent_configs ORDER BY tool_key",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AgentConfigRecord {
+                tool_key: row.get(0)?,
+                scenario_id: row.get(1)?,
+                managed: row.get::<_, i32>(2)? != 0,
+                updated_at: row.get(3)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn set_agent_scenario(&self, tool_key: &str, scenario_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT OR REPLACE INTO agent_configs (tool_key, scenario_id, managed, updated_at)
+             VALUES (?1, ?2, COALESCE((SELECT managed FROM agent_configs WHERE tool_key = ?1), 1), ?3)",
+            params![tool_key, scenario_id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_agent_managed(&self, tool_key: &str, managed: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE agent_configs SET managed = ?1, updated_at = ?2 WHERE tool_key = ?3",
+            params![managed, now, tool_key],
+        )?;
+        Ok(())
+    }
+
+    /// Seed agent_configs for each tool_key using the current active scenario.
+    /// Existing rows are left unchanged (INSERT OR IGNORE).
+    pub fn init_agent_configs(&self, tool_keys: &[String]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        // Get the current active scenario
+        let active_scenario_id: Option<String> = {
+            let mut stmt =
+                conn.prepare("SELECT scenario_id FROM active_scenario WHERE key = 'current'")?;
+            let mut rows = stmt.query_map([], |row| row.get::<_, Option<String>>(0))?;
+            rows.next().and_then(|r| r.ok()).flatten()
+        };
+
+        let tx = conn.unchecked_transaction()?;
+        for tool_key in tool_keys {
+            tx.execute(
+                "INSERT OR IGNORE INTO agent_configs (tool_key, scenario_id, managed, updated_at)
+                 VALUES (?1, ?2, 1, ?3)",
+                params![tool_key, active_scenario_id, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn add_agent_extra_pack(&self, tool_key: &str, pack_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_extra_packs (tool_key, pack_id) VALUES (?1, ?2)",
+            params![tool_key, pack_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_agent_extra_pack(&self, tool_key: &str, pack_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM agent_extra_packs WHERE tool_key = ?1 AND pack_id = ?2",
+            params![tool_key, pack_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_agent_extra_packs(&self, tool_key: &str) -> Result<Vec<PackRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT p.id, p.name, p.description, p.icon, p.color, p.sort_order, p.created_at, p.updated_at
+             FROM packs p
+             INNER JOIN agent_extra_packs aep ON p.id = aep.pack_id
+             WHERE aep.tool_key = ?1
+             ORDER BY p.sort_order, p.name",
+        )?;
+        let rows = stmt.query_map(params![tool_key], map_pack_row)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Returns the deduplicated, ordered effective skill list for an agent.
+    /// Combines the agent's scenario skills (packs + direct) with any extra packs
+    /// assigned to the agent. Duplicates are removed (first occurrence wins).
+    pub fn get_effective_skills_for_agent(&self, tool_key: &str) -> Result<Vec<SkillRecord>> {
+        let conn = self.conn.lock().unwrap();
+
+        // Get the agent's scenario_id
+        let scenario_id: Option<String> = {
+            let mut stmt =
+                conn.prepare("SELECT scenario_id FROM agent_configs WHERE tool_key = ?1")?;
+            let mut rows =
+                stmt.query_map(params![tool_key], |row| row.get::<_, Option<String>>(0))?;
+            rows.next().and_then(|r| r.ok()).flatten()
+        };
+
+        let scenario_id = match scenario_id {
+            Some(id) => id,
+            None => return Ok(Vec::new()),
+        };
+
+        let mut stmt = conn.prepare(
+            "SELECT s.id, s.name, s.description, s.source_type, s.source_ref, s.source_ref_resolved, s.source_subpath,
+                    s.source_branch, s.source_revision, s.remote_revision, s.central_path, s.content_hash, s.enabled,
+                    s.created_at, s.updated_at, s.status, s.update_status, s.last_checked_at, s.last_check_error
+             FROM (
+                 SELECT ps.skill_id AS id, sp.sort_order * 10000 + ps.sort_order AS effective_order
+                 FROM pack_skills ps
+                 INNER JOIN scenario_packs sp ON ps.pack_id = sp.pack_id
+                 WHERE sp.scenario_id = ?1
+                 UNION ALL
+                 SELECT ss.skill_id AS id, 99999000 + ss.sort_order AS effective_order
+                 FROM scenario_skills ss
+                 WHERE ss.scenario_id = ?1
+                 UNION ALL
+                 SELECT ps.skill_id AS id, 199999000 + ps.sort_order AS effective_order
+                 FROM pack_skills ps
+                 INNER JOIN agent_extra_packs aep ON ps.pack_id = aep.pack_id
+                 WHERE aep.tool_key = ?2
+             ) AS ordering
+             INNER JOIN skills s ON s.id = ordering.id
+             GROUP BY s.id
+             ORDER BY MIN(ordering.effective_order)",
+        )?;
+        let rows = stmt.query_map(params![scenario_id, tool_key], map_skill_row)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     // ── Effective Skill Resolution ──
 
     /// Returns the deduplicated, ordered effective skill list for a scenario.
@@ -2075,5 +2242,276 @@ mod plugin_tests {
 
         let sc2_plugins = store.get_scenario_plugins("sc2").unwrap();
         assert!(sc2_plugins[0].enabled);
+    }
+}
+
+#[cfg(test)]
+mod agent_tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn test_store() -> (SkillStore, NamedTempFile) {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = SkillStore::new(&tmp.path().to_path_buf()).unwrap();
+        (store, tmp)
+    }
+
+    fn insert_test_skill(store: &SkillStore, id: &str, name: &str) -> SkillRecord {
+        let rec = SkillRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            source_type: "local".to_string(),
+            source_ref: None,
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: format!("/tmp/skills/{id}"),
+            content_hash: None,
+            enabled: true,
+            created_at: 1000,
+            updated_at: 1000,
+            status: "ok".to_string(),
+            update_status: "unknown".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        store.insert_skill(&rec).unwrap();
+        rec
+    }
+
+    fn insert_test_scenario(store: &SkillStore, id: &str, name: &str) {
+        let rec = ScenarioRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            icon: None,
+            sort_order: 0,
+            created_at: 1000,
+            updated_at: 1000,
+        };
+        store.insert_scenario(&rec).unwrap();
+    }
+
+    #[test]
+    fn set_and_get_agent_config() {
+        let (store, _tmp) = test_store();
+        insert_test_scenario(&store, "sc1", "Scenario One");
+
+        store.set_agent_scenario("claude", "sc1").unwrap();
+
+        let config = store.get_agent_config("claude").unwrap().unwrap();
+        assert_eq!(config.tool_key, "claude");
+        assert_eq!(config.scenario_id.as_deref(), Some("sc1"));
+        assert!(config.managed);
+        assert!(config.updated_at > 0);
+
+        // Non-existent agent returns None
+        let none = store.get_agent_config("nonexistent").unwrap();
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn get_all_agent_configs() {
+        let (store, _tmp) = test_store();
+        insert_test_scenario(&store, "sc1", "Scenario One");
+        insert_test_scenario(&store, "sc2", "Scenario Two");
+
+        store.set_agent_scenario("claude", "sc1").unwrap();
+        store.set_agent_scenario("windsurf", "sc2").unwrap();
+
+        let configs = store.get_all_agent_configs().unwrap();
+        assert_eq!(configs.len(), 2);
+        // Ordered by tool_key
+        assert_eq!(configs[0].tool_key, "claude");
+        assert_eq!(configs[1].tool_key, "windsurf");
+    }
+
+    #[test]
+    fn set_agent_managed() {
+        let (store, _tmp) = test_store();
+        insert_test_scenario(&store, "sc1", "Scenario One");
+
+        store.set_agent_scenario("claude", "sc1").unwrap();
+
+        // Default is managed=true
+        let config = store.get_agent_config("claude").unwrap().unwrap();
+        assert!(config.managed);
+
+        // Set to unmanaged
+        store.set_agent_managed("claude", false).unwrap();
+        let config = store.get_agent_config("claude").unwrap().unwrap();
+        assert!(!config.managed);
+
+        // Set back to managed
+        store.set_agent_managed("claude", true).unwrap();
+        let config = store.get_agent_config("claude").unwrap().unwrap();
+        assert!(config.managed);
+    }
+
+    #[test]
+    fn init_agent_configs_seeds_from_active_scenario() {
+        let (store, _tmp) = test_store();
+        insert_test_scenario(&store, "sc1", "Active Scenario");
+        store.set_active_scenario("sc1").unwrap();
+
+        let tool_keys = vec![
+            "claude".to_string(),
+            "windsurf".to_string(),
+            "cursor".to_string(),
+        ];
+        store.init_agent_configs(&tool_keys).unwrap();
+
+        let configs = store.get_all_agent_configs().unwrap();
+        assert_eq!(configs.len(), 3);
+        for config in &configs {
+            assert_eq!(config.scenario_id.as_deref(), Some("sc1"));
+            assert!(config.managed);
+        }
+
+        // Calling again should not overwrite existing rows (INSERT OR IGNORE)
+        insert_test_scenario(&store, "sc2", "New Active");
+        store.set_active_scenario("sc2").unwrap();
+        store.init_agent_configs(&tool_keys).unwrap();
+
+        let configs = store.get_all_agent_configs().unwrap();
+        assert_eq!(configs.len(), 3);
+        // All should still point to sc1 (not overwritten)
+        for config in &configs {
+            assert_eq!(config.scenario_id.as_deref(), Some("sc1"));
+        }
+    }
+
+    #[test]
+    fn add_and_remove_agent_extra_pack() {
+        let (store, _tmp) = test_store();
+        store
+            .insert_pack("p1", "Pack One", None, None, None)
+            .unwrap();
+        store
+            .insert_pack("p2", "Pack Two", None, None, None)
+            .unwrap();
+
+        store.add_agent_extra_pack("claude", "p1").unwrap();
+        store.add_agent_extra_pack("claude", "p2").unwrap();
+
+        let packs = store.get_agent_extra_packs("claude").unwrap();
+        assert_eq!(packs.len(), 2);
+
+        store.remove_agent_extra_pack("claude", "p1").unwrap();
+        let packs = store.get_agent_extra_packs("claude").unwrap();
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0].id, "p2");
+    }
+
+    #[test]
+    fn effective_skills_for_agent_scenario_only() {
+        let (store, _tmp) = test_store();
+        insert_test_skill(&store, "s1", "Skill A");
+        insert_test_skill(&store, "s2", "Skill B");
+        insert_test_scenario(&store, "sc1", "Scenario One");
+
+        // Set up scenario with skills via pack
+        store
+            .insert_pack("p1", "Pack One", None, None, None)
+            .unwrap();
+        store.add_skill_to_pack("p1", "s1").unwrap();
+        store.add_skill_to_pack("p1", "s2").unwrap();
+        store.add_pack_to_scenario("sc1", "p1").unwrap();
+
+        // Assign agent to scenario
+        store.set_agent_scenario("claude", "sc1").unwrap();
+
+        let effective = store.get_effective_skills_for_agent("claude").unwrap();
+        assert_eq!(effective.len(), 2);
+        assert_eq!(effective[0].id, "s1");
+        assert_eq!(effective[1].id, "s2");
+    }
+
+    #[test]
+    fn effective_skills_for_agent_with_extra_pack() {
+        let (store, _tmp) = test_store();
+        insert_test_skill(&store, "s1", "Skill A");
+        insert_test_skill(&store, "s2", "Skill B");
+        insert_test_skill(&store, "s3", "Skill C");
+        insert_test_scenario(&store, "sc1", "Scenario One");
+
+        // Scenario has s1 via pack
+        store
+            .insert_pack("p1", "Base Pack", None, None, None)
+            .unwrap();
+        store.add_skill_to_pack("p1", "s1").unwrap();
+        store.add_pack_to_scenario("sc1", "p1").unwrap();
+
+        // Extra pack has s2 and s3
+        store
+            .insert_pack("p2", "Extra Pack", None, None, None)
+            .unwrap();
+        store.add_skill_to_pack("p2", "s2").unwrap();
+        store.add_skill_to_pack("p2", "s3").unwrap();
+
+        // Assign agent to scenario + extra pack
+        store.set_agent_scenario("claude", "sc1").unwrap();
+        store.add_agent_extra_pack("claude", "p2").unwrap();
+
+        let effective = store.get_effective_skills_for_agent("claude").unwrap();
+        assert_eq!(effective.len(), 3);
+        // Scenario skills first, then extra pack skills
+        assert_eq!(effective[0].id, "s1");
+        assert_eq!(effective[1].id, "s2");
+        assert_eq!(effective[2].id, "s3");
+    }
+
+    #[test]
+    fn effective_skills_for_agent_deduped() {
+        let (store, _tmp) = test_store();
+        insert_test_skill(&store, "s1", "Shared Skill");
+        insert_test_skill(&store, "s2", "Extra Only");
+        insert_test_scenario(&store, "sc1", "Scenario One");
+
+        // s1 in scenario's pack
+        store
+            .insert_pack("p1", "Base Pack", None, None, None)
+            .unwrap();
+        store.add_skill_to_pack("p1", "s1").unwrap();
+        store.add_pack_to_scenario("sc1", "p1").unwrap();
+
+        // s1 also in extra pack (duplicate), plus s2
+        store
+            .insert_pack("p2", "Extra Pack", None, None, None)
+            .unwrap();
+        store.add_skill_to_pack("p2", "s1").unwrap();
+        store.add_skill_to_pack("p2", "s2").unwrap();
+
+        store.set_agent_scenario("claude", "sc1").unwrap();
+        store.add_agent_extra_pack("claude", "p2").unwrap();
+
+        let effective = store.get_effective_skills_for_agent("claude").unwrap();
+        assert_eq!(effective.len(), 2, "s1 should be deduped");
+        assert_eq!(effective[0].id, "s1");
+        assert_eq!(effective[1].id, "s2");
+    }
+
+    #[test]
+    fn unmanaged_agent_config() {
+        let (store, _tmp) = test_store();
+        insert_test_scenario(&store, "sc1", "Scenario One");
+
+        store.set_agent_scenario("claude", "sc1").unwrap();
+        store.set_agent_managed("claude", false).unwrap();
+
+        let config = store.get_agent_config("claude").unwrap().unwrap();
+        assert!(!config.managed);
+        assert_eq!(config.scenario_id.as_deref(), Some("sc1"));
+
+        // Changing scenario preserves managed=false
+        insert_test_scenario(&store, "sc2", "Scenario Two");
+        store.set_agent_scenario("claude", "sc2").unwrap();
+
+        let config = store.get_agent_config("claude").unwrap().unwrap();
+        assert!(!config.managed);
+        assert_eq!(config.scenario_id.as_deref(), Some("sc2"));
     }
 }

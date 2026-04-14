@@ -15,6 +15,8 @@ import {
   FolderOpen,
   GripVertical,
   Link2,
+  ChevronRight,
+  Bot,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -25,7 +27,7 @@ import { RenameScenarioDialog } from "./RenameScenarioDialog";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import * as api from "../lib/tauri";
-import type { SyncHealth } from "../lib/tauri";
+import type { SyncHealth, AgentConfigDto } from "../lib/tauri";
 import { getScenarioIconOption } from "../lib/scenarioIcons";
 
 function getSyncHealthIndicator(health: SyncHealth, skillCount: number): { color: string; title: string } | null {
@@ -54,11 +56,17 @@ export function Sidebar() {
   const [deleteProjectTarget, setDeleteProjectTarget] = useState<{ id: string; name: string } | null>(null);
   const [orderedScenarios, setOrderedScenarios] = useState(scenarios);
   const [orderedProjects, setOrderedProjects] = useState(projects);
+  const [agentConfigs, setAgentConfigs] = useState<AgentConfigDto[]>([]);
+  const [scenariosCollapsed, setScenariosCollapsed] = useState(false);
   const scenarioReorderQueueRef = useRef<Promise<void>>(Promise.resolve());
   const projectReorderQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => { setOrderedScenarios(scenarios); }, [scenarios]);
   useEffect(() => { setOrderedProjects(projects); }, [projects]);
+
+  useEffect(() => {
+    api.getAllAgentConfigs().then(setAgentConfigs).catch(() => {});
+  }, [activeScenario]);
 
   const handleDragEnd = (result: DropResult) => {
     if (!result.destination || result.destination.index === result.source.index) return;
@@ -217,13 +225,68 @@ export function Sidebar() {
         {/* Divider */}
         <div className="mx-3 mt-3.5 mb-2.5 border-t border-border-subtle" />
 
-        {/* Scenarios */}
         <div className="px-2.5 flex-1 overflow-y-auto scrollbar-hide min-h-0">
-          <div className="mb-1.5 px-2.5">
+          {/* Agents */}
+          {agentConfigs.filter((a) => a.installed).length > 0 && (
+            <>
+              <div className="mb-1.5 px-2.5">
+                <span className="block truncate text-[12px] font-semibold tracking-[0.01em] text-muted whitespace-nowrap">
+                  AGENTS
+                </span>
+              </div>
+              <div className="space-y-0.5 mb-2">
+                {agentConfigs.filter((a) => a.installed).map((agent) => (
+                  <Link
+                    key={agent.tool_key}
+                    to={`/agent/${agent.tool_key}`}
+                    className={cn(
+                      "flex items-center gap-2 px-2.5 py-[7px] rounded-[5px] text-[13px] transition-colors outline-none",
+                      location.pathname === `/agent/${agent.tool_key}`
+                        ? "bg-surface-active text-primary font-medium"
+                        : "text-tertiary hover:text-secondary hover:bg-surface-hover"
+                    )}
+                  >
+                    <Bot
+                      className={cn(
+                        "w-4 h-4 shrink-0",
+                        location.pathname === `/agent/${agent.tool_key}` ? "text-accent" : "text-muted"
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "w-1.5 h-1.5 rounded-full shrink-0",
+                        agent.managed ? "bg-emerald-400" : "bg-gray-500"
+                      )}
+                    />
+                    <span className="flex-1 truncate">{agent.display_name}</span>
+                    <span className="text-[10px] text-muted shrink-0 tabular-nums">
+                      {agent.scenario_name || "—"}
+                      {agent.extra_pack_count > 0 && ` +${agent.extra_pack_count}`}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+              <div className="mx-0.5 mb-2.5 border-t border-border-subtle" />
+            </>
+          )}
+
+          {/* Scenarios */}
+          <div className="mb-1.5 px-2.5 flex items-center justify-between">
             <span className="block truncate text-[12px] font-semibold tracking-[0.01em] text-muted whitespace-nowrap">
               {t("sidebar.scenarios")}
             </span>
+            <button
+              onClick={() => setScenariosCollapsed((c) => !c)}
+              className="text-faint hover:text-muted transition-colors outline-none"
+              title={scenariosCollapsed ? "Expand" : "Collapse"}
+            >
+              <ChevronRight
+                className={cn("w-3 h-3 transition-transform", !scenariosCollapsed && "rotate-90")}
+              />
+            </button>
           </div>
+          {!scenariosCollapsed && (
+          <>
           <DragDropContext onDragEnd={handleDragEnd}>
             <Droppable droppableId="scenarios">
               {(droppableProvided) => (
@@ -324,6 +387,8 @@ export function Sidebar() {
             <Plus className="w-3.5 h-3.5" />
             {t("sidebar.newScenario")}
           </button>
+          </>
+          )}
 
           {/* Divider */}
           <div className="mx-0.5 mt-3.5 mb-2.5 border-t border-border-subtle" />

@@ -1,0 +1,364 @@
+import { useState, useEffect, useCallback } from "react";
+import { useParams } from "react-router-dom";
+import { Bot, ToggleLeft, ToggleRight } from "lucide-react";
+import { toast } from "sonner";
+import { cn } from "../utils";
+import { useApp } from "../context/AppContext";
+import * as api from "../lib/tauri";
+import type { AgentConfigDto, PackRecord, PackSkillRecord } from "../lib/tauri";
+
+// ─── Skill Tag Cloud ─────────────────────────────────────────────────────────
+
+interface SkillTagCloudProps {
+  skills: PackSkillRecord[];
+  extraPackIds: Set<string>;
+}
+
+function SkillTagCloud({ skills, extraPackIds: _extraPackIds }: SkillTagCloudProps) {
+  if (skills.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 pt-2">
+      {skills.map((skill) => (
+        <span
+          key={skill.id}
+          className="inline-flex items-center rounded-full border border-border-subtle bg-surface-hover px-2 py-0.5 text-[11px] font-medium text-tertiary"
+          title={skill.description || undefined}
+        >
+          {skill.name}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ─── Progress Bar ─────────────────────────────────────────────────────────────
+
+interface SkillProgressBarProps {
+  scenarioCount: number;
+  extraCount: number;
+  total: number;
+}
+
+function SkillProgressBar({ scenarioCount, extraCount, total }: SkillProgressBarProps) {
+  if (total === 0) return <div className="h-2 rounded-full bg-surface-hover" />;
+  const scenarioPct = Math.round((scenarioCount / total) * 100);
+  const extraPct = Math.round((extraCount / total) * 100);
+  return (
+    <div className="flex h-2 w-full overflow-hidden rounded-full bg-surface-hover">
+      <div
+        className="h-full bg-emerald-500 transition-all"
+        style={{ width: `${scenarioPct}%` }}
+        title={`Scenario: ${scenarioCount}`}
+      />
+      <div
+        className="h-full bg-amber-400 transition-all"
+        style={{ width: `${extraPct}%` }}
+        title={`Extra packs: ${extraCount}`}
+      />
+    </div>
+  );
+}
+
+// ─── Main View ───────────────────────────────────────────────────────────────
+
+export function AgentDetail() {
+  const { toolKey } = useParams<{ toolKey: string }>();
+  const { scenarios } = useApp();
+
+  const [agent, setAgent] = useState<AgentConfigDto | null>(null);
+  const [effectiveSkills, setEffectiveSkills] = useState<PackSkillRecord[]>([]);
+  const [extraPacks, setExtraPacks] = useState<PackRecord[]>([]);
+  const [allPacks, setAllPacks] = useState<PackRecord[]>([]);
+  const [scenarioPacks, setScenarioPacks] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [applyingScenario, setApplyingScenario] = useState(false);
+  const [pendingScenarioId, setPendingScenarioId] = useState<string>("");
+  const [togglingPack, setTogglingPack] = useState<string | null>(null);
+  const [togglingManaged, setTogglingManaged] = useState(false);
+
+  const loadAgent = useCallback(async () => {
+    if (!toolKey) return;
+    try {
+      const [cfg, skills, packs, all] = await Promise.all([
+        api.getAgentConfig(toolKey),
+        api.getEffectiveSkillsForAgent(toolKey),
+        api.getAgentExtraPacks(toolKey),
+        api.getAllPacks(),
+      ]);
+      setAgent(cfg);
+      setEffectiveSkills(skills);
+      setExtraPacks(packs);
+      setAllPacks(all);
+      setPendingScenarioId(cfg?.scenario_id ?? "");
+
+      // Load the base scenario's packs so we can exclude them from extra picks
+      if (cfg?.scenario_id) {
+        try {
+          const sp = await api.getPacksForScenario(cfg.scenario_id);
+          setScenarioPacks(new Set(sp.map((p) => p.id)));
+        } catch {
+          setScenarioPacks(new Set());
+        }
+      } else {
+        setScenarioPacks(new Set());
+      }
+    } catch (e) {
+      console.error("Failed to load agent config", e);
+      toast.error("Failed to load agent config");
+    } finally {
+      setLoading(false);
+    }
+  }, [toolKey]);
+
+  useEffect(() => {
+    setLoading(true);
+    loadAgent();
+  }, [loadAgent]);
+
+  const handleApplyScenario = async () => {
+    if (!toolKey || !pendingScenarioId) return;
+    setApplyingScenario(true);
+    try {
+      await api.setAgentScenario(toolKey, pendingScenarioId);
+      await loadAgent();
+      toast.success("Scenario applied");
+    } catch {
+      toast.error("Failed to apply scenario");
+    } finally {
+      setApplyingScenario(false);
+    }
+  };
+
+  const handleToggleManaged = async () => {
+    if (!toolKey || !agent) return;
+    setTogglingManaged(true);
+    try {
+      await api.setAgentManaged(toolKey, !agent.managed);
+      await loadAgent();
+      toast.success(agent.managed ? "Agent unmanaged" : "Agent managed");
+    } catch {
+      toast.error("Failed to update agent");
+    } finally {
+      setTogglingManaged(false);
+    }
+  };
+
+  const handleTogglePack = async (pack: PackRecord, currentlyEnabled: boolean) => {
+    if (!toolKey) return;
+    setTogglingPack(pack.id);
+    try {
+      if (currentlyEnabled) {
+        await api.removeAgentExtraPack(toolKey, pack.id);
+        toast.success(`Removed "${pack.name}"`);
+      } else {
+        await api.addAgentExtraPack(toolKey, pack.id);
+        toast.success(`Added "${pack.name}"`);
+      }
+      await loadAgent();
+    } catch {
+      toast.error("Failed to update pack");
+    } finally {
+      setTogglingPack(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="app-page app-page-narrow">
+        <div className="flex items-center justify-center py-16 text-muted text-[13px]">
+          Loading…
+        </div>
+      </div>
+    );
+  }
+
+  if (!agent) {
+    return (
+      <div className="app-page app-page-narrow">
+        <div className="flex items-center justify-center py-16 text-muted text-[13px]">
+          Agent not found.
+        </div>
+      </div>
+    );
+  }
+
+  const extraPackIds = new Set(extraPacks.map((p) => p.id));
+  const availableExtraPacks = allPacks.filter((p) => !scenarioPacks.has(p.id));
+
+  // Skill counts for progress bar
+  // We approximate: total = effective, extra = extra_pack_count worth of skills
+  // Actual split requires knowing which skills come from which source, but we use
+  // agent's effective_skill_count and extra_pack_count as a proxy count ratio.
+  const totalCount = effectiveSkills.length;
+  const extraSkillCount = agent.extra_pack_count > 0
+    ? Math.max(0, totalCount - (agent.effective_skill_count - agent.extra_pack_count))
+    : 0;
+  const scenarioSkillCount = totalCount - extraSkillCount;
+
+  const fieldClass =
+    "h-8 rounded-[4px] border border-border-subtle bg-background px-2.5 text-[13px] text-secondary outline-none transition-colors focus:border-border";
+
+  const scenarioChanged = pendingScenarioId !== (agent.scenario_id ?? "");
+
+  return (
+    <div className="app-page app-page-narrow">
+      {/* Header */}
+      <div className="app-page-header">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface">
+              <Bot className="h-5 w-5 text-muted" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="app-page-title">{agent.display_name}</h1>
+              <p className="app-page-subtitle">
+                {agent.effective_skill_count} effective skill{agent.effective_skill_count !== 1 ? "s" : ""}
+                {agent.extra_pack_count > 0 && ` · ${agent.extra_pack_count} extra pack${agent.extra_pack_count !== 1 ? "s" : ""}`}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Managed toggle */}
+            <button
+              onClick={handleToggleManaged}
+              disabled={togglingManaged}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] font-medium transition-colors outline-none",
+                agent.managed
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
+                  : "border-border-subtle bg-surface text-muted hover:bg-surface-hover"
+              )}
+            >
+              {agent.managed
+                ? <ToggleRight className="h-3.5 w-3.5" />
+                : <ToggleLeft className="h-3.5 w-3.5" />}
+              {agent.managed ? "Active" : "Unmanaged"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Base Scenario */}
+      <div>
+        <h2 className="app-section-title mb-3">Base Scenario</h2>
+        <div className="app-panel p-4">
+          <div className="flex items-center gap-3">
+            <select
+              value={pendingScenarioId}
+              onChange={(e) => setPendingScenarioId(e.target.value)}
+              className={cn(fieldClass, "flex-1")}
+            >
+              <option value="">— No scenario —</option>
+              {scenarios.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.skill_count} skills)
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={handleApplyScenario}
+              disabled={!scenarioChanged || applyingScenario || !pendingScenarioId}
+              className="app-button-primary !py-1.5 !px-3 !text-[12px]"
+            >
+              {applyingScenario ? "Applying…" : "Apply"}
+            </button>
+          </div>
+          {agent.scenario_name && (
+            <p className="text-[12px] text-muted mt-2">
+              Current: <span className="text-secondary font-medium">{agent.scenario_name}</span>
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Additional Packs */}
+      {availableExtraPacks.length > 0 && (
+        <div>
+          <h2 className="app-section-title mb-3">Additional Packs</h2>
+          <div className="app-panel overflow-hidden divide-y divide-border-subtle">
+            {availableExtraPacks.map((pack) => {
+              const isEnabled = extraPackIds.has(pack.id);
+              const isLoading = togglingPack === pack.id;
+              return (
+                <div
+                  key={pack.id}
+                  className="flex items-center justify-between px-4 py-3 hover:bg-surface-hover transition-colors"
+                >
+                  <div className="min-w-0 flex-1">
+                    <h4 className="text-[13px] font-medium text-secondary truncate">
+                      {pack.name}
+                    </h4>
+                    {pack.description && (
+                      <p className="text-[12px] text-muted truncate mt-0.5">{pack.description}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => handleTogglePack(pack, isEnabled)}
+                    disabled={isLoading}
+                    className={cn(
+                      "flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors outline-none ml-3",
+                      isEnabled
+                        ? "border-accent-border bg-accent-dark text-white"
+                        : "border-border bg-surface hover:border-border-subtle"
+                    )}
+                  >
+                    {isEnabled && (
+                      <svg className="w-2.5 h-2.5" viewBox="0 0 12 12" fill="none">
+                        <path
+                          d="M2 6L5 9L10 3"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Effective Skills */}
+      <div>
+        <h2 className="app-section-title mb-3">Effective Skills</h2>
+        <div className="app-panel p-4 space-y-3">
+          {/* Summary line */}
+          <div className="text-[13px] text-secondary">
+            {agent.scenario_name && (
+              <span>
+                <span className="text-emerald-400 font-medium">{agent.scenario_name}</span>
+                {` (${scenarioSkillCount})`}
+              </span>
+            )}
+            {agent.extra_pack_count > 0 && (
+              <span className="text-muted">
+                {agent.scenario_name && " + "}
+                <span className="text-amber-400 font-medium">extra packs</span>
+                {` (${extraSkillCount})`}
+              </span>
+            )}
+            {totalCount > 0 && (
+              <span className="text-muted"> = {totalCount} total</span>
+            )}
+            {totalCount === 0 && (
+              <span className="text-muted">No skills assigned</span>
+            )}
+          </div>
+
+          {/* Progress bar */}
+          <SkillProgressBar
+            scenarioCount={scenarioSkillCount}
+            extraCount={extraSkillCount}
+            total={totalCount}
+          />
+
+          {/* Tag cloud */}
+          <SkillTagCloud skills={effectiveSkills} extraPackIds={extraPackIds} />
+        </div>
+      </div>
+    </div>
+  );
+}

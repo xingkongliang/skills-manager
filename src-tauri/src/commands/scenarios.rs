@@ -150,6 +150,14 @@ pub async fn create_scenario(
         }
         store.set_active_scenario(&id).map_err(AppError::db)?;
 
+        // Update all managed agents to use this new scenario
+        let configs = store.get_all_agent_configs().map_err(AppError::db)?;
+        for config in &configs {
+            if config.managed {
+                store.set_agent_scenario(&config.tool_key, &id).map_err(AppError::db)?;
+            }
+        }
+
         Ok(ScenarioDto {
             id,
             name,
@@ -214,6 +222,13 @@ pub async fn delete_scenario(
             let remaining = store.get_all_scenarios().map_err(AppError::db)?;
             if let Some(first) = remaining.first() {
                 store.set_active_scenario(&first.id).map_err(AppError::db)?;
+                // Update all managed agents to the fallback scenario
+                let configs = store.get_all_agent_configs().map_err(AppError::db)?;
+                for config in &configs {
+                    if config.managed {
+                        store.set_agent_scenario(&config.tool_key, &first.id).map_err(AppError::db)?;
+                    }
+                }
                 sync_scenario_skills(&store, &first.id)?;
             } else {
                 store.clear_active_scenario().map_err(AppError::db)?;
@@ -249,6 +264,14 @@ pub async fn switch_scenario(
         // Set new active
         store.set_active_scenario(&id).map_err(AppError::db)?;
 
+        // Update all managed agents to use this scenario
+        let configs = store.get_all_agent_configs().map_err(AppError::db)?;
+        for config in &configs {
+            if config.managed {
+                store.set_agent_scenario(&config.tool_key, &id).map_err(AppError::db)?;
+            }
+        }
+
         // Sync new scenario skills
         sync_scenario_skills(&store, &id)?;
 
@@ -274,48 +297,14 @@ pub async fn add_skill_to_scenario(
             .add_skill_to_scenario(&scenario_id, &skill_id)
             .map_err(AppError::db)?;
 
-        // If this is the active scenario, sync the skill
-        if let Ok(Some(active_id)) = store.get_active_scenario_id() {
-            if active_id == scenario_id {
-                let adapters =
-                    enabled_installed_adapters_for_scenario_skill(&store, &scenario_id, &skill_id)?;
-                let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-                if let Ok(Some(skill)) = store.get_skill_by_id(&skill_id) {
-                    let source = PathBuf::from(&skill.central_path);
-                    for adapter in &adapters {
-                        let target = adapter.skills_dir().join(&skill.name);
-                        let mode = sync_engine::sync_mode_for_tool(
-                            &adapter.key,
-                            configured_mode.as_deref(),
-                        );
-                        match sync_engine::sync_skill(&source, &target, mode) {
-                            Ok(actual_mode) => {
-                                let now = chrono::Utc::now().timestamp_millis();
-                                let target_record = crate::core::skill_store::SkillTargetRecord {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    skill_id: skill_id.clone(),
-                                    tool: adapter.key.clone(),
-                                    target_path: target.to_string_lossy().to_string(),
-                                    mode: actual_mode.as_str().to_string(),
-                                    status: "ok".to_string(),
-                                    synced_at: Some(now),
-                                    last_error: None,
-                                };
-                                if let Err(e) = store.insert_target(&target_record) {
-                                    log::warn!(
-                                        "Failed to insert sync target for skill {skill_id}: {e}"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                log::warn!(
-                                    "Failed to sync skill {skill_id} to {}: {e}",
-                                    target.display()
-                                );
-                            }
-                        }
-                    }
-                }
+        // Re-sync all managed agents that are on this scenario
+        let agent_configs = store.get_all_agent_configs().map_err(AppError::db)?;
+        for config in &agent_configs {
+            if !config.managed {
+                continue;
+            }
+            if config.scenario_id.as_deref() == Some(scenario_id.as_str()) {
+                sync_agent_skills(&store, &config.tool_key)?;
             }
         }
 
@@ -341,26 +330,35 @@ pub async fn remove_skill_from_scenario(
             .remove_skill_from_scenario(&scenario_id, &skill_id)
             .map_err(AppError::db)?;
 
-        // If this is the active scenario, unsync the skill only if it is no longer
-        // in the effective skill set (i.e. not still inherited via a pack).
-        if let Ok(Some(active_id)) = store.get_active_scenario_id() {
-            if active_id == scenario_id {
-                let still_effective = store
-                    .is_skill_in_effective_scenario(&scenario_id, &skill_id)
-                    .unwrap_or(false);
-                if !still_effective {
-                    let targets = store.get_targets_for_skill(&skill_id).unwrap_or_default();
-                    for target in &targets {
-                        let path = PathBuf::from(&target.target_path);
-                        if let Err(e) = sync_engine::remove_target(&path) {
-                            log::warn!("Failed to remove sync target {}: {e}", path.display());
-                        }
-                        if let Err(e) = store.delete_target(&skill_id, &target.tool) {
-                            log::warn!(
-                                "Failed to delete target record for skill {skill_id}, tool {}: {e}",
-                                target.tool
-                            );
-                        }
+        // For each managed agent on this scenario, check if the skill is still
+        // in the effective set (might still be inherited via a pack). If not,
+        // remove the sync target for that agent's tool.
+        let agent_configs = store.get_all_agent_configs().map_err(AppError::db)?;
+        for config in &agent_configs {
+            if !config.managed {
+                continue;
+            }
+            if config.scenario_id.as_deref() != Some(scenario_id.as_str()) {
+                continue;
+            }
+            let still_effective = store
+                .is_skill_in_effective_scenario(&scenario_id, &skill_id)
+                .unwrap_or(false);
+            if !still_effective {
+                let targets = store.get_targets_for_skill(&skill_id).unwrap_or_default();
+                for target in &targets {
+                    if target.tool != config.tool_key {
+                        continue;
+                    }
+                    let path = PathBuf::from(&target.target_path);
+                    if let Err(e) = sync_engine::remove_target(&path) {
+                        log::warn!("Failed to remove sync target {}: {e}", path.display());
+                    }
+                    if let Err(e) = store.delete_target(&skill_id, &target.tool) {
+                        log::warn!(
+                            "Failed to delete target record for skill {skill_id}, tool {}: {e}",
+                            target.tool
+                        );
                     }
                 }
             }
@@ -423,45 +421,121 @@ pub async fn reorder_scenario_skills(
 
 // ── Internal helpers ──
 
-pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), AppError> {
+/// Sync a single agent's effective skills to its tool directory.
+pub(crate) fn sync_agent_skills(
+    store: &SkillStore,
+    tool_key: &str,
+) -> Result<(), AppError> {
+    let adapter = match tool_adapters::find_adapter_with_store(store, tool_key) {
+        Some(a) if a.is_installed() => a,
+        _ => return Ok(()),
+    };
+
     let skills = store
-        .get_effective_skills_for_scenario(scenario_id)
+        .get_effective_skills_for_agent(tool_key)
         .map_err(AppError::db)?;
     let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
 
+    // Get the agent's scenario_id for per-skill tool toggle lookups
+    let agent_scenario_id = store
+        .get_agent_config(tool_key)
+        .map_err(AppError::db)?
+        .and_then(|c| c.scenario_id);
+
     for skill in &skills {
         let source = PathBuf::from(&skill.central_path);
-        let adapters =
-            enabled_installed_adapters_for_scenario_skill(store, scenario_id, &skill.id)?;
-        for adapter in &adapters {
-            let target = adapter.skills_dir().join(&skill.name);
-            let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
-            match sync_engine::sync_skill(&source, &target, mode) {
-                Ok(actual_mode) => {
-                    let now = chrono::Utc::now().timestamp_millis();
-                    let target_record = crate::core::skill_store::SkillTargetRecord {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        skill_id: skill.id.clone(),
-                        tool: adapter.key.clone(),
-                        target_path: target.to_string_lossy().to_string(),
-                        mode: actual_mode.as_str().to_string(),
-                        status: "ok".to_string(),
-                        synced_at: Some(now),
-                        last_error: None,
-                    };
-                    if let Err(e) = store.insert_target(&target_record) {
-                        log::warn!("Failed to insert sync target for skill {}: {e}", skill.id);
-                    }
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to sync skill {} to {}: {e}",
-                        skill.id,
-                        target.display()
-                    );
-                }
+        if !source.exists() {
+            continue;
+        }
+
+        // If agent has a scenario, check per-skill tool toggles
+        if let Some(ref scenario_id) = agent_scenario_id {
+            let adapter_keys = vec![adapter.key.clone()];
+            store
+                .ensure_scenario_skill_tool_defaults(scenario_id, &skill.id, &adapter_keys)
+                .map_err(AppError::db)?;
+
+            let enabled = store
+                .get_enabled_tools_for_scenario_skill(scenario_id, &skill.id)
+                .map_err(AppError::db)?;
+            if !enabled.contains(&adapter.key) {
+                continue;
             }
         }
+
+        let target = adapter.skills_dir().join(&skill.name);
+        let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
+        match sync_engine::sync_skill(&source, &target, mode) {
+            Ok(actual_mode) => {
+                let now = chrono::Utc::now().timestamp_millis();
+                let target_record = crate::core::skill_store::SkillTargetRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    skill_id: skill.id.clone(),
+                    tool: adapter.key.clone(),
+                    target_path: target.to_string_lossy().to_string(),
+                    mode: actual_mode.as_str().to_string(),
+                    status: "ok".to_string(),
+                    synced_at: Some(now),
+                    last_error: None,
+                };
+                if let Err(e) = store.insert_target(&target_record) {
+                    log::warn!("Failed to insert sync target for skill {}: {e}", skill.id);
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to sync skill {} to {}: {e}",
+                    skill.id,
+                    target.display()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Unsync a single agent's effective skills from its tool directory.
+pub(crate) fn unsync_agent_skills(
+    store: &SkillStore,
+    tool_key: &str,
+) -> Result<(), AppError> {
+    // Remove all targets for this tool
+    let all_targets = store.get_all_targets().map_err(AppError::db)?;
+    for target in &all_targets {
+        if target.tool != tool_key {
+            continue;
+        }
+        let path = PathBuf::from(&target.target_path);
+        if let Err(e) = sync_engine::remove_target(&path) {
+            log::warn!("Failed to remove sync target {}: {e}", path.display());
+        }
+        if let Err(e) = store.delete_target(&target.skill_id, &target.tool) {
+            log::warn!(
+                "Failed to delete target record for skill {}, tool {}: {e}",
+                target.skill_id,
+                target.tool
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Sync scenario skills across all managed agents.
+/// Each agent gets its own effective skill list based on its per-agent scenario
+/// (and any extra packs assigned to it).
+pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), AppError> {
+    let agent_configs = store.get_all_agent_configs().map_err(AppError::db)?;
+
+    for config in &agent_configs {
+        if !config.managed {
+            continue;
+        }
+        // Only sync agents that are on this scenario
+        if config.scenario_id.as_deref() != Some(scenario_id) {
+            continue;
+        }
+        sync_agent_skills(store, &config.tool_key)?;
     }
 
     // Apply per-scenario plugin state to installed_plugins.json
@@ -476,24 +550,17 @@ pub(crate) fn unsync_scenario_skills(
     store: &SkillStore,
     scenario_id: &str,
 ) -> Result<(), AppError> {
-    let skill_ids = store
-        .get_effective_skill_ids_for_scenario(scenario_id)
-        .map_err(AppError::db)?;
+    let agent_configs = store.get_all_agent_configs().map_err(AppError::db)?;
 
-    for skill_id in &skill_ids {
-        let targets = store.get_targets_for_skill(skill_id).unwrap_or_default();
-        for target in &targets {
-            let path = PathBuf::from(&target.target_path);
-            if let Err(e) = sync_engine::remove_target(&path) {
-                log::warn!("Failed to remove sync target {}: {e}", path.display());
-            }
-            if let Err(e) = store.delete_target(skill_id, &target.tool) {
-                log::warn!(
-                    "Failed to delete target record for skill {skill_id}, tool {}: {e}",
-                    target.tool
-                );
-            }
+    for config in &agent_configs {
+        if !config.managed {
+            continue;
         }
+        // Only unsync agents that are on this scenario
+        if config.scenario_id.as_deref() != Some(scenario_id) {
+            continue;
+        }
+        unsync_agent_skills(store, &config.tool_key)?;
     }
 
     // Restore all plugins when unsyncing (back to "all enabled" default)
