@@ -615,6 +615,12 @@ impl SkillStore {
         Ok(())
     }
 
+    pub fn delete_discovered(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM discovered_skills WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     // ── Cache ──
 
     pub fn get_cache(&self, key: &str, ttl_secs: i64) -> Result<Option<String>> {

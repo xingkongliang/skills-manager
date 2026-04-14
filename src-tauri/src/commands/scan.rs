@@ -59,12 +59,26 @@ pub async fn scan_local_skills(
             store.insert_discovered(rec).map_err(AppError::db)?;
         }
 
+        // Clean up stale discovered entries (paths that no longer exist)
+        let all_discovered_after = store.get_all_discovered().map_err(AppError::db)?;
+        for d in &all_discovered_after {
+            if !std::path::Path::new(&d.found_path).exists() {
+                store.delete_discovered(&d.id).ok();
+            }
+        }
+
         let all_discovered = store.get_all_discovered().map_err(AppError::db)?;
         let groups = scanner::group_discovered(&all_discovered);
 
+        // Count only unlinked, non-native discovered skills as importable
+        let importable_count = all_discovered
+            .iter()
+            .filter(|d| d.imported_skill_id.is_none() && !d.is_native)
+            .count();
+
         Ok(ScanResultDto {
             tools_scanned: plan.tools_scanned,
-            skills_found: plan.skills_found,
+            skills_found: importable_count,
             groups,
         })
     })
@@ -165,6 +179,13 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
                     if let Some(ref scenario_id) = active_scenario {
                         store.add_skill_to_scenario(scenario_id, &existing.id).ok();
                     }
+                    // Link ALL discovered records with this name to the existing skill
+                    let all_discovered = store.get_all_discovered().unwrap_or_default();
+                    for d in &all_discovered {
+                        if d.name_guess.as_deref() == Some(&group.name) && d.imported_skill_id.is_none() {
+                            store.link_discovered_to_skill(&d.id, &existing.id).ok();
+                        }
+                    }
                     continue;
                 }
 
@@ -197,6 +218,14 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
                         last_check_error: None,
                     };
                     store.insert_skill(&record).ok();
+
+                    // Link ALL discovered records with this name to the imported skill
+                    let all_discovered = store.get_all_discovered().unwrap_or_default();
+                    for d in &all_discovered {
+                        if d.name_guess.as_deref() == Some(&group.name) && d.imported_skill_id.is_none() {
+                            store.link_discovered_to_skill(&d.id, &id).ok();
+                        }
+                    }
 
                     if let Some(ref scenario_id) = active_scenario {
                         store.add_skill_to_scenario(scenario_id, &id).ok();
