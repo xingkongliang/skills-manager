@@ -227,7 +227,7 @@ export function Sidebar() {
 
         <div className="px-2.5 flex-1 overflow-y-auto scrollbar-hide min-h-0">
           {/* Agents */}
-          {agentConfigs.filter((a) => a.installed).length > 0 && (
+          {agentConfigs.filter((a) => a.managed).length > 0 && (
             <>
               <div className="mb-1.5 px-2.5">
                 <span className="block truncate text-[12px] font-semibold tracking-[0.01em] text-muted whitespace-nowrap">
@@ -235,7 +235,7 @@ export function Sidebar() {
                 </span>
               </div>
               <div className="space-y-0.5 mb-2">
-                {agentConfigs.filter((a) => a.installed).map((agent) => (
+                {agentConfigs.filter((a) => a.managed).map((agent) => (
                   <Link
                     key={agent.tool_key}
                     to={`/agent/${agent.tool_key}`}
