@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use skills_manager_core::skill_store::SkillStore;
-use skills_manager_core::{central_repo, sync_engine, tool_adapters, ScenarioRecord};
+use skills_manager_core::{central_repo, dedup, sync_engine, tool_adapters, ScenarioRecord};
 use std::path::PathBuf;
 
 // ── Helpers ──────────────────────────────────────────────
@@ -638,4 +638,112 @@ fn sync_agent(
     }
 
     Ok(results)
+}
+
+// ── Dedup command ───────────────────────────────────────
+
+pub fn cmd_dedup(apply: bool, agent: Option<&str>) -> Result<()> {
+    let store = open_store()?;
+    let all_adapters = tool_adapters::enabled_installed_adapters(&store);
+
+    let dry_run = !apply;
+
+    if dry_run {
+        println!("Dedup dry run (use --apply to execute):\n");
+    } else {
+        println!("Dedup applying changes:\n");
+    }
+
+    let results = match agent {
+        Some(agent_key) => {
+            let adapter = all_adapters
+                .iter()
+                .find(|a| a.key == agent_key)
+                .ok_or_else(|| {
+                    let available: Vec<&str> =
+                        all_adapters.iter().map(|a| a.key.as_str()).collect();
+                    anyhow::anyhow!(
+                        "Agent '{}' not found. Available: {}",
+                        agent_key,
+                        available.join(", ")
+                    )
+                })?;
+            let r =
+                dedup::dedup_agent_skills(&store, &adapter.key, &adapter.skills_dir(), dry_run)?;
+            vec![(adapter.key.clone(), r)]
+        }
+        None => dedup::dedup_all_agents(&store, &all_adapters, dry_run),
+    };
+
+    let mut total_linked = 0;
+    let mut total_replaced = 0;
+    let mut total_native = 0;
+    let mut total_skipped = 0;
+    let mut total_errors = 0;
+
+    for (tool_key, r) in &results {
+        if r.is_empty() {
+            continue;
+        }
+
+        println!("{}:", tool_key);
+
+        if !r.already_linked.is_empty() {
+            println!("  Already linked: {}", r.already_linked.len());
+            total_linked += r.already_linked.len();
+        }
+
+        if !r.replaced_with_symlink.is_empty() {
+            let verb = if dry_run { "Would replace" } else { "Replaced" };
+            println!("  {} with symlink: {}", verb, r.replaced_with_symlink.len());
+            for name in &r.replaced_with_symlink {
+                println!("    {}", name);
+            }
+            total_replaced += r.replaced_with_symlink.len();
+        }
+
+        if !r.marked_native.is_empty() {
+            let verb = if dry_run { "Would mark" } else { "Marked" };
+            println!("  {} as native: {}", verb, r.marked_native.len());
+            for name in &r.marked_native {
+                println!("    {}", name);
+            }
+            total_native += r.marked_native.len();
+        }
+
+        if !r.skipped_unknown.is_empty() {
+            println!("  Skipped (not in central): {}", r.skipped_unknown.len());
+            total_skipped += r.skipped_unknown.len();
+        }
+
+        for err in &r.errors {
+            eprintln!("  Error: {}", err);
+            total_errors += 1;
+        }
+
+        println!();
+    }
+
+    println!("Summary:");
+    println!("  Already linked:  {}", total_linked);
+    println!(
+        "  {}:  {}",
+        if dry_run { "Would replace" } else { "Replaced" },
+        total_replaced
+    );
+    println!(
+        "  {}:    {}",
+        if dry_run {
+            "Would mark native"
+        } else {
+            "Marked native"
+        },
+        total_native
+    );
+    println!("  Skipped:         {}", total_skipped);
+    if total_errors > 0 {
+        println!("  Errors:          {}", total_errors);
+    }
+
+    Ok(())
 }

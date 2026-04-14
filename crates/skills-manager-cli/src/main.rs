@@ -68,6 +68,17 @@ enum Commands {
         #[command(subcommand)]
         action: AgentAction,
     },
+
+    /// Deduplicate agent skill directories against the central store.
+    /// Replaces identical copies with symlinks.
+    Dedup {
+        /// Actually replace copies with symlinks (default: dry run)
+        #[arg(long)]
+        apply: bool,
+        /// Only dedup a specific agent (e.g., claude_code)
+        #[arg(long)]
+        agent: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -133,6 +144,7 @@ fn main() {
                 commands::cmd_agent_remove_pack(&agent, &pack)
             }
         },
+        Commands::Dedup { apply, agent } => commands::cmd_dedup(apply, agent.as_deref()),
     };
 
     if let Err(e) = result {

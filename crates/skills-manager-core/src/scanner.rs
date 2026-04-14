@@ -99,6 +99,7 @@ pub fn scan_local_skills_with_adapters(
                     fingerprint,
                     found_at,
                     imported_skill_id: None,
+                    is_native: false,
                 });
             }
         }

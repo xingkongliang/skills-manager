@@ -507,6 +507,8 @@ pub fn run() {
             commands::agents::get_effective_skills_for_agent,
             commands::agents::get_agent_extra_packs,
             commands::agents::get_agent_skill_ownership,
+            commands::agents::dedup_agent_skills,
+            commands::agents::dedup_all_agents,
             // Scenarios
             commands::scenarios::get_scenarios,
             commands::scenarios::get_active_scenario,

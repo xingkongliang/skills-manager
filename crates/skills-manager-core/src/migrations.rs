@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 7;
+const LATEST_VERSION: u32 = 8;
 
 const PLUGINS_SCHEMA_DDL: &str = "
     CREATE TABLE IF NOT EXISTS managed_plugins (
@@ -114,6 +114,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         4 => migrate_v4_to_v5(conn),
         5 => migrate_v5_to_v6(conn),
         6 => migrate_v6_to_v7(conn),
+        7 => migrate_v7_to_v8(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -250,6 +251,12 @@ fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "skills", "update_status", "TEXT DEFAULT 'unknown'")?;
     add_column_if_missing(conn, "skills", "last_checked_at", "INTEGER")?;
     add_column_if_missing(conn, "skills", "last_check_error", "TEXT")?;
+    add_column_if_missing(
+        conn,
+        "discovered_skills",
+        "is_native",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
 
     Ok(())
 }
@@ -327,6 +334,22 @@ fn migrate_v6_to_v7(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v7 → v8: Add is_native flag to discovered_skills for dedup awareness.
+fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
+    // Guard: discovered_skills may not exist if the DB was created at an
+    // intermediate version in tests.  The column will be added by
+    // migrate_v0_to_v1 for fresh databases.
+    if table_exists(conn, "discovered_skills")? {
+        add_column_if_missing(
+            conn,
+            "discovered_skills",
+            "is_native",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+    }
+    Ok(())
+}
+
 // ── Helpers ──
 
 fn add_column_if_missing(
@@ -353,6 +376,16 @@ fn validate_identifier(name: &str) -> Result<()> {
         anyhow::bail!("Invalid SQL identifier: {}", name);
     }
     Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    validate_identifier(table)?;
+    let count: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
@@ -880,5 +913,71 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn v7_to_v8_migration_adds_is_native_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+
+        // Start at v7
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS scenarios (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+             CREATE TABLE IF NOT EXISTS discovered_skills (
+                 id TEXT PRIMARY KEY,
+                 tool TEXT NOT NULL,
+                 found_path TEXT NOT NULL,
+                 name_guess TEXT,
+                 fingerprint TEXT,
+                 found_at INTEGER NOT NULL,
+                 imported_skill_id TEXT
+             );
+             CREATE TABLE IF NOT EXISTS packs (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
+                 description TEXT, icon TEXT, color TEXT, sort_order INTEGER DEFAULT 0,
+                 created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE IF NOT EXISTS managed_plugins (id TEXT PRIMARY KEY,
+                 plugin_key TEXT NOT NULL UNIQUE, display_name TEXT,
+                 plugin_data TEXT NOT NULL, created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE IF NOT EXISTS scenario_plugins (
+                 scenario_id TEXT NOT NULL, plugin_id TEXT NOT NULL,
+                 enabled INTEGER NOT NULL DEFAULT 1,
+                 PRIMARY KEY(scenario_id, plugin_id));
+             CREATE TABLE IF NOT EXISTS agent_configs (
+                 tool_key TEXT PRIMARY KEY,
+                 scenario_id TEXT,
+                 managed INTEGER NOT NULL DEFAULT 1,
+                 updated_at INTEGER);
+             CREATE TABLE IF NOT EXISTS agent_extra_packs (
+                 tool_key TEXT NOT NULL,
+                 pack_id TEXT NOT NULL,
+                 PRIMARY KEY(tool_key, pack_id));",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        assert!(has_column(&conn, "discovered_skills", "is_native").unwrap());
+
+        // Verify default value works
+        conn.execute(
+            "INSERT INTO discovered_skills (id, tool, found_path, found_at) VALUES ('d1', 'claude_code', '/tmp/test', 0)",
+            [],
+        )
+        .unwrap();
+        let is_native: i32 = conn
+            .query_row(
+                "SELECT is_native FROM discovered_skills WHERE id = 'd1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(is_native, 0);
+
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, LATEST_VERSION);
     }
 }
