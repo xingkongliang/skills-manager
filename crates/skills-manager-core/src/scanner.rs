@@ -81,7 +81,7 @@ pub fn scan_local_skills_with_adapters(
                     continue;
                 }
 
-                let name = skill_metadata::infer_skill_name(&path);
+                let name = skill_metadata::infer_skill_name(&path).trim().to_string();
                 let fingerprint = content_hash::hash_directory(&path).ok();
 
                 let found_at = std::fs::metadata(&path)
