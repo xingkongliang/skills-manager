@@ -1808,7 +1808,6 @@ export function MySkills() {
                       </button>
                     </>
                   )}
-                  )}
                   <button
                     onClick={() => handleToggleScenario(skill)}
                     disabled={!activeScenario}
