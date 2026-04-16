@@ -32,3 +32,13 @@ dist-ssr
 *.sw?
 
 .claude
+
+# Secrets
+*.secret.key
+.secret.key
+
+# Build artifacts
+target/
+
+# Brainstorming sessions (local-only)
+.superpowers/
