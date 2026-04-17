@@ -122,6 +122,14 @@ function areAgentSetsEqual(left: string[], right: string[]) {
   return left.every((value) => rightSet.has(value));
 }
 
+function getAssignedAgents(variants: ProjectSkill[]) {
+  return Array.from(new Set(variants.map((variant) => variant.agent))).sort();
+}
+
+function isGroupEnabled(skill: Pick<ProjectSkillGroup, "enabledCount">) {
+  return skill.enabledCount > 0;
+}
+
 export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -254,7 +262,7 @@ export function ProjectDetail() {
     items: groupedSkills,
     filtered,
     getKey: getSkillKey,
-    isItemActive: (s) => s.enabledCount === s.totalCount,
+    isItemActive: isGroupEnabled,
   });
 
   const exportTargets = useMemo(() => {
@@ -351,16 +359,16 @@ export function ProjectDetail() {
     if (!id) return;
     setTogglingSkill(getSkillKey(skill));
     try {
-      const nextEnabled = skill.enabledCount !== skill.totalCount;
+      const nextEnabled = !isGroupEnabled(skill);
       await Promise.all(
         skill.variants.map((variant) =>
           api.toggleProjectSkill(id, variant.relative_path, variant.agent, nextEnabled)
         )
       );
-      if (skill.enabledCount === skill.totalCount) {
-        toast.success(t("project.skillDisabled", { name: skill.name }));
-      } else {
+      if (nextEnabled) {
         toast.success(t("project.skillEnabled", { name: skill.name }));
+      } else {
+        toast.success(t("project.skillDisabled", { name: skill.name }));
       }
       await loadSkills();
     } catch (error: unknown) {
@@ -470,14 +478,14 @@ export function ProjectDetail() {
     let failed = 0;
     for (const skill of selectedSkillsList) {
       try {
-        if (enabling && skill.enabledCount !== skill.totalCount) {
+        if (enabling && !isGroupEnabled(skill)) {
           await Promise.all(
             skill.variants.map((variant) =>
               api.toggleProjectSkill(id, variant.relative_path, variant.agent, true)
             )
           );
           count++;
-        } else if (!enabling && skill.enabledCount > 0) {
+        } else if (!enabling && isGroupEnabled(skill)) {
           await Promise.all(
             skill.variants.map((variant) =>
               api.toggleProjectSkill(id, variant.relative_path, variant.agent, false)
@@ -657,7 +665,7 @@ export function ProjectDetail() {
               skill.status === "center_newer" ||
               skill.status === "diverged";
             const statusMeta = getSyncStatusMeta(t, skill.status);
-            const assignedAgents = skill.variants.map((variant) => variant.agent).sort();
+            const assignedAgents = getAssignedAgents(skill.variants);
             const hasCustomAssignment =
               defaultAgentKeys.length > 0 && !areAgentSetsEqual(assignedAgents, defaultAgentKeys);
 
@@ -767,7 +775,7 @@ export function ProjectDetail() {
                           >
                             {isToggling ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : skill.enabledCount === skill.totalCount ? (
+                            ) : isGroupEnabled(skill) ? (
                               t("project.enabled")
                             ) : (
                               t("project.enableSkill")
@@ -890,7 +898,7 @@ export function ProjectDetail() {
                       >
                         {isToggling ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : skill.enabledCount === skill.totalCount ? (
+                        ) : isGroupEnabled(skill) ? (
                           t("project.enabled")
                         ) : (
                           t("project.enableSkill")

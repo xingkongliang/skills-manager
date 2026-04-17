@@ -98,6 +98,19 @@ pub fn read_linked_workspace_skills(
     skills
 }
 
+fn should_skip_dir(root: &Path, dir: &Path) -> bool {
+    let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name.starts_with('.') {
+        return true;
+    }
+
+    // Ignore embedded plugin/cache bundle layouts such as:
+    // <bundle>/<version>/skills/<skill>/SKILL.md
+    // The workspace root itself may be named "skills", so only skip nested
+    // container directories that introduce another "skills" subtree.
+    dir != root && dir.join("skills").is_dir()
+}
+
 fn read_skills_from_dir(
     dir: &Path,
     enabled: bool,
@@ -131,6 +144,9 @@ fn read_skills_from_dir_recursive(
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
         if !path.is_dir() {
+            continue;
+        }
+        if should_skip_dir(root, &path) {
             continue;
         }
 
@@ -306,7 +322,7 @@ fn latest_modified_millis(dir: &Path) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_project_skills, AgentSkillConfig};
+    use super::{read_linked_workspace_skills, read_project_skills, AgentSkillConfig};
     use std::fs;
     use tempfile::tempdir;
 
@@ -354,5 +370,63 @@ mod tests {
         let skills = read_project_skills(tmp.path(), &configs);
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].relative_path, "research/web-search");
+    }
+
+    #[test]
+    fn linked_workspace_skips_hidden_dirs_and_embedded_bundle_skills() {
+        let tmp = tempdir().unwrap();
+        let skills_root = tmp.path().join("skills");
+        let disabled_root = tmp.path().join("skills-disabled");
+
+        let top_level_skill = skills_root.join("understand");
+        fs::create_dir_all(&top_level_skill).unwrap();
+        fs::write(top_level_skill.join("SKILL.md"), "---\nname: understand\n---\n").unwrap();
+
+        let hidden_skill = skills_root.join(".claude").join("skills").join("hidden-skill");
+        fs::create_dir_all(&hidden_skill).unwrap();
+        fs::write(hidden_skill.join("SKILL.md"), "---\nname: hidden-skill\n---\n").unwrap();
+
+        let embedded_enabled = skills_root
+            .join("understand-anything")
+            .join("understand-anything")
+            .join("311f2ad1aca5")
+            .join("skills")
+            .join("understand");
+        fs::create_dir_all(&embedded_enabled).unwrap();
+        fs::write(embedded_enabled.join("SKILL.md"), "---\nname: understand\n---\n").unwrap();
+
+        let disabled_skill = disabled_root.join("understand-diff");
+        fs::create_dir_all(&disabled_skill).unwrap();
+        fs::write(
+            disabled_skill.join("SKILL.md"),
+            "---\nname: understand-diff\n---\n",
+        )
+        .unwrap();
+
+        let embedded_disabled = disabled_root
+            .join("claude-plugins-official")
+            .join("superpowers")
+            .join("5.0.7")
+            .join("skills")
+            .join("brainstorming");
+        fs::create_dir_all(&embedded_disabled).unwrap();
+        fs::write(
+            embedded_disabled.join("SKILL.md"),
+            "---\nname: brainstorming\n---\n",
+        )
+        .unwrap();
+
+        let skills = read_linked_workspace_skills(
+            &skills_root,
+            Some(&disabled_root),
+            "linked",
+            "Linked",
+        );
+
+        let names: Vec<&str> = skills.iter().map(|skill| skill.name.as_str()).collect();
+        assert_eq!(names, vec!["understand", "understand-diff"]);
+        assert_eq!(skills.iter().filter(|skill| skill.name == "understand").count(), 1);
+        assert!(skills.iter().any(|skill| skill.name == "understand" && skill.enabled));
+        assert!(skills.iter().any(|skill| skill.name == "understand-diff" && !skill.enabled));
     }
 }
