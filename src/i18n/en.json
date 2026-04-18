@@ -15,31 +15,31 @@
   "help": {
     "eyebrow": "Guide",
     "title": "Quick Start for Skills Manager",
-    "description": "The fastest path is: pick a scenario, install skills into the central library, decide what stays active in My Skills, then use Project Workspaces, Git backup, or Settings only when that workflow needs them.",
+    "description": "Fastest path: pick a scenario → install skills → manage them in My Skills. Press ⌘K anytime to open the command palette. Use Project Workspaces, Git backup, and Settings as needed.",
     "items": {
       "scenarios": {
-        "title": "Start by picking or creating a scenario",
-        "description": "Use separate scenarios for work, learning, or client projects. Each scenario keeps its own enabled skills, per-agent toggles, and skill order."
+        "title": "Scenarios",
+        "description": "Separate work, learning, or client projects into scenarios, each with its own enabled skills, per-agent toggles, and skill order. Switch quickly via the command palette."
       },
       "install": {
-        "title": "Install skills into the central library",
-        "description": "Import from local folders, Git repositories, archives, or the marketplace. If you add a SkillsMP API key in Settings, marketplace search can also use AI."
+        "title": "Install Skills",
+        "description": "Import from local folders, Git repositories, archives, or the marketplace. Batch-import multiple skills from a folder at once. Add a SkillsMP API key to enable AI-powered search."
       },
       "sync": {
-        "title": "Use My Skills to decide what is active",
-        "description": "Enable or remove skills for the current scenario, add tags, review docs and source details, check updates, open Version History, and sync or unsync them for detected agents."
+        "title": "My Skills",
+        "description": "Manage enabled skills for the current scenario with bulk tag editing and per-agent sync toggles. Click any skill to view docs, version history, and agent sync details."
       },
       "projects": {
-        "title": "Use Project Workspaces for repo-specific skills",
-        "description": "Link a project to inspect project-local skill folders (including nested directories), compare them with the central library, and import or export changes for the agents you care about. You can also link any directory as a standalone skills workspace for paths outside the default agent locations."
+        "title": "Project Workspaces",
+        "description": "Link a project to browse per-agent local skill folders, compare with the central library, and import or export changes. Supports agent-level toggles, nested directories, and standalone workspace linking."
       },
       "backup": {
-        "title": "Use Git backup when you need history or multi-machine sync",
-        "description": "Save the remote URL in Settings, then run Start Backup or Sync to Git from My Skills. Each successful sync creates a snapshot tag that can be restored later from Version History."
+        "title": "Git Backup",
+        "description": "Configure a remote repository in Settings, then back up or sync from My Skills. Each sync creates a restorable snapshot tag — ideal for multi-machine sync and version tracking."
       },
       "settings": {
-        "title": "Keep environment settings in one place",
-        "description": "Use Settings to review agent paths, add custom tools, change sync mode, theme, text size, language, default scenario, tray behavior, proxy, Git remote, AI search key, and app updates."
+        "title": "Settings",
+        "description": "Manage agent paths and toggles, add custom agents, change sync mode, theme, text size, language, default scenario, proxy, Git remote, AI search key, and check for app updates."
       }
     }
   },

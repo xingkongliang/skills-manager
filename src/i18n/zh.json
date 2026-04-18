@@ -15,31 +15,31 @@
   "help": {
     "eyebrow": "操作指南",
     "title": "快速上手 Skills Manager",
-    "description": "最快的使用路径是：先选场景，把 Skill 安装进中央仓库，再在“我的 Skills”里决定当前场景要启用什么；只有在需要项目内协作、Git 备份或环境配置时，再去对应页面处理。",
+    "description": "最快路径：选场景 → 安装 Skill → 在「我的 Skills」里管理启用状态。按 ⌘K 可随时呼出命令面板快速跳转。项目协作、Git 备份、环境配置等按需使用。",
     "items": {
       "scenarios": {
-        "title": "先选一个场景，或新建一个场景",
-        "description": "把工作、学习、客户项目拆成不同场景。每个场景维护自己的启用列表、Agent 开关，以及已启用 Skill 的排序。"
+        "title": "场景管理",
+        "description": "把工作、学习、客户项目拆成不同场景，每个场景有独立的启用列表、Agent 开关和 Skill 排序。支持命令面板快速切换场景。"
       },
       "install": {
-        "title": "把 Skill 安装进中央仓库",
-        "description": "支持从本地目录、Git 仓库、压缩包或市场导入。若你在设置里填入 SkillsMP API Key，市场搜索还可以切换为 AI 搜索。"
+        "title": "安装 Skills",
+        "description": "从本地目录、Git 仓库、压缩包或市场导入。支持批量导入文件夹中的多个 Skill。配置 SkillsMP API Key 后可使用 AI 搜索。"
       },
       "sync": {
-        "title": "在“我的 Skills”里决定当前场景启用什么",
-        "description": "在这里启用或移除 Skill、添加标签、查看文档与来源信息、检查更新、查看版本历史，也可以按 Agent 手动同步或取消同步。"
+        "title": "我的 Skills",
+        "description": "管理当前场景的 Skill 启用状态，支持批量标签编辑、按 Agent 同步或取消同步。点击 Skill 可查看文档、版本历史和 Agent 同步详情。"
       },
       "projects": {
-        "title": "项目工作区适合管理仓库内的本地 Skills",
-        "description": "关联项目后，可以查看项目内各 Agent 的本地 Skills 目录（支持嵌套目录），对照中央仓库，并按需双向导入或导出。也可以将任意目录指定为独立 Skills 工作区，管理不在默认 Agent 路径下的 Skills。"
+        "title": "项目工作区",
+        "description": "关联项目后查看各 Agent 的本地 Skills 目录，对照中央仓库双向导入导出。支持 Agent 级别开关、嵌套目录浏览，也可将任意目录作为独立 Skills 工作区。"
       },
       "backup": {
-        "title": "需要历史版本或多机同步时，用 Git 备份",
-        "description": "先在设置里保存远程仓库地址，再去“我的 Skills”执行“开始备份”或“同步到 Git”。每次成功同步都会生成一个可从版本历史恢复的快照标签。"
+        "title": "Git 备份",
+        "description": "在设置页配置远程仓库地址，再到「我的 Skills」执行备份或同步。每次同步生成可恢复的快照标签，适合多机同步和版本管理。"
       },
       "settings": {
-        "title": "环境配置统一放在设置页",
-        "description": "在这里检查 Agent 路径、添加自定义工具、切换同步模式、主题、字号、语言和默认场景，配置托盘、代理、Git 远程、AI 搜索 Key，并检查应用更新。"
+        "title": "设置",
+        "description": "管理 Agent 路径与开关、自定义 Agent、同步模式、主题字号、语言、默认场景、网络代理、Git 远程、AI 搜索 Key，以及应用更新。"
       }
     }
   },
