@@ -43,6 +43,20 @@
       }
     }
   },
+  "commandPalette": {
+    "placeholder": "Jump to skill, scenario, project, action…",
+    "empty": "No matches. Try a different query.",
+    "skills": "Skills",
+    "scenarios": "Scenarios",
+    "projects": "Projects",
+    "actions": "Actions",
+    "scanImport": "Scan & import local skills",
+    "hints": {
+      "navigate": "navigate",
+      "open": "open",
+      "toggle": "toggle"
+    }
+  },
   "dashboard": {
     "greeting": "Hello!",
     "currentScenario": "Current Scenario",

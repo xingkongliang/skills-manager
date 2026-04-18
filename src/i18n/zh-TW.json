@@ -43,6 +43,20 @@
       }
     }
   },
+  "commandPalette": {
+    "placeholder": "跳轉到技能、場景、專案或操作…",
+    "empty": "沒有符合項目，換個關鍵字試試。",
+    "skills": "技能",
+    "scenarios": "場景",
+    "projects": "專案",
+    "actions": "操作",
+    "scanImport": "掃描並匯入本機技能",
+    "hints": {
+      "navigate": "選擇",
+      "open": "開啟",
+      "toggle": "呼叫"
+    }
+  },
   "dashboard": {
     "greeting": "你好！",
     "currentScenario": "當前場景",

@@ -31,6 +31,7 @@ import { useMultiSelect } from "../hooks/useMultiSelect";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
+import { SyncDots } from "../components/SyncDots";
 import * as api from "../lib/tauri";
 import type {
   ManagedSkill,
@@ -1367,7 +1368,8 @@ export function MySkills() {
                         </>
                       )}
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex items-center gap-2 shrink-0">
+                      <SyncDots skill={skill} tools={tools} limit={6} />
                       <button
                         onClick={() => handleToggleScenario(skill)}
                         disabled={!activeScenario}
@@ -1445,6 +1447,7 @@ export function MySkills() {
                       {badge.label}
                     </span>
                   )}
+                  <SyncDots skill={skill} tools={tools} limit={6} size="sm" />
                   <span className="inline-flex items-center gap-1 text-[13px] text-muted">
                     {sourceIcon(skill.source_type)}
                     {sourceTypeLabel(skill)}

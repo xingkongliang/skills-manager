@@ -43,6 +43,20 @@
       }
     }
   },
+  "commandPalette": {
+    "placeholder": "跳转到技能、场景、项目或操作…",
+    "empty": "没有匹配项，换个关键词试试。",
+    "skills": "技能",
+    "scenarios": "场景",
+    "projects": "项目",
+    "actions": "操作",
+    "scanImport": "扫描并导入本地技能",
+    "hints": {
+      "navigate": "选择",
+      "open": "打开",
+      "toggle": "呼出"
+    }
+  },
   "dashboard": {
     "greeting": "你好！",
     "currentScenario": "当前场景",
