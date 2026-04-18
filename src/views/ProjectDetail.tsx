@@ -28,6 +28,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
 import { DetailSheet } from "../components/DetailSheet";
+import { AgentToggleSection, type AgentToggleItem } from "../components/AgentToggleSection";
 import { ProjectAgentDots } from "../components/ProjectAgentDots";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { getTagActiveColor, getTagColor } from "../lib/skillTags";
@@ -149,6 +150,7 @@ export function ProjectDetail() {
   const [batchUpdatingCenter, setBatchUpdatingCenter] = useState(false);
   const [batchUpdatingProject, setBatchUpdatingProject] = useState(false);
   const [togglingSkill, setTogglingSkill] = useState<string | null>(null);
+  const [togglingDetailAgent, setTogglingDetailAgent] = useState<string | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ProjectSkillGroup | null>(null);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
@@ -246,6 +248,19 @@ export function ProjectDetail() {
       }))
       .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
   }, [skills]);
+
+  useEffect(() => {
+    if (!detailSkill) return;
+    const refreshed = groupedSkills.find((skill) => skill.id === detailSkill.id) ?? null;
+    if (!refreshed) {
+      setDetailSkill(null);
+      setDocContent(null);
+      return;
+    }
+    if (refreshed !== detailSkill) {
+      setDetailSkill(refreshed);
+    }
+  }, [detailSkill, groupedSkills]);
 
   const filtered = useMemo(() => {
     return groupedSkills.filter((skill) => {
@@ -418,6 +433,35 @@ export function ProjectDetail() {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
       setTogglingSkill(null);
+    }
+  };
+
+  const handleToggleDetailAgent = async (skill: ProjectSkillGroup, agentKey: string, enabled: boolean) => {
+    if (!id) return;
+    const target = exportTargets.find((item) => item.key === agentKey);
+    const displayName = target?.display_name ?? agentKey;
+    const existingVariant = skill.variants.find((variant) => variant.agent === agentKey);
+
+    setTogglingDetailAgent(agentKey);
+    try {
+      if (enabled) {
+        const centerSkillId = skill.centerSkillIds[0];
+        if (!centerSkillId) {
+          toast.error(t("project.agentAddRequiresCenter", { agent: displayName }));
+          return;
+        }
+        await api.exportSkillToProject(centerSkillId, id, [agentKey]);
+        toast.success(t("project.agentAdded", { agent: displayName, name: skill.name }));
+      } else {
+        if (!existingVariant) return;
+        await api.deleteProjectSkill(id, existingVariant.relative_path, agentKey);
+        toast.success(t("project.agentRemoved", { agent: displayName, name: skill.name }));
+      }
+      await Promise.all([loadSkills(), refreshProjects()]);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      setTogglingDetailAgent(null);
     }
   };
 
@@ -1159,6 +1203,9 @@ export function ProjectDetail() {
       {detailSkill && project && (
         <ProjectSkillDetailPanel
           skill={detailSkill}
+          targets={exportTargets}
+          togglingAgent={togglingDetailAgent}
+          onToggleAgent={(agentKey, enabled) => handleToggleDetailAgent(detailSkill, agentKey, enabled)}
           docContent={docContent}
           docLoading={docLoading}
           onClose={() => setDetailSkill(null)}
@@ -1212,16 +1259,39 @@ export function ProjectDetail() {
 
 function ProjectSkillDetailPanel({
   skill,
+  targets,
+  togglingAgent,
+  onToggleAgent,
   docContent,
   docLoading,
   onClose,
 }: {
   skill: ProjectSkillGroup;
+  targets: ProjectAgentTarget[];
+  togglingAgent: string | null;
+  onToggleAgent: (agentKey: string, enabled: boolean) => void;
   docContent: string | null;
   docLoading: boolean;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const toggleItems: AgentToggleItem[] = targets.map((target) => {
+    const variant = skill.variants.find((item) => item.agent === target.key);
+    return {
+      key: target.key,
+      displayName: target.display_name,
+      enabled: Boolean(variant),
+      isAvailable: target.installed && target.enabled,
+      disabled: (!variant && (!target.installed || !target.enabled)),
+      badgeLabel: !target.installed
+        ? t("mySkills.agentToggleNotInstalled")
+        : !target.enabled
+          ? t("mySkills.agentToggleDisabledGlobally")
+          : variant && !variant.enabled
+            ? t("project.disabled")
+            : null,
+    };
+  });
   const meta = (
     <>
       <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
@@ -1272,6 +1342,12 @@ function ProjectSkillDetailPanel({
       meta={meta}
       onClose={onClose}
     >
+      <AgentToggleSection
+        items={toggleItems}
+        togglingKey={togglingAgent}
+        onToggle={onToggleAgent}
+        className="mb-4"
+      />
       {docLoading ? (
         <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
       ) : docContent ? (

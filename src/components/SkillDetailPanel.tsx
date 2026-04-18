@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Folder,
-  CheckCircle2,
-  Circle,
-  Loader2,
   ChevronDown,
   ChevronUp,
   Github,
@@ -23,6 +20,7 @@ import {
 import { DocumentDiffViewer } from "./DocumentDiffViewer";
 import { DetailSheet } from "./DetailSheet";
 import { SkillMarkdown } from "./SkillMarkdown";
+import { AgentToggleSection, type AgentToggleItem } from "./AgentToggleSection";
 
 interface Props {
   skill: ManagedSkill | null;
@@ -80,7 +78,6 @@ function SkillDetailPanelContent({
   const [sourceDoc, setSourceDoc] = useState<SourceSkillDocument | null>(null);
   const [loading, setLoading] = useState(true);
   const [isMetadataExpanded, setIsMetadataExpanded] = useState(false);
-  const [isAgentSectionExpanded, setIsAgentSectionExpanded] = useState(false);
   const [contentTab, setContentTab] = useState<"local" | "diff" | "source">("local");
   const localRequestIdRef = useRef(0);
   const sourceRequestIdRef = useRef(0);
@@ -174,11 +171,18 @@ function SkillDetailPanelContent({
 
   const activeDoc = doc?.skill_id === skill.id ? doc : null;
   const activeSourceDoc = sourceDoc?.skill_id === skill.id ? sourceDoc : null;
-  const availableToggleCount =
-    toolToggles?.filter((item) => item.installed && item.globally_enabled).length ?? 0;
-  const syncedAvailableCount =
-    toolToggles?.filter((item) => item.installed && item.globally_enabled && item.enabled).length ?? 0;
-  const unavailableToggleCount = (toolToggles?.length ?? 0) - availableToggleCount;
+  const toggleItems: AgentToggleItem[] = (toolToggles ?? []).map((toggle) => ({
+    key: toggle.tool,
+    displayName: toggle.display_name,
+    enabled: toggle.enabled,
+    isAvailable: toggle.installed && toggle.globally_enabled,
+    disabled: !toggle.installed || !toggle.globally_enabled,
+    badgeLabel: !toggle.installed
+      ? t("mySkills.agentToggleNotInstalled")
+      : !toggle.globally_enabled
+        ? t("mySkills.agentToggleDisabledGlobally")
+        : null,
+  }));
 
   const meta = (
     <>
@@ -252,95 +256,12 @@ function SkillDetailPanelContent({
       onClose={onClose}
     >
       {toolToggles && onToggleTool && (
-        <div className="mb-4 rounded-xl border border-border-subtle">
-          <div className="border-b border-border-subtle px-6 py-2.5">
-            <div className="flex items-center justify-between gap-2 text-[13px]">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="font-medium text-secondary">{t("mySkills.agentTogglesTitle")}</span>
-                <span className="rounded-full border border-border-subtle bg-surface px-2 py-0.5 text-[12px] text-muted">
-                  {t("mySkills.syncSummary", {
-                    synced: syncedAvailableCount,
-                    total: availableToggleCount,
-                  })}
-                </span>
-                {unavailableToggleCount > 0 && (
-                  <span className="rounded-full border border-border-subtle bg-surface px-2 py-0.5 text-[12px] text-muted">
-                    {t("mySkills.agentUnavailableCount", { count: unavailableToggleCount })}
-                  </span>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsAgentSectionExpanded((prev) => !prev)}
-                aria-expanded={isAgentSectionExpanded}
-                aria-controls="skill-agent-toggle-list"
-                className="inline-flex shrink-0 items-center gap-1 rounded-[6px] border border-border-subtle bg-surface px-2 py-1 text-[12px] text-muted transition-colors hover:text-secondary"
-                title={
-                  isAgentSectionExpanded
-                    ? t("mySkills.collapseAgentToggles")
-                    : t("mySkills.expandAgentToggles")
-                }
-              >
-                <span>
-                  {isAgentSectionExpanded
-                    ? t("mySkills.collapseAgentToggles")
-                    : t("mySkills.expandAgentToggles")}
-                </span>
-                {isAgentSectionExpanded ? (
-                  <ChevronUp className="h-3.5 w-3.5" />
-                ) : (
-                  <ChevronDown className="h-3.5 w-3.5" />
-                )}
-              </button>
-            </div>
-            {isAgentSectionExpanded && (
-              <div id="skill-agent-toggle-list" className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-3">
-                {toolToggles.map((toggle) => {
-                  const disabledReason = !toggle.installed
-                    ? t("mySkills.agentToggleNotInstalled")
-                    : !toggle.globally_enabled
-                      ? t("mySkills.agentToggleDisabledGlobally")
-                      : "";
-                  const disabled = !toggle.installed || !toggle.globally_enabled;
-                  const loadingToggle = togglingTool === toggle.tool;
-                  return (
-                    <button
-                      key={toggle.tool}
-                      type="button"
-                      onClick={() => onToggleTool(toggle.tool, !toggle.enabled)}
-                      disabled={disabled || loadingToggle}
-                      className={cn(
-                        "flex w-full items-center gap-2 rounded-[6px] border px-2 py-1.5 text-left text-[12px] transition-colors",
-                        toggle.enabled ? "border-border bg-surface" : "border-border-subtle bg-bg-secondary",
-                        !disabled && !loadingToggle && "hover:bg-surface-hover",
-                        (disabled || loadingToggle) && "opacity-55"
-                      )}
-                      title={disabledReason || (toggle.enabled ? t("settings.disableAgent") : t("settings.enableAgent"))}
-                    >
-                      <span className="shrink-0">
-                        {loadingToggle ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
-                        ) : toggle.enabled ? (
-                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                        ) : (
-                          <Circle className="h-3.5 w-3.5 text-muted" />
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-secondary">
-                        {toggle.display_name}
-                      </span>
-                      {disabledReason && (
-                        <span className="shrink-0 rounded-full border border-border-subtle bg-bg-secondary px-1.5 py-0.5 text-[11px] text-muted">
-                          {disabledReason}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
+        <AgentToggleSection
+          items={toggleItems}
+          togglingKey={togglingTool}
+          onToggle={onToggleTool}
+          className="mb-4"
+        />
       )}
 
       {supportsSourceDiff && (

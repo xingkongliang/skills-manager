@@ -250,6 +250,18 @@ fn ensure_dir_within_root(path: &Path, root: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+fn remove_workspace_skill_target(path: &Path) -> Result<(), AppError> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        std::fs::remove_file(path)?;
+    } else if metadata.is_dir() {
+        std::fs::remove_dir_all(path)?;
+    } else {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 fn ensure_distinct_linked_workspace_roots(
     skills_root: &Path,
     disabled_root: &Path,
@@ -1024,7 +1036,7 @@ pub async fn delete_project_skill(
         };
 
         ensure_dir_within_root(&target, &target_root)?;
-        std::fs::remove_dir_all(&target)?;
+        remove_workspace_skill_target(&target)?;
         Ok(())
     })
     .await?
@@ -1032,7 +1044,9 @@ pub async fn delete_project_skill(
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_sync_status, ensure_distinct_linked_workspace_roots};
+    use super::{
+        classify_sync_status, ensure_distinct_linked_workspace_roots, remove_workspace_skill_target,
+    };
     use crate::core::content_hash;
     use crate::core::project_scanner::ProjectSkillInfo;
     use crate::core::skill_store::SkillRecord;
@@ -1082,6 +1096,7 @@ mod tests {
             enabled: true,
             agent: "claude_code".to_string(),
             agent_display_name: "Claude Code".to_string(),
+            tags: Vec::new(),
             in_center: true,
             sync_status: "project_only".to_string(),
             center_skill_id: Some("skill-1".to_string()),
@@ -1172,5 +1187,22 @@ mod tests {
         fs::create_dir_all(&disabled).unwrap();
 
         ensure_distinct_linked_workspace_roots(&root, &disabled).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_workspace_skill_target_removes_symlink_without_touching_target() {
+        let tmp = tempdir().unwrap();
+        let real = tmp.path().join("real-skill");
+        let link = tmp.path().join("linked-skill");
+        fs::create_dir_all(&real).unwrap();
+        fs::write(real.join("SKILL.md"), "# hello").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        remove_workspace_skill_target(&link).unwrap();
+
+        assert!(!link.exists());
+        assert!(real.exists());
+        assert!(real.join("SKILL.md").exists());
     }
 }
