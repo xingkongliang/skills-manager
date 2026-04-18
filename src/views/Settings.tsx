@@ -704,19 +704,10 @@ export function Settings() {
             </div>
           </div>
 
-          <div className="mb-3 flex flex-wrap gap-2">
-            <div className="rounded-[6px] border border-border-subtle bg-surface px-3 py-1.5">
-              <div className="text-[11px] text-muted">{t("settings.detectedAgents")}</div>
-              <div className="text-[15px] font-semibold text-secondary">{installedTools.length}</div>
-            </div>
-            <div className="rounded-[6px] border border-border-subtle bg-surface px-3 py-1.5">
-              <div className="text-[11px] text-muted">{t("settings.enabledAgents")}</div>
-              <div className="text-[15px] font-semibold text-secondary">{enabledTools.length}</div>
-            </div>
-            <div className="rounded-[6px] border border-border-subtle bg-surface px-3 py-1.5">
-              <div className="text-[11px] text-muted">{t("settings.customAgents")}</div>
-              <div className="text-[15px] font-semibold text-secondary">{customTools.length}</div>
-            </div>
+          <div className="mb-3 flex flex-wrap items-center gap-3 text-[13px] text-muted">
+            <span>{t("settings.detectedAgents")} <span className="font-medium text-secondary">{installedTools.length}</span></span>
+            <span>{t("settings.enabledAgents")} <span className="font-medium text-secondary">{enabledTools.length}</span></span>
+            <span>{t("settings.customAgents")} <span className="font-medium text-secondary">{customTools.length}</span></span>
           </div>
 
           {/* Add custom agent form */}
