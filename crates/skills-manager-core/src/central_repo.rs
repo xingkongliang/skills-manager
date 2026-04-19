@@ -47,5 +47,11 @@ pub fn ensure_central_repo() -> Result<()> {
         }
     }
 
+    // Install/refresh built-in skills (e.g. pack-router-gen) into the vault.
+    // Idempotent: safe to run on every startup.
+    if let Err(e) = crate::builtin_skills::install_builtin_skills(&skills_dir()) {
+        log::warn!("Failed to install builtin skills: {}", e);
+    }
+
     Ok(())
 }
