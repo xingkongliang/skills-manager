@@ -1063,4 +1063,69 @@ mod tests {
             .unwrap();
         assert_eq!(version, 9);
     }
+
+    #[test]
+    fn v9_migration_preserves_existing_pack_data() {
+        // Upgrade-path regression guard: a v8 DB that already has a pack row
+        // must keep its data intact when the v8→v9 step runs, and the new
+        // columns must take their declared defaults.
+        //
+        // File-backed via NamedTempFile (rather than in-memory) to mirror the
+        // production code path where migrations run against a real SQLite file.
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let conn = Connection::open(temp.path()).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+
+        // Bring the schema up to v8 by running each step 0..8 directly.
+        // `migrate_step` is crate-private but accessible from this test module.
+        for v in 0..8 {
+            super::migrate_step(&conn, v).unwrap();
+        }
+
+        // Seed an existing pack row at v8 (before the new columns exist).
+        conn.execute(
+            "INSERT INTO packs (id, name, description, sort_order, created_at, updated_at) \
+             VALUES ('p1', 'test-pack', 'desc', 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        // Apply only the v8 → v9 migration step.
+        super::migrate_step(&conn, 8).unwrap();
+
+        // The existing row must still be there, with its original values
+        // preserved and the new columns populated with declared defaults.
+        let (name, description, is_essential, router_desc, router_body, router_updated_at): (
+            String,
+            Option<String>,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+        ) = conn
+            .query_row(
+                "SELECT name, description, is_essential, router_description, \
+                        router_body, router_updated_at \
+                 FROM packs WHERE id = 'p1'",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(name, "test-pack");
+        assert_eq!(description.as_deref(), Some("desc"));
+        assert_eq!(is_essential, 0);
+        assert!(router_desc.is_none());
+        assert!(router_body.is_none());
+        assert!(router_updated_at.is_none());
+    }
 }
