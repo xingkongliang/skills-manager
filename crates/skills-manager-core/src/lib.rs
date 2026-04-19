@@ -12,6 +12,7 @@ pub mod migrations;
 pub mod pack_seeder;
 pub mod plugins;
 pub mod project_scanner;
+pub mod router_render;
 pub mod scanner;
 pub mod skill_metadata;
 pub mod skill_store;
