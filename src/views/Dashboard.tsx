@@ -15,6 +15,7 @@ import { useApp } from "../context/AppContext";
 import * as api from "../lib/tauri";
 import type { AgentConfigDto, ManagedPlugin, ManagedSkill, PackRecord } from "../lib/tauri";
 import { getScenarioIconOption } from "../lib/scenarioIcons";
+import { TokensSavedWidget } from "../components/TokensSavedWidget";
 
 export function Dashboard() {
   const { t } = useTranslation();
@@ -106,6 +107,17 @@ export function Dashboard() {
           );
         })}
       </div>
+
+      {/* Tokens Saved */}
+      {/* TODO: once PackRecord exposes is_essential + skill_count, compute:
+          essentialSkillCount = sum(skill_count) for active-scenario packs where is_essential
+          nonEssentialPackCount = count of active-scenario packs where !is_essential
+          Also replace "hybrid" hard-coding with the real active disclosure mode. */}
+      <TokensSavedWidget
+        currentMode="hybrid"
+        essentialSkillCount={null}
+        nonEssentialPackCount={null}
+      />
 
       {/* Agents Overview */}
       <div>
