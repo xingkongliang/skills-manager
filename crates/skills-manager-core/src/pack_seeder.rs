@@ -430,6 +430,7 @@ mod tests {
             sort_order: 0,
             created_at: now,
             updated_at: now,
+            disclosure_mode: crate::skill_store::DisclosureMode::Full,
         };
         store.insert_scenario(&scenario).unwrap();
         for sid in [&s1, &s2, &s3, &s4, &s5] {

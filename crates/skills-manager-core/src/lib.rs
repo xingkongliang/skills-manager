@@ -25,8 +25,8 @@ pub use dedup::DedupResult;
 pub use error::{AppError, ErrorKind};
 pub use pack_seeder::SeedResult;
 pub use skill_store::{
-    AgentConfigRecord, AgentSkillOwnership, DiscoveredSkillRecord, ManagedPluginRecord, PackRecord,
-    ProjectRecord, ScenarioPluginRecord, ScenarioRecord, ScenarioSkillToolToggleRecord,
-    SkillRecord, SkillStore, SkillTargetRecord,
+    AgentConfigRecord, AgentSkillOwnership, DisclosureMode, DiscoveredSkillRecord,
+    ManagedPluginRecord, PackRecord, ProjectRecord, ScenarioPluginRecord, ScenarioRecord,
+    ScenarioSkillToolToggleRecord, SkillRecord, SkillStore, SkillTargetRecord,
 };
 pub use sync_engine::SyncMode;

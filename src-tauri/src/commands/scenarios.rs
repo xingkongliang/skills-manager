@@ -6,7 +6,7 @@ use tauri::State;
 use crate::core::{
     error::AppError,
     plugins,
-    skill_store::{ScenarioRecord, SkillStore},
+    skill_store::{DisclosureMode, ScenarioRecord, SkillStore},
     sync_engine, tool_adapters,
 };
 use std::collections::HashSet;
@@ -141,6 +141,7 @@ pub async fn create_scenario(
             sort_order: 999,
             created_at: now,
             updated_at: now,
+            disclosure_mode: DisclosureMode::Full,
         };
 
         store.insert_scenario(&record).map_err(AppError::db)?;
