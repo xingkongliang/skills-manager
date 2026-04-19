@@ -48,6 +48,14 @@
 - **Git backup and restore** — Version-control your skill library with Git for backup and multi-machine sync, then restore snapshot versions from Version History when needed.
 - **Flexible app settings** — Configure repo path, sync mode, default scenario, theme, text size, language, tray behavior, proxy, Git remote, and update checks in one place.
 
+## Progressive Disclosure
+
+Skills Manager now ships with a `hybrid` disclosure mode for Claude Code that cuts system-prompt skill tokens by roughly 85%. Instead of materializing every enabled skill into `~/.claude/skills/`, only Essential-pack skills and auto-generated pack router `SKILL.md` files are synced. Non-essential skills stay in the central vault and are loaded on demand when Claude reads a router.
+
+Each scenario has a `disclosure_mode` (`full` or `hybrid`). The MatrixView shows which skills are materialized vs routed, the Sidebar shows the active mode, and the Dashboard estimates tokens saved vs Full mode.
+
+See [`docs/superpowers/specs/2026-04-19-progressive-disclosure-design.md`](docs/superpowers/specs/2026-04-19-progressive-disclosure-design.md) for the full design.
+
 ## Quick Start
 
 1. Create or switch to a scenario for the workflow you want to use.

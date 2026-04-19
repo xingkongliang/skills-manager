@@ -118,3 +118,19 @@ brainstorming → writing-plans → [plan-eng-review if architectural]
 | Eng review | gstack `/plan-eng-review` | before Phase 1 architecture lock |
 | Simplify | `/simplify` | after implementation |
 | QA | gstack `/qa` | after frontend features |
+
+## Progressive Disclosure (2026-04-19+)
+
+Default scenario disclosure mode is `hybrid` — only Essential-pack skills and auto-generated pack router SKILL.md files land in `~/.claude/skills/`. Non-essential skills stay in the vault (`~/.skills-manager/skills/`) and are read on demand via pack routers.
+
+### Commands
+- `sm pack context <pack>` — dump pack metadata for router generation
+- `sm pack set-router <pack> --description <text> [--body <file>]` — persist router content
+- `sm pack list-routers` — show status of each pack's router
+- `sm pack gen-router <pack>` — queue a marker for the `pack-router-gen` skill to process
+- `sm pack regen-all-routers` — batch queue markers for all non-essential packs
+
+### Debugging
+- Check which skills are materialized vs routed in MatrixView
+- Sidebar shows the active scenario's disclosure_mode
+- Dashboard shows estimated tokens saved vs Full mode

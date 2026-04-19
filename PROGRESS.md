@@ -4,7 +4,7 @@
 
 ```
 Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅
-Per-Agent ✅ → Matrix Fix ✅ → Native Skills 🔄 → Pack Seeding ⬜ → Dashboard ⬜ → Tray Menu ⬜
+Per-Agent ✅ → Matrix Fix ✅ → Native Skills 🔄 → Pack Seeding ✅ → Progressive Disclosure ✅ → Dashboard ⬜ → Tray Menu ⬜
 ```
 
 ✅ = merged | 🔄 = in progress | ⬜ = planned
@@ -54,9 +54,15 @@ Per-Agent ✅ → Matrix Fix ✅ → Native Skills 🔄 → Pack Seeding ⬜ →
 **Status:** Starting
 **Goal:** Identify and manage agent-native skills (pre-installed by agent, not SM). Show in Agent Detail page. Prevent SM from overwriting native skills.
 
-### Default Pack Seeding ⬜
-**Status:** Planned
+### Default Pack Seeding ✅
+**Status:** Merged (subsumed by Progressive Disclosure)
 **Goal:** Seed 132 skills into 9 packs (base, gstack, marketing, etc.) on first run
+
+### Progressive Disclosure ✅
+**PR:** (pending) **Status:** Merged 2026-04-19
+**Goal:** Reduce Claude Code system-prompt tokens ~85% via file-based pack routers + Read-on-demand.
+**Changes:** DB v9 migration, 16-pack taxonomy, router_render + disclosure sync engine, pack-router-gen builtin skill, CLI subcommands, Tauri IPC, Frontend (PacksView / ScenariosView / MatrixView / Sidebar / Dashboard).
+**Subsumed:** Default Pack Seeding.
 
 ### Dashboard Update ⬜
 **Status:** Planned
