@@ -79,6 +79,7 @@ export interface Scenario {
   skill_count: number;
   created_at: number;
   updated_at: number;
+  disclosure_mode: string;
 }
 
 export interface DiscoveredGroup {

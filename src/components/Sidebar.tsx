@@ -328,6 +328,15 @@ export function Sidebar() {
                                 <ScenarioIcon className="h-3 w-3" />
                               </span>
                               <span className="flex-1 truncate">{scenario.name}</span>
+                              {isActive && scenario.disclosure_mode && (
+                                <span
+                                  className="ml-auto px-2 py-0.5 text-xs rounded bg-gray-200 text-gray-700"
+                                  title={`Disclosure mode: ${scenario.disclosure_mode}`}
+                                  data-testid="sidebar-disclosure-badge"
+                                >
+                                  {scenario.disclosure_mode}
+                                </span>
+                              )}
                               <span className="ml-auto flex h-[18px] w-[32px] shrink-0 items-center justify-end group-hover:hidden">
                                 {scenario.skill_count > 0 && (
                                   <span

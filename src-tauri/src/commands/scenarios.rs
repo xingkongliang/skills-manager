@@ -62,6 +62,7 @@ pub struct ScenarioDto {
     pub skill_count: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    pub disclosure_mode: String,
 }
 
 #[tauri::command]
@@ -83,6 +84,7 @@ pub async fn get_scenarios(
                 skill_count: count,
                 created_at: s.created_at,
                 updated_at: s.updated_at,
+                disclosure_mode: s.disclosure_mode.as_str().to_string(),
             });
         }
         Ok(result)
@@ -111,6 +113,7 @@ pub async fn get_active_scenario(
                     skill_count: count,
                     created_at: s.created_at,
                     updated_at: s.updated_at,
+                    disclosure_mode: s.disclosure_mode.as_str().to_string(),
                 }));
             }
         }
@@ -168,6 +171,7 @@ pub async fn create_scenario(
             skill_count: 0,
             created_at: now,
             updated_at: now,
+            disclosure_mode: DisclosureMode::Full.as_str().to_string(),
         })
     })
     .await?;
