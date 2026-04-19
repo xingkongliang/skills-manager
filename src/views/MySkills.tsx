@@ -31,6 +31,9 @@ import { useMultiSelect } from "../hooks/useMultiSelect";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
+import { DisclosureModeSelect, type DisclosureMode } from "../components/DisclosureModeSelect";
+import { TokenEstimateBadge } from "../components/TokenEstimateBadge";
+import { invoke } from "@tauri-apps/api/core";
 import * as api from "../lib/tauri";
 import type {
   ManagedSkill,
@@ -830,6 +833,30 @@ export function MySkills() {
             {skills.length}
           </span>
         </h1>
+        {activeScenario && (
+          <div className="flex items-center gap-3 mt-3">
+            {/* TODO: derive essentialSkillCount / nonEssentialPackCount from scenario packs once available in TS layer */}
+            <DisclosureModeSelect
+              value={(activeScenario.disclosure_mode ?? "full") as DisclosureMode}
+              onChange={async (mode) => {
+                try {
+                  await invoke("set_scenario_disclosure_mode", {
+                    scenarioId: activeScenario.id,
+                    mode,
+                  });
+                  await refreshScenarios();
+                } catch (err) {
+                  toast.error(getErrorMessage(err));
+                }
+              }}
+            />
+            <TokenEstimateBadge
+              mode={(activeScenario.disclosure_mode ?? "full") as DisclosureMode}
+              essentialSkillCount={0}
+              nonEssentialPackCount={0}
+            />
+          </div>
+        )}
       </div>
 
       <div className="app-toolbar">
