@@ -332,6 +332,9 @@ pub fn cmd_pack_set_router(
     description: Option<&str>,
     body_file: Option<&std::path::Path>,
 ) -> Result<()> {
+    if description.is_none() && body_file.is_none() {
+        anyhow::bail!("set-router requires at least one of --description or --body");
+    }
     let store = open_store()?;
     let pack = find_pack_by_name(&store, name)?;
     let body = body_file.map(std::fs::read_to_string).transpose()?;
@@ -377,7 +380,6 @@ pub fn cmd_pack_gen_router(name: &str) -> Result<()> {
         skills,
     };
     let sm_root = central_repo::base_dir();
-    std::fs::create_dir_all(&sm_root)?;
     skills_manager_core::pending_router_gen::write_marker(&sm_root, &marker)?;
     println!(
         "Pending marker written. Open Claude Code — the pack-router-gen skill will handle '{}'.",
