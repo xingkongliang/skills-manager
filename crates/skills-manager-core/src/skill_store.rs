@@ -1396,6 +1396,36 @@ impl SkillStore {
         Ok(())
     }
 
+    pub fn set_pack_router(
+        &self,
+        pack_id: &str,
+        description: Option<&str>,
+        body: Option<&str>,
+        updated_at: i64,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE packs SET router_description = ?2, router_body = ?3, router_updated_at = ?4 WHERE id = ?1",
+            params![pack_id, description, body, updated_at],
+        )?;
+        if n == 0 {
+            anyhow::bail!("pack {pack_id} not found");
+        }
+        Ok(())
+    }
+
+    pub fn set_pack_essential(&self, pack_id: &str, is_essential: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE packs SET is_essential = ?2 WHERE id = ?1",
+            params![pack_id, is_essential as i32],
+        )?;
+        if n == 0 {
+            anyhow::bail!("pack {pack_id} not found");
+        }
+        Ok(())
+    }
+
     pub fn add_skill_to_pack(&self, pack_id: &str, skill_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let max_order: i32 = conn.query_row(
@@ -1991,6 +2021,59 @@ mod pack_tests {
         assert_eq!(fetched.router_body, None);
         assert_eq!(fetched.is_essential, true);
         assert_eq!(fetched.router_updated_at, Some(1_700_000_000));
+    }
+
+    #[test]
+    fn set_pack_router_updates_description_and_timestamp() {
+        let (store, _tmp) = test_store();
+        store
+            .insert_pack("p-seo", "mkt-seo", None, None, None)
+            .unwrap();
+
+        store
+            .set_pack_router("p-seo", Some("new desc"), None, 1_700_000_500)
+            .unwrap();
+
+        let got = store.get_pack_by_id("p-seo").unwrap().unwrap();
+        assert_eq!(got.router_description.as_deref(), Some("new desc"));
+        assert_eq!(got.router_body, None);
+        assert_eq!(got.router_updated_at, Some(1_700_000_500));
+    }
+
+    #[test]
+    fn set_pack_router_errors_when_pack_missing() {
+        let (store, _tmp) = test_store();
+        let err = store
+            .set_pack_router("nope", Some("x"), None, 1)
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn set_pack_essential_toggles_flag() {
+        let (store, _tmp) = test_store();
+        store
+            .insert_pack("p-ess", "essential", None, None, None)
+            .unwrap();
+
+        store.set_pack_essential("p-ess", true).unwrap();
+        assert_eq!(
+            store.get_pack_by_id("p-ess").unwrap().unwrap().is_essential,
+            true
+        );
+
+        store.set_pack_essential("p-ess", false).unwrap();
+        assert_eq!(
+            store.get_pack_by_id("p-ess").unwrap().unwrap().is_essential,
+            false
+        );
+    }
+
+    #[test]
+    fn set_pack_essential_errors_when_pack_missing() {
+        let (store, _tmp) = test_store();
+        let err = store.set_pack_essential("nope", true).unwrap_err();
+        assert!(err.to_string().contains("not found"));
     }
 
     #[test]
