@@ -10,6 +10,7 @@ pub mod install_cancel;
 pub mod installer;
 pub mod migrations;
 pub mod pack_seeder;
+pub mod pending_router_gen;
 pub mod plugins;
 pub mod project_scanner;
 pub mod router_render;

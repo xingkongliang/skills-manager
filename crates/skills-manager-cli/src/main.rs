@@ -108,6 +108,31 @@ enum PackAction {
         /// Scenario name
         scenario: String,
     },
+    /// Show pack details (description, router, skills)
+    Context {
+        /// Pack name
+        name: String,
+    },
+    /// Set or update a pack's router description/body
+    SetRouter {
+        /// Pack name
+        name: String,
+        /// New router description (single-line summary)
+        #[arg(long)]
+        description: Option<String>,
+        /// Path to a file whose contents become the router body
+        #[arg(long)]
+        body: Option<std::path::PathBuf>,
+    },
+    /// List packs and their router status
+    ListRouters,
+    /// Write a pending-router-gen marker for a pack
+    GenRouter {
+        /// Pack name
+        name: String,
+    },
+    /// Write pending-router-gen markers for every non-essential pack
+    RegenAllRouters,
 }
 
 #[derive(Subcommand)]
@@ -146,6 +171,15 @@ fn main() {
         Commands::Pack { action } => match action {
             PackAction::Add { pack, scenario } => commands::cmd_pack_add(&pack, &scenario),
             PackAction::Remove { pack, scenario } => commands::cmd_pack_remove(&pack, &scenario),
+            PackAction::Context { name } => commands::cmd_pack_context(&name),
+            PackAction::SetRouter {
+                name,
+                description,
+                body,
+            } => commands::cmd_pack_set_router(&name, description.as_deref(), body.as_deref()),
+            PackAction::ListRouters => commands::cmd_pack_list_routers(),
+            PackAction::GenRouter { name } => commands::cmd_pack_gen_router(&name),
+            PackAction::RegenAllRouters => commands::cmd_pack_regen_all_routers(),
         },
         Commands::Agents => commands::cmd_agents(),
         Commands::Agent { action } => match action {

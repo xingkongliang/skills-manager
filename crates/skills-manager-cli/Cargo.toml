@@ -13,3 +13,4 @@ path = "src/main.rs"
 skills-manager-core = { path = "../skills-manager-core" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1.0"
+chrono = "0.4"

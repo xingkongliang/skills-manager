@@ -302,6 +302,103 @@ fn resync_if_active(store: &SkillStore, scenario_id: &str) -> Result<()> {
     Ok(())
 }
 
+// ── Pack context / router commands ───────────────────────
+
+pub fn cmd_pack_context(name: &str) -> Result<()> {
+    let store = open_store()?;
+    let pack = find_pack_by_name(&store, name)?;
+    let skills = store.get_skills_for_pack(&pack.id)?;
+
+    println!("# Pack: {}\n", pack.name);
+    if let Some(d) = &pack.description {
+        println!("Description: {d}\n");
+    }
+    if let Some(r) = &pack.router_description {
+        println!("Current router: {r}\n");
+    }
+    println!("## Skills ({})\n", skills.len());
+    for s in &skills {
+        println!(
+            "- {}: {}",
+            s.name,
+            s.description.clone().unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+pub fn cmd_pack_set_router(
+    name: &str,
+    description: Option<&str>,
+    body_file: Option<&std::path::Path>,
+) -> Result<()> {
+    if description.is_none() && body_file.is_none() {
+        anyhow::bail!("set-router requires at least one of --description or --body");
+    }
+    let store = open_store()?;
+    let pack = find_pack_by_name(&store, name)?;
+    let body = body_file.map(std::fs::read_to_string).transpose()?;
+    let ts = chrono::Utc::now().timestamp();
+    store.set_pack_router(&pack.id, description, body.as_deref(), ts)?;
+    println!("Router updated for pack '{}'.", pack.name);
+    Ok(())
+}
+
+pub fn cmd_pack_list_routers() -> Result<()> {
+    let store = open_store()?;
+    for pack in store.get_all_packs()? {
+        let status = if pack.router_description.is_some() {
+            "✓"
+        } else {
+            "—"
+        };
+        println!(
+            "{status}  {name:<24} {desc}",
+            status = status,
+            name = pack.name,
+            desc = pack
+                .router_description
+                .as_deref()
+                .unwrap_or("<not generated>"),
+        );
+    }
+    Ok(())
+}
+
+pub fn cmd_pack_gen_router(name: &str) -> Result<()> {
+    let store = open_store()?;
+    let pack = find_pack_by_name(&store, name)?;
+    let skills = store
+        .get_skills_for_pack(&pack.id)?
+        .into_iter()
+        .map(|s| (s.name, s.description))
+        .collect();
+    let marker = skills_manager_core::pending_router_gen::PendingMarker {
+        pack_id: pack.id.clone(),
+        pack_name: pack.name.clone(),
+        created_at: chrono::Utc::now().timestamp(),
+        skills,
+    };
+    let sm_root = central_repo::base_dir();
+    skills_manager_core::pending_router_gen::write_marker(&sm_root, &marker)?;
+    println!(
+        "Pending marker written. Open Claude Code — the pack-router-gen skill will handle '{}'.",
+        pack.name
+    );
+    Ok(())
+}
+
+pub fn cmd_pack_regen_all_routers() -> Result<()> {
+    let store = open_store()?;
+    for pack in store.get_all_packs()? {
+        if pack.is_essential {
+            continue;
+        }
+        cmd_pack_gen_router(&pack.name)?;
+    }
+    Ok(())
+}
+
 // ── Pack helper ──
 
 fn find_pack_by_name(store: &SkillStore, name: &str) -> Result<skills_manager_core::PackRecord> {
