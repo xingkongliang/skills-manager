@@ -77,6 +77,39 @@ pub struct PackRecord {
     pub router_updated_at: Option<i64>,
 }
 
+/// Progressive Disclosure mode for a scenario.
+///
+/// Controls how the resolved skill list is surfaced to agents:
+/// - `Full`: all skills materialized (legacy behavior).
+/// - `Hybrid`: essential packs materialized; non-essential packs surfaced via router descriptions.
+/// - `RouterOnly`: all packs surfaced via router descriptions only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisclosureMode {
+    Full,
+    Hybrid,
+    RouterOnly,
+}
+
+impl DisclosureMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DisclosureMode::Full => "full",
+            DisclosureMode::Hybrid => "hybrid",
+            DisclosureMode::RouterOnly => "router_only",
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "full" => Ok(Self::Full),
+            "hybrid" => Ok(Self::Hybrid),
+            "router_only" => Ok(Self::RouterOnly),
+            other => anyhow::bail!("invalid disclosure_mode: {other}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ScenarioRecord {
     pub id: String,
@@ -86,6 +119,7 @@ pub struct ScenarioRecord {
     pub sort_order: i32,
     pub created_at: i64,
     pub updated_at: i64,
+    pub disclosure_mode: DisclosureMode,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -769,8 +803,8 @@ impl SkillStore {
     pub fn insert_scenario(&self, scenario: &ScenarioRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO scenarios (id, name, description, icon, sort_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO scenarios (id, name, description, icon, sort_order, created_at, updated_at, disclosure_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 scenario.id,
                 scenario.name,
@@ -779,6 +813,7 @@ impl SkillStore {
                 scenario.sort_order,
                 scenario.created_at,
                 scenario.updated_at,
+                scenario.disclosure_mode.as_str(),
             ],
         )?;
         Ok(())
@@ -787,20 +822,33 @@ impl SkillStore {
     pub fn get_all_scenarios(&self) -> Result<Vec<ScenarioRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, icon, sort_order, created_at, updated_at FROM scenarios ORDER BY sort_order, created_at",
+            "SELECT id, name, description, icon, sort_order, created_at, updated_at, disclosure_mode FROM scenarios ORDER BY sort_order, created_at",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ScenarioRecord {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                description: row.get(2)?,
-                icon: row.get(3)?,
-                sort_order: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-            })
-        })?;
+        let rows = stmt.query_map([], map_scenario_row)?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn get_scenario_by_id(&self, id: &str) -> Result<Option<ScenarioRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, icon, sort_order, created_at, updated_at, disclosure_mode FROM scenarios WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], map_scenario_row)?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    pub fn set_scenario_disclosure_mode(&self, id: &str, mode: &str) -> Result<()> {
+        // Validate the mode string before persisting.
+        DisclosureMode::parse(mode)?;
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE scenarios SET disclosure_mode = ?2 WHERE id = ?1",
+            params![id, mode],
+        )?;
+        if n == 0 {
+            anyhow::bail!("scenario {id} not found");
+        }
+        Ok(())
     }
 
     pub fn update_scenario(
@@ -1850,6 +1898,30 @@ fn map_managed_plugin_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ManagedPl
     })
 }
 
+fn map_scenario_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScenarioRecord> {
+    let raw_mode: String = row.get(7)?;
+    let disclosure_mode = DisclosureMode::parse(&raw_mode).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            7,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            )),
+        )
+    })?;
+    Ok(ScenarioRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        icon: row.get(3)?,
+        sort_order: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+        disclosure_mode,
+    })
+}
+
 fn map_pack_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PackRecord> {
     Ok(PackRecord {
         id: row.get(0)?,
@@ -1940,6 +2012,7 @@ mod pack_tests {
             sort_order: 0,
             created_at: 1000,
             updated_at: 1000,
+            disclosure_mode: DisclosureMode::Full,
         };
         store.insert_scenario(&rec).unwrap();
     }
@@ -2370,6 +2443,7 @@ mod plugin_tests {
             sort_order: 0,
             created_at: 1000,
             updated_at: 1000,
+            disclosure_mode: DisclosureMode::Full,
         };
         store.insert_scenario(&rec).unwrap();
     }
@@ -2642,6 +2716,7 @@ mod agent_tests {
             sort_order: 0,
             created_at: 1000,
             updated_at: 1000,
+            disclosure_mode: DisclosureMode::Full,
         };
         store.insert_scenario(&rec).unwrap();
     }
@@ -2864,5 +2939,84 @@ mod agent_tests {
         let config = store.get_agent_config("claude").unwrap().unwrap();
         assert!(!config.managed);
         assert_eq!(config.scenario_id.as_deref(), Some("sc2"));
+    }
+}
+
+#[cfg(test)]
+mod disclosure_tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn test_store() -> (SkillStore, NamedTempFile) {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = SkillStore::new(&tmp.path().to_path_buf()).unwrap();
+        (store, tmp)
+    }
+
+    fn insert_scenario(store: &SkillStore, id: &str, name: &str) {
+        let rec = ScenarioRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            icon: None,
+            sort_order: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            disclosure_mode: DisclosureMode::Full,
+        };
+        store.insert_scenario(&rec).unwrap();
+    }
+
+    #[test]
+    fn disclosure_mode_parses_and_round_trips() {
+        assert_eq!(DisclosureMode::parse("full").unwrap(), DisclosureMode::Full);
+        assert_eq!(
+            DisclosureMode::parse("hybrid").unwrap(),
+            DisclosureMode::Hybrid
+        );
+        assert_eq!(
+            DisclosureMode::parse("router_only").unwrap(),
+            DisclosureMode::RouterOnly
+        );
+        assert!(DisclosureMode::parse("junk").is_err());
+        assert_eq!(DisclosureMode::Full.as_str(), "full");
+        assert_eq!(DisclosureMode::Hybrid.as_str(), "hybrid");
+        assert_eq!(DisclosureMode::RouterOnly.as_str(), "router_only");
+    }
+
+    #[test]
+    fn scenario_record_exposes_disclosure_mode() {
+        let (store, _tmp) = test_store();
+        insert_scenario(&store, "s1", "Test");
+
+        // Default is 'full' from column default / inserted value.
+        let s = store.get_scenario_by_id("s1").unwrap().unwrap();
+        assert_eq!(s.disclosure_mode, DisclosureMode::Full);
+
+        store.set_scenario_disclosure_mode("s1", "hybrid").unwrap();
+        let s = store.get_scenario_by_id("s1").unwrap().unwrap();
+        assert_eq!(s.disclosure_mode, DisclosureMode::Hybrid);
+
+        store
+            .set_scenario_disclosure_mode("s1", "router_only")
+            .unwrap();
+        let s = store.get_scenario_by_id("s1").unwrap().unwrap();
+        assert_eq!(s.disclosure_mode, DisclosureMode::RouterOnly);
+    }
+
+    #[test]
+    fn set_scenario_disclosure_mode_rejects_invalid() {
+        let (store, _tmp) = test_store();
+        insert_scenario(&store, "s1", "Test");
+        assert!(store.set_scenario_disclosure_mode("s1", "bogus").is_err());
+    }
+
+    #[test]
+    fn set_scenario_disclosure_mode_errors_when_missing() {
+        let (store, _tmp) = test_store();
+        let err = store
+            .set_scenario_disclosure_mode("nope", "hybrid")
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"));
     }
 }

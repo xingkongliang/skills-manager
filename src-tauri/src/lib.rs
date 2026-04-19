@@ -543,6 +543,7 @@ fn initialize_startup_scenario(store: &Arc<core::skill_store::SkillStore>) -> Re
             sort_order: 0,
             created_at: now,
             updated_at: now,
+            disclosure_mode: core::skill_store::DisclosureMode::Full,
         };
         store
             .insert_scenario(&default_scenario)
