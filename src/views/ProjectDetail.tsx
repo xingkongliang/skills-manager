@@ -108,6 +108,22 @@ function getSyncStatusMeta(t: (key: string) => string, status: ProjectSkill["syn
   }
 }
 
+function getAssignedAgents(variants: ProjectSkill[]) {
+  return Array.from(new Set(variants.map((variant) => variant.agent))).sort();
+}
+
+function getAgentDotTargets(variants: ProjectSkill[]) {
+  const seen = new Set<string>();
+  const targets: { key: string; display_name: string }[] = [];
+  for (const v of variants) {
+    if (!seen.has(v.agent)) {
+      seen.add(v.agent);
+      targets.push({ key: v.agent, display_name: v.agent_display_name });
+    }
+  }
+  return targets;
+}
+
 function getGroupStatus(variants: ProjectSkill[]): ProjectSkill["sync_status"] {
   const priority: ProjectSkill["sync_status"][] = [
     "diverged",
@@ -907,7 +923,7 @@ export function ProjectDetail() {
               skill.status === "center_newer" ||
               skill.status === "diverged";
             const statusMeta = getSyncStatusMeta(t, skill.status);
-            const assignedAgents = skill.variants.map((variant) => variant.agent).sort();
+            const assignedAgents = getAssignedAgents(skill.variants);
 
             if (viewMode === "grid") {
               return (
@@ -1298,10 +1314,10 @@ function ProjectSkillDetailPanel({
     <>
       <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
         <ProjectAgentDots
-          assignedAgents={skill.variants.map((variant) => variant.agent)}
-          targets={skill.variants.map((variant) => ({
-            key: variant.agent,
-            display_name: variant.agent_display_name,
+          assignedAgents={getAssignedAgents(skill.variants)}
+          targets={getAgentDotTargets(skill.variants).map((t) => ({
+            key: t.key,
+            display_name: t.display_name,
             enabled: true,
             installed: true,
             is_custom: false,

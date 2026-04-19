@@ -11,7 +11,7 @@ pub struct AppError {
     pub message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     Database,
