@@ -71,6 +71,10 @@ pub struct PackRecord {
     pub sort_order: i32,
     pub created_at: i64,
     pub updated_at: i64,
+    pub router_description: Option<String>,
+    pub router_body: Option<String>,
+    pub is_essential: bool,
+    pub router_updated_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1350,7 +1354,8 @@ impl SkillStore {
     pub fn get_all_packs(&self) -> Result<Vec<PackRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, icon, color, sort_order, created_at, updated_at
+            "SELECT id, name, description, icon, color, sort_order, created_at, updated_at,
+                    router_description, router_body, is_essential, router_updated_at
              FROM packs ORDER BY sort_order, created_at",
         )?;
         let rows = stmt.query_map([], map_pack_row)?;
@@ -1360,7 +1365,8 @@ impl SkillStore {
     pub fn get_pack_by_id(&self, id: &str) -> Result<Option<PackRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, icon, color, sort_order, created_at, updated_at
+            "SELECT id, name, description, icon, color, sort_order, created_at, updated_at,
+                    router_description, router_body, is_essential, router_updated_at
              FROM packs WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map(params![id], map_pack_row)?;
@@ -1464,7 +1470,8 @@ impl SkillStore {
     pub fn get_packs_for_scenario(&self, scenario_id: &str) -> Result<Vec<PackRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT p.id, p.name, p.description, p.icon, p.color, p.sort_order, p.created_at, p.updated_at
+            "SELECT p.id, p.name, p.description, p.icon, p.color, p.sort_order, p.created_at, p.updated_at,
+                    p.router_description, p.router_body, p.is_essential, p.router_updated_at
              FROM packs p
              INNER JOIN scenario_packs sp ON p.id = sp.pack_id
              WHERE sp.scenario_id = ?1
@@ -1576,7 +1583,8 @@ impl SkillStore {
     pub fn get_agent_extra_packs(&self, tool_key: &str) -> Result<Vec<PackRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT p.id, p.name, p.description, p.icon, p.color, p.sort_order, p.created_at, p.updated_at
+            "SELECT p.id, p.name, p.description, p.icon, p.color, p.sort_order, p.created_at, p.updated_at,
+                    p.router_description, p.router_body, p.is_essential, p.router_updated_at
              FROM packs p
              INNER JOIN agent_extra_packs aep ON p.id = aep.pack_id
              WHERE aep.tool_key = ?1
@@ -1822,6 +1830,10 @@ fn map_pack_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PackRecord> {
         sort_order: row.get(5)?,
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
+        router_description: row.get(8)?,
+        router_body: row.get(9)?,
+        is_essential: row.get::<_, i64>(10)? != 0,
+        router_updated_at: row.get(11)?,
     })
 }
 
@@ -1940,6 +1952,45 @@ mod pack_tests {
 
         let not_found = store.get_pack_by_id("nonexistent").unwrap();
         assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn pack_record_round_trips_router_and_essential() {
+        let (store, _tmp) = test_store();
+        store
+            .insert_pack("p-seo", "mkt-seo", Some("SEO pack"), None, None)
+            .unwrap();
+
+        // New fields default to None / false on fresh insert
+        let fresh = store.get_pack_by_id("p-seo").unwrap().unwrap();
+        assert_eq!(fresh.router_description, None);
+        assert_eq!(fresh.router_body, None);
+        assert_eq!(fresh.is_essential, false);
+        assert_eq!(fresh.router_updated_at, None);
+
+        // Direct column write to confirm they round-trip through SELECT
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE packs SET router_description = ?1, router_body = ?2, is_essential = ?3, router_updated_at = ?4 WHERE id = ?5",
+                params![
+                    "Trigger SEO audit...",
+                    Option::<&str>::None,
+                    1i32,
+                    1_700_000_000i64,
+                    "p-seo",
+                ],
+            )
+            .unwrap();
+        }
+        let fetched = store.get_pack_by_id("p-seo").unwrap().unwrap();
+        assert_eq!(
+            fetched.router_description.as_deref(),
+            Some("Trigger SEO audit...")
+        );
+        assert_eq!(fetched.router_body, None);
+        assert_eq!(fetched.is_essential, true);
+        assert_eq!(fetched.router_updated_at, Some(1_700_000_000));
     }
 
     #[test]
