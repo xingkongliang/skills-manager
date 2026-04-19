@@ -16,6 +16,66 @@ fn refresh_tray_menu_best_effort(app: &tauri::AppHandle) {
     }
 }
 
+/// Sync a skill's files to all enabled tool adapter directories for the given scenario.
+/// Only performs sync if the scenario is the currently active one.
+pub(crate) fn sync_skill_to_active_scenario(
+    store: &SkillStore,
+    scenario_id: &str,
+    skill_id: &str,
+) -> Result<(), AppError> {
+    if let Ok(Some(active_id)) = store.get_active_scenario_id() {
+        if active_id == scenario_id {
+            let adapters =
+                enabled_installed_adapters_for_scenario_skill(store, scenario_id, skill_id)?;
+            let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+            let Ok(Some(skill)) = store.get_skill_by_id(skill_id) else {
+                return Ok(());
+            };
+            let source = PathBuf::from(&skill.central_path);
+            let target_name = skill.name;
+            let old_targets = store.get_targets_for_skill(skill_id).unwrap_or_default();
+            for adapter in &adapters {
+                // Remove stale target from a previous sync if the skill name changed
+                if let Some(old) = old_targets.iter().find(|t| t.tool == adapter.key) {
+                    let old_path = PathBuf::from(&old.target_path);
+                    if old_path != adapter.skills_dir().join(&target_name) {
+                        if let Err(e) = sync_engine::remove_target(&old_path) {
+                            log::warn!("Failed to remove stale target {}: {e}", old_path.display());
+                        }
+                        let _ = store.delete_target(skill_id, &adapter.key);
+                    }
+                }
+
+                let target = adapter.skills_dir().join(&target_name);
+                let mode =
+                    sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
+                match sync_engine::sync_skill(&source, &target, mode) {
+                    Ok(actual_mode) => {
+                        let now = chrono::Utc::now().timestamp_millis();
+                        let target_record = crate::core::skill_store::SkillTargetRecord {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            skill_id: skill_id.to_string(),
+                            tool: adapter.key.clone(),
+                            target_path: target.to_string_lossy().to_string(),
+                            mode: actual_mode.as_str().to_string(),
+                            status: "ok".to_string(),
+                            synced_at: Some(now),
+                            last_error: None,
+                        };
+                        if let Err(e) = store.insert_target(&target_record) {
+                            log::warn!("Failed to insert sync target for skill {skill_id}: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to sync skill {skill_id} to {}: {e}", target.display());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn ensure_scenario_exists(store: &SkillStore, scenario_id: &str) -> Result<(), AppError> {
     let exists = store
         .get_all_scenarios()
@@ -273,50 +333,7 @@ pub async fn add_skill_to_scenario(
             .add_skill_to_scenario(&scenario_id, &skill_id)
             .map_err(AppError::db)?;
 
-        // If this is the active scenario, sync the skill
-        if let Ok(Some(active_id)) = store.get_active_scenario_id() {
-            if active_id == scenario_id {
-                let adapters =
-                    enabled_installed_adapters_for_scenario_skill(&store, &scenario_id, &skill_id)?;
-                let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-                if let Ok(Some(skill)) = store.get_skill_by_id(&skill_id) {
-                    let source = PathBuf::from(&skill.central_path);
-                    for adapter in &adapters {
-                        let target = adapter.skills_dir().join(&skill.name);
-                        let mode = sync_engine::sync_mode_for_tool(
-                            &adapter.key,
-                            configured_mode.as_deref(),
-                        );
-                        match sync_engine::sync_skill(&source, &target, mode) {
-                            Ok(actual_mode) => {
-                                let now = chrono::Utc::now().timestamp_millis();
-                                let target_record = crate::core::skill_store::SkillTargetRecord {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    skill_id: skill_id.clone(),
-                                    tool: adapter.key.clone(),
-                                    target_path: target.to_string_lossy().to_string(),
-                                    mode: actual_mode.as_str().to_string(),
-                                    status: "ok".to_string(),
-                                    synced_at: Some(now),
-                                    last_error: None,
-                                };
-                                if let Err(e) = store.insert_target(&target_record) {
-                                    log::warn!(
-                                        "Failed to insert sync target for skill {skill_id}: {e}"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                log::warn!(
-                                    "Failed to sync skill {skill_id} to {}: {e}",
-                                    target.display()
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        sync_skill_to_active_scenario(&store, &scenario_id, &skill_id)?;
 
         Ok(())
     })

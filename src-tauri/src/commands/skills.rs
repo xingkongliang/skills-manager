@@ -1210,6 +1210,14 @@ fn store_installed_skill(
             store
                 .add_skill_to_scenario(scenario_id, &existing.id)
                 .map_err(AppError::db)?;
+
+            if let Err(e) = super::scenarios::sync_skill_to_active_scenario(
+                store,
+                scenario_id,
+                &existing.id,
+            ) {
+                log::warn!("Failed to sync reinstalled skill to scenario: {e}");
+            }
         }
 
         return Ok(existing.id);
@@ -1245,6 +1253,14 @@ fn store_installed_skill(
         store
             .add_skill_to_scenario(scenario_id, &id)
             .map_err(AppError::db)?;
+
+        if let Err(e) = super::scenarios::sync_skill_to_active_scenario(
+            store,
+            scenario_id,
+            &id,
+        ) {
+            log::warn!("Failed to sync newly installed skill to scenario: {e}");
+        }
     }
 
     Ok(id)
