@@ -399,6 +399,119 @@ pub fn cmd_pack_regen_all_routers() -> Result<()> {
     Ok(())
 }
 
+// ── Router eval harness (MVP, string-match proxy) ────────
+
+/// Canned queries per pack. A "hit" means the pack's `router_description`
+/// contains at least one meaningful (>3 char) word from the query.
+///
+/// This is a cheap regression guard — not a substitute for a live Claude
+/// routing eval, which is out of scope for MVP.
+const EVAL_QUERIES: &[(&str, &[&str])] = &[
+    (
+        "mkt-seo",
+        &["audit my SEO", "add schema markup", "not ranking on Google"],
+    ),
+    (
+        "dev-frontend",
+        &[
+            "build a landing page",
+            "tailwind component",
+            "stitch mockup",
+        ],
+    ),
+    (
+        "web-research",
+        &["deep research", "search twitter", "last 30 days trends"],
+    ),
+    (
+        "browser-automation",
+        &["scrape this page", "browser automation", "login to site"],
+    ),
+    ("mkt-copy", &["write cold email", "ad copy", "sales deck"]),
+    (
+        "mkt-cro",
+        &[
+            "landing page conversion",
+            "signup optimization",
+            "popup for leads",
+        ],
+    ),
+    (
+        "knowledge-library",
+        &["readwise highlights", "obsidian note", "feed catchup"],
+    ),
+    (
+        "docs-office",
+        &["convert to pdf", "word document", "pptx slides"],
+    ),
+    (
+        "ai-engineering",
+        &["build mcp server", "claude api tool use", "prompt caching"],
+    ),
+    (
+        "agent-orchestration",
+        &["paseo committee", "loop agent", "handoff to another"],
+    ),
+];
+
+pub fn cmd_pack_eval_routers() -> Result<()> {
+    let store = open_store()?;
+
+    let mut total_hits = 0usize;
+    let mut total_queries = 0usize;
+
+    println!("{:<22} {:>8} {:>8}", "Pack", "Hits", "Total");
+    println!("{}", "-".repeat(42));
+
+    for (pack_name, queries) in EVAL_QUERIES {
+        let pack = match store
+            .get_all_packs()?
+            .into_iter()
+            .find(|p| p.name.eq_ignore_ascii_case(pack_name))
+        {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let desc = pack
+            .router_description
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase();
+
+        let mut hits = 0usize;
+        for q in *queries {
+            let q_lower = q.to_lowercase();
+            // Hit = at least one meaningful word (>3 chars) from the query
+            // appears in the router description.
+            if q_lower
+                .split_whitespace()
+                .any(|w| w.len() > 3 && desc.contains(w))
+            {
+                hits += 1;
+            }
+        }
+
+        let total = queries.len();
+        total_hits += hits;
+        total_queries += total;
+        println!("{:<22} {:>8} {:>8}", pack_name, hits, total);
+    }
+
+    println!("{}", "-".repeat(42));
+    let pct = if total_queries > 0 {
+        (total_hits * 100) / total_queries
+    } else {
+        0
+    };
+    println!(
+        "{:<22} {:>8} {:>8}   ({}%)",
+        "TOTAL", total_hits, total_queries, pct
+    );
+
+    Ok(())
+}
+
 // ── Pack helper ──
 
 fn find_pack_by_name(store: &SkillStore, name: &str) -> Result<skills_manager_core::PackRecord> {
