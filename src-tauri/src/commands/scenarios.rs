@@ -571,3 +571,18 @@ pub(crate) fn unsync_scenario_skills(
 
     Ok(())
 }
+
+#[tauri::command]
+pub async fn set_scenario_disclosure_mode(
+    scenario_id: String,
+    mode: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store
+            .set_scenario_disclosure_mode(&scenario_id, &mode)
+            .map_err(AppError::db)
+    })
+    .await?
+}

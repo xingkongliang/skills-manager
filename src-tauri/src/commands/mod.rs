@@ -4,6 +4,7 @@ pub mod git_backup;
 pub mod packs;
 pub mod plugins;
 pub mod projects;
+pub mod router_gen;
 pub mod scan;
 pub mod scenarios;
 pub mod settings;

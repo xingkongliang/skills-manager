@@ -493,6 +493,13 @@ pub fn run() {
             commands::packs::remove_pack_from_scenario,
             commands::packs::get_effective_skills_for_scenario,
             commands::packs::seed_default_packs,
+            commands::packs::set_pack_router,
+            commands::packs::set_pack_essential,
+            commands::packs::preview_router_skill_md,
+            // Router generation markers
+            commands::router_gen::write_pending_router_marker,
+            commands::router_gen::list_pending_router_markers,
+            commands::router_gen::clear_pending_router_marker,
             // Plugins
             commands::plugins::get_managed_plugins,
             commands::plugins::scan_plugins,
@@ -526,6 +533,7 @@ pub fn run() {
             commands::projects::reorder_projects,
             commands::scenarios::get_scenario_skill_order,
             commands::scenarios::reorder_scenario_skills,
+            commands::scenarios::set_scenario_disclosure_mode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

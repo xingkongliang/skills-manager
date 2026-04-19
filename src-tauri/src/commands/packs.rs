@@ -3,8 +3,10 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::core::{
+    central_repo,
     error::AppError,
     pack_seeder::{self, SeedResult},
+    router_render,
     skill_store::{PackRecord, SkillRecord, SkillStore},
 };
 
@@ -168,6 +170,60 @@ pub async fn get_effective_skills_for_scenario(
         store
             .get_effective_skills_for_scenario(&scenario_id)
             .map_err(AppError::db)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn set_pack_router(
+    pack_id: String,
+    description: Option<String>,
+    body: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let ts = chrono::Utc::now().timestamp();
+        store
+            .set_pack_router(&pack_id, description.as_deref(), body.as_deref(), ts)
+            .map_err(AppError::db)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn set_pack_essential(
+    pack_id: String,
+    is_essential: bool,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store
+            .set_pack_essential(&pack_id, is_essential)
+            .map_err(AppError::db)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn preview_router_skill_md(
+    pack_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<String, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let pack = store
+            .get_pack_by_id(&pack_id)
+            .map_err(AppError::db)?
+            .ok_or_else(|| AppError::not_found(format!("pack {pack_id} not found")))?;
+        let skills = store.get_skills_for_pack(&pack.id).map_err(AppError::db)?;
+        let vault_root = central_repo::skills_dir();
+        Ok(router_render::render_router_skill_md(
+            &pack,
+            &skills,
+            &vault_root,
+        ))
     })
     .await?
 }
