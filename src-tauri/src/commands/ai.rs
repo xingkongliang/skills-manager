@@ -71,7 +71,8 @@ pub async fn invoke_codebuddy_agent(
         input["internetEnvironment"] = serde_json::json!(env);
     }
     if let Ok(codebuddy_path) = std::env::var("CODEBUDDY_CODE_PATH") {
-        if !codebuddy_path.trim().is_empty() {
+        let codebuddy_path = codebuddy_path.trim();
+        if !codebuddy_path.is_empty() {
             input["codebuddyCodePath"] = serde_json::json!(codebuddy_path);
         }
     }
