@@ -133,6 +133,8 @@ enum PackAction {
     },
     /// Write pending-router-gen markers for every non-essential pack
     RegenAllRouters,
+    /// Evaluate router-description accuracy against canned queries
+    EvalRouters,
 }
 
 #[derive(Subcommand)]
@@ -180,6 +182,7 @@ fn main() {
             PackAction::ListRouters => commands::cmd_pack_list_routers(),
             PackAction::GenRouter { name } => commands::cmd_pack_gen_router(&name),
             PackAction::RegenAllRouters => commands::cmd_pack_regen_all_routers(),
+            PackAction::EvalRouters => commands::cmd_pack_eval_routers(),
         },
         Commands::Agents => commands::cmd_agents(),
         Commands::Agent { action } => match action {
