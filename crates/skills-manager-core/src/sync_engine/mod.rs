@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
+pub mod disclosure;
+
 #[derive(Debug, Clone, Copy)]
 pub enum SyncMode {
     Symlink,
