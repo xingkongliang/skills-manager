@@ -28,7 +28,7 @@ export function Layout() {
   }, [navigate]);
 
   return (
-    <div className="relative flex h-screen w-full overflow-hidden bg-background text-primary">
+    <div className="relative flex h-full w-full overflow-hidden bg-background text-primary">
       {/* Full-width top drag bar — spans sidebar + content, with bottom divider */}
       <div
         onMouseDown={onDrag}

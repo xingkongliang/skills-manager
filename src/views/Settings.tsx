@@ -37,16 +37,11 @@ import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
 import * as api from "../lib/tauri";
+import { applyTextSize } from "../lib/textScale";
 import type { AppUpdateInfo } from "../lib/tauri";
 import type { Theme } from "../hooks/useTheme";
 
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
-const TEXT_SIZE_ZOOM_MAP: Record<string, string> = {
-  small: "0.9",
-  default: "1",
-  large: "1.1",
-  xlarge: "1.2",
-};
 
 const MAINSTREAM_AGENT_KEYS = new Set([
   "claude_code",
@@ -60,10 +55,6 @@ const MAINSTREAM_AGENT_KEYS = new Set([
   "antigravity",
   "amp",
 ]);
-
-function applyTextSize(size: string) {
-  document.documentElement.style.zoom = TEXT_SIZE_ZOOM_MAP[size] || "1";
-}
 
 function compactHomePath(path: string) {
   return path

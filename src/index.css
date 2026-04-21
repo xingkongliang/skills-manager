@@ -5,6 +5,7 @@
 @layer base {
   /* Light theme (default) */
   :root {
+    --app-scale: 1;
     --color-bg: #FAFAFA;
     --color-bg-secondary: #F4F4F5;
     --color-surface: #FFFFFF;
@@ -56,13 +57,16 @@
     }
   }
 
+  html,
+  body,
+  #root {
+    height: calc(100vh / var(--app-scale));
+    width: calc(100vw / var(--app-scale));
+  }
+
   body {
     @apply bg-background text-primary font-sans antialiased overflow-hidden;
     letter-spacing: -0.005em;
-  }
-
-  #root {
-    @apply h-screen;
   }
 }
 
