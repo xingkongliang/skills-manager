@@ -306,9 +306,11 @@ pub async fn set_custom_tool_path(
         if old_skills_dir != new_adapter.skills_dir() {
             reconcile_tool_sync_after_path_change(&store, &key);
         }
-        Ok(())
+        Ok::<(), AppError>(())
     })
-    .await?
+    .await??;
+    crate::core::file_watcher::request_watch_set_resync();
+    Ok(())
 }
 
 #[tauri::command]
@@ -331,9 +333,11 @@ pub async fn reset_custom_tool_path(
         if old_skills_dir != new_adapter.skills_dir() {
             reconcile_tool_sync_after_path_change(&store, &key);
         }
-        Ok(())
+        Ok::<(), AppError>(())
     })
-    .await?
+    .await??;
+    crate::core::file_watcher::request_watch_set_resync();
+    Ok(())
 }
 
 #[tauri::command]
@@ -374,9 +378,11 @@ pub async fn add_custom_tool(
         });
         set_custom_tools(&store, &customs)?;
         reconcile_tool_sync_after_path_change(&store, &key);
-        Ok(())
+        Ok::<(), AppError>(())
     })
-    .await?
+    .await??;
+    crate::core::file_watcher::request_watch_set_resync();
+    Ok(())
 }
 
 #[tauri::command]
@@ -405,7 +411,9 @@ pub async fn remove_custom_tool(
         disabled.retain(|k| k != &key);
         set_disabled_tools(&store, &disabled)
     })
-    .await?
+    .await??;
+    crate::core::file_watcher::request_watch_set_resync();
+    Ok(())
 }
 
 pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {

@@ -400,7 +400,7 @@ pub async fn add_project(
     path: String,
 ) -> Result<ProjectDto, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let project = tauri::async_runtime::spawn_blocking(move || {
         let project_path = Path::new(&path);
         if !project_path.is_dir() {
             return Err(AppError::invalid_input("Directory does not exist"));
@@ -437,7 +437,9 @@ pub async fn add_project(
         let configs = agent_skill_configs(&store);
         Ok(project_to_dto(&record, &all_managed, &configs))
     })
-    .await?
+    .await??;
+    crate::core::file_watcher::request_watch_set_resync();
+    Ok(project)
 }
 
 #[tauri::command]
@@ -448,7 +450,7 @@ pub async fn add_linked_workspace(
     disabled_path: Option<String>,
 ) -> Result<ProjectDto, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let project = tauri::async_runtime::spawn_blocking(move || {
         let name = name.trim().to_string();
         if name.is_empty() {
             return Err(AppError::invalid_input("Workspace name is required"));
@@ -513,14 +515,18 @@ pub async fn add_linked_workspace(
         let configs = agent_skill_configs(&store);
         Ok(project_to_dto(&record, &all_managed, &configs))
     })
-    .await?
+    .await??;
+    crate::core::file_watcher::request_watch_set_resync();
+    Ok(project)
 }
 
 #[tauri::command]
 pub async fn remove_project(store: State<'_, Arc<SkillStore>>, id: String) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || store.delete_project(&id).map_err(AppError::db))
-        .await?
+        .await??;
+    crate::core::file_watcher::request_watch_set_resync();
+    Ok(())
 }
 
 #[tauri::command]

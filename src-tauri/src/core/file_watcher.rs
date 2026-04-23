@@ -1,23 +1,58 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc::Sender, Mutex, OnceLock};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::Emitter;
 
-use super::{central_repo, skill_store::SkillStore, tool_adapters};
+use super::{central_repo, skill_store::SkillStore, tool_adapters, tool_adapters::ToolAdapter};
 
 const APP_FS_CHANGED_EVENT: &str = "app-files-changed";
-const WATCH_RESCAN_INTERVAL: Duration = Duration::from_secs(3);
 const WATCH_EMIT_DEBOUNCE: Duration = Duration::from_millis(500);
 
+static WATCHER_CONTROL: OnceLock<Mutex<Option<Sender<WatcherMessage>>>> = OnceLock::new();
+
+enum WatcherMessage {
+    FsEvent(Result<Event, notify::Error>),
+    Resync,
+}
+
+fn watcher_control() -> &'static Mutex<Option<Sender<WatcherMessage>>> {
+    WATCHER_CONTROL.get_or_init(|| Mutex::new(None))
+}
+
+fn set_watcher_control(sender: Sender<WatcherMessage>) {
+    if let Ok(mut slot) = watcher_control().lock() {
+        *slot = Some(sender);
+    }
+}
+
+pub fn request_watch_set_resync() {
+    // Maintenance rule: if you change any data source consumed by
+    // `collect_watch_paths()` (tool adapters, custom tool paths/defs, projects,
+    // linked workspace roots, disabled paths), trigger this after the write
+    // succeeds so the live watcher set stays in sync.
+    if let Ok(slot) = watcher_control().lock() {
+        if let Some(sender) = slot.as_ref() {
+            let _ = sender.send(WatcherMessage::Resync);
+        }
+    }
+}
+
 fn collect_watch_paths(store: &SkillStore) -> Vec<PathBuf> {
+    collect_watch_paths_for_adapters(store, tool_adapters::all_tool_adapters(store))
+}
+
+fn collect_watch_paths_for_adapters(
+    store: &SkillStore,
+    adapters: Vec<ToolAdapter>,
+) -> Vec<PathBuf> {
     let mut paths = vec![central_repo::skills_dir(), central_repo::scenarios_dir()];
 
-    for adapter in tool_adapters::all_tool_adapters(store) {
+    for adapter in adapters {
         paths.push(adapter.skills_dir());
-        paths.extend(adapter.all_scan_dirs());
     }
 
     if let Ok(projects) = store.get_all_projects() {
@@ -109,9 +144,10 @@ fn should_emit(event: &Event) -> bool {
 pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Arc<SkillStore>) {
     std::thread::spawn(move || {
         let (tx, rx) = std::sync::mpsc::channel();
+        set_watcher_control(tx.clone());
         let mut watcher = match RecommendedWatcher::new(
             move |result| {
-                let _ = tx.send(result);
+                let _ = tx.send(WatcherMessage::FsEvent(result));
             },
             Config::default().with_poll_interval(Duration::from_secs(2)),
         ) {
@@ -123,27 +159,25 @@ pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Ar
         };
 
         let mut watched = HashSet::new();
-        let mut last_sync = Instant::now() - WATCH_RESCAN_INTERVAL;
-        let mut last_emit = Instant::now() - WATCH_EMIT_DEBOUNCE;
+        let mut last_emit = std::time::Instant::now() - WATCH_EMIT_DEBOUNCE;
+        sync_watch_set(&mut watcher, &mut watched, &store);
 
         loop {
-            if last_sync.elapsed() >= WATCH_RESCAN_INTERVAL {
-                sync_watch_set(&mut watcher, &mut watched, &store);
-                last_sync = Instant::now();
-            }
-
             match rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(Ok(event)) => {
+                Ok(WatcherMessage::Resync) => {
+                    sync_watch_set(&mut watcher, &mut watched, &store);
+                }
+                Ok(WatcherMessage::FsEvent(Ok(event))) => {
                     if !should_emit(&event) || last_emit.elapsed() < WATCH_EMIT_DEBOUNCE {
                         continue;
                     }
                     if let Err(err) = app.emit(APP_FS_CHANGED_EVENT, ()) {
                         log::debug!("Failed to emit app-files-changed: {err}");
                     } else {
-                        last_emit = Instant::now();
+                        last_emit = std::time::Instant::now();
                     }
                 }
-                Ok(Err(err)) => {
+                Ok(WatcherMessage::FsEvent(Err(err))) => {
                     log::debug!("Filesystem watcher error: {err}");
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -155,8 +189,9 @@ pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Ar
 
 #[cfg(test)]
 mod tests {
-    use super::collect_watch_paths;
+    use super::{collect_watch_paths, collect_watch_paths_for_adapters};
     use crate::core::skill_store::{ProjectRecord, SkillStore};
+    use crate::core::tool_adapters::ToolAdapter;
     use std::fs;
     use tempfile::tempdir;
 
@@ -190,5 +225,30 @@ mod tests {
         assert!(paths.contains(&disabled_root));
         assert!(!paths.contains(&skills_root.parent().unwrap().to_path_buf()));
         assert!(!paths.contains(&disabled_root.parent().unwrap().to_path_buf()));
+    }
+
+    #[test]
+    fn watch_paths_ignore_additional_scan_dirs() {
+        let tmp = tempdir().unwrap();
+        let db_path = tmp.path().join("watcher.db");
+        let primary_dir = tmp.path().join("agent-skills");
+        let noisy_scan_dir = tmp.path().join("plugin-cache");
+        fs::create_dir_all(&primary_dir).unwrap();
+        fs::create_dir_all(&noisy_scan_dir).unwrap();
+
+        let store = SkillStore::new(&db_path).unwrap();
+        let adapters = vec![ToolAdapter {
+            key: "custom".to_string(),
+            display_name: "Custom".to_string(),
+            relative_skills_dir: String::new(),
+            relative_detect_dir: String::new(),
+            additional_scan_dirs: vec![noisy_scan_dir.to_string_lossy().to_string()],
+            override_skills_dir: Some(primary_dir.to_string_lossy().to_string()),
+            is_custom: true,
+        }];
+
+        let paths = collect_watch_paths_for_adapters(&store, adapters);
+        assert!(paths.contains(&primary_dir));
+        assert!(!paths.contains(&noisy_scan_dir));
     }
 }

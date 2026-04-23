@@ -120,7 +120,7 @@
   }
 
   .app-segmented-button {
-    @apply rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors outline-none hover:text-tertiary;
+    @apply whitespace-nowrap rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors outline-none hover:text-tertiary;
   }
 
   .app-segmented-button-active {
