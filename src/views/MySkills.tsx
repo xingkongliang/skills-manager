@@ -1138,8 +1138,8 @@ export function MySkills() {
       </div>
 
       <div className="app-toolbar">
-        <div className="flex flex-1 gap-3">
-          <div className="relative w-full max-w-[280px]">
+        <div className="flex min-w-0 flex-1 gap-3">
+          <div className="relative w-full max-w-[220px] shrink">
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
             <input
               type="text"
@@ -1153,7 +1153,7 @@ export function MySkills() {
             />
           </div>
 
-          <div className="app-segmented">
+          <div className="app-segmented shrink-0">
             {(["all", "enabled", "available"] as const).map((mode) => (
               <button
                 key={mode}
@@ -1170,7 +1170,7 @@ export function MySkills() {
 
         </div>
 
-        <div className="app-segmented">
+        <div className="app-segmented shrink-0">
           {!gitStatus?.is_repo ? (
             <button
               onClick={handleGitStartBackup}
