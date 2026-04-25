@@ -5,7 +5,7 @@ use tauri::State;
 use crate::core::{
     error::AppError,
     skill_store::{SkillStore, SkillTargetRecord},
-    sync_engine, tool_adapters,
+    sync_engine, sync_metadata, tool_adapters,
 };
 use serde::Serialize;
 
@@ -247,9 +247,11 @@ pub async fn set_skill_tool_toggle(
             }
         }
 
-        store
-            .set_scenario_skill_tool_enabled(&scenario_id, &skill_id, &tool, enabled)
-            .map_err(AppError::db)?;
+        sync_metadata::with_repo_lock("set skill tool toggle", || {
+            store.set_scenario_skill_tool_enabled(&scenario_id, &skill_id, &tool, enabled)?;
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)?;
 
         let is_active = store
             .get_active_scenario_id()

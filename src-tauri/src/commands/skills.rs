@@ -13,7 +13,7 @@ use crate::core::{
     installer,
     skill_metadata::{self, is_valid_skill_dir},
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
-    sync_engine,
+    sync_engine, sync_metadata,
 };
 
 #[derive(Debug, Serialize)]
@@ -344,7 +344,11 @@ pub async fn delete_managed_skill(
             std::fs::remove_dir_all(&central).ok();
         }
 
-        store.delete_skill(&skill_id).map_err(AppError::db)?;
+        sync_metadata::with_repo_lock("delete skill", || {
+            store.delete_skill(&skill_id)?;
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)?;
 
         Ok(())
     })
@@ -1189,8 +1193,8 @@ fn store_installed_skill(
         .get_skill_by_central_path(&central_path)
         .map_err(AppError::db)?
     {
-        store
-            .update_skill_after_reinstall(
+        sync_metadata::with_repo_lock("store installed skill", || {
+            store.update_skill_after_reinstall(
                 &existing.id,
                 &result.name,
                 result.description.as_deref(),
@@ -1203,19 +1207,18 @@ fn store_installed_skill(
                 metadata.remote_revision.as_deref(),
                 Some(&result.content_hash),
                 &metadata.update_status,
-            )
-            .map_err(AppError::db)?;
+            )?;
+            if let Some(scenario_id) = active_scenario_id {
+                store.add_skill_to_scenario(scenario_id, &existing.id)?;
+            }
+            sync_metadata::write_all_from_db_unlocked(store)
+        })
+        .map_err(AppError::db)?;
 
         if let Some(scenario_id) = active_scenario_id {
-            store
-                .add_skill_to_scenario(scenario_id, &existing.id)
-                .map_err(AppError::db)?;
-
-            if let Err(e) = super::scenarios::sync_skill_to_active_scenario(
-                store,
-                scenario_id,
-                &existing.id,
-            ) {
+            if let Err(e) =
+                super::scenarios::sync_skill_to_active_scenario(store, scenario_id, &existing.id)
+            {
                 log::warn!("Failed to sync reinstalled skill to scenario: {e}");
             }
         }
@@ -1247,18 +1250,17 @@ fn store_installed_skill(
         last_check_error: None,
     };
 
-    store.insert_skill(&record).map_err(AppError::db)?;
+    sync_metadata::with_repo_lock("store installed skill", || {
+        store.insert_skill(&record)?;
+        if let Some(scenario_id) = active_scenario_id {
+            store.add_skill_to_scenario(scenario_id, &id)?;
+        }
+        sync_metadata::write_all_from_db_unlocked(store)
+    })
+    .map_err(AppError::db)?;
 
     if let Some(scenario_id) = active_scenario_id {
-        store
-            .add_skill_to_scenario(scenario_id, &id)
-            .map_err(AppError::db)?;
-
-        if let Err(e) = super::scenarios::sync_skill_to_active_scenario(
-            store,
-            scenario_id,
-            &id,
-        ) {
+        if let Err(e) = super::scenarios::sync_skill_to_active_scenario(store, scenario_id, &id) {
             log::warn!("Failed to sync newly installed skill to scenario: {e}");
         }
     }
@@ -1643,9 +1645,11 @@ pub async fn set_skill_tags(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        store
-            .set_tags_for_skill(&skill_id, &tags)
-            .map_err(AppError::db)
+        sync_metadata::with_repo_lock("set skill tags", || {
+            store.set_tags_for_skill(&skill_id, &tags)?;
+            sync_metadata::ensure_skill_metadata_unlocked(&store, &skill_id)
+        })
+        .map_err(AppError::db)
     })
     .await?
 }

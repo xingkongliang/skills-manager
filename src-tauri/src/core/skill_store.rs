@@ -150,6 +150,58 @@ impl SkillStore {
         Ok(())
     }
 
+    pub fn upsert_skill(&self, skill: &SkillRecord) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO skills (
+                id, name, description, source_type, source_ref, source_ref_resolved, source_subpath,
+                source_branch, source_revision, remote_revision, central_path, content_hash, enabled,
+                created_at, updated_at, status, update_status, last_checked_at, last_check_error
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                source_type = excluded.source_type,
+                source_ref = excluded.source_ref,
+                source_ref_resolved = excluded.source_ref_resolved,
+                source_subpath = excluded.source_subpath,
+                source_branch = excluded.source_branch,
+                source_revision = excluded.source_revision,
+                remote_revision = excluded.remote_revision,
+                central_path = excluded.central_path,
+                content_hash = excluded.content_hash,
+                enabled = excluded.enabled,
+                updated_at = excluded.updated_at,
+                status = excluded.status,
+                update_status = excluded.update_status,
+                last_checked_at = excluded.last_checked_at,
+                last_check_error = excluded.last_check_error",
+            params![
+                skill.id,
+                skill.name,
+                skill.description,
+                skill.source_type,
+                skill.source_ref,
+                skill.source_ref_resolved,
+                skill.source_subpath,
+                skill.source_branch,
+                skill.source_revision,
+                skill.remote_revision,
+                skill.central_path,
+                skill.content_hash,
+                skill.enabled,
+                skill.created_at,
+                skill.updated_at,
+                skill.status,
+                skill.update_status,
+                skill.last_checked_at,
+                skill.last_check_error,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn get_all_skills(&self) -> Result<Vec<SkillRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -827,6 +879,88 @@ impl SkillStore {
              DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at",
             params![scenario_id, skill_id, tool, enabled, now],
         )?;
+        Ok(())
+    }
+
+    pub fn replace_scenarios_from_metadata(
+        &self,
+        scenarios: &[super::sync_metadata::ScenarioMetaFile],
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let metadata_ids: std::collections::HashSet<&str> =
+            scenarios.iter().map(|s| s.scenario_id.as_str()).collect();
+        {
+            let mut stmt = tx.prepare("SELECT id FROM scenarios")?;
+            let ids = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for id in ids {
+                if !metadata_ids.contains(id.as_str()) {
+                    tx.execute("DELETE FROM scenarios WHERE id = ?1", params![id])?;
+                }
+            }
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        for scenario in scenarios {
+            tx.execute(
+                "INSERT INTO scenarios (id, name, description, icon, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                 ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description,
+                    icon = excluded.icon,
+                    sort_order = excluded.sort_order,
+                    updated_at = excluded.updated_at",
+                params![
+                    scenario.scenario_id,
+                    scenario.name,
+                    scenario.description,
+                    scenario.icon,
+                    scenario.sort_order,
+                    now,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn replace_scenario_memberships_from_metadata(
+        &self,
+        memberships: &[super::sync_metadata::ScenarioSkillMetaFile],
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM scenario_skill_tools", [])?;
+        tx.execute("DELETE FROM scenario_skills", [])?;
+        let now = chrono::Utc::now().timestamp_millis();
+        for member in memberships {
+            tx.execute(
+                "INSERT OR IGNORE INTO scenario_skills (scenario_id, skill_id, added_at, sort_order)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    member.scenario_id,
+                    member.skill_id,
+                    now,
+                    member.sort_order,
+                ],
+            )?;
+            for (tool, enabled) in &member.tools {
+                tx.execute(
+                    "INSERT OR REPLACE INTO scenario_skill_tools (scenario_id, skill_id, tool, enabled, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        member.scenario_id,
+                        member.skill_id,
+                        tool,
+                        enabled,
+                        now,
+                    ],
+                )?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 

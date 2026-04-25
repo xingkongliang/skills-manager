@@ -1,4 +1,6 @@
-use crate::core::{central_repo, error::AppError, git_backup, git_fetcher, skill_metadata};
+use crate::core::{
+    central_repo, error::AppError, git_backup, git_fetcher, skill_metadata, sync_metadata,
+};
 use std::sync::Arc;
 use tauri::State;
 use walkdir::WalkDir;
@@ -42,10 +44,14 @@ pub async fn git_backup_commit(
     store: State<'_, Arc<SkillStore>>,
     message: String,
 ) -> Result<(), AppError> {
-    let _ = store;
+    let store = store.inner().clone();
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
-        git_backup::commit_all(&skills_dir, &message).map_err(AppError::git)
+        git_backup::with_repo_lock(&skills_dir, "git commit", || {
+            sync_metadata::write_all_from_db_unlocked(&store)?;
+            git_backup::commit_all_unlocked(&skills_dir, &message)
+        })
+        .map_err(AppError::git)
     })
     .await?
 }
@@ -65,8 +71,11 @@ pub async fn git_backup_pull(store: State<'_, Arc<SkillStore>>) -> Result<(), Ap
     let store = store.inner().clone();
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
-        git_backup::pull(&skills_dir).map_err(AppError::classify_git_error)?;
-        reconcile_skills_index(&store).map_err(AppError::db)
+        git_backup::with_repo_lock(&skills_dir, "git pull", || {
+            git_backup::pull_unlocked(&skills_dir)?;
+            reconcile_skills_index_unlocked(&store)
+        })
+        .map_err(AppError::classify_git_error)
     })
     .await?
 }
@@ -80,8 +89,11 @@ pub async fn git_backup_clone(
     let store = store.inner().clone();
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
-        git_backup::clone_into(&skills_dir, &url).map_err(AppError::classify_git_error)?;
-        reconcile_skills_index(&store).map_err(AppError::db)
+        git_backup::with_repo_lock(&skills_dir, "git clone", || {
+            git_backup::clone_into_unlocked(&skills_dir, &url)?;
+            reconcile_skills_index_unlocked(&store)
+        })
+        .map_err(AppError::classify_git_error)
     })
     .await?
 }
@@ -120,14 +132,23 @@ pub async fn git_backup_restore_version(
     let store = store.inner().clone();
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
-        git_backup::restore_snapshot_version(&skills_dir, &tag).map_err(AppError::git)?;
-        reconcile_skills_index(&store).map_err(AppError::db)?;
+        git_backup::with_repo_lock(&skills_dir, "git restore snapshot", || {
+            git_backup::restore_snapshot_version_unlocked(&skills_dir, &tag)?;
+            reconcile_skills_index_unlocked(&store)
+        })
+        .map_err(AppError::git)?;
         Ok(())
     })
     .await?
 }
 
-fn reconcile_skills_index(store: &SkillStore) -> anyhow::Result<()> {
+fn reconcile_skills_index_unlocked(store: &SkillStore) -> anyhow::Result<()> {
+    sync_metadata::cleanup_temporary_files()?;
+    if sync_metadata::metadata_exists() {
+        sync_metadata::reindex_from_metadata_unlocked(store)?;
+        return Ok(());
+    }
+
     let skills_dir = central_repo::skills_dir();
     std::fs::create_dir_all(&skills_dir)?;
 
@@ -193,5 +214,5 @@ fn reconcile_skills_index(store: &SkillStore) -> anyhow::Result<()> {
         store.insert_skill(&record)?;
     }
 
-    Ok(())
+    sync_metadata::write_all_from_db_unlocked(store)
 }

@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 
-use crate::core::{error::AppError, installer, scanner, skill_store::SkillStore, tool_adapters};
+use crate::core::{
+    error::AppError, installer, scanner, skill_store::SkillStore, sync_metadata, tool_adapters,
+};
 
 fn canonicalize_lossy(path: &str) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
@@ -15,12 +17,7 @@ fn match_imported_skill_id(
 ) -> Option<String> {
     let found_path = canonicalize_lossy(&rec.found_path);
     if let Some(existing) = managed_skills.iter().find(|skill| {
-        skill
-            .source_ref
-            .as_deref()
-            .map(canonicalize_lossy)
-            .as_ref()
-            == Some(&found_path)
+        skill.source_ref.as_deref().map(canonicalize_lossy).as_ref() == Some(&found_path)
             || skill
                 .source_ref_resolved
                 .as_deref()
@@ -139,14 +136,16 @@ pub async fn import_existing_skill(
             last_check_error: None,
         };
 
-        store.insert_skill(&record).map_err(AppError::db)?;
+        sync_metadata::with_repo_lock("import existing skill", || {
+            store.insert_skill(&record)?;
 
-        // Auto-add to active scenario
-        if let Ok(Some(scenario_id)) = store.get_active_scenario_id() {
-            store
-                .add_skill_to_scenario(&scenario_id, &id)
-                .map_err(AppError::db)?;
-        }
+            // Auto-add to active scenario
+            if let Ok(Some(scenario_id)) = store.get_active_scenario_id() {
+                store.add_skill_to_scenario(&scenario_id, &id)?;
+            }
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)?;
 
         Ok(())
     })

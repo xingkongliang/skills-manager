@@ -6,7 +6,7 @@ use tauri::State;
 use crate::core::{
     error::AppError,
     skill_store::{ScenarioRecord, SkillStore},
-    sync_engine, tool_adapters,
+    sync_engine, sync_metadata, tool_adapters,
 };
 use std::collections::HashSet;
 
@@ -67,7 +67,10 @@ pub(crate) fn sync_skill_to_active_scenario(
                         }
                     }
                     Err(e) => {
-                        log::warn!("Failed to sync skill {skill_id} to {}: {e}", target.display());
+                        log::warn!(
+                            "Failed to sync skill {skill_id} to {}: {e}",
+                            target.display()
+                        );
                     }
                 }
             }
@@ -202,7 +205,11 @@ pub async fn create_scenario(
             updated_at: now,
         };
 
-        store.insert_scenario(&record).map_err(AppError::db)?;
+        sync_metadata::with_repo_lock("create scenario", || {
+            store.insert_scenario(&record)?;
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)?;
 
         if let Some(previous_id) = previous_active_id.as_deref() {
             unsync_scenario_skills(&store, previous_id)?;
@@ -238,9 +245,11 @@ pub async fn update_scenario(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        store
-            .update_scenario(&id, &name, description.as_deref(), icon.as_deref())
-            .map_err(AppError::db)
+        sync_metadata::with_repo_lock("update scenario", || {
+            store.update_scenario(&id, &name, description.as_deref(), icon.as_deref())?;
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)
     })
     .await?;
     if result.is_ok() {
@@ -267,7 +276,11 @@ pub async fn delete_scenario(
             unsync_scenario_skills(&store, &id)?;
         }
 
-        store.delete_scenario(&id).map_err(AppError::db)?;
+        sync_metadata::with_repo_lock("delete scenario", || {
+            store.delete_scenario(&id)?;
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)?;
 
         if was_active {
             let remaining = store.get_all_scenarios().map_err(AppError::db)?;
@@ -329,9 +342,11 @@ pub async fn add_skill_to_scenario(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        store
-            .add_skill_to_scenario(&scenario_id, &skill_id)
-            .map_err(AppError::db)?;
+        sync_metadata::with_repo_lock("add skill to scenario", || {
+            store.add_skill_to_scenario(&scenario_id, &skill_id)?;
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)?;
 
         sync_skill_to_active_scenario(&store, &scenario_id, &skill_id)?;
 
@@ -353,9 +368,11 @@ pub async fn remove_skill_from_scenario(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        store
-            .remove_skill_from_scenario(&scenario_id, &skill_id)
-            .map_err(AppError::db)?;
+        sync_metadata::with_repo_lock("remove skill from scenario", || {
+            store.remove_skill_from_scenario(&scenario_id, &skill_id)?;
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)?;
 
         // If this is the active scenario, unsync the skill
         if let Ok(Some(active_id)) = store.get_active_scenario_id() {
@@ -393,7 +410,11 @@ pub async fn reorder_scenarios(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        store.reorder_scenarios(&ids).map_err(AppError::db)
+        sync_metadata::with_repo_lock("reorder scenarios", || {
+            store.reorder_scenarios(&ids)?;
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)
     })
     .await?;
     if result.is_ok() {
@@ -424,9 +445,11 @@ pub async fn reorder_scenario_skills(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        store
-            .reorder_scenario_skills(&scenario_id, &skill_ids)
-            .map_err(AppError::db)
+        sync_metadata::with_repo_lock("reorder scenario skills", || {
+            store.reorder_scenario_skills(&scenario_id, &skill_ids)?;
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)
     })
     .await?
 }

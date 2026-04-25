@@ -3,6 +3,8 @@ use chrono::Utc;
 use std::path::Path;
 use std::process::Command;
 
+use super::repo_lock::RepoLock;
+
 /// Create a `Command` for git that hides the console window on Windows.
 fn git_command() -> Command {
     #[allow(unused_mut)]
@@ -124,6 +126,11 @@ pub fn get_status(skills_dir: &Path) -> Result<GitBackupStatus> {
 
 /// Initialize a new git repository in the skills directory.
 pub fn init_repo(skills_dir: &Path) -> Result<()> {
+    let _lock = RepoLock::acquire(skills_dir, "git init")?;
+    init_repo_unlocked(skills_dir)
+}
+
+pub(crate) fn init_repo_unlocked(skills_dir: &Path) -> Result<()> {
     if skills_dir.join(".git").exists() {
         anyhow::bail!("Already a git repository");
     }
@@ -131,11 +138,7 @@ pub fn init_repo(skills_dir: &Path) -> Result<()> {
     run_git_checked(skills_dir, &["init"])?;
     run_git_checked(skills_dir, &["checkout", "-b", "main"])?;
 
-    // Create .gitignore
-    let gitignore = skills_dir.join(".gitignore");
-    if !gitignore.exists() {
-        std::fs::write(&gitignore, ".DS_Store\nThumbs.db\n*.tmp\n")?;
-    }
+    ensure_gitignore(skills_dir)?;
 
     // Initial commit
     run_git_checked(skills_dir, &["add", "-A"])?;
@@ -149,6 +152,11 @@ pub fn init_repo(skills_dir: &Path) -> Result<()> {
 
 /// Set (or update) the remote origin URL.
 pub fn set_remote(skills_dir: &Path, url: &str) -> Result<()> {
+    let _lock = RepoLock::acquire(skills_dir, "git set remote")?;
+    set_remote_unlocked(skills_dir, url)
+}
+
+pub(crate) fn set_remote_unlocked(skills_dir: &Path, url: &str) -> Result<()> {
     ensure_repo(skills_dir)?;
 
     let has_remote = run_git(skills_dir, &["remote", "get-url", "origin"]).is_ok();
@@ -178,8 +186,15 @@ pub fn set_remote(skills_dir: &Path, url: &str) -> Result<()> {
 }
 
 /// Stage all changes and create a commit.
+#[allow(dead_code)]
 pub fn commit_all(skills_dir: &Path, message: &str) -> Result<()> {
+    let _lock = RepoLock::acquire(skills_dir, "git commit")?;
+    commit_all_unlocked(skills_dir, message)
+}
+
+pub(crate) fn commit_all_unlocked(skills_dir: &Path, message: &str) -> Result<()> {
     ensure_repo(skills_dir)?;
+    ensure_gitignore(skills_dir)?;
 
     run_git_checked(skills_dir, &["add", "-A"])?;
 
@@ -195,6 +210,11 @@ pub fn commit_all(skills_dir: &Path, message: &str) -> Result<()> {
 
 /// Push to the remote repository.
 pub fn push(skills_dir: &Path) -> Result<()> {
+    let _lock = RepoLock::acquire(skills_dir, "git push")?;
+    push_unlocked(skills_dir)
+}
+
+pub(crate) fn push_unlocked(skills_dir: &Path) -> Result<()> {
     ensure_repo(skills_dir)?;
 
     let branch = run_git(skills_dir, &["rev-parse", "--abbrev-ref", "HEAD"])
@@ -251,14 +271,26 @@ pub fn push(skills_dir: &Path) -> Result<()> {
 }
 
 /// Pull from the remote repository.
+#[allow(dead_code)]
 pub fn pull(skills_dir: &Path) -> Result<()> {
+    let _lock = RepoLock::acquire(skills_dir, "git pull")?;
+    pull_unlocked(skills_dir)
+}
+
+pub(crate) fn pull_unlocked(skills_dir: &Path) -> Result<()> {
     ensure_repo(skills_dir)?;
-    run_git_checked(skills_dir, &["pull", "--rebase", "--autostash"])?;
+    ensure_no_interrupted_git_operation(skills_dir)?;
+    run_git_checked(skills_dir, &["pull", "--no-rebase"])?;
     Ok(())
 }
 
 /// Create an annotated snapshot tag on current HEAD.
 pub fn create_snapshot_tag(skills_dir: &Path) -> Result<String> {
+    let _lock = RepoLock::acquire(skills_dir, "git snapshot")?;
+    create_snapshot_tag_unlocked(skills_dir)
+}
+
+pub(crate) fn create_snapshot_tag_unlocked(skills_dir: &Path) -> Result<String> {
     ensure_repo(skills_dir)?;
 
     // Reuse an existing snapshot tag on HEAD to avoid duplicate history entries
@@ -340,7 +372,13 @@ pub fn list_snapshot_versions(
 }
 
 /// Restore skills files to a snapshot tag by creating a new restore commit.
+#[allow(dead_code)]
 pub fn restore_snapshot_version(skills_dir: &Path, tag: &str) -> Result<()> {
+    let _lock = RepoLock::acquire(skills_dir, "git restore snapshot")?;
+    restore_snapshot_version_unlocked(skills_dir, tag)
+}
+
+pub(crate) fn restore_snapshot_version_unlocked(skills_dir: &Path, tag: &str) -> Result<()> {
     ensure_repo(skills_dir)?;
 
     if !tag.starts_with("sm-v-") {
@@ -406,7 +444,13 @@ pub fn restore_snapshot_version(skills_dir: &Path, tag: &str) -> Result<()> {
 
 /// Clone a remote repository into the skills directory.
 /// The skills directory must be empty or non-existent.
+#[allow(dead_code)]
 pub fn clone_into(skills_dir: &Path, url: &str) -> Result<()> {
+    let _lock = RepoLock::acquire(skills_dir, "git clone")?;
+    clone_into_unlocked(skills_dir, url)
+}
+
+pub(crate) fn clone_into_unlocked(skills_dir: &Path, url: &str) -> Result<()> {
     if skills_dir.join(".git").exists() {
         anyhow::bail!("Skills directory is already a git repository");
     }
@@ -469,6 +513,48 @@ fn ensure_repo(skills_dir: &Path) -> Result<()> {
         anyhow::bail!("Skills directory is not a git repository. Initialize it first.");
     }
     Ok(())
+}
+
+fn ensure_no_interrupted_git_operation(skills_dir: &Path) -> Result<()> {
+    let git_dir = skills_dir.join(".git");
+    for marker in ["MERGE_HEAD", "index.lock", "rebase-merge", "rebase-apply"] {
+        if git_dir.join(marker).exists() {
+            anyhow::bail!(
+                "Git operation is already in progress ({marker}); resolve it before syncing"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn ensure_gitignore(skills_dir: &Path) -> Result<()> {
+    let gitignore = skills_dir.join(".gitignore");
+    let required = [".DS_Store", "Thumbs.db", "*.tmp", ".skills-manager.lock"];
+    let mut lines: Vec<String> = if gitignore.exists() {
+        std::fs::read_to_string(&gitignore)?
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let existing: std::collections::HashSet<String> =
+        lines.iter().map(|line| line.trim().to_string()).collect();
+    for line in required {
+        if !existing.contains(line) {
+            lines.push(line.to_string());
+        }
+    }
+    std::fs::write(&gitignore, format!("{}\n", lines.join("\n")))?;
+    Ok(())
+}
+
+pub(crate) fn with_repo_lock<T, F>(repo_root: &Path, operation: &str, f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    let _lock = RepoLock::acquire(repo_root, operation)?;
+    f()
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> Result<String> {
