@@ -1,4 +1,7 @@
 {
   "productName": "skills-manager-test",
-  "identifier": "com.agentskills.desktop.test"
+  "identifier": "com.agentskills.desktop.test",
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
 }
