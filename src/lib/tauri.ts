@@ -413,6 +413,9 @@ export interface GitBackupVersion {
   committed_at: string;
 }
 
+export const gitBackupFetch = () =>
+  invoke<void>("git_backup_fetch");
+
 export const gitBackupStatus = () =>
   invoke<GitBackupStatus>("git_backup_status");
 

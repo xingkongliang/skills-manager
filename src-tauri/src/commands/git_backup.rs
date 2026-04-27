@@ -8,6 +8,16 @@ use walkdir::WalkDir;
 use crate::core::skill_store::SkillStore;
 
 #[tauri::command]
+pub async fn git_backup_fetch(store: State<'_, Arc<SkillStore>>) -> Result<(), AppError> {
+    let _ = store;
+    let skills_dir = central_repo::skills_dir();
+    tokio::task::spawn_blocking(move || {
+        git_backup::fetch_remote(&skills_dir).map_err(AppError::git)
+    })
+    .await?
+}
+
+#[tauri::command]
 pub async fn git_backup_status(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<git_backup::GitBackupStatus, AppError> {

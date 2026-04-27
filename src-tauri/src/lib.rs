@@ -446,6 +446,7 @@ pub fn run() {
             commands::settings::app_exit,
             commands::settings::hide_to_tray,
             // Git Backup
+            commands::git_backup::git_backup_fetch,
             commands::git_backup::git_backup_status,
             commands::git_backup::git_backup_init,
             commands::git_backup::git_backup_set_remote,

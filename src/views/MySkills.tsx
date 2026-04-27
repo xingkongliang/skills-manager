@@ -15,6 +15,8 @@ import {
   GitBranch,
   History,
   ArrowUpCircle,
+  ArrowDownCircle,
+  ArrowUpDown,
   Loader2,
   X,
   Plus,
@@ -321,6 +323,8 @@ export function MySkills() {
 
   const refreshGitStatus = useCallback(async () => {
     try {
+      // Fetch remote first so ahead/behind counts reflect the latest remote state.
+      await api.gitBackupFetch().catch(() => {});
       const status = await api.gitBackupStatus();
       setGitStatus(status);
     } catch {
@@ -347,6 +351,7 @@ export function MySkills() {
   useEffect(() => {
     (async () => {
       const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
+      await api.gitBackupFetch().catch(() => {});
       const status = await api.gitBackupStatus().catch(() => null);
       setGitStatus(status);
 
@@ -738,6 +743,7 @@ export function MySkills() {
   const handleGitSync = async () => {
     setGitLoading("sync");
     try {
+      await api.gitBackupFetch().catch(() => {});
       let status = await api.gitBackupStatus();
       if (!status.is_repo) {
         toast.info(t("settings.gitNotInitialized"));
@@ -808,6 +814,7 @@ export function MySkills() {
         label: t("mySkills.gitRepoSync"),
         disabled: false,
         toneClassName: "text-secondary",
+        icon: "sync" as const,
       };
     }
     if (!gitStatus.remote_url && !gitRemoteConfig) {
@@ -815,26 +822,55 @@ export function MySkills() {
         label: t("mySkills.gitRepoNeedRemote"),
         disabled: true,
         toneClassName: "text-red-500",
+        icon: "sync" as const,
       };
     }
-    if (gitStatus.has_changes || gitStatus.ahead > 0 || gitStatus.behind > 0) {
+    const { has_changes, ahead, behind } = gitStatus;
+
+    // Build a concise status hint for the button label.
+    const parts: string[] = [];
+    if (has_changes) parts.push(t("mySkills.gitStatusUncommitted"));
+    if (ahead > 0) parts.push(t("mySkills.gitStatusAhead", { count: ahead }));
+    if (behind > 0) parts.push(t("mySkills.gitStatusBehind", { count: behind }));
+    const hint = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+
+    if (behind > 0 && (has_changes || ahead > 0)) {
       return {
-        label: t("mySkills.gitRepoSync"),
+        label: t("mySkills.gitRepoSync") + hint,
         disabled: false,
         toneClassName: "text-amber-500",
+        icon: "both" as const,
       };
     }
-    if (!gitStatus.has_changes && gitStatus.ahead === 0 && gitStatus.behind === 0) {
+    if (behind > 0) {
+      return {
+        label: t("mySkills.gitRepoPull") + hint,
+        disabled: false,
+        toneClassName: "text-blue-500",
+        icon: "pull" as const,
+      };
+    }
+    if (has_changes || ahead > 0) {
+      return {
+        label: t("mySkills.gitRepoPush") + hint,
+        disabled: false,
+        toneClassName: "text-amber-500",
+        icon: "push" as const,
+      };
+    }
+    if (!has_changes && ahead === 0 && behind === 0) {
       return {
         label: t("mySkills.gitRepoUpToDate"),
         disabled: true,
         toneClassName: "text-muted",
+        icon: "sync" as const,
       };
     }
     return {
       label: t("mySkills.gitRepoSync"),
       disabled: false,
       toneClassName: "text-secondary",
+      icon: "sync" as const,
     };
   };
 
@@ -994,6 +1030,10 @@ export function MySkills() {
                   >
                     {gitLoading === "sync" ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : gitSyncButton.icon === "pull" ? (
+                      <ArrowDownCircle className="h-3.5 w-3.5" />
+                    ) : gitSyncButton.icon === "both" ? (
+                      <ArrowUpDown className="h-3.5 w-3.5" />
                     ) : (
                       <ArrowUpCircle className="h-3.5 w-3.5" />
                     )}
