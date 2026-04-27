@@ -547,9 +547,36 @@ fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         file.sync_all()?;
     }
     fs::rename(&tmp, path)?;
-    if let Some(parent) = path.parent() {
+    sync_parent_dir(path)?;
+    Ok(())
+}
+
+fn sync_parent_dir(path: &Path) -> Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        // Windows requires FILE_FLAG_BACKUP_SEMANTICS to open a directory
+        // handle. std::fs::File::open uses ordinary file semantics and fails
+        // with Access is denied (os error 5) for directories.
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000;
+
+        let dir = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(parent)?;
+        dir.sync_all()?;
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
         let dir = fs::File::open(parent)?;
         dir.sync_all()?;
+        Ok(())
     }
-    Ok(())
 }
