@@ -91,6 +91,7 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
 
       - name: Build with Tauri
+        if: startsWith(github.ref, 'refs/tags/')
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -104,6 +105,23 @@ jobs:
           prerelease: false
           updaterJsonKeepUniversal: true
           args: --target ${{ matrix.target }}
+
+      - name: Build with Tauri for manual testing
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Upload manual build artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: skills-manager-${{ matrix.label }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**
+            !src-tauri/target/${{ matrix.target }}/release/bundle/**/*.sig
+          if-no-files-found: error
 
   verify-updater-assets:
     needs: build
