@@ -1,6 +1,13 @@
 {
   "productName": "skills-manager-test",
   "identifier": "com.agentskills.desktop.test",
+  "app": {
+    "windows": [
+      {
+        "title": "Skills Manager Test"
+      }
+    ]
+  },
   "bundle": {
     "createUpdaterArtifacts": false
   }

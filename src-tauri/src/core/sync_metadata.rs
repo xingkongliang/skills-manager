@@ -563,10 +563,11 @@ fn sync_parent_dir(path: &Path) -> Result<()> {
         // Windows requires FILE_FLAG_BACKUP_SEMANTICS to open a directory
         // handle. std::fs::File::open uses ordinary file semantics and fails
         // with Access is denied (os error 5) for directories.
+        // FlushFileBuffers also requires a handle opened with write access.
         const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000;
 
         let dir = fs::OpenOptions::new()
-            .read(true)
+            .write(true)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
             .open(parent)?;
         dir.sync_all()?;
