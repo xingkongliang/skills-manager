@@ -29,6 +29,7 @@ jobs:
             label: Windows-x64
 
     runs-on: ${{ matrix.platform }}
+    if: github.event_name != 'workflow_dispatch' || matrix.platform == 'windows-latest'
     name: Build (${{ matrix.label }})
 
     steps:
