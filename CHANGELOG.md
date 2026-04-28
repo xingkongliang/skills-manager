@@ -5,6 +5,102 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.1] - 2026-04-28
+
+### Changed
+- Use symlinks as the default sync mode for faster scenario switching and a single source of truth.
+
+### Fixed
+- Improved bulk skill deletion performance by processing selected skills in one operation.
+
+## [1.15.0] - 2026-04-25
+
+### Added
+- Allow editing project skills path for custom agents
+- Multi-device sync metadata support
+- New cyan/teal S app icon design
+
+### Changed
+- Updated sidebar icon to match the new S design (transparent background)
+
+### Fixed
+- Wrap Dock icon in proper macOS squircle so corners render rounded
+- Emit refresh event when polling rescan picks up new watch directories
+- Stop watching empty skill dirs so users can delete agent folders
+- Remove emptied skills-disabled directory after re-enabling last skill
+
+## [1.14.3] - 2026-04-21
+
+### Added
+- 
+
+### Changed
+- 
+
+### Fixed
+- 
+
+### Removed
+- 
+## [1.14.3] - 2026-04-21
+
+### Changed
+- Improved text size scaling to keep the Settings page scrollable at all zoom levels
+
+### Fixed
+- Fixed symlink skill uninstall failure on Windows
+- Fixed Windows symlink sync issues when using agent directories
+- Added logging for Windows symlink fallback to aid troubleshooting
+
+## [1.14.2] - 2026-04-21
+
+### Added
+- 
+
+### Changed
+- 
+
+### Fixed
+- Avoid black screen when opening skill detail sheet on macOS
+- Preserve update check settings when importing skills from archives
+- Sync skill symlinks to agent directories on install
+
+## [1.14.1] - 2026-04-18
+
+### Added
+- Command palette for quick navigation and actions
+- Per-agent sync status indicators to see which agents need syncing
+- Bulk tag editing for skills to organize skills faster
+- Agent toggle in project detail panel for quick agent assignment
+- Skill detail panel with local/diff/center tabs to compare skill versions
+- Agent dots and tags displayed in skill detail panel
+
+### Changed
+- Improved project workspace skill management with better organization
+- Skill detail panel now fully scrollable with a persistent close button
+
+### Fixed
+- Removed agent assignment count label from project skill cards for a cleaner look
+
+### Removed
+- No removals in this release
+## [1.14.0] - 2026-04-18
+
+### Added
+- Bulk skill update actions to update multiple installed skills in one step
+- Custom central repository path support for users who keep their managed skills outside the default location
+
+### Changed
+- Refined Settings form controls for a cleaner and more consistent configuration experience
+
+### Fixed
+- Deduplicated startup skill update notifications to avoid repeated alerts for the same update
+- Updated Antigravity path defaults so installs and sync use the correct skills directory
+- Tightened Claude Code skill discovery and import matching to avoid false positives from plugin marketplace caches and mismatched same-name skills
+
+### Removed
+- No removals in this release
+
 ## [1.13.3] - 2026-04-11
 
 ### Changed
