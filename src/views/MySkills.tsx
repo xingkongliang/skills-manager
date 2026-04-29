@@ -8,7 +8,6 @@ import {
   Github,
   HardDrive,
   Globe,
-  Trash2,
   Layers,
   RefreshCw,
   RotateCcw,
@@ -34,6 +33,7 @@ import { useMultiSelect } from "../hooks/useMultiSelect";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { OnlineMatchDialog } from "../components/OnlineMatchDialog";
 import { BatchOnlineMatchDialog, type BatchMatchItem } from "../components/BatchOnlineMatchDialog";
+import { DeleteSkillButton } from "../components/DeleteSkillButton";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { ScenarioPromptEditor, extractUsedSkillNames } from "../components/ScenarioPromptEditor";
@@ -138,7 +138,8 @@ export function MySkills() {
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [allTags, setAllTags] = useState<string[]>([]);
   const [search, setSearch] = useState("");
-  const [deleteTarget, setDeleteTarget] = useState<ManagedSkill | null>(null);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const refreshAfterDeleteRef = useRef<number | null>(null);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
   const [checkingAll, setCheckingAll] = useState(false);
   const [checkingSkillId, setCheckingSkillId] = useState<string | null>(null);
@@ -483,14 +484,52 @@ export function MySkills() {
     }
   };
 
-  const handleDeleteManagedSkill = async () => {
-    if (!deleteTarget) return;
-    await api.deleteManagedSkill(deleteTarget.id);
-    if (selectedSkill?.id === deleteTarget.id) closeSkillDetail();
-    toast.success(`${deleteTarget.name} ${t("mySkills.deleted")}`);
-    setDeleteTarget(null);
-    await Promise.all([refreshManagedSkills(), refreshScenarios()]);
-  };
+  const scheduleRefreshAfterDelete = useCallback(() => {
+    if (refreshAfterDeleteRef.current !== null) {
+      window.clearTimeout(refreshAfterDeleteRef.current);
+    }
+    refreshAfterDeleteRef.current = window.setTimeout(() => {
+      refreshAfterDeleteRef.current = null;
+      void Promise.all([refreshManagedSkills(), refreshScenarios()]);
+    }, 300);
+  }, [refreshManagedSkills, refreshScenarios]);
+
+  useEffect(() => {
+    return () => {
+      if (refreshAfterDeleteRef.current !== null) {
+        window.clearTimeout(refreshAfterDeleteRef.current);
+      }
+    };
+  }, []);
+
+  const handleDeleteSkill = useCallback(
+    (skill: ManagedSkill) => {
+      setDeletingIds((prev) => {
+        if (prev.has(skill.id)) return prev;
+        const next = new Set(prev);
+        next.add(skill.id);
+        return next;
+      });
+      void (async () => {
+        try {
+          await api.deleteManagedSkill(skill.id);
+          if (selectedSkill?.id === skill.id) closeSkillDetail();
+          toast.success(`${skill.name} ${t("mySkills.deleted")}`);
+        } catch (error: unknown) {
+          toast.error(getErrorMessage(error, t("common.error")));
+        } finally {
+          setDeletingIds((prev) => {
+            if (!prev.has(skill.id)) return prev;
+            const next = new Set(prev);
+            next.delete(skill.id);
+            return next;
+          });
+          scheduleRefreshAfterDelete();
+        }
+      })();
+    },
+    [selectedSkill, closeSkillDetail, t, scheduleRefreshAfterDelete]
+  );
 
   const handleBatchDelete = async () => {
     const ids = Array.from(selectedIds);
@@ -1479,7 +1518,7 @@ export function MySkills() {
                 {(dragHandle) => (
                 <div
                   className={cn(
-                    "app-panel group relative flex h-full flex-col overflow-hidden transition-all hover:border-border hover:bg-surface-hover",
+                    "app-panel group relative flex h-full flex-col transition-all hover:border-border hover:bg-surface-hover",
                     enabledInScenario && "border-l-2 border-l-accent",
                     isMultiSelect && "cursor-pointer",
                     isMultiSelect && selectedIds.has(skill.id) && "ring-1 ring-accent border-accent/40",
@@ -1487,7 +1526,7 @@ export function MySkills() {
                   )}
                   onClick={isMultiSelect ? () => toggleSelect(skill.id) : undefined}
                 >
-                  <div className={cn("absolute right-2 top-2 flex items-center gap-0.5 rounded-lg border border-border-subtle bg-surface px-1 py-0.5 opacity-0 shadow-sm transition-all", !isMultiSelect && "group-hover:opacity-100")}>
+                  <div className={cn("absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg border border-border-subtle bg-surface px-1 py-0.5 opacity-0 shadow-sm transition-all", !isMultiSelect && "group-hover:opacity-100")}>
                     {dragHandle}
                     <button
                       onClick={() => handleCheckUpdate(skill)}
@@ -1507,14 +1546,17 @@ export function MySkills() {
                         <RotateCcw className={cn("h-3.5 w-3.5", updatingSkillId === skill.id && "animate-spin")} />
                       </button>
                     ) : null}
-                    <button
-                      onClick={() => setDeleteTarget(skill)}
-                      className="rounded p-1 text-faint transition-colors hover:text-red-400"
-                      title={t("mySkills.delete")}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <DeleteSkillButton
+                      skill={skill}
+                      onConfirm={handleDeleteSkill}
+                      buttonClassName="p-1"
+                    />
                   </div>
+                  {deletingIds.has(skill.id) && (
+                    <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-surface/70 backdrop-blur-[1px]">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted" />
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-2.5 px-3.5 pr-20 pt-3 pb-1.5">
                     {isMultiSelect ? (
@@ -1699,7 +1741,7 @@ export function MySkills() {
               {(dragHandle) => (
               <div
                 className={cn(
-                  "app-panel group flex items-center gap-3.5 rounded-xl border-transparent px-3.5 py-3 transition-all hover:border-border hover:bg-surface-hover",
+                  "app-panel group relative flex items-center gap-3.5 rounded-xl border-transparent px-3.5 py-3 transition-all hover:border-border hover:bg-surface-hover",
                   enabledInScenario && "border-l-2 border-l-accent",
                   isMultiSelect && "cursor-pointer",
                   isMultiSelect && selectedIds.has(skill.id) && "ring-1 ring-accent border-accent/40",
@@ -1707,6 +1749,11 @@ export function MySkills() {
                 )}
                 onClick={isMultiSelect ? () => toggleSelect(skill.id) : undefined}
               >
+                {deletingIds.has(skill.id) && (
+                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-surface/70 backdrop-blur-[1px]">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted" />
+                  </div>
+                )}
                 {dragHandle}
                 {isMultiSelect ? (
                   selectedIds.has(skill.id)
@@ -1838,13 +1885,11 @@ export function MySkills() {
                       <RotateCcw className={cn("h-3.5 w-3.5", updatingSkillId === skill.id && "animate-spin")} />
                     </button>
                   ) : null}
-                  <button
-                    onClick={() => setDeleteTarget(skill)}
-                    className="rounded p-0.5 text-faint transition-colors hover:text-red-400"
-                    title={t("mySkills.delete")}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  <DeleteSkillButton
+                    skill={skill}
+                    onConfirm={handleDeleteSkill}
+                    buttonClassName="p-0.5"
+                  />
                 </div>
               </div>
               )}
@@ -1878,12 +1923,6 @@ export function MySkills() {
         onToggleTool={handleToggleSkillTool}
       />
 
-      <ConfirmDialog
-        open={deleteTarget !== null}
-        message={t("mySkills.deleteConfirm", { name: deleteTarget?.name || "" })}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={handleDeleteManagedSkill}
-      />
       <ConfirmDialog
         open={batchDeleteConfirm}
         message={t("mySkills.batchDeleteConfirm", { count: selectedIds.size })}
