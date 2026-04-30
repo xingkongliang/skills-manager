@@ -17,6 +17,69 @@ fn refresh_tray_menu_best_effort(app: &tauri::AppHandle) {
     }
 }
 
+/// Sync a skill's files to all enabled tool adapter directories for the given scenario.
+/// Only performs sync if the scenario is the currently active one.
+pub(crate) fn sync_skill_to_active_scenario(
+    store: &SkillStore,
+    scenario_id: &str,
+    skill_id: &str,
+) -> Result<(), AppError> {
+    if let Ok(Some(active_id)) = store.get_active_scenario_id() {
+        if active_id == scenario_id {
+            let adapters =
+                enabled_installed_adapters_for_scenario_skill(store, scenario_id, skill_id)?;
+            let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+            let Ok(Some(skill)) = store.get_skill_by_id(skill_id) else {
+                return Ok(());
+            };
+            let source = PathBuf::from(&skill.central_path);
+            let target_name = sync_engine::target_dir_name(&source, &skill.name);
+            let old_targets = store.get_targets_for_skill(skill_id).unwrap_or_default();
+            for adapter in &adapters {
+                // Remove stale target from a previous sync if the skill name changed
+                if let Some(old) = old_targets.iter().find(|t| t.tool == adapter.key) {
+                    let old_path = PathBuf::from(&old.target_path);
+                    if old_path != adapter.skills_dir().join(&target_name) {
+                        if let Err(e) = sync_engine::remove_target(&old_path) {
+                            log::warn!("Failed to remove stale target {}: {e}", old_path.display());
+                        }
+                        let _ = store.delete_target(skill_id, &adapter.key);
+                    }
+                }
+
+                let target = adapter.skills_dir().join(&target_name);
+                let mode =
+                    sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
+                match sync_engine::sync_skill(&source, &target, mode) {
+                    Ok(actual_mode) => {
+                        let now = chrono::Utc::now().timestamp_millis();
+                        let target_record = crate::core::skill_store::SkillTargetRecord {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            skill_id: skill_id.to_string(),
+                            tool: adapter.key.clone(),
+                            target_path: target.to_string_lossy().to_string(),
+                            mode: actual_mode.as_str().to_string(),
+                            status: "ok".to_string(),
+                            synced_at: Some(now),
+                            last_error: None,
+                        };
+                        if let Err(e) = store.insert_target(&target_record) {
+                            log::warn!("Failed to insert sync target for skill {skill_id}: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to sync skill {skill_id} to {}: {e}",
+                            target.display()
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn ensure_scenario_exists(store: &SkillStore, scenario_id: &str) -> Result<(), AppError> {
     let exists = store
         .get_all_scenarios()
@@ -86,7 +149,11 @@ pub async fn get_scenarios(
                 updated_at: s.updated_at,
             });
         }
-        log::info!("[get_scenarios] TOTAL ({} scenarios): {:?}", result.len(), t_total.elapsed());
+        log::info!(
+            "[get_scenarios] TOTAL ({} scenarios): {:?}",
+            result.len(),
+            t_total.elapsed()
+        );
         Ok(result)
     })
     .await?
@@ -118,7 +185,10 @@ pub async fn get_active_scenario(
                 }));
             }
         }
-        log::info!("[get_active_scenario] TOTAL (no active): {:?}", t_total.elapsed());
+        log::info!(
+            "[get_active_scenario] TOTAL (no active): {:?}",
+            t_total.elapsed()
+        );
         Ok(None)
     })
     .await?
@@ -323,49 +393,7 @@ pub async fn add_skill_to_scenario(
             .map_or(false, |v| v == "global");
 
         if !is_global {
-            if let Ok(Some(active_id)) = store.get_active_scenario_id() {
-                if active_id == scenario_id {
-                    let adapters =
-                        enabled_installed_adapters_for_scenario_skill(&store, &scenario_id, &skill_id)?;
-                    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-                    if let Ok(Some(skill)) = store.get_skill_by_id(&skill_id) {
-                        let source = PathBuf::from(&skill.central_path);
-                        for adapter in &adapters {
-                            let target = adapter.skills_dir().join(&skill.name);
-                            let mode = sync_engine::sync_mode_for_tool(
-                                &adapter.key,
-                                configured_mode.as_deref(),
-                            );
-                            match sync_engine::sync_skill(&source, &target, mode) {
-                                Ok(actual_mode) => {
-                                    let now = chrono::Utc::now().timestamp_millis();
-                                    let target_record = crate::core::skill_store::SkillTargetRecord {
-                                        id: uuid::Uuid::new_v4().to_string(),
-                                        skill_id: skill_id.clone(),
-                                        tool: adapter.key.clone(),
-                                        target_path: target.to_string_lossy().to_string(),
-                                        mode: actual_mode.as_str().to_string(),
-                                        status: "ok".to_string(),
-                                        synced_at: Some(now),
-                                        last_error: None,
-                                    };
-                                    if let Err(e) = store.insert_target(&target_record) {
-                                        log::warn!(
-                                            "Failed to insert sync target for skill {skill_id}: {e}"
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    log::warn!(
-                                        "Failed to sync skill {skill_id} to {}: {e}",
-                                        target.display()
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            sync_skill_to_active_scenario(&store, &scenario_id, &skill_id)?;
         }
 
         Ok(())
@@ -489,7 +517,11 @@ pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Res
     let t0 = std::time::Instant::now();
     let all_adapters = tool_adapters::enabled_installed_adapters(store);
     let adapter_keys: Vec<String> = all_adapters.iter().map(|a| a.key.clone()).collect();
-    log::info!("[sync] step1 adapters ({} enabled): {:?}", all_adapters.len(), t0.elapsed());
+    log::info!(
+        "[sync] step1 adapters ({} enabled): {:?}",
+        all_adapters.len(),
+        t0.elapsed()
+    );
 
     // Pre-create adapter skills directories to avoid repeated create_dir_all calls
     let t0 = std::time::Instant::now();
@@ -534,11 +566,11 @@ pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Res
             let enabled_set: HashSet<&str> = tools.iter().map(|s| s.as_str()).collect();
             for adapter in &all_adapters {
                 if enabled_set.contains(adapter.key.as_str()) {
-                    let target = adapter.skills_dir().join(&skill.name);
-                    let mode = sync_engine::sync_mode_for_tool(
-                        &adapter.key,
-                        configured_mode.as_deref(),
-                    );
+                    let target = adapter
+                        .skills_dir()
+                        .join(sync_engine::target_dir_name(&source, &skill.name));
+                    let mode =
+                        sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
                     sync_tasks.push(SyncTask {
                         source: source.clone(),
                         target,
@@ -550,10 +582,21 @@ pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Res
             }
         }
     }
-    let symlink_count = sync_tasks.iter().filter(|t| matches!(t.mode, sync_engine::SyncMode::Symlink)).count();
-    let copy_count = sync_tasks.iter().filter(|t| matches!(t.mode, sync_engine::SyncMode::Copy)).count();
-    log::info!("[sync] step4 build tasks: {} total ({} symlink, {} copy): {:?}",
-        sync_tasks.len(), symlink_count, copy_count, t0.elapsed());
+    let symlink_count = sync_tasks
+        .iter()
+        .filter(|t| matches!(t.mode, sync_engine::SyncMode::Symlink))
+        .count();
+    let copy_count = sync_tasks
+        .iter()
+        .filter(|t| matches!(t.mode, sync_engine::SyncMode::Copy))
+        .count();
+    log::info!(
+        "[sync] step4 build tasks: {} total ({} symlink, {} copy): {:?}",
+        sync_tasks.len(),
+        symlink_count,
+        copy_count,
+        t0.elapsed()
+    );
 
     // 5. Parallel file sync (optimized: no create_dir_all per task, no remove before symlink if target doesn't exist)
     let t0 = std::time::Instant::now();
@@ -566,19 +609,29 @@ pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Res
             let result = sync_engine::sync_skill_fast(&task.source, &task.target, task.mode);
             let elapsed = t_op.elapsed().as_micros() as u64;
             match task.mode {
-                sync_engine::SyncMode::Symlink => symlink_time.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed),
-                sync_engine::SyncMode::Copy => copy_time.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed),
+                sync_engine::SyncMode::Symlink => {
+                    symlink_time.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed)
+                }
+                sync_engine::SyncMode::Copy => {
+                    copy_time.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed)
+                }
             };
             (task, result)
         })
         .collect();
     let sym_us = symlink_time.load(std::sync::atomic::Ordering::Relaxed);
     let cp_us = copy_time.load(std::sync::atomic::Ordering::Relaxed);
-    log::info!("[sync] step5 parallel file sync: {:?} (symlink cumulative: {}ms, copy cumulative: {}ms)",
-        t0.elapsed(), sym_us / 1000, cp_us / 1000);
-    log::info!("[sync] step5 avg: symlink={:.1}ms/op, copy={:.1}ms/op",
+    log::info!(
+        "[sync] step5 parallel file sync: {:?} (symlink cumulative: {}ms, copy cumulative: {}ms)",
+        t0.elapsed(),
+        sym_us / 1000,
+        cp_us / 1000
+    );
+    log::info!(
+        "[sync] step5 avg: symlink={:.1}ms/op, copy={:.1}ms/op",
         sym_us as f64 / symlink_count.max(1) as f64 / 1000.0,
-        cp_us as f64 / copy_count.max(1) as f64 / 1000.0);
+        cp_us as f64 / copy_count.max(1) as f64 / 1000.0
+    );
 
     // 6. Batch insert target records in one transaction
     let t0 = std::time::Instant::now();
@@ -628,9 +681,7 @@ pub(crate) fn unsync_scenario_skills(
     }
 
     // 1. Batch query: get all targets for all skills at once
-    let all_targets = store
-        .get_targets_for_skills(&skill_ids)
-        .unwrap_or_default();
+    let all_targets = store.get_targets_for_skills(&skill_ids).unwrap_or_default();
 
     // 2. Parallel file removal
     all_targets.par_iter().for_each(|target| {
@@ -681,9 +732,10 @@ pub(crate) fn sync_all_skills(store: &SkillStore) -> Result<(), AppError> {
     for skill in &skills {
         let source = PathBuf::from(&skill.central_path);
         for adapter in &all_adapters {
-            let target = adapter.skills_dir().join(&skill.name);
-            let mode =
-                sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
+            let target = adapter
+                .skills_dir()
+                .join(sync_engine::target_dir_name(&source, &skill.name));
+            let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
             sync_tasks.push(SyncTask {
                 source: source.clone(),
                 target,
@@ -789,7 +841,10 @@ pub async fn set_skill_sync_scope(
             // Switching to global: sync ALL skills to all adapters
             let t0 = std::time::Instant::now();
             sync_all_skills(&store)?;
-            log::info!("set_skill_sync_scope → global: sync_all_skills took {:?}", t0.elapsed());
+            log::info!(
+                "set_skill_sync_scope → global: sync_all_skills took {:?}",
+                t0.elapsed()
+            );
         } else {
             // Switching to scenario: unsync everything, then sync active scenario only
             unsync_all_skills(&store)?;
@@ -837,4 +892,129 @@ pub async fn get_scenario_prompt_template(
             .map_err(AppError::db)
     })
     .await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::skill_store::SkillRecord;
+    use crate::core::tool_adapters::CustomToolDef;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn sample_skill(id: &str, name: &str, central_path: &std::path::Path) -> SkillRecord {
+        SkillRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            source_type: "import".to_string(),
+            source_ref: Some(central_path.to_string_lossy().to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: central_path.to_string_lossy().to_string(),
+            content_hash: None,
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        }
+    }
+
+    fn sample_scenario(id: &str, name: &str) -> ScenarioRecord {
+        ScenarioRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            icon: None,
+            sort_order: 0,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn write_skill_dir(base: &std::path::Path, name: &str) -> PathBuf {
+        let dir = base.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), format!("---\nname: {name}\n---\n")).unwrap();
+        dir
+    }
+
+    fn configure_single_custom_tool(store: &SkillStore, target_base: &std::path::Path) {
+        let custom_tools = vec![CustomToolDef {
+            key: "test_agent".to_string(),
+            display_name: "Test Agent".to_string(),
+            skills_dir: target_base.to_string_lossy().to_string(),
+            project_relative_skills_dir: None,
+        }];
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::to_string(&custom_tools).unwrap(),
+            )
+            .unwrap();
+        let disabled_builtin_tools: Vec<String> = tool_adapters::default_tool_adapters()
+            .into_iter()
+            .map(|adapter| adapter.key)
+            .collect();
+        store
+            .set_setting(
+                "disabled_tools",
+                &serde_json::to_string(&disabled_builtin_tools).unwrap(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn scenario_sync_keeps_duplicate_skill_names_separate() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let source_base = tmp.path().join("central");
+        let target_base = tmp.path().join("agent-skills");
+        fs::create_dir_all(&source_base).unwrap();
+        fs::create_dir_all(&target_base).unwrap();
+        configure_single_custom_tool(&store, &target_base);
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        store
+            .insert_scenario(&sample_scenario("active", "Active"))
+            .unwrap();
+
+        let first_dir = write_skill_dir(&source_base, "skill123");
+        let second_dir = write_skill_dir(&source_base, "skill123-2");
+        fs::write(first_dir.join("unique.txt"), "first").unwrap();
+        fs::write(second_dir.join("unique.txt"), "second").unwrap();
+
+        store
+            .insert_skill(&sample_skill("first", "skill123", &first_dir))
+            .unwrap();
+        store
+            .insert_skill(&sample_skill("second", "skill123", &second_dir))
+            .unwrap();
+        store.add_skill_to_scenario("active", "first").unwrap();
+        store.add_skill_to_scenario("active", "second").unwrap();
+
+        sync_scenario_skills(&store, "active").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(target_base.join("skill123/unique.txt")).unwrap(),
+            "first"
+        );
+        assert_eq!(
+            fs::read_to_string(target_base.join("skill123-2/unique.txt")).unwrap(),
+            "second"
+        );
+        let targets = store.get_all_targets().unwrap();
+        assert!(targets.iter().any(|target| {
+            target.skill_id == "first" && target.target_path.ends_with("skill123")
+        }));
+        assert!(targets.iter().any(|target| {
+            target.skill_id == "second" && target.target_path.ends_with("skill123-2")
+        }));
+    }
 }

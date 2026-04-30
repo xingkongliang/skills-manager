@@ -110,6 +110,10 @@ function getToolDisplayName(toolKey: string, tools: ToolInfo[]) {
   return tools.find((tool) => tool.key === toolKey)?.display_name || toolKey;
 }
 
+function centralDirName(skill: ManagedSkill) {
+  return skill.central_path.split(/[\\/]/).filter(Boolean).pop() || skill.name;
+}
+
 function displaySnapshotLabel(tag: string) {
   const raw = tag.startsWith("sm-v-") ? tag.slice("sm-v-".length) : tag;
   const parts = raw.split("-");
@@ -218,10 +222,31 @@ export function MySkills() {
     return next;
   };
 
+  const skillDisplayNames = useMemo(() => {
+    const nameCounts = new Map<string, number>();
+    for (const skill of skills) {
+      nameCounts.set(skill.name, (nameCounts.get(skill.name) || 0) + 1);
+    }
+
+    const displayNames = new Map<string, string>();
+    for (const skill of skills) {
+      const dirName = centralDirName(skill);
+      displayNames.set(
+        skill.id,
+        (nameCounts.get(skill.name) || 0) > 1 && dirName !== skill.name
+          ? dirName
+          : skill.name
+      );
+    }
+    return displayNames;
+  }, [skills]);
+
   const filtered = useMemo(() => {
     const result = skills.filter((skill) => {
+      const displayName = skillDisplayNames.get(skill.id) || skill.name;
       const matchesSearch =
         skill.name.toLowerCase().includes(search.toLowerCase()) ||
+        displayName.toLowerCase().includes(search.toLowerCase()) ||
         (skill.description || "").toLowerCase().includes(search.toLowerCase());
       if (!matchesSearch) return false;
 
@@ -254,7 +279,7 @@ export function MySkills() {
     }
 
     return result;
-  }, [skills, search, sourceFilters, tagFilters, filterMode, activeScenario, scenarioSkillOrder]);
+  }, [skills, skillDisplayNames, search, sourceFilters, tagFilters, filterMode, activeScenario, scenarioSkillOrder]);
 
   const hasUntaggedSkills = useMemo(() => skills.some((s) => s.tags.length === 0), [skills]);
 
@@ -1511,6 +1536,7 @@ export function MySkills() {
             const isMissingLocalSource =
               skill.update_status === "source_missing"
               && (skill.source_type === "local" || skill.source_type === "import");
+            const displayName = skillDisplayNames.get(skill.id) || skill.name;
 
             if (viewMode === "grid") {
               return (
@@ -1571,9 +1597,9 @@ export function MySkills() {
                     <h3
                       className="flex-1 cursor-pointer truncate text-[14px] font-semibold text-primary hover:text-accent-light"
                       onClick={isMultiSelect ? undefined : () => openSkillDetailById(skill.id)}
-                      title={skill.name}
+                      title={displayName}
                     >
-                      {skill.name}
+                      {displayName}
                     </h3>
                   </div>
 
@@ -1768,9 +1794,9 @@ export function MySkills() {
                 <h3
                   className="w-[180px] shrink-0 truncate cursor-pointer text-[14px] font-semibold text-secondary hover:text-primary"
                   onClick={isMultiSelect ? undefined : () => openSkillDetailById(skill.id)}
-                  title={skill.name}
+                  title={displayName}
                 >
-                  {skill.name}
+                  {displayName}
                 </h3>
 
                 <p className="min-w-0 flex-1 truncate text-[13px] text-muted">
