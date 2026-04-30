@@ -48,6 +48,15 @@ pub fn sync_mode_for_tool(_tool_key: &str, configured_mode: Option<&str>) -> Syn
     }
 }
 
+pub fn target_dir_name(central_path: &Path, skill_name: &str) -> String {
+    central_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| skill_name.to_string())
+}
+
 pub fn sync_skill(source: &Path, target: &Path, mode: SyncMode) -> Result<SyncMode> {
     if is_target_current(source, target, mode) {
         return Ok(mode);
@@ -244,6 +253,18 @@ mod tests {
     fn sync_mode_as_str() {
         assert_eq!(SyncMode::Symlink.as_str(), "symlink");
         assert_eq!(SyncMode::Copy.as_str(), "copy");
+    }
+
+    #[test]
+    fn target_dir_name_uses_central_directory_name() {
+        let central_path = Path::new("/central/skill123-2");
+
+        assert_eq!(target_dir_name(central_path, "skill123"), "skill123-2");
+    }
+
+    #[test]
+    fn target_dir_name_falls_back_to_skill_name() {
+        assert_eq!(target_dir_name(Path::new(""), "skill123"), "skill123");
     }
 
     // ── sync_skill (filesystem) ──

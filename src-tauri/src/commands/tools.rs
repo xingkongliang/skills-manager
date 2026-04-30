@@ -145,7 +145,9 @@ fn sync_active_scenario_to_tool(store: &SkillStore, tool_key: &str) {
             continue;
         }
         let source = PathBuf::from(&skill.central_path);
-        let target = adapter.skills_dir().join(&skill.name);
+        let target = adapter
+            .skills_dir()
+            .join(sync_engine::target_dir_name(&source, &skill.name));
         let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
         match sync_engine::sync_skill(&source, &target, mode) {
             Ok(actual_mode) => {
@@ -527,4 +529,131 @@ pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {
         log::info!("Migrated legacy tool key {OLD_KEY} -> {NEW_KEY}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::skill_store::{ScenarioRecord, SkillRecord};
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn sample_skill(id: &str, name: &str, central_path: &std::path::Path) -> SkillRecord {
+        SkillRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            source_type: "import".to_string(),
+            source_ref: Some(central_path.to_string_lossy().to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: central_path.to_string_lossy().to_string(),
+            content_hash: None,
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        }
+    }
+
+    fn sample_scenario(id: &str, name: &str) -> ScenarioRecord {
+        ScenarioRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            icon: None,
+            sort_order: 0,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn write_skill_dir(base: &std::path::Path, dir_name: &str, marker: &str) -> PathBuf {
+        let dir = base.join(dir_name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {dir_name}\n---\n"),
+        )
+        .unwrap();
+        fs::write(dir.join("unique.txt"), marker).unwrap();
+        dir
+    }
+
+    fn configure_single_custom_tool(store: &SkillStore, target_base: &std::path::Path) {
+        let custom_tools = vec![CustomToolDef {
+            key: "test_agent".to_string(),
+            display_name: "Test Agent".to_string(),
+            skills_dir: target_base.to_string_lossy().to_string(),
+            project_relative_skills_dir: None,
+        }];
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::to_string(&custom_tools).unwrap(),
+            )
+            .unwrap();
+        let disabled_builtin_tools: Vec<String> = tool_adapters::default_tool_adapters()
+            .into_iter()
+            .map(|adapter| adapter.key)
+            .collect();
+        store
+            .set_setting(
+                "disabled_tools",
+                &serde_json::to_string(&disabled_builtin_tools).unwrap(),
+            )
+            .unwrap();
+        store.set_setting("sync_mode", "copy").unwrap();
+    }
+
+    #[test]
+    fn active_scenario_tool_sync_keeps_duplicate_skill_names_separate() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let source_base = tmp.path().join("central");
+        let target_base = tmp.path().join("agent-skills");
+        fs::create_dir_all(&source_base).unwrap();
+        fs::create_dir_all(&target_base).unwrap();
+        configure_single_custom_tool(&store, &target_base);
+
+        store
+            .insert_scenario(&sample_scenario("active", "Active"))
+            .unwrap();
+        store.set_active_scenario("active").unwrap();
+
+        let first_dir = write_skill_dir(&source_base, "skill123", "first");
+        let second_dir = write_skill_dir(&source_base, "skill123-2", "second");
+        store
+            .insert_skill(&sample_skill("first", "skill123", &first_dir))
+            .unwrap();
+        store
+            .insert_skill(&sample_skill("second", "skill123", &second_dir))
+            .unwrap();
+        store.add_skill_to_scenario("active", "first").unwrap();
+        store.add_skill_to_scenario("active", "second").unwrap();
+
+        sync_active_scenario_to_tool(&store, "test_agent");
+
+        assert_eq!(
+            fs::read_to_string(target_base.join("skill123/unique.txt")).unwrap(),
+            "first"
+        );
+        assert_eq!(
+            fs::read_to_string(target_base.join("skill123-2/unique.txt")).unwrap(),
+            "second"
+        );
+        let targets = store.get_all_targets().unwrap();
+        assert!(targets.iter().any(|target| {
+            target.skill_id == "first" && target.target_path.ends_with("skill123")
+        }));
+        assert!(targets.iter().any(|target| {
+            target.skill_id == "second" && target.target_path.ends_with("skill123-2")
+        }));
+    }
 }

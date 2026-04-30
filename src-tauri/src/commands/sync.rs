@@ -55,7 +55,9 @@ fn sync_skill_to_tool_internal(
         .ok_or_else(|| AppError::not_found("Skill not found"))?;
 
     let source = PathBuf::from(&skill.central_path);
-    let target = adapter.skills_dir().join(&skill.name);
+    let target = adapter
+        .skills_dir()
+        .join(sync_engine::target_dir_name(&source, &skill.name));
     let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
     let mode = sync_engine::sync_mode_for_tool(tool, configured_mode.as_deref());
     let actual_mode = sync_engine::sync_skill(&source, &target, mode).map_err(AppError::io)?;
@@ -278,4 +280,107 @@ pub async fn set_skill_tool_toggle(
         Ok(())
     })
     .await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::skill_store::SkillRecord;
+    use crate::core::tool_adapters::CustomToolDef;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn sample_skill(id: &str, name: &str, central_path: &std::path::Path) -> SkillRecord {
+        SkillRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            source_type: "import".to_string(),
+            source_ref: Some(central_path.to_string_lossy().to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: central_path.to_string_lossy().to_string(),
+            content_hash: None,
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        }
+    }
+
+    fn write_skill_dir(base: &std::path::Path, dir_name: &str, marker: &str) -> PathBuf {
+        let dir = base.join(dir_name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {dir_name}\n---\n"),
+        )
+        .unwrap();
+        fs::write(dir.join("unique.txt"), marker).unwrap();
+        dir
+    }
+
+    fn configure_single_custom_tool(store: &SkillStore, target_base: &std::path::Path) {
+        let custom_tools = vec![CustomToolDef {
+            key: "test_agent".to_string(),
+            display_name: "Test Agent".to_string(),
+            skills_dir: target_base.to_string_lossy().to_string(),
+            project_relative_skills_dir: None,
+        }];
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::to_string(&custom_tools).unwrap(),
+            )
+            .unwrap();
+        let disabled_builtin_tools: Vec<String> = tool_adapters::default_tool_adapters()
+            .into_iter()
+            .map(|adapter| adapter.key)
+            .collect();
+        store
+            .set_setting(
+                "disabled_tools",
+                &serde_json::to_string(&disabled_builtin_tools).unwrap(),
+            )
+            .unwrap();
+        store.set_setting("sync_mode", "copy").unwrap();
+    }
+
+    #[test]
+    fn sync_skill_to_tool_keeps_duplicate_skill_names_separate() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let source_base = tmp.path().join("central");
+        let target_base = tmp.path().join("agent-skills");
+        fs::create_dir_all(&source_base).unwrap();
+        fs::create_dir_all(&target_base).unwrap();
+        configure_single_custom_tool(&store, &target_base);
+
+        let first_dir = write_skill_dir(&source_base, "skill123", "first");
+        let second_dir = write_skill_dir(&source_base, "skill123-2", "second");
+        store
+            .insert_skill(&sample_skill("first", "skill123", &first_dir))
+            .unwrap();
+        store
+            .insert_skill(&sample_skill("second", "skill123", &second_dir))
+            .unwrap();
+
+        sync_skill_to_tool_internal(&store, "first", "test_agent").unwrap();
+        sync_skill_to_tool_internal(&store, "second", "test_agent").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(target_base.join("skill123/unique.txt")).unwrap(),
+            "first"
+        );
+        assert_eq!(
+            fs::read_to_string(target_base.join("skill123-2/unique.txt")).unwrap(),
+            "second"
+        );
+    }
 }
