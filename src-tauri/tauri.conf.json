@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "skills-manager",
-  "version": "1.15.2",
+  "version": "1.16.0",
   "identifier": "com.agentskills.desktop",
   "build": {
     "frontendDist": "../dist",
