@@ -8,7 +8,13 @@ use std::sync::Mutex;
 use super::crypto;
 
 /// Settings keys whose values are encrypted at rest with AES-256-GCM.
-const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url", "skillsmp_api_key", "codebuddy_api_key"];
+const SENSITIVE_KEYS: &[&str] = &[
+    "proxy_url",
+    "git_backup_remote_url",
+    "skillsmp_api_key",
+    "codebuddy_api_key",
+    "openai_compatible_api_key",
+];
 
 pub struct SkillStore {
     conn: Mutex<Connection>,

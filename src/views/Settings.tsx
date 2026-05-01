@@ -62,6 +62,8 @@ const MAINSTREAM_AGENT_KEYS = new Set([
   "amp",
 ]);
 
+type AiProvider = "codebuddy" | "openai_compatible";
+
 function applyTextSize(size: string) {
   document.documentElement.style.zoom = TEXT_SIZE_ZOOM_MAP[size] || "1";
 }
@@ -98,9 +100,17 @@ export function Settings() {
   const [textSize, setTextSize] = useState("default");
   const [skillsmpApiKey, setSkillsmpApiKey] = useState("");
   const [skillsmpSaving, setSkillsmpSaving] = useState(false);
+  const [aiDefaultProvider, setAiDefaultProvider] = useState<AiProvider>("codebuddy");
+  const [aiProviderSaving, setAiProviderSaving] = useState(false);
   const [codebuddyApiKey, setCodebuddyApiKey] = useState("");
   const [codebuddyEnv, setCodebuddyEnv] = useState("");
   const [codebuddySaving, setCodebuddySaving] = useState(false);
+  const [openaiBaseUrl, setOpenaiBaseUrl] = useState("");
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [openaiModel, setOpenaiModel] = useState("");
+  const [openaiTemperature, setOpenaiTemperature] = useState("0.2");
+  const [openaiMaxTokens, setOpenaiMaxTokens] = useState("2000");
+  const [openaiSaving, setOpenaiSaving] = useState(false);
   // Agent path editing
   const [editingPathKey, setEditingPathKey] = useState<string | null>(null);
   const [editingPathValue, setEditingPathValue] = useState("");
@@ -215,8 +225,16 @@ export function Settings() {
     });
     api.getSettings("text_size").then((v) => { if (v) { setTextSize(v); applyTextSize(v); } });
     api.getSettings("skillsmp_api_key").then((v) => { if (v) setSkillsmpApiKey(v); });
+    api.getSettings("ai_default_provider").then((v) => {
+      if (v === "openai_compatible" || v === "codebuddy") setAiDefaultProvider(v);
+    });
     api.getSettings("codebuddy_api_key").then((v) => { if (v) setCodebuddyApiKey(v); });
     api.getSettings("codebuddy_internet_environment").then((v) => { if (v) setCodebuddyEnv(v); });
+    api.getSettings("openai_compatible_base_url").then((v) => { if (v) setOpenaiBaseUrl(v); });
+    api.getSettings("openai_compatible_api_key").then((v) => { if (v) setOpenaiApiKey(v); });
+    api.getSettings("openai_compatible_model").then((v) => { if (v) setOpenaiModel(v); });
+    api.getSettings("openai_compatible_temperature").then((v) => { if (v) setOpenaiTemperature(v); });
+    api.getSettings("openai_compatible_max_tokens").then((v) => { if (v) setOpenaiMaxTokens(v); });
     api.getCentralRepoPath().then(setCentralRepoPath).catch(() => {});
 
     (async () => {
@@ -386,6 +404,18 @@ export function Settings() {
     }
   };
 
+  const handleSaveAiProvider = async () => {
+    setAiProviderSaving(true);
+    try {
+      await api.setSettings("ai_default_provider", aiDefaultProvider);
+      toast.success(t("common.success"));
+    } catch {
+      toast.error(t("common.error"));
+    } finally {
+      setAiProviderSaving(false);
+    }
+  };
+
   const handleSaveCodebuddy = async () => {
     setCodebuddySaving(true);
     try {
@@ -396,6 +426,22 @@ export function Settings() {
       toast.error(t("common.error"));
     } finally {
       setCodebuddySaving(false);
+    }
+  };
+
+  const handleSaveOpenAiCompatible = async () => {
+    setOpenaiSaving(true);
+    try {
+      await api.setSettings("openai_compatible_base_url", openaiBaseUrl.trim());
+      await api.setSettings("openai_compatible_api_key", openaiApiKey.trim());
+      await api.setSettings("openai_compatible_model", openaiModel.trim());
+      await api.setSettings("openai_compatible_temperature", openaiTemperature.trim() || "0.2");
+      await api.setSettings("openai_compatible_max_tokens", openaiMaxTokens.trim() || "2000");
+      toast.success(t("common.success"));
+    } catch {
+      toast.error(t("common.error"));
+    } finally {
+      setOpenaiSaving(false);
     }
   };
 
@@ -1169,16 +1215,45 @@ export function Settings() {
           </div>
         </section>
 
-        {/* CodeBuddy API Key */}
+        {/* AI Provider Configuration */}
         <section>
           <h2 className="app-section-title mb-3">
-            {t("settings.codebuddyTitle", { defaultValue: "CodeBuddy AI" })}
+            {t("settings.aiConfigTitle", { defaultValue: "AI Configuration" })}
           </h2>
           <div className="app-panel overflow-hidden divide-y divide-border-subtle">
             <div className="px-4 py-3">
-              <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.codebuddyApiKey", { defaultValue: "API Key" })}</h3>
+              <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.aiDefaultProvider", { defaultValue: "Default Provider" })}</h3>
               <p className="text-[13px] text-muted mb-2">
-                {t("settings.codebuddyDesc", { defaultValue: "Enter your CodeBuddy API key to enable AI features (skill tagging, scenario generation, etc.)." })}{" "}
+                {t("settings.aiDefaultProviderDesc", { defaultValue: "Used by AI tagging, tag consolidation, scenario creation, and prompt generation." })}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={aiDefaultProvider}
+                  onChange={(e) => setAiDefaultProvider(e.target.value as AiProvider)}
+                  className={`${fieldClass} min-w-[220px]`}
+                >
+                  <option value="codebuddy">{t("settings.aiProviderCodebuddy", { defaultValue: "CodeBuddy" })}</option>
+                  <option value="openai_compatible">{t("settings.aiProviderOpenaiCompatible", { defaultValue: "OpenAI-compatible" })}</option>
+                </select>
+                <button
+                  onClick={handleSaveAiProvider}
+                  disabled={aiProviderSaving}
+                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+                >
+                  {aiProviderSaving ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Settings2 className="w-3 h-3" />
+                  )}
+                  {t("common.save")}
+                </button>
+              </div>
+            </div>
+
+            <div className="px-4 py-3">
+              <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.codebuddyTitle", { defaultValue: "CodeBuddy" })}</h3>
+              <p className="text-[13px] text-muted mb-2">
+                {t("settings.codebuddyDesc", { defaultValue: "Enter your CodeBuddy API key to enable AI features." })}{" "}
                 <button
                   type="button"
                   onClick={() => openUrl("https://tencent.sso.copilot.tencent.com/profile/keys")}
@@ -1188,6 +1263,7 @@ export function Settings() {
                   <ExternalLink className="h-3 w-3" />
                 </button>
               </p>
+              <h4 className="text-[12px] text-muted mb-1">{t("settings.codebuddyApiKey", { defaultValue: "API Key" })}</h4>
               <div className="flex flex-wrap items-center gap-2 mb-2">
                 <input
                   type="password"
@@ -1197,7 +1273,7 @@ export function Settings() {
                   className={`${fieldClass} min-w-0 flex-1 font-mono`}
                 />
               </div>
-              <h3 className="text-[13px] text-secondary font-medium mb-0.5 mt-3">{t("settings.codebuddyEnv", { defaultValue: "Environment" })}</h3>
+              <h4 className="text-[12px] text-muted mb-1 mt-3">{t("settings.codebuddyEnv", { defaultValue: "Environment" })}</h4>
               <p className="text-[13px] text-muted mb-2">
                 {t("settings.codebuddyEnvDesc", { defaultValue: "Select the CodeBuddy deployment environment." })}
               </p>
@@ -1219,6 +1295,83 @@ export function Settings() {
                   className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
                 >
                   {codebuddySaving ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Key className="w-3 h-3" />
+                  )}
+                  {t("common.save")}
+                </button>
+              </div>
+            </div>
+
+            <div className="px-4 py-3">
+              <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.openaiCompatibleTitle", { defaultValue: "OpenAI-compatible" })}</h3>
+              <p className="text-[13px] text-muted mb-2">
+                {t("settings.openaiCompatibleDesc", { defaultValue: "Connect any chat completions compatible endpoint with an API key." })}
+              </p>
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <div>
+                  <label className="text-[12px] text-muted mb-1 block">{t("settings.openaiBaseUrl", { defaultValue: "Base URL" })}</label>
+                  <input
+                    type="url"
+                    value={openaiBaseUrl}
+                    onChange={(e) => setOpenaiBaseUrl(e.target.value)}
+                    placeholder="https://api.openai.com/v1"
+                    className={`${fieldClass} w-full font-mono`}
+                  />
+                </div>
+                <div>
+                  <label className="text-[12px] text-muted mb-1 block">{t("settings.openaiModel", { defaultValue: "Model" })}</label>
+                  <input
+                    value={openaiModel}
+                    onChange={(e) => setOpenaiModel(e.target.value)}
+                    placeholder="gpt-4o-mini"
+                    className={`${fieldClass} w-full font-mono`}
+                  />
+                </div>
+                <div>
+                  <label className="text-[12px] text-muted mb-1 block">{t("settings.openaiApiKey", { defaultValue: "API Key" })}</label>
+                  <input
+                    type="password"
+                    value={openaiApiKey}
+                    onChange={(e) => setOpenaiApiKey(e.target.value)}
+                    placeholder="sk-..."
+                    className={`${fieldClass} w-full font-mono`}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[12px] text-muted mb-1 block">{t("settings.openaiTemperature", { defaultValue: "Temperature" })}</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      value={openaiTemperature}
+                      onChange={(e) => setOpenaiTemperature(e.target.value)}
+                      className={`${fieldClass} w-full font-mono`}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[12px] text-muted mb-1 block">{t("settings.openaiMaxTokens", { defaultValue: "Max Tokens" })}</label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={openaiMaxTokens}
+                      onChange={(e) => setOpenaiMaxTokens(e.target.value)}
+                      className={`${fieldClass} w-full font-mono`}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 mt-3">
+                <button
+                  onClick={handleSaveOpenAiCompatible}
+                  disabled={openaiSaving}
+                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+                >
+                  {openaiSaving ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   ) : (
                     <Key className="w-3 h-3" />

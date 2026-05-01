@@ -124,8 +124,8 @@ export function Sidebar() {
   };
 
   const handleAiCreateScenario = async () => {
-    const apiKeyCheck = await api.getSettings("codebuddy_api_key");
-    if (!apiKeyCheck) {
+    const aiProviderReady = await api.isAiProviderConfigured();
+    if (!aiProviderReady) {
       toast.error(t("mySkills.aiTaggingNoApiKey"));
       return;
     }
@@ -150,7 +150,7 @@ export function Sidebar() {
         description: s.description || "",
         tags: s.tags || [],
       }));
-      const result = await api.invokeCodebuddyAgent("create_scenario", {
+      const result = await api.invokeAiTask("create_scenario", {
         skills: skillList,
         existingScenarios: scenarios.map((s) => s.name),
       });

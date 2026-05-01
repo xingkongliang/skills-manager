@@ -242,8 +242,8 @@ export const ScenarioPromptEditor = forwardRef<
   };
 
   const handleAiGenerate = async () => {
-    const apiKeyCheck = await api.getSettings("codebuddy_api_key");
-    if (!apiKeyCheck) {
+    const aiProviderReady = await api.isAiProviderConfigured();
+    if (!aiProviderReady) {
       toast.error(t("mySkills.aiTaggingNoApiKey"));
       return;
     }
@@ -256,14 +256,14 @@ export const ScenarioPromptEditor = forwardRef<
       }));
       const enabledSkillNames = skillList.map((skill) => skill.name);
 
-      let result = await api.invokeCodebuddyAgent("generate_scenario_prompt", {
+      let result = await api.invokeAiTask("generate_scenario_prompt", {
         scenarioName,
         skills: skillList,
         outputLanguage: i18n.language,
       });
       if (!isRecipeCoverageValid(enabledSkillNames, result.recipes ?? [])) {
         const mismatch = describeCoverageMismatch(enabledSkillNames, result.recipes ?? []);
-        result = await api.invokeCodebuddyAgent("generate_scenario_prompt", {
+        result = await api.invokeAiTask("generate_scenario_prompt", {
           scenarioName,
           skills: skillList,
           outputLanguage: i18n.language,

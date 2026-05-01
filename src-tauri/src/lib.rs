@@ -498,6 +498,7 @@ pub fn run() {
             commands::recipes::get_recipe_skills,
             commands::recipes::reorder_recipes,
             // AI
+            commands::ai::invoke_ai_task,
             commands::ai::invoke_codebuddy_agent,
         ])
         .run(tauri::generate_context!())

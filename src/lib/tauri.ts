@@ -439,8 +439,28 @@ export interface AiResult {
   mapping?: Record<string, string[]>;
 }
 
+export const invokeAiTask = (task: string, payload: Record<string, unknown>) =>
+  invoke<AiResult>("invoke_ai_task", { task, payload });
+
 export const invokeCodebuddyAgent = (task: string, payload: Record<string, unknown>) =>
   invoke<AiResult>("invoke_codebuddy_agent", { task, payload });
+
+export const isAiProviderConfigured = async () => {
+  const provider = (await getSettings("ai_default_provider")) || "codebuddy";
+  if (provider === "openai_compatible") {
+    const [baseUrl, apiKey, model] = await Promise.all([
+      getSettings("openai_compatible_base_url"),
+      getSettings("openai_compatible_api_key"),
+      getSettings("openai_compatible_model"),
+    ]);
+    return Boolean(baseUrl?.trim() && apiKey?.trim() && model?.trim());
+  }
+  if (provider === "codebuddy") {
+    const apiKey = await getSettings("codebuddy_api_key");
+    return Boolean(apiKey?.trim());
+  }
+  return false;
+};
 
 // ── Git Backup ──
 

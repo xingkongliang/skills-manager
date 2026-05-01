@@ -753,8 +753,8 @@ export function MySkills() {
   };
 
   const handleAiTag = async (skill: ManagedSkill) => {
-    const apiKeyCheck = await api.getSettings("codebuddy_api_key");
-    if (!apiKeyCheck) {
+    const aiProviderReady = await api.isAiProviderConfigured();
+    if (!aiProviderReady) {
       toast.error(t("mySkills.aiTaggingNoApiKey"));
       return;
     }
@@ -767,7 +767,7 @@ export function MySkills() {
       } catch {
         // no doc available
       }
-      const result = await api.invokeCodebuddyAgent("tag_skill", {
+      const result = await api.invokeAiTask("tag_skill", {
         skillName: skill.name,
         skillContent: skillContent || `${skill.name}\n${skill.description || ""}`,
       });
@@ -785,8 +785,8 @@ export function MySkills() {
   };
 
   const handleBatchAiTag = async (targetSkills?: ManagedSkill[]) => {
-    const apiKeyCheck = await api.getSettings("codebuddy_api_key");
-    if (!apiKeyCheck) {
+    const aiProviderReady = await api.isAiProviderConfigured();
+    if (!aiProviderReady) {
       toast.error(t("mySkills.aiTaggingNoApiKey"));
       return;
     }
@@ -828,7 +828,7 @@ export function MySkills() {
         toast.loading(t("mySkills.batchTaggingProgress", { current: batchEnd, total: skillContents.length }), { id: toastId });
 
         try {
-          const result = await api.invokeCodebuddyAgent("batch_tag_skills", {
+          const result = await api.invokeAiTask("batch_tag_skills", {
             skills: batch.map((s) => ({ name: s.name, content: s.content })),
           });
 
@@ -871,7 +871,7 @@ export function MySkills() {
           const freshSkills = await api.getManagedSkills();
           const freshTags = [...new Set(freshSkills.flatMap((s) => s.tags))];
           if (freshTags.length >= 10) {
-            const consolidateResult = await api.invokeCodebuddyAgent("consolidate_tags", {
+            const consolidateResult = await api.invokeAiTask("consolidate_tags", {
               tags: freshTags,
             });
             if (consolidateResult.mapping) {
