@@ -543,11 +543,15 @@ export const updateScenario = (
 export const deleteScenario = (id: string) =>
   invoke<void>("delete_scenario", { id });
 
+/** @deprecated v1.16+: clicking a scene no longer applies. Use applyScenarioToDefault. */
 export const switchScenario = (id: string) =>
   invoke<void>("switch_scenario", { id });
 
 export const setSkillSyncScope = (scope: string) =>
   invoke<void>("set_skill_sync_scope", { scope });
+
+export const applyScenarioToDefault = (id: string) =>
+  invoke<void>("apply_scenario_to_default", { id });
 
 export const addSkillToScenario = (skillId: string, scenarioId: string) =>
   invoke<void>("add_skill_to_scenario", { skillId, scenarioId });

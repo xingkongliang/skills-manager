@@ -305,28 +305,48 @@ pub async fn delete_scenario(
     result
 }
 
+/// Apply a scenario to the default targets (all enabled agent globals).
+///
+/// This is the explicit user-initiated action introduced in v1.16. It performs
+/// the same disk-writing work as the legacy [`switch_scenario`] command but is
+/// only invoked when the user clicks "Apply to Default" — sidebar/command-palette
+/// scenario clicks no longer call this.
+#[tauri::command]
+pub async fn apply_scenario_to_default(
+    app: tauri::AppHandle,
+    id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    apply_scenario_to_default_impl(app, id, store.inner().clone()).await
+}
+
+/// Legacy command kept for the tray menu and backward compatibility. Frontend
+/// callers should use [`apply_scenario_to_default`] instead.
 #[tauri::command]
 pub async fn switch_scenario(
     app: tauri::AppHandle,
     id: String,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    let store_bg = store.clone();
-    let id_bg = id.clone();
+    apply_scenario_to_default_impl(app, id, store.inner().clone()).await
+}
 
-    // Check if global sync scope — skip file operations if so
+async fn apply_scenario_to_default_impl(
+    app: tauri::AppHandle,
+    id: String,
+    store: Arc<SkillStore>,
+) -> Result<(), AppError> {
     let is_global = store
         .get_setting("skill_sync_scope")
         .unwrap_or(None)
         .map_or(false, |v| v == "global");
+    let store_bg = store.clone();
+    let id_bg = id.clone();
 
-    // Phase 1: DB-only operations (fast) — synchronous
     tauri::async_runtime::spawn_blocking(move || {
         ensure_scenario_exists(&store, &id)?;
 
         if !is_global {
-            // Unsync old scenario skills — file removal
             if let Ok(Some(old_id)) = store.get_active_scenario_id() {
                 if old_id != id {
                     let t0 = std::time::Instant::now();
@@ -336,15 +356,13 @@ pub async fn switch_scenario(
             }
         }
 
-        // Set new active scenario in DB
+        // Mark this scenario as the one currently applied to default targets.
         store.set_active_scenario(&id).map_err(AppError::db)?;
 
         Ok::<(), AppError>(())
     })
     .await??;
 
-    // Phase 2: File sync in background — don't block the UI
-    // In global mode, all skills are already synced — skip file operations
     let app_bg = app.clone();
     if !is_global {
         tauri::async_runtime::spawn(async move {
@@ -357,16 +375,12 @@ pub async fn switch_scenario(
             })
             .await
             .ok();
-            // Notify frontend that file sync is done so it can refresh targets
             if let Err(e) = app_bg.emit("scenario-sync-complete", ()) {
                 log::warn!("Failed to emit scenario-sync-complete: {e}");
             }
         });
-    } else {
-        // Global mode: just notify frontend to refresh (scenario metadata changed)
-        if let Err(e) = app_bg.emit("scenario-sync-complete", ()) {
-            log::warn!("Failed to emit scenario-sync-complete: {e}");
-        }
+    } else if let Err(e) = app_bg.emit("scenario-sync-complete", ()) {
+        log::warn!("Failed to emit scenario-sync-complete: {e}");
     }
 
     refresh_tray_menu_best_effort(&app);

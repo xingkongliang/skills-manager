@@ -16,6 +16,8 @@ import {
   ArrowUpCircle,
   Loader2,
   X,
+  Send,
+  AlertCircle,
   Plus,
   SquareCheck,
   Square,
@@ -127,7 +129,9 @@ function displaySnapshotLabel(tag: string) {
 export function MySkills() {
   const { t } = useTranslation();
   const {
-    activeScenario,
+    viewedScenario,
+    activeScenario: appliedScenario,
+    applyScenarioToDefault,
     tools,
     managedSkills: skills,
     refreshScenarios,
@@ -136,6 +140,23 @@ export function MySkills() {
     openSkillDetailById,
     closeSkillDetail,
   } = useApp();
+  const [applyingDefault, setApplyingDefault] = useState(false);
+  const applyCalloutDismissedKey = "skills-manager.applyCalloutDismissed";
+  const [showApplyCallout, setShowApplyCallout] = useState(() => {
+    try {
+      return localStorage.getItem(applyCalloutDismissedKey) !== "1";
+    } catch {
+      return false;
+    }
+  });
+  const dismissApplyCallout = () => {
+    setShowApplyCallout(false);
+    try {
+      localStorage.setItem(applyCalloutDismissedKey, "1");
+    } catch {
+      // ignore
+    }
+  };
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
   const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
@@ -179,28 +200,60 @@ export function MySkills() {
 
   const [scenarioSkillOrder, setScenarioSkillOrder] = useState<string[]>([]);
 
-  const activeScenarioName = activeScenario?.name || t("mySkills.currentScenarioFallback");
+  const viewedScenarioName = viewedScenario?.name || t("mySkills.currentScenarioFallback");
+
+  // Stage 1: default targets are simply "all enabled installed agents" —
+  // there's no per-agent differentiation to show, so the status row only
+  // answers "is this scene currently live on disk?".
+  const isApplied = !!viewedScenario && appliedScenario?.id === viewedScenario.id;
+  const hasDefaultTarget = tools.some((t) => t.enabled && t.installed);
+  const defaultTargetMissing = !hasDefaultTarget;
+
+  const handleApplyToDefault = async () => {
+    if (!viewedScenario) return;
+    if (!hasDefaultTarget) {
+      toast.error(t("mySkills.applyMissingDefault"), {
+        action: {
+          label: t("mySkills.openLocationSettings"),
+          onClick: () => {
+            window.history.pushState(null, "", "/settings");
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          },
+        },
+      });
+      return;
+    }
+    setApplyingDefault(true);
+    try {
+      await applyScenarioToDefault(viewedScenario.id);
+      toast.success(t("mySkills.appliedToast"));
+      dismissApplyCallout();
+    } catch (e) {
+      toast.error(getErrorMessage(e, t("common.error")));
+    } finally {
+      setApplyingDefault(false);
+    }
+  };
 
   const handlePromptTemplateChange = useCallback((template: string) => {
     setPromptUsedSkillNames(extractUsedSkillNames(template));
   }, []);
 
-  // Fetch sort order whenever active scenario changes
+  // Fetch sort order whenever viewed scenario changes
   useEffect(() => {
-    // Only reset prompt editor when the actual scenario switches, not on skills refresh
     const prevId = prevActiveScenarioIdRef.current;
-    const curId = activeScenario?.id;
+    const curId = viewedScenario?.id;
     if (prevId !== curId) {
       setIsPromptEditorMode(false);
       setPromptUsedSkillNames(new Set());
       prevActiveScenarioIdRef.current = curId;
     }
-    if (!activeScenario) {
+    if (!viewedScenario) {
       setScenarioSkillOrder([]);
       return;
     }
-    api.getScenarioSkillOrder(activeScenario.id).then(setScenarioSkillOrder).catch(() => {});
-  }, [activeScenario, skills]);
+    api.getScenarioSkillOrder(viewedScenario.id).then(setScenarioSkillOrder).catch(() => {});
+  }, [viewedScenario, skills]);
 
   const refreshAllTags = async () => {
     try {
@@ -254,19 +307,19 @@ export function MySkills() {
 
       if (tagFilters.size > 0 && !skill.tags.some((t) => tagFilters.has(t))) return false;
 
-      if (!activeScenario) return true;
+      if (!viewedScenario) return true;
 
-      const enabledInScenario = skill.scenario_ids.includes(activeScenario.id);
+      const enabledInScenario = skill.scenario_ids.includes(viewedScenario.id);
       if (filterMode === "enabled") return enabledInScenario;
       if (filterMode === "available") return !enabledInScenario;
       return true;
     });
 
     // Always sort enabled skills first; within enabled group, use custom sort order
-    if (activeScenario) {
+    if (viewedScenario) {
       result.sort((a, b) => {
-        const aEnabled = a.scenario_ids.includes(activeScenario.id) ? 0 : 1;
-        const bEnabled = b.scenario_ids.includes(activeScenario.id) ? 0 : 1;
+        const aEnabled = a.scenario_ids.includes(viewedScenario.id) ? 0 : 1;
+        const bEnabled = b.scenario_ids.includes(viewedScenario.id) ? 0 : 1;
         if (aEnabled !== bEnabled) return aEnabled - bEnabled;
         // Within same group, use scenario sort order
         const aOrder = scenarioSkillOrder.indexOf(a.id);
@@ -279,7 +332,7 @@ export function MySkills() {
     }
 
     return result;
-  }, [skills, skillDisplayNames, search, sourceFilters, tagFilters, filterMode, activeScenario, scenarioSkillOrder]);
+  }, [skills, skillDisplayNames, search, sourceFilters, tagFilters, filterMode, viewedScenario, scenarioSkillOrder]);
 
   const hasUntaggedSkills = useMemo(() => skills.some((s) => s.tags.length === 0), [skills]);
 
@@ -295,7 +348,7 @@ export function MySkills() {
     items: skills,
     filtered,
     getKey: (s) => s.id,
-    isItemActive: (s) => activeScenario ? s.scenario_ids.includes(activeScenario.id) : true,
+    isItemActive: (s) => viewedScenario ? s.scenario_ids.includes(viewedScenario.id) : true,
   });
 
   const selectedSkill = useMemo(
@@ -311,10 +364,10 @@ export function MySkills() {
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
       const { active, over } = event;
-      if (!over || active.id === over.id || !activeScenario) return;
+      if (!over || active.id === over.id || !viewedScenario) return;
 
       // Only reorder enabled skills (they are always at the front)
-      const enabledSkills = filtered.filter((s) => s.scenario_ids.includes(activeScenario.id));
+      const enabledSkills = filtered.filter((s) => s.scenario_ids.includes(viewedScenario.id));
       const oldIndex = enabledSkills.findIndex((s) => s.id === active.id);
       const newIndex = enabledSkills.findIndex((s) => s.id === over.id);
       if (oldIndex === -1 || newIndex === -1) return;
@@ -327,16 +380,16 @@ export function MySkills() {
       setScenarioSkillOrder(reordered.map((s) => s.id));
 
       try {
-        await api.reorderScenarioSkills(activeScenario.id, reordered.map((s) => s.id));
+        await api.reorderScenarioSkills(viewedScenario.id, reordered.map((s) => s.id));
       } catch {
         // Revert on failure
-        await api.getScenarioSkillOrder(activeScenario.id).then(setScenarioSkillOrder).catch(() => {});
+        await api.getScenarioSkillOrder(viewedScenario.id).then(setScenarioSkillOrder).catch(() => {});
       }
     },
-    [filtered, activeScenario]
+    [filtered, viewedScenario]
   );
 
-  const canDrag = !!activeScenario;
+  const canDrag = !!viewedScenario;
 
   const mapGitError = (error: unknown) => {
     const kind = getErrorKind(error);
@@ -464,16 +517,16 @@ export function MySkills() {
   useEffect(() => {
     let cancelled = false;
     const loadToggles = async () => {
-      if (!selectedSkill || !activeScenario) {
+      if (!selectedSkill || !viewedScenario) {
         setToolToggles(null);
         return;
       }
-      if (!selectedSkill.scenario_ids.includes(activeScenario.id)) {
+      if (!selectedSkill.scenario_ids.includes(viewedScenario.id)) {
         setToolToggles(null);
         return;
       }
       try {
-        const toggles = await api.getSkillToolToggles(selectedSkill.id, activeScenario.id);
+        const toggles = await api.getSkillToolToggles(selectedSkill.id, viewedScenario.id);
         if (!cancelled) setToolToggles(toggles);
       } catch {
         if (!cancelled) setToolToggles(null);
@@ -483,13 +536,13 @@ export function MySkills() {
     return () => {
       cancelled = true;
     };
-  }, [selectedSkill, activeScenario]);
+  }, [selectedSkill, viewedScenario]);
 
   const handleToggleSkillTool = async (toolKey: string, enabled: boolean) => {
-    if (!selectedSkill || !activeScenario) return;
+    if (!selectedSkill || !viewedScenario) return;
     setTogglingToolKey(toolKey);
     try {
-      await api.setSkillToolToggle(selectedSkill.id, activeScenario.id, toolKey, enabled);
+      await api.setSkillToolToggle(selectedSkill.id, viewedScenario.id, toolKey, enabled);
       const displayName = getToolDisplayName(toolKey, tools);
       toast.success(
         enabled
@@ -498,7 +551,7 @@ export function MySkills() {
       );
       const [, toggles] = await Promise.all([
         refreshManagedSkills(),
-        api.getSkillToolToggles(selectedSkill.id, activeScenario.id),
+        api.getSkillToolToggles(selectedSkill.id, viewedScenario.id),
       ]);
       setToolToggles(toggles);
     } catch (error: unknown) {
@@ -580,19 +633,19 @@ export function MySkills() {
   };
 
   const handleBatchToggleScenario = async () => {
-    if (!activeScenario) return;
+    if (!viewedScenario) return;
     const selectedSkillsList = skills.filter((s) => selectedIds.has(s.id));
     const enabling = anyDisabled;
     let count = 0;
     let failed = 0;
     for (const skill of selectedSkillsList) {
       try {
-        const enabledInScenario = skill.scenario_ids.includes(activeScenario.id);
+        const enabledInScenario = skill.scenario_ids.includes(viewedScenario.id);
         if (enabling && !enabledInScenario) {
-          await api.addSkillToScenario(skill.id, activeScenario.id);
+          await api.addSkillToScenario(skill.id, viewedScenario.id);
           count++;
         } else if (!enabling && enabledInScenario) {
-          await api.removeSkillFromScenario(skill.id, activeScenario.id);
+          await api.removeSkillFromScenario(skill.id, viewedScenario.id);
           count++;
         }
       } catch {
@@ -612,13 +665,13 @@ export function MySkills() {
   };
 
   const handleToggleScenario = async (skill: ManagedSkill) => {
-    if (!activeScenario) return;
-    const enabledInScenario = skill.scenario_ids.includes(activeScenario.id);
+    if (!viewedScenario) return;
+    const enabledInScenario = skill.scenario_ids.includes(viewedScenario.id);
     if (enabledInScenario) {
-      await api.removeSkillFromScenario(skill.id, activeScenario.id);
+      await api.removeSkillFromScenario(skill.id, viewedScenario.id);
       toast.success(`${skill.name} ${t("mySkills.disabledInScenario")}`);
     } else {
-      await api.addSkillToScenario(skill.id, activeScenario.id);
+      await api.addSkillToScenario(skill.id, viewedScenario.id);
       toast.success(`${skill.name} ${t("mySkills.enabledInScenario")}`);
     }
     await Promise.all([refreshManagedSkills(), refreshScenarios()]);
@@ -1192,13 +1245,55 @@ export function MySkills() {
 
   return (
     <div className="app-page">
-      <div className="app-page-header pr-2 pb-1">
+      <div className="app-page-header pr-2 pb-1 flex items-center justify-between gap-3">
         <h1 className="app-page-title flex items-center gap-2">
           {t("mySkills.title")}
           <span className="app-badge">
             {skills.length}
           </span>
         </h1>
+
+        {viewedScenario && (
+          <div className="relative flex items-center gap-2">
+            <div className="flex flex-col items-end text-[12px] leading-tight">
+              {defaultTargetMissing ? (
+                <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  {t("mySkills.defaultLocationMissing")}
+                </span>
+              ) : isApplied ? (
+                <span className="text-muted">{t("mySkills.applied")}</span>
+              ) : (
+                <span className="text-muted">{t("mySkills.notAppliedYet")}</span>
+              )}
+            </div>
+            <button
+              onClick={handleApplyToDefault}
+              disabled={applyingDefault}
+              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-2 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+              title={!hasDefaultTarget ? t("mySkills.applyMissingDefault") : undefined}
+            >
+              {applyingDefault ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Send className="h-3.5 w-3.5" />
+              )}
+              {t("mySkills.applyToDefault")}
+            </button>
+            {showApplyCallout && (
+              <div className="absolute right-0 top-full z-20 mt-2 w-64 rounded-md border border-border bg-surface p-3 text-[12px] leading-snug shadow-lg">
+                <button
+                  onClick={dismissApplyCallout}
+                  className="absolute right-1.5 top-1.5 rounded p-0.5 text-faint hover:text-secondary"
+                  aria-label={t("common.close")}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+                <p className="pr-4 text-secondary">{t("mySkills.applyCallout")}</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="app-toolbar">
@@ -1346,7 +1441,7 @@ export function MySkills() {
           >
             <SquareCheck className="h-4 w-4" />
           </button>
-          {activeScenario && (
+          {viewedScenario && (
             <button
               onClick={() => setIsPromptEditorMode(!isPromptEditorMode)}
               className={cn(
@@ -1423,8 +1518,8 @@ export function MySkills() {
         <MultiSelectToolbar
           selectedCount={selectedIds.size}
           isAllSelected={isAllSelected}
-          anyDisabled={activeScenario ? anyDisabled : false}
-          showToggle={!!activeScenario}
+          anyDisabled={viewedScenario ? anyDisabled : false}
+          showToggle={!!viewedScenario}
           labels={{
             hint: t("mySkills.selectHint"),
             selected: t("mySkills.selectedCount", { count: selectedIds.size }),
@@ -1529,8 +1624,8 @@ export function MySkills() {
           >
           {filtered.map((skill) => {
             const isSynced = skill.targets.length > 0;
-            const enabledInScenario = activeScenario
-              ? skill.scenario_ids.includes(activeScenario.id)
+            const enabledInScenario = viewedScenario
+              ? skill.scenario_ids.includes(viewedScenario.id)
               : false;
             const badge = statusBadge(skill);
             const isMissingLocalSource =
@@ -1722,7 +1817,7 @@ export function MySkills() {
                         <>
                           <span className="text-faint">·</span>
                           <span className="truncate text-[13px] font-medium text-amber-600 dark:text-amber-400/80">
-                            {activeScenarioName}
+                            {viewedScenarioName}
                           </span>
                         </>
                       )}
@@ -1744,7 +1839,7 @@ export function MySkills() {
                       )}
                       <button
                         onClick={() => handleToggleScenario(skill)}
-                        disabled={!activeScenario}
+                        disabled={!viewedScenario}
                         className={cn(
                           "rounded px-2 py-1 text-[13px] font-medium transition-colors outline-none",
                           enabledInScenario
@@ -1843,7 +1938,7 @@ export function MySkills() {
                   </span>
                   {enabledInScenario && (
                     <span className="text-[13px] font-medium text-amber-600 dark:text-amber-400/80">
-                      {activeScenarioName}
+                      {viewedScenarioName}
                     </span>
                   )}
                 </div>
@@ -1883,7 +1978,7 @@ export function MySkills() {
                   )}
                   <button
                     onClick={() => handleToggleScenario(skill)}
-                    disabled={!activeScenario}
+                    disabled={!viewedScenario}
                     className={cn(
                       "rounded px-2 py-0.5 text-[13px] font-medium transition-colors outline-none",
                       enabledInScenario
@@ -1925,12 +2020,12 @@ export function MySkills() {
         </div>
           </SortableContext>
           </div>
-          {isPromptEditorMode && activeScenario && (
+          {isPromptEditorMode && viewedScenario && (
             <div className="flex-1 min-w-0 max-h-[calc(100vh-220px)] overflow-y-auto scrollbar-hide pb-8">
               <ScenarioPromptEditor
                 ref={promptEditorRef}
-                scenarioId={activeScenario.id}
-                scenarioName={activeScenario.name}
+                scenarioId={viewedScenario.id}
+                scenarioName={viewedScenario.name}
                 onExit={() => setIsPromptEditorMode(false)}
                 onTemplateChange={handlePromptTemplateChange}
               />
