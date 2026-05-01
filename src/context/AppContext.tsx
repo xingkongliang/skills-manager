@@ -9,7 +9,10 @@ import { toast } from "sonner";
 
 interface AppState {
   scenarios: Scenario[];
+  /** Backend-tracked "last applied to default targets". Drives the "Applied to..." status, not the sidebar selection. */
   activeScenario: Scenario | null;
+  /** Frontend-only "currently being viewed/edited" scenario. Persisted to localStorage. UI selection. */
+  viewedScenario: Scenario | null;
   tools: ToolInfo[];
   managedSkills: ManagedSkill[];
   projects: Project[];
@@ -22,7 +25,8 @@ interface AppState {
   refreshTools: () => Promise<void>;
   refreshManagedSkills: () => Promise<void>;
   refreshProjects: () => Promise<void>;
-  switchScenario: (id: string) => Promise<void>;
+  setViewedScenarioId: (id: string) => void;
+  applyScenarioToDefault: (id: string) => Promise<void>;
   clearAppError: () => void;
   openHelp: () => void;
   closeHelp: () => void;
@@ -30,12 +34,21 @@ interface AppState {
   closeSkillDetail: () => void;
 }
 
+const VIEWED_SCENARIO_LS_KEY = "skills-manager.viewedScenarioId";
+
 const AppContext = createContext<AppState | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const SKILL_UPDATE_TOAST_ID = "skill-update-available";
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [activeScenario, setActiveScenario] = useState<Scenario | null>(null);
+  const [viewedScenarioId, setViewedScenarioIdState] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(VIEWED_SCENARIO_LS_KEY);
+    } catch {
+      return null;
+    }
+  });
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [managedSkills, setManagedSkills] = useState<ManagedSkill[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -104,19 +117,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setLoading(false);
   }, [refreshManagedSkills, refreshProjects, refreshScenarios, refreshTools]);
 
-  const handleSwitchScenario = useCallback(
+  const setViewedScenarioId = useCallback((id: string) => {
+    setViewedScenarioIdState(id);
+    try {
+      localStorage.setItem(VIEWED_SCENARIO_LS_KEY, id);
+    } catch {
+      // localStorage may be unavailable; selection is still tracked in memory.
+    }
+  }, []);
+
+  const handleApplyScenarioToDefault = useCallback(
     async (id: string) => {
-      try {
-        await api.switchScenario(id);
-        await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-        setAppError(null);
-      } catch (e) {
-        console.error("Failed to switch scenario:", e);
-        setTranslatedError("common.scenarios");
-      }
+      await api.applyScenarioToDefault(id);
+      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
     },
-    [refreshManagedSkills, refreshScenarios, setTranslatedError]
+    [refreshManagedSkills, refreshScenarios]
   );
+
+  // Resolve viewedScenario: persisted id > activeScenario > first scenario.
+  // Persist whichever resolves so the next launch matches what the user saw.
+  const viewedScenario = (() => {
+    if (viewedScenarioId) {
+      const found = scenarios.find((s) => s.id === viewedScenarioId);
+      if (found) return found;
+    }
+    return activeScenario ?? scenarios[0] ?? null;
+  })();
+
+  useEffect(() => {
+    if (!viewedScenario) return;
+    if (viewedScenario.id !== viewedScenarioId) {
+      // Persist the resolved fallback so subsequent reads are stable.
+      setViewedScenarioIdState(viewedScenario.id);
+      try {
+        localStorage.setItem(VIEWED_SCENARIO_LS_KEY, viewedScenario.id);
+      } catch {
+        // ignore
+      }
+    }
+  }, [viewedScenario, viewedScenarioId]);
 
   useEffect(() => {
     async function init() {
@@ -238,6 +277,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       value={{
         scenarios,
         activeScenario,
+        viewedScenario,
         tools,
         managedSkills,
         projects,
@@ -250,7 +290,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshTools,
         refreshManagedSkills,
         refreshProjects,
-        switchScenario: handleSwitchScenario,
+        setViewedScenarioId,
+        applyScenarioToDefault: handleApplyScenarioToDefault,
         clearAppError: () => setAppError(null),
         openHelp: () => setHelpOpen(true),
         closeHelp: () => setHelpOpen(false),

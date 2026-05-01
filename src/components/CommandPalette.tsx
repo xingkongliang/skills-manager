@@ -34,8 +34,8 @@ export function CommandPalette() {
     managedSkills,
     scenarios,
     projects,
-    activeScenario,
-    switchScenario,
+    viewedScenario,
+    setViewedScenarioId,
     openSkillDetailById,
   } = useApp();
 
@@ -116,8 +116,8 @@ export function CommandPalette() {
           sublabel: s.description || `${s.skill_count} skills`,
           icon: <Icon className="h-3.5 w-3.5" />,
           run: () => {
-            if (activeScenario?.id !== s.id) {
-              switchScenario(s.id);
+            if (viewedScenario?.id !== s.id) {
+              setViewedScenarioId(s.id);
             }
             if (!window.location.pathname.endsWith("/my-skills")) {
               navigate("/my-skills");
@@ -189,8 +189,8 @@ export function CommandPalette() {
     managedSkills,
     scenarios,
     projects,
-    activeScenario?.id,
-    switchScenario,
+    viewedScenario?.id,
+    setViewedScenarioId,
     openSkillDetailById,
     navigate,
     t,

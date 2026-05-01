@@ -482,6 +482,7 @@ pub fn run() {
             commands::scenarios::update_scenario,
             commands::scenarios::delete_scenario,
             commands::scenarios::switch_scenario,
+            commands::scenarios::apply_scenario_to_default,
             commands::scenarios::add_skill_to_scenario,
             commands::scenarios::remove_skill_from_scenario,
             commands::scenarios::reorder_scenarios,

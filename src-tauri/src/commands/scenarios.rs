@@ -310,13 +310,37 @@ pub async fn delete_scenario(
     result
 }
 
+/// Apply a scenario to the default targets (all enabled agent globals).
+///
+/// This is the explicit user-initiated action introduced in v1.16. It performs
+/// the same disk-writing work as the legacy [`switch_scenario`] command but is
+/// only invoked when the user clicks "Apply to Default" — sidebar/command-palette
+/// scenario clicks no longer call this.
+#[tauri::command]
+pub async fn apply_scenario_to_default(
+    app: tauri::AppHandle,
+    id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    apply_scenario_to_default_impl(app, id, store.inner().clone()).await
+}
+
+/// Legacy command kept for the tray menu and backward compatibility. Frontend
+/// callers should use [`apply_scenario_to_default`] instead.
 #[tauri::command]
 pub async fn switch_scenario(
     app: tauri::AppHandle,
     id: String,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
-    let store = store.inner().clone();
+    apply_scenario_to_default_impl(app, id, store.inner().clone()).await
+}
+
+async fn apply_scenario_to_default_impl(
+    app: tauri::AppHandle,
+    id: String,
+    store: Arc<SkillStore>,
+) -> Result<(), AppError> {
     let result = tauri::async_runtime::spawn_blocking(move || {
         ensure_scenario_exists(&store, &id)?;
         let desired_targets = collect_scenario_sync_targets(&store, &id)?;
@@ -328,7 +352,7 @@ pub async fn switch_scenario(
             }
         }
 
-        // Set new active
+        // Mark this scenario as the one currently applied to default targets.
         store.set_active_scenario(&id).map_err(AppError::db)?;
 
         // Sync missing or stale targets for the new scenario.

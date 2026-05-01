@@ -43,7 +43,7 @@ export function Sidebar() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
-  const { scenarios, activeScenario, switchScenario, refreshScenarios, refreshManagedSkills, projects, refreshProjects } = useApp();
+  const { scenarios, viewedScenario, setViewedScenarioId, refreshScenarios, refreshManagedSkills, projects, refreshProjects } = useApp();
   const [showCreate, setShowCreate] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; icon?: string | null } | null>(null);
@@ -101,13 +101,11 @@ export function Sidebar() {
     { name: t("sidebar.installSkills"), path: "/install", icon: Download },
   ];
 
-  const handleSwitchScenario = async (id: string) => {
-    await switchScenario(id);
-    const s = scenarios.find((s) => s.id === id);
-    if (location.pathname === "/settings") {
+  const handleSwitchScenario = (id: string) => {
+    setViewedScenarioId(id);
+    if (location.pathname !== "/my-skills") {
       navigate("/my-skills");
     }
-    if (s) toast.success(t("scenario.switched", { name: s.name }));
   };
 
   const handleCreateScenario = async (name: string, description?: string, icon?: string) => {
@@ -227,7 +225,7 @@ export function Sidebar() {
                   {...droppableProvided.droppableProps}
                 >
                   {orderedScenarios.map((scenario, index) => {
-                    const isActive = activeScenario?.id === scenario.id;
+                    const isActive = viewedScenario?.id === scenario.id;
                     const scenarioIcon = getScenarioIconOption(scenario);
                     const ScenarioIcon = scenarioIcon.icon;
                     return (
