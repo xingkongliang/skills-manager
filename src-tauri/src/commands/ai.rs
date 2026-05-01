@@ -138,7 +138,19 @@ fn parse_f64_setting(value: Option<String>, default: f64) -> f64 {
     value
         .as_deref()
         .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite())
         .unwrap_or(default)
+}
+
+fn parse_temperature_setting(value: Option<String>) -> f64 {
+    const DEFAULT_TEMPERATURE: f64 = 0.2;
+
+    let temperature = parse_f64_setting(value, DEFAULT_TEMPERATURE);
+    if (0.0..=2.0).contains(&temperature) {
+        temperature
+    } else {
+        DEFAULT_TEMPERATURE
+    }
 }
 
 fn parse_u64_setting(value: Option<String>, default: u64) -> u64 {
@@ -226,11 +238,10 @@ pub async fn invoke_ai_task(
                         .map_err(AppError::db)?,
                 )
                 .ok_or_else(|| AppError::invalid_input("OpenAI-compatible model not configured"))?;
-                let temperature = parse_f64_setting(
+                let temperature = parse_temperature_setting(
                     store
                         .get_setting("openai_compatible_temperature")
                         .map_err(AppError::db)?,
-                    0.2,
                 );
                 let max_tokens = parse_u64_setting(
                     store
@@ -273,6 +284,32 @@ pub async fn invoke_ai_task(
     );
 
     run_ai_bridge(app, input).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_f64_setting, parse_temperature_setting};
+
+    #[test]
+    fn parse_f64_setting_discards_non_finite_values() {
+        for value in ["NaN", "inf", "-inf", "Infinity", "-Infinity"] {
+            assert_eq!(parse_f64_setting(Some(value.to_string()), 0.2), 0.2);
+        }
+    }
+
+    #[test]
+    fn parse_temperature_setting_defaults_out_of_range_values() {
+        for value in ["-0.1", "2.1", "NaN", "inf", "-inf"] {
+            assert_eq!(parse_temperature_setting(Some(value.to_string())), 0.2);
+        }
+    }
+
+    #[test]
+    fn parse_temperature_setting_accepts_values_in_range() {
+        assert_eq!(parse_temperature_setting(Some("0".to_string())), 0.0);
+        assert_eq!(parse_temperature_setting(Some("1.5".to_string())), 1.5);
+        assert_eq!(parse_temperature_setting(Some("2".to_string())), 2.0);
+    }
 }
 
 #[tauri::command]

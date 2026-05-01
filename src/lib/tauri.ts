@@ -455,8 +455,11 @@ export const isAiProviderConfigured = async () => {
     ]);
     return Boolean(baseUrl?.trim() && apiKey?.trim() && model?.trim());
   }
-  const apiKey = await getSettings("codebuddy_api_key");
-  return Boolean(apiKey?.trim());
+  if (provider === "codebuddy") {
+    const apiKey = await getSettings("codebuddy_api_key");
+    return Boolean(apiKey?.trim());
+  }
+  return false;
 };
 
 // ── Git Backup ──
