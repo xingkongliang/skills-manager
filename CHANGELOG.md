@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.1] - 2026-05-01
+
+### Changed
+- Project pages now feature **Add Skills to Project** as the primary action — a high-contrast button right next to the project title, plus a one-time inline tip showing where to bulk-add by tag.
+- The Add Skills dialog calls out tag filtering ("Filter by tag — pick one or more tags to bulk-add related skills") so the batch workflow is discoverable instead of hidden.
+- Empty project pages now show a clear **Add Skills from Library** call-to-action so first-time visitors know what to do next.
+- Added a new **Recommended Workflows** entry to the Help dialog covering single-agent, multi-project, and multi-machine flows.
+
 ## [1.16.0] - 2026-05-01
 
 ### Changed

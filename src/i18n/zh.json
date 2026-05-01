@@ -17,6 +17,10 @@
     "title": "快速上手 Skills Manager",
     "description": "最快的使用路径是：先选场景，把 Skill 安装进中央仓库，再在“我的 Skills”里决定当前场景要启用什么；只有在需要项目内协作、Git 备份或环境配置时，再去对应页面处理。",
     "items": {
+      "workflows": {
+        "title": "推荐工作流",
+        "description": "单 Agent 用户：安装 Skill → 点「应用到默认」。可以忽略标签和项目工作区。多项目用户：给 Skill 打标签（如「前端」「调试」），在项目页点「添加 Skill」并按标签筛选，一次推送一组同类 Skill。多机用户：在设置页开启 Git 备份，把中央仓库在多台设备间同步。"
+      },
       "scenarios": {
         "title": "先选一个场景，或新建一个场景",
         "description": "把工作、学习、客户项目拆成不同场景。每个场景维护自己的启用列表、Agent 开关，以及已启用 Skill 的排序。"
@@ -454,7 +458,7 @@
     "language": "语言",
     "help": "帮助",
     "about": "关于",
-    "version": "Skills Manager 1.16.0",
+    "version": "Skills Manager 1.16.1",
     "tagline": "跨平台。极简、高效、无感多场景切换。",
     "checkUpdate": "检查更新",
     "checking": "检查中…",
@@ -648,6 +652,11 @@
     "importToCenter": "更新中心",
     "importFromCenter": "添加 Skill",
     "addSkill": "添加 Skill",
+    "addSkillsCta": "从中央仓库添加 Skill",
+    "addSkillsToProject": "添加 Skill 到项目",
+    "addCallout": "也支持批量添加：在「添加 Skill」弹窗里按 tag 筛选，可一次推送一组同类 Skill。",
+    "exportTagFilterLabel": "按标签筛选:",
+    "exportTagFilterHint": "选择一个或多个标签可批量添加同类 Skill（如「前端」+「调试」）。",
     "updateCenter": "更新中心",
     "updateProject": "更新项目",
     "importToCenterSuccess": "\"{{name}}\" 已更新到 Skills 中心",
@@ -692,7 +701,7 @@
     "noSkillsToExport": "中央仓库中没有可添加到项目的 Skill",
     "import": "添加",
     "updateSelected": "添加 {{count}} 个",
-    "batchImported": "已添加 {{count}} 个 Skill",
+    "batchImported": "已添加 {{count}} 个 Skill 到项目",
     "batchImportFailed": "{{count}} 个 Skill 添加失败",
     "deleteSkill": "删除 Skill",
     "deleteSkillConfirm": "确定永久删除 Skill \"{{name}}\" 吗？此操作不可恢复。",

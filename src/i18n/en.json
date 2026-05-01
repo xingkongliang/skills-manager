@@ -17,6 +17,10 @@
     "title": "Quick Start for Skills Manager",
     "description": "The fastest path is: pick a scenario, install skills into the central library, decide what stays active in My Skills, then use Project Workspaces, Git backup, or Settings only when that workflow needs them.",
     "items": {
+      "workflows": {
+        "title": "Recommended Workflows",
+        "description": "Single-agent users: install skills → tap Apply to Default. That's it — ignore tags and project workspaces. Multi-project users: tag your skills (e.g. \"frontend\", \"debug\"), then in each project page click Add Skill and filter by tag to bulk-add. Multi-machine users: turn on Git Backup in Settings to sync the central library across devices."
+      },
       "scenarios": {
         "title": "Start by picking or creating a scenario",
         "description": "Use separate scenarios for work, learning, or client projects. Each scenario keeps its own enabled skills, per-agent toggles, and skill order."
@@ -454,7 +458,7 @@
     "language": "Language",
     "help": "Help",
     "about": "About",
-    "version": "Skills Manager 1.16.0",
+    "version": "Skills Manager 1.16.1",
     "tagline": "Cross-platform. Minimal, efficient, seamless multi-scenario switching.",
     "checkUpdate": "Check for Updates",
     "checking": "Checking…",
@@ -648,6 +652,11 @@
     "importToCenter": "Update Center",
     "importFromCenter": "Add Skill",
     "addSkill": "Add Skill",
+    "addSkillsCta": "Add Skills from Library",
+    "addSkillsToProject": "Add Skills to Project",
+    "addCallout": "You can also add multiple skills at once — filter by tag in the Add Skills dialog.",
+    "exportTagFilterLabel": "Filter by tag:",
+    "exportTagFilterHint": "Pick one or more tags to bulk-add related skills (e.g. \"frontend\" + \"debug\").",
     "updateCenter": "Update Center",
     "updateProject": "Update Project",
     "importToCenterSuccess": "\"{{name}}\" updated to Skills Center",
@@ -692,7 +701,7 @@
     "noSkillsToExport": "No skills available to add to this project",
     "import": "Add",
     "updateSelected": "Add {{count}}",
-    "batchImported": "{{count}} skills added",
+    "batchImported": "Added {{count}} skill(s) to this project",
     "batchImportFailed": "{{count}} skills failed to add",
     "deleteSkill": "Delete skill",
     "deleteSkillConfirm": "Permanently delete skill \"{{name}}\"? This action cannot be undone.",

@@ -18,6 +18,7 @@ import {
   Trash2,
   SquareCheck,
   Square,
+  Plus,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
@@ -143,6 +144,22 @@ export function ProjectDetail() {
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ProjectSkillGroup | null>(null);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
+  const PROJECT_ADD_CALLOUT_KEY = "skills-manager.projectAddCalloutDismissed";
+  const [showAddCallout, setShowAddCallout] = useState(() => {
+    try {
+      return localStorage.getItem(PROJECT_ADD_CALLOUT_KEY) !== "1";
+    } catch {
+      return false;
+    }
+  });
+  const dismissAddCallout = () => {
+    setShowAddCallout(false);
+    try {
+      localStorage.setItem(PROJECT_ADD_CALLOUT_KEY, "1");
+    } catch {
+      // ignore
+    }
+  };
 
   const project = projects.find((p) => p.id === id);
   const getSkillKey = useCallback((skill: Pick<ProjectSkillGroup, "id">) => {
@@ -511,19 +528,45 @@ export function ProjectDetail() {
 
   return (
     <div className="app-page">
-      <div className="app-page-header pr-2">
-        <h1 className="app-page-title flex items-center gap-2.5">
-          <FolderOpen className="w-5 h-5 text-accent" />
-          {project.name}
-          <span className="app-badge">{groupedSkills.length}</span>
-        </h1>
-        <p className="app-page-subtitle">
-          {project.path}
-          {groupedSkills.length > 0 && ` \u00B7 ${enabledCount} / ${groupedSkills.length} ${t("project.enabled")}`}
-        </p>
-        <p className="mt-1 text-[13px] text-muted">
-          {project.workspace_type === "linked" ? t("project.linkedWorkspaceHint") : t("project.workspaceHint")}
-        </p>
+      <div className="app-page-header pr-2 flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h1 className="app-page-title flex items-center gap-2.5">
+            <FolderOpen className="w-5 h-5 text-accent" />
+            {project.name}
+            <span className="app-badge">{groupedSkills.length}</span>
+          </h1>
+          <p className="app-page-subtitle">
+            {project.path}
+            {groupedSkills.length > 0 && ` \u00B7 ${enabledCount} / ${groupedSkills.length} ${t("project.enabled")}`}
+          </p>
+          <p className="mt-1 text-[13px] text-muted">
+            {project.workspace_type === "linked" ? t("project.linkedWorkspaceHint") : t("project.workspaceHint")}
+          </p>
+        </div>
+        <div className="relative shrink-0 pt-1">
+          <button
+            onClick={() => {
+              setShowExportDialog(true);
+              dismissAddCallout();
+            }}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-2 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {t("project.addSkill")}
+          </button>
+          {showAddCallout && groupedSkills.length > 0 && (
+            <div className="absolute right-0 top-full z-20 mt-2 w-72 rounded-md border border-border bg-surface p-3 text-[12px] leading-snug shadow-lg">
+              <button
+                onClick={dismissAddCallout}
+                className="absolute right-1.5 top-1.5 rounded p-0.5 text-faint hover:text-secondary"
+                aria-label={t("common.close")}
+              >
+                <X className="h-3 w-3" />
+              </button>
+              <p className="pr-4 text-secondary">{t("project.addCallout")}</p>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="app-toolbar">
@@ -559,15 +602,9 @@ export function ProjectDetail() {
 
         <div className="app-segmented">
           <button
-            onClick={() => setShowExportDialog(true)}
-            className="inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
-          >
-            <Download className="h-3.5 w-3.5" />
-            {t("project.addSkill")}
-          </button>
-          <button
             onClick={loadSkills}
-            className="ml-2 mr-2 inline-flex items-center gap-1 rounded-md border-l border-border-subtle pl-4 pr-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+            className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+            title={t("common.refresh")}
           >
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
           </button>
@@ -635,9 +672,21 @@ export function ProjectDetail() {
           <h3 className="mb-1.5 text-[14px] font-semibold text-tertiary">
             {groupedSkills.length === 0 ? t("project.noSkills") : t("mySkills.noMatch")}
           </h3>
-          <p className="text-[13px] text-muted">
+          <p className="max-w-md text-[13px] text-muted">
             {groupedSkills.length === 0 ? t("project.noSkillsHint") : ""}
           </p>
+          {groupedSkills.length === 0 && (
+            <button
+              onClick={() => {
+                setShowExportDialog(true);
+                dismissAddCallout();
+              }}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {t("project.addSkillsCta")}
+            </button>
+          )}
         </div>
       ) : (
         <div
@@ -1202,7 +1251,7 @@ function ExportFromCenterDialog({
       <div className="relative w-full max-w-lg rounded-xl border border-border-subtle bg-bg-secondary shadow-2xl">
         <div className="flex items-center justify-between border-b border-border-subtle px-5 py-4">
           <h2 className="text-[14px] font-semibold text-primary">
-            {t("project.selectSkillToExport")}
+            {t("project.addSkillsToProject")}
           </h2>
           <button
             onClick={onClose}
@@ -1356,10 +1405,14 @@ function ExportFromCenterDialog({
             </button>
           </div>
           {allTags.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <span className="text-[12px] text-muted">{t("mySkills.tags.filter")}</span>
-              <button
-                onClick={() => setTagFilters(new Set())}
+            <div className="mt-2">
+              <p className="mb-1.5 text-[11px] text-muted">
+                {t("project.exportTagFilterHint")}
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[12px] font-medium text-muted">{t("project.exportTagFilterLabel")}</span>
+                <button
+                  onClick={() => setTagFilters(new Set())}
                 className={cn(
                   "rounded-full border px-2 py-0.5 text-[12px] transition-colors",
                   tagFilters.size === 0
@@ -1401,6 +1454,7 @@ function ExportFromCenterDialog({
                   {isAllSelected ? t("project.deselectAll") : t("project.selectAll")}
                 </button>
               )}
+              </div>
             </div>
           )}
         </div>
