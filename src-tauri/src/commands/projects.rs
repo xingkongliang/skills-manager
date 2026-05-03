@@ -214,6 +214,121 @@ fn project_to_dto(
     }
 }
 
+fn default_workspace_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn add_linked_workspace_impl(
+    store: &SkillStore,
+    name: String,
+    path: String,
+    disabled_path: Option<String>,
+) -> Result<ProjectDto, AppError> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::invalid_input("Workspace name is required"));
+    }
+
+    let skills_root = PathBuf::from(path.trim());
+    if !skills_root.is_dir() {
+        return Err(AppError::invalid_input("Skills directory does not exist"));
+    }
+
+    let disabled_path = disabled_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let disabled_path = if let Some(disabled) = disabled_path {
+        let disabled_root = PathBuf::from(&disabled);
+        if !disabled_root.is_dir() {
+            return Err(AppError::invalid_input(
+                "Disabled skills directory does not exist",
+            ));
+        }
+        ensure_distinct_linked_workspace_roots(&skills_root, &disabled_root)?;
+        Some(disabled)
+    } else {
+        let mut disabled_root = skills_root.clone();
+        let derived = disabled_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|name| format!("{}-disabled", name));
+        match derived {
+            Some(name) => {
+                disabled_root.set_file_name(name);
+                match std::fs::create_dir_all(&disabled_root) {
+                    Ok(()) => {
+                        ensure_distinct_linked_workspace_roots(&skills_root, &disabled_root)?;
+                        Some(disabled_root.to_string_lossy().to_string())
+                    }
+                    Err(_) => None,
+                }
+            }
+            None => None,
+        }
+    };
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let record = ProjectRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.clone(),
+        path: skills_root.to_string_lossy().to_string(),
+        workspace_type: "linked".to_string(),
+        linked_agent_key: Some(slugify_skill_dir_name(&name)),
+        linked_agent_name: Some(name),
+        disabled_path,
+        sort_order: 0,
+        created_at: now,
+        updated_at: now,
+    };
+
+    store.insert_project(&record).map_err(AppError::db)?;
+    let all_managed = store.get_all_skills().map_err(AppError::db)?;
+    let configs = agent_skill_configs(store);
+    Ok(project_to_dto(&record, &all_managed, &configs))
+}
+
+fn add_project_impl(store: &SkillStore, path: String) -> Result<ProjectDto, AppError> {
+    let project_path = Path::new(&path);
+    if !project_path.is_dir() {
+        return Err(AppError::invalid_input("Directory does not exist"));
+    }
+
+    if project_scanner::is_standalone_skills_root(project_path) {
+        return add_linked_workspace_impl(store, default_workspace_name(project_path), path, None);
+    }
+
+    let claude_dir = project_path.join(".claude");
+    let skills_dir = claude_dir.join("skills");
+    let disabled_dir = claude_dir.join("skills-disabled");
+
+    // Support initializing an empty project directory as a managed project.
+    std::fs::create_dir_all(&skills_dir)?;
+    std::fs::create_dir_all(&disabled_dir)?;
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let record = ProjectRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: default_workspace_name(project_path),
+        path: path.clone(),
+        workspace_type: "project".to_string(),
+        linked_agent_key: None,
+        linked_agent_name: None,
+        disabled_path: None,
+        sort_order: 0,
+        created_at: now,
+        updated_at: now,
+    };
+
+    store.insert_project(&record).map_err(AppError::db)?;
+    let all_managed = store.get_all_skills().map_err(AppError::db)?;
+    let configs = agent_skill_configs(store);
+    Ok(project_to_dto(&record, &all_managed, &configs))
+}
+
 fn ensure_safe_skill_relative_path(skill_relative_path: &str) -> Result<(), AppError> {
     if skill_relative_path.trim().is_empty() {
         return Err(AppError::invalid_input("Invalid skill directory path"));
@@ -515,43 +630,7 @@ pub async fn add_project(
     path: String,
 ) -> Result<ProjectDto, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let project_path = Path::new(&path);
-        if !project_path.is_dir() {
-            return Err(AppError::invalid_input("Directory does not exist"));
-        }
-        let claude_dir = project_path.join(".claude");
-        let skills_dir = claude_dir.join("skills");
-        let disabled_dir = claude_dir.join("skills-disabled");
-
-        // Support initializing an empty project directory as a managed project.
-        std::fs::create_dir_all(&skills_dir)?;
-        std::fs::create_dir_all(&disabled_dir)?;
-
-        let name = project_path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let now = chrono::Utc::now().timestamp_millis();
-        let record = ProjectRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            name,
-            path: path.clone(),
-            workspace_type: "project".to_string(),
-            linked_agent_key: None,
-            linked_agent_name: None,
-            disabled_path: None,
-            sort_order: 0,
-            created_at: now,
-            updated_at: now,
-        };
-
-        store.insert_project(&record).map_err(AppError::db)?;
-        let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        let configs = agent_skill_configs(&store);
-        Ok(project_to_dto(&record, &all_managed, &configs))
-    })
+    tauri::async_runtime::spawn_blocking(move || add_project_impl(&store, path))
     .await?
 }
 
@@ -564,69 +643,7 @@ pub async fn add_linked_workspace(
 ) -> Result<ProjectDto, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let name = name.trim().to_string();
-        if name.is_empty() {
-            return Err(AppError::invalid_input("Workspace name is required"));
-        }
-
-        let skills_root = PathBuf::from(path.trim());
-        if !skills_root.is_dir() {
-            return Err(AppError::invalid_input("Skills directory does not exist"));
-        }
-
-        let disabled_path = disabled_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        let disabled_path = if let Some(disabled) = disabled_path {
-            let disabled_root = PathBuf::from(&disabled);
-            if !disabled_root.is_dir() {
-                return Err(AppError::invalid_input(
-                    "Disabled skills directory does not exist",
-                ));
-            }
-            ensure_distinct_linked_workspace_roots(&skills_root, &disabled_root)?;
-            Some(disabled)
-        } else {
-            let mut disabled_root = skills_root.clone();
-            let derived = disabled_root
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|name| format!("{}-disabled", name));
-            match derived {
-                Some(name) => {
-                    disabled_root.set_file_name(name);
-                    match std::fs::create_dir_all(&disabled_root) {
-                        Ok(()) => {
-                            ensure_distinct_linked_workspace_roots(&skills_root, &disabled_root)?;
-                            Some(disabled_root.to_string_lossy().to_string())
-                        }
-                        Err(_) => None,
-                    }
-                }
-                None => None,
-            }
-        };
-
-        let now = chrono::Utc::now().timestamp_millis();
-        let record = ProjectRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: name.clone(),
-            path: skills_root.to_string_lossy().to_string(),
-            workspace_type: "linked".to_string(),
-            linked_agent_key: Some(slugify_skill_dir_name(&name)),
-            linked_agent_name: Some(name),
-            disabled_path,
-            sort_order: 0,
-            created_at: now,
-            updated_at: now,
-        };
-
-        store.insert_project(&record).map_err(AppError::db)?;
-        let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        let configs = agent_skill_configs(&store);
-        Ok(project_to_dto(&record, &all_managed, &configs))
+        add_linked_workspace_impl(&store, name, path, disabled_path)
     })
     .await?
 }
@@ -1112,13 +1129,13 @@ pub async fn delete_project_skill(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_sync_status, ensure_distinct_linked_workspace_roots,
+        add_project_impl, classify_sync_status, ensure_distinct_linked_workspace_roots,
         remove_workspace_skill_target, set_project_skill_enabled_state,
     };
     use crate::core::content_hash;
     use crate::core::error::ErrorKind;
     use crate::core::project_scanner::ProjectSkillInfo;
-    use crate::core::skill_store::SkillRecord;
+    use crate::core::skill_store::{SkillRecord, SkillStore};
     use std::fs;
     use tempfile::tempdir;
 
@@ -1256,6 +1273,62 @@ mod tests {
         fs::create_dir_all(&disabled).unwrap();
 
         ensure_distinct_linked_workspace_roots(&root, &disabled).unwrap();
+    }
+
+    fn temp_store() -> (tempfile::TempDir, SkillStore) {
+        let tmp = tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let store = SkillStore::new(&db_path).unwrap();
+        (tmp, store)
+    }
+
+    #[test]
+    fn add_project_treats_standalone_skills_root_as_linked_workspace() {
+        let (_store_tmp, store) = temp_store();
+        let skills_root_tmp = tempdir().unwrap();
+        let skill = skills_root_tmp.path().join("example-skill");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "# Example").unwrap();
+
+        let dto = add_project_impl(&store, skills_root_tmp.path().to_string_lossy().to_string())
+            .unwrap();
+
+        assert_eq!(dto.workspace_type, "linked");
+        assert_eq!(dto.path, skills_root_tmp.path().to_string_lossy().to_string());
+        assert!(!skills_root_tmp.path().join(".claude").exists());
+
+        let mut disabled_root = skills_root_tmp.path().to_path_buf();
+        let dir_name = skills_root_tmp
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap();
+        disabled_root.set_file_name(format!("{dir_name}-disabled"));
+        assert!(disabled_root.is_dir());
+    }
+
+    #[test]
+    fn add_project_keeps_project_mode_for_actual_project_root() {
+        let (_store_tmp, store) = temp_store();
+        let project_root = tempdir().unwrap();
+        let existing_skill = project_root
+            .path()
+            .join(".claude")
+            .join("skills")
+            .join("example-skill");
+        fs::create_dir_all(&existing_skill).unwrap();
+        fs::write(existing_skill.join("SKILL.md"), "# Example").unwrap();
+
+        let dto = add_project_impl(&store, project_root.path().to_string_lossy().to_string())
+            .unwrap();
+
+        assert_eq!(dto.workspace_type, "project");
+        assert!(project_root.path().join(".claude").join("skills").is_dir());
+        assert!(project_root
+            .path()
+            .join(".claude")
+            .join("skills-disabled")
+            .is_dir());
     }
 
     #[cfg(unix)]

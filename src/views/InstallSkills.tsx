@@ -194,8 +194,11 @@ export function InstallSkills() {
     setSearchParams({ tab });
   };
 
-  const runScan = useCallback(async () => {
-    setScanLoading(true);
+  const runScan = useCallback(async (options?: { background?: boolean }) => {
+    const background = options?.background ?? false;
+    if (!background) {
+      setScanLoading(true);
+    }
     setLocalError(null);
     try {
       const result = await api.scanLocalSkills();
@@ -206,9 +209,23 @@ export function InstallSkills() {
       setLocalError(message);
       toast.error(message);
     } finally {
-      setScanLoading(false);
+      if (!background) {
+        setScanLoading(false);
+      }
     }
   }, [t]);
+
+  const markScanGroupsImported = useCallback((shouldMark: (group: ScanResult["groups"][number]) => boolean) => {
+    setScanResult((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        groups: current.groups.map((group) =>
+          shouldMark(group) ? { ...group, imported: true } : group
+        ),
+      };
+    });
+  }, []);
 
   useEffect(() => {
     if (activeTab !== "market") return;
@@ -287,7 +304,10 @@ export function InstallSkills() {
     try {
       await api.installLocal(sourcePath);
       await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-      await runScan();
+      markScanGroupsImported((group) =>
+        group.locations.some((location) => location.found_path === sourcePath)
+      );
+      runScan({ background: true });
       toast.success(t("install.toast.success", { name }), {
         id: toastId,
         action: {
@@ -382,7 +402,7 @@ export function InstallSkills() {
       }
 
       await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-      runScan();
+      runScan({ background: true });
     } catch (error: unknown) {
       const message = getErrorMessage(error, t("common.error"));
       setLocalError(message);
@@ -530,8 +550,11 @@ export function InstallSkills() {
     try {
       await api.importExistingSkill(sourcePath, name);
       toast.success(t("install.scan.importedOne", { name }));
+      markScanGroupsImported((group) =>
+        group.locations.some((location) => location.found_path === sourcePath)
+      );
       await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-      await runScan();
+      runScan({ background: true });
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -548,8 +571,9 @@ export function InstallSkills() {
     try {
       await api.importAllDiscovered();
       toast.success(t("install.scan.importedAll"));
+      markScanGroupsImported(() => true);
       await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-      await runScan();
+      runScan({ background: true });
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -1242,7 +1266,7 @@ export function InstallSkills() {
               title={t("common.requestFailed")}
               description={localError}
               actionLabel={t("common.retry")}
-              onAction={runScan}
+              onAction={() => runScan()}
               tone="danger"
             />
           ) : null}
@@ -1263,7 +1287,7 @@ export function InstallSkills() {
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={runScan}
+                  onClick={() => runScan()}
                   disabled={scanLoading}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface-hover px-3 py-2 text-[13px] font-medium text-secondary transition-colors hover:bg-surface-active disabled:opacity-50"
                 >

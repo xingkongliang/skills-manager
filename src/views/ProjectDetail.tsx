@@ -38,6 +38,7 @@ import { cn } from "../utils";
 import * as api from "../lib/tauri";
 import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { applyProjectSkillEnabledState } from "./projectSkillState";
 
 const PROJECT_DEFAULT_EXPORT_AGENTS_KEY = "project_default_export_agents";
 const PROJECT_EXPORT_AGENT_PRIORITY = ["claude_code", "codex", "cursor", "gemini_cli", "github_copilot"];
@@ -125,6 +126,10 @@ function getAgentDotTargets(variants: ProjectSkill[]) {
   return targets;
 }
 
+function isGroupEnabled(skill: Pick<ProjectSkillGroup, "enabledCount">) {
+  return skill.enabledCount > 0;
+}
+
 function getGroupStatus(variants: ProjectSkill[]): ProjectSkill["sync_status"] {
   const priority: ProjectSkill["sync_status"][] = [
     "diverged",
@@ -150,6 +155,7 @@ export function ProjectDetail() {
   const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
   const [selectedExportAgents, setSelectedExportAgents] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("all");
   const [search, setSearch] = useState("");
@@ -191,16 +197,25 @@ export function ProjectDetail() {
     return skill.id;
   }, []);
 
-  const loadSkills = useCallback(async () => {
+  const loadSkills = useCallback(async (options?: { background?: boolean }) => {
     if (!id) return;
-    setLoading(true);
+    const background = options?.background ?? false;
+    if (background) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     try {
       const result = await api.getProjectSkills(id);
       setSkills(result);
     } catch (e) {
       console.error("Failed to load project skills:", e);
     } finally {
-      setLoading(false);
+      if (background) {
+        setRefreshing(false);
+      } else {
+        setLoading(false);
+      }
     }
   }, [id]);
 
@@ -317,7 +332,7 @@ export function ProjectDetail() {
     items: groupedSkills,
     filtered,
     getKey: getSkillKey,
-    isItemActive: (s) => s.enabledCount === s.totalCount,
+    isItemActive: isGroupEnabled,
   });
 
   const exportTargets = useMemo(() => {
@@ -422,7 +437,11 @@ export function ProjectDetail() {
     try {
       await api.updateProjectSkillToCenter(id, skill.primaryVariant.relative_path, skill.primaryVariant.agent);
       toast.success(t("project.updateCenterSuccess", { name: skill.name }));
-      await Promise.all([refreshManagedSkills(), refreshScenarios(), loadSkills()]);
+      await Promise.all([
+        refreshManagedSkills(),
+        refreshScenarios(),
+        loadSkills({ background: true }),
+      ]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -444,7 +463,7 @@ export function ProjectDetail() {
       } else {
         toast.success(t("project.updateProjectSuccess", { name: skill.name }));
       }
-      await Promise.all([loadSkills(), refreshProjects()]);
+      await Promise.all([loadSkills({ background: true }), refreshProjects()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -456,18 +475,20 @@ export function ProjectDetail() {
     if (!id) return;
     setTogglingSkill(getSkillKey(skill));
     try {
-      const nextEnabled = skill.enabledCount !== skill.totalCount;
+      const nextEnabled = !isGroupEnabled(skill);
       await Promise.all(
         skill.variants.map((variant) =>
           api.toggleProjectSkill(id, variant.relative_path, variant.agent, nextEnabled)
         )
       );
-      if (skill.enabledCount === skill.totalCount) {
-        toast.success(t("project.skillDisabled", { name: skill.name }));
-      } else {
+      setSkills((current) =>
+        applyProjectSkillEnabledState(current, skill.variants, nextEnabled)
+      );
+      if (nextEnabled) {
         toast.success(t("project.skillEnabled", { name: skill.name }));
+      } else {
+        toast.success(t("project.skillDisabled", { name: skill.name }));
       }
-      await loadSkills();
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -496,7 +517,7 @@ export function ProjectDetail() {
         await api.deleteProjectSkill(id, existingVariant.relative_path, agentKey);
         toast.success(t("project.agentRemoved", { agent: displayName, name: skill.name }));
       }
-      await Promise.all([loadSkills(), refreshProjects()]);
+      await Promise.all([loadSkills({ background: true }), refreshProjects()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -517,7 +538,7 @@ export function ProjectDetail() {
         count: selectedExportAgents.length,
       }));
       setShowExportDialog(false);
-      await Promise.all([loadSkills(), refreshProjects()]);
+      await Promise.all([loadSkills({ background: true }), refreshProjects()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     }
@@ -549,7 +570,7 @@ export function ProjectDetail() {
     if (imported > 0) {
       setShowExportDialog(false);
     }
-    await Promise.all([loadSkills(), refreshProjects()]);
+    await Promise.all([loadSkills({ background: true }), refreshProjects()]);
   };
 
   const handleDeleteSkill = async () => {
@@ -561,7 +582,7 @@ export function ProjectDetail() {
         )
       );
       toast.success(t("project.skillDeleted", { name: deleteTarget.name }));
-      await Promise.all([loadSkills(), refreshProjects()]);
+      await Promise.all([loadSkills({ background: true }), refreshProjects()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     }
@@ -592,7 +613,7 @@ export function ProjectDetail() {
     }
     exitMultiSelect();
     setBatchDeleteConfirm(false);
-    await Promise.all([loadSkills(), refreshProjects()]);
+    await Promise.all([loadSkills({ background: true }), refreshProjects()]);
   };
 
   const handleBatchToggleProject = async () => {
@@ -600,27 +621,35 @@ export function ProjectDetail() {
     const enabling = anyDisabled;
     let count = 0;
     let failed = 0;
+    const updatedVariants: Pick<ProjectSkill, "agent" | "relative_path">[] = [];
     for (const skill of selectedSkills) {
       try {
-        if (enabling && skill.enabledCount !== skill.totalCount) {
+        if (enabling && !isGroupEnabled(skill)) {
           await Promise.all(
             skill.variants.map((variant) =>
               api.toggleProjectSkill(id, variant.relative_path, variant.agent, true)
             )
           );
+          updatedVariants.push(...skill.variants);
           count++;
-        } else if (!enabling && skill.enabledCount > 0) {
+        } else if (!enabling && isGroupEnabled(skill)) {
           await Promise.all(
             skill.variants.map((variant) =>
               api.toggleProjectSkill(id, variant.relative_path, variant.agent, false)
             )
           );
+          updatedVariants.push(...skill.variants);
           count++;
         }
       } catch {
         failed++;
         // continue with remaining
       }
+    }
+    if (updatedVariants.length > 0) {
+      setSkills((current) =>
+        applyProjectSkillEnabledState(current, updatedVariants, enabling)
+      );
     }
     if (count > 0) {
       toast.success(enabling
@@ -630,7 +659,6 @@ export function ProjectDetail() {
     if (failed > 0) {
       toast.error(t("project.batchToggleFailed", { count: failed }));
     }
-    await loadSkills();
   };
 
   const handleBatchUpdateCenter = async () => {
@@ -658,7 +686,11 @@ export function ProjectDetail() {
       if (failed > 0) {
         toast.error(t("project.batchUpdateCenterFailed", { count: failed }));
       }
-      await Promise.all([refreshManagedSkills(), refreshScenarios(), loadSkills()]);
+      await Promise.all([
+        refreshManagedSkills(),
+        refreshScenarios(),
+        loadSkills({ background: true }),
+      ]);
     } finally {
       setBatchUpdatingCenter(false);
     }
@@ -693,7 +725,7 @@ export function ProjectDetail() {
       if (failed > 0) {
         toast.error(t("project.batchUpdateProjectFailed", { count: failed }));
       }
-      await Promise.all([loadSkills(), refreshProjects()]);
+      await Promise.all([loadSkills({ background: true }), refreshProjects()]);
     } finally {
       setBatchUpdatingProject(false);
     }
@@ -732,7 +764,7 @@ export function ProjectDetail() {
     if (failed > 0) {
       toast.error(t("project.batchTagsFailed", { count: failed }));
     }
-    await Promise.all([refreshManagedSkills(), loadSkills()]);
+    await Promise.all([refreshManagedSkills(), loadSkills({ background: true })]);
   };
 
   if (!project) return null;
@@ -813,11 +845,12 @@ export function ProjectDetail() {
 
         <div className="app-segmented">
           <button
-            onClick={loadSkills}
+            onClick={() => loadSkills({ background: true })}
             className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+            disabled={refreshing}
             title={t("common.refresh")}
           >
-            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+            <RefreshCw className={cn("h-3.5 w-3.5", (loading || refreshing) && "animate-spin")} />
           </button>
           <button
             onClick={() => setViewMode("grid")}
@@ -1096,7 +1129,7 @@ export function ProjectDetail() {
                           >
                             {isToggling ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : skill.enabledCount === skill.totalCount ? (
+                            ) : isGroupEnabled(skill) ? (
                               t("project.enabled")
                             ) : (
                               t("project.enableSkill")
@@ -1236,7 +1269,7 @@ export function ProjectDetail() {
                       >
                         {isToggling ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : skill.enabledCount === skill.totalCount ? (
+                        ) : isGroupEnabled(skill) ? (
                           t("project.enabled")
                         ) : (
                           t("project.enableSkill")
