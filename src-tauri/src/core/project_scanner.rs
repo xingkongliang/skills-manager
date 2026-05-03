@@ -113,6 +113,64 @@ fn should_skip_dir(root: &Path, dir: &Path) -> bool {
     dir != root && dir.join("skills").is_dir()
 }
 
+pub fn is_standalone_skills_root(root: &Path) -> bool {
+    if !root.is_dir() {
+        return false;
+    }
+
+    if root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.ends_with("-disabled"))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+
+    let mut visited = std::collections::HashSet::new();
+    if let Ok(canon) = std::fs::canonicalize(root) {
+        visited.insert(canon);
+    }
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.starts_with('.') {
+            continue;
+        }
+
+        if skill_metadata::is_valid_skill_dir(&path) {
+            return true;
+        }
+
+        if name == "skills" || name.ends_with("-disabled") {
+            continue;
+        }
+
+        let canon = match std::fs::canonicalize(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if !visited.insert(canon) {
+            continue;
+        }
+
+        if contains_skill_dir_recursive(&path, &mut visited, 1) {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn read_skills_from_dir(
     dir: &Path,
     enabled: bool,
@@ -223,6 +281,45 @@ fn read_skills_from_dir_recursive(
     }
 }
 
+fn contains_skill_dir_recursive(
+    current: &Path,
+    visited: &mut std::collections::HashSet<PathBuf>,
+    remaining_depth: usize,
+) -> bool {
+    if remaining_depth == 0 {
+        return false;
+    }
+
+    let Ok(entries) = std::fs::read_dir(current) else {
+        return false;
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        if skill_metadata::is_valid_skill_dir(&path) {
+            return true;
+        }
+
+        let canon = match std::fs::canonicalize(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if !visited.insert(canon) {
+            continue;
+        }
+
+        if contains_skill_dir_recursive(&path, visited, remaining_depth - 1) {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Scan a root directory for projects containing any agent's skills directory.
 pub fn scan_projects_in_dir(
     root: &Path,
@@ -239,6 +336,7 @@ fn has_any_agent_skills(dir: &Path, agent_configs: &[AgentSkillConfig]) -> bool 
     agent_configs
         .iter()
         .any(|config| dir.join(&config.relative_skills_dir).is_dir())
+        || is_standalone_skills_root(dir)
 }
 
 fn scan_recursive(
@@ -343,7 +441,10 @@ fn latest_modified_millis(dir: &Path) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_linked_workspace_skills, read_project_skills, AgentSkillConfig};
+    use super::{
+        is_standalone_skills_root, read_linked_workspace_skills, read_project_skills,
+        scan_projects_in_dir, AgentSkillConfig,
+    };
     use std::fs;
     use tempfile::tempdir;
 
@@ -391,6 +492,58 @@ mod tests {
         let skills = read_project_skills(tmp.path(), &configs);
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].relative_path, "research/web-search");
+    }
+
+    #[test]
+    fn scan_projects_includes_standalone_skills_root() {
+        let tmp = tempdir().unwrap();
+        let skills_root = tmp.path().join("workspace").join("skills");
+        let nested_skill = skills_root.join("research").join("web-search");
+        fs::create_dir_all(&nested_skill).unwrap();
+        fs::write(nested_skill.join("SKILL.md"), "# Nested").unwrap();
+
+        let results = scan_projects_in_dir(tmp.path(), 4, &[]);
+
+        assert_eq!(results, vec![skills_root.to_string_lossy().to_string()]);
+    }
+
+    #[test]
+    fn scan_projects_matches_scan_root_when_it_is_a_standalone_skills_root() {
+        let tmp = tempdir().unwrap();
+        let skill = tmp.path().join("example-skill");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "# Example").unwrap();
+
+        let results = scan_projects_in_dir(tmp.path(), 0, &[]);
+
+        assert_eq!(results, vec![tmp.path().to_string_lossy().to_string()]);
+    }
+
+    #[test]
+    fn standalone_skills_root_ignores_hidden_agent_dirs() {
+        let tmp = tempdir().unwrap();
+        let hidden_skill = tmp.path().join(".claude").join("skills").join("example-skill");
+        fs::create_dir_all(&hidden_skill).unwrap();
+        fs::write(hidden_skill.join("SKILL.md"), "# Example").unwrap();
+
+        assert!(!is_standalone_skills_root(tmp.path()));
+    }
+
+    #[test]
+    fn standalone_skills_root_does_not_match_parent_of_skills_dir() {
+        let tmp = tempdir().unwrap();
+        let nested_skill = tmp
+            .path()
+            .join("workspace")
+            .join("skills")
+            .join("example-skill");
+        fs::create_dir_all(&nested_skill).unwrap();
+        fs::write(nested_skill.join("SKILL.md"), "# Example").unwrap();
+
+        assert!(!is_standalone_skills_root(&tmp.path().join("workspace")));
+        assert!(is_standalone_skills_root(
+            &tmp.path().join("workspace").join("skills")
+        ));
     }
 
     #[test]
