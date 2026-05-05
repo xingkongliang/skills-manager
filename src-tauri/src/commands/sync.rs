@@ -4,8 +4,10 @@ use tauri::State;
 
 use crate::core::{
     error::AppError,
-    skill_store::{SkillStore, SkillTargetRecord},
+    scenario_service,
+    skill_store::SkillStore,
     sync_engine, sync_metadata, tool_adapters,
+    tool_service,
 };
 use serde::Serialize;
 
@@ -19,12 +21,7 @@ pub struct SkillToolToggleDto {
 }
 
 fn disabled_tools(store: &SkillStore) -> Vec<String> {
-    store
-        .get_setting("disabled_tools")
-        .ok()
-        .flatten()
-        .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
-        .unwrap_or_default()
+    tool_service::get_disabled_tools(store)
 }
 
 fn sync_skill_to_tool_internal(
@@ -32,50 +29,7 @@ fn sync_skill_to_tool_internal(
     skill_id: &str,
     tool: &str,
 ) -> Result<(), AppError> {
-    let adapter = tool_adapters::find_adapter_with_store(store, tool)
-        .ok_or_else(|| AppError::not_found(format!("Unknown tool: {}", tool)))?;
-
-    if !adapter.is_installed() {
-        return Err(AppError::not_found(format!(
-            "{} is not installed",
-            adapter.display_name
-        )));
-    }
-
-    if disabled_tools(store).contains(&tool.to_string()) {
-        return Err(AppError::invalid_input(format!(
-            "{} is disabled",
-            adapter.display_name
-        )));
-    }
-
-    let skill = store
-        .get_skill_by_id(skill_id)
-        .map_err(AppError::db)?
-        .ok_or_else(|| AppError::not_found("Skill not found"))?;
-
-    let source = PathBuf::from(&skill.central_path);
-    let target = adapter
-        .skills_dir()
-        .join(sync_engine::target_dir_name(&source, &skill.name));
-    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-    let mode = sync_engine::sync_mode_for_tool(tool, configured_mode.as_deref());
-    let actual_mode = sync_engine::sync_skill(&source, &target, mode).map_err(AppError::io)?;
-
-    let now = chrono::Utc::now().timestamp_millis();
-    let target_record = SkillTargetRecord {
-        id: uuid::Uuid::new_v4().to_string(),
-        skill_id: skill_id.to_string(),
-        tool: tool.to_string(),
-        target_path: target.to_string_lossy().to_string(),
-        mode: actual_mode.as_str().to_string(),
-        status: "ok".to_string(),
-        synced_at: Some(now),
-        last_error: None,
-    };
-
-    store.insert_target(&target_record).map_err(AppError::db)?;
-    Ok(())
+    scenario_service::sync_single_skill_to_tool(store, skill_id, tool)
 }
 
 #[tauri::command]

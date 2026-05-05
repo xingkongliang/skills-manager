@@ -127,10 +127,52 @@ npm install
 npm run tauri:dev
 ```
 
+### CLI
+
+The repository now includes an agent-friendly CLI built on the same Rust shared core used by the desktop app. Repository bootstrap, tool resolution, scenario sync/apply logic, and metadata reindexing now live in reusable core modules instead of being reimplemented separately for CLI automation.
+
+```bash
+# Show the active repository paths and counts
+npm run cli -- repo status
+
+# List skills / inspect one skill
+npm run cli -- skills list
+npm run cli -- skills show db
+
+# Preview or apply a scenario using the shared Rust core
+npm run cli -- scenarios list
+npm run cli -- scenarios preview Default
+npm run cli -- scenarios apply Default
+
+# Export one skill to another agent workspace
+npm run cli -- skills export db --dest ~/.claude/skills/db
+
+# Inspect or sync the git-backed skills repo
+npm run cli -- git status
+npm run cli -- git pull
+npm run cli -- git commit -m "chore: update skills"
+```
+
+Available command groups:
+- `repo` — inspect or change the configured base directory
+- `tools` — list detected tool targets and paths
+- `skills` — list, inspect, and export skills
+- `scenarios` — list scenarios, preview sync targets, or apply one to default tool paths
+- `git` — operate on the git-backed `skills/` repository (`clone`, `pull`, `push`, `commit`, `versions`, `restore`)
+
+Extra flags:
+- `--skills-root <path>` — operate on a cloned/exported skills repo directly instead of the local app default
+- `--json` — machine-readable output for scripts/agents
+
+```bash
+npm run -s cli -- --skills-root /path/to/my-skills --json skills list
+```
+
 ### Build
 
 ```bash
 npm run tauri:build
+npm run cli:build
 ```
 
 ## Troubleshooting

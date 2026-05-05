@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
-mod commands;
-mod core;
+pub mod commands;
+pub mod core;
 
 /// Shared flag: when true, CloseRequested should NOT be prevented.
 pub static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -334,17 +334,8 @@ pub fn quit_app(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Ensure central repo exists
-    core::central_repo::ensure_central_repo().expect("Failed to create central repo");
-
-    // Initialize database
-    let db_path = core::central_repo::db_path();
-    let store = Arc::new(
-        core::skill_store::SkillStore::new(&db_path).expect("Failed to initialize database"),
-    );
-    commands::tools::migrate_legacy_tool_keys(&store).expect("Failed to migrate legacy tool keys");
+    let store = core::app_state::initialize_store().expect("Failed to initialize app state");
     let store_for_setup = store.clone();
-    initialize_startup_scenario(&store).expect("Failed to initialize startup scenario");
 
     let cancel_registry = Arc::new(core::install_cancel::InstallCancelRegistry::new());
 
@@ -494,48 +485,3 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-fn initialize_startup_scenario(store: &Arc<core::skill_store::SkillStore>) -> Result<(), String> {
-    let mut scenarios = store.get_all_scenarios().map_err(|e| e.to_string())?;
-    if scenarios.is_empty() {
-        let now = chrono::Utc::now().timestamp_millis();
-        let default_scenario = core::skill_store::ScenarioRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: "Default".to_string(),
-            description: Some("Default startup scenario".to_string()),
-            icon: None,
-            sort_order: 0,
-            created_at: now,
-            updated_at: now,
-        };
-        store
-            .insert_scenario(&default_scenario)
-            .map_err(|e| e.to_string())?;
-        scenarios.push(default_scenario);
-    }
-
-    let current_active = store.get_active_scenario_id().map_err(|e| e.to_string())?;
-    let preferred_default = store.get_setting("default_scenario").ok().flatten();
-
-    let desired_active = preferred_default
-        .filter(|id| scenarios.iter().any(|scenario| scenario.id == *id))
-        .or_else(|| {
-            current_active
-                .clone()
-                .filter(|id| scenarios.iter().any(|scenario| scenario.id == *id))
-        })
-        .unwrap_or_else(|| scenarios[0].id.clone());
-
-    if current_active.as_deref() != Some(desired_active.as_str()) {
-        if let Some(old_active) = current_active.as_deref() {
-            commands::scenarios::unsync_scenario_skills(store, old_active)
-                .map_err(|e| e.to_string())?;
-        }
-
-        store
-            .set_active_scenario(&desired_active)
-            .map_err(|e| e.to_string())?;
-    }
-
-    commands::scenarios::sync_scenario_skills(store, &desired_active).map_err(|e| e.to_string())?;
-    Ok(())
-}

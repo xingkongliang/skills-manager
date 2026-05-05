@@ -12,7 +12,9 @@
     "release:prepare": "node scripts/prepare-release.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "cli": "node scripts/run-rust-cli.mjs cli",
+    "cli:build": "node scripts/run-rust-cli.mjs build"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
