@@ -1,15 +1,19 @@
 use serde::Serialize;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 
 use crate::core::error::AppError;
-use crate::core::skill_store::{SkillStore, SkillTargetRecord};
+use crate::core::scenario_service;
+use crate::core::scenario_service::sync_scenario_skills;
+use crate::core::skill_store::SkillStore;
 use crate::core::sync_engine;
 use crate::core::tool_adapters::{self, CustomToolDef};
-
-use super::scenarios::{enabled_installed_adapters_for_scenario_skill, sync_scenario_skills};
+use crate::core::tool_service::{
+    self, ToolInfo, get_custom_tool_paths, get_custom_tools, get_disabled_tools,
+    normalize_project_relative_skills_dir_input, normalize_skills_dir_input, set_custom_tool_paths,
+    set_custom_tools, set_disabled_tools,
+};
 
 #[derive(Debug, Serialize)]
 pub struct ToolInfoDto {
@@ -23,157 +27,9 @@ pub struct ToolInfoDto {
     pub project_relative_skills_dir: Option<String>,
 }
 
-fn get_disabled_tools(store: &SkillStore) -> Vec<String> {
-    store
-        .get_setting("disabled_tools")
-        .ok()
-        .flatten()
-        .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
-        .unwrap_or_default()
-}
-
-fn set_disabled_tools(store: &SkillStore, disabled: &[String]) -> Result<(), AppError> {
-    let json = serde_json::to_string(disabled)
-        .map_err(|e| AppError::internal(format!("Failed to serialize: {e}")))?;
-    store
-        .set_setting("disabled_tools", &json)
-        .map_err(AppError::db)
-}
-
-fn get_custom_tool_paths(store: &SkillStore) -> HashMap<String, String> {
-    tool_adapters::custom_tool_paths(store)
-}
-
-fn set_custom_tool_paths(
-    store: &SkillStore,
-    paths: &HashMap<String, String>,
-) -> Result<(), AppError> {
-    let json = serde_json::to_string(paths)
-        .map_err(|e| AppError::internal(format!("Failed to serialize: {e}")))?;
-    store
-        .set_setting("custom_tool_paths", &json)
-        .map_err(AppError::db)
-}
-
-fn get_custom_tools(store: &SkillStore) -> Vec<CustomToolDef> {
-    tool_adapters::custom_tools(store)
-}
-
-fn set_custom_tools(store: &SkillStore, custom_tools: &[CustomToolDef]) -> Result<(), AppError> {
-    let json = serde_json::to_string(custom_tools)
-        .map_err(|e| AppError::internal(format!("Failed to serialize: {e}")))?;
-    store
-        .set_setting("custom_tools", &json)
-        .map_err(AppError::db)
-}
-
-fn normalize_skills_dir_input(path: &str) -> Result<String, AppError> {
-    let raw = path.trim();
-    if raw.is_empty() {
-        return Err(AppError::invalid_input("Path is required"));
-    }
-
-    let expanded = if raw == "~" {
-        dirs::home_dir()
-            .ok_or_else(|| AppError::internal("Cannot determine home directory"))?
-            .to_string_lossy()
-            .to_string()
-    } else if let Some(rest) = raw.strip_prefix("~/") {
-        dirs::home_dir()
-            .ok_or_else(|| AppError::internal("Cannot determine home directory"))?
-            .join(rest)
-            .to_string_lossy()
-            .to_string()
-    } else if !std::path::Path::new(raw).is_absolute() {
-        return Err(AppError::invalid_input(
-            "Skills path must be absolute (or start with ~/)",
-        ));
-    } else {
-        raw.to_string()
-    };
-
-    Ok(expanded)
-}
-
-fn normalize_project_relative_skills_dir_input(path: &str) -> Result<Option<String>, AppError> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    let candidate = std::path::Path::new(trimmed);
-    if candidate.is_absolute() {
-        return Err(AppError::invalid_input(
-            "Project skills path must be relative to the project root",
-        ));
-    }
-    if candidate
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err(AppError::invalid_input(
-            "Project skills path cannot contain parent directory segments",
-        ));
-    }
-    Ok(Some(trimmed.trim_matches('/').to_string()))
-}
-
 /// Sync active scenario skills to a single tool.
 fn sync_active_scenario_to_tool(store: &SkillStore, tool_key: &str) {
-    let active_id = match store.get_active_scenario_id() {
-        Ok(Some(id)) => id,
-        _ => return,
-    };
-    let skills = match store.get_skills_for_scenario(&active_id) {
-        Ok(s) => s,
-        _ => return,
-    };
-    let adapter = match tool_adapters::find_adapter_with_store(store, tool_key) {
-        Some(a) if a.is_installed() => a,
-        _ => return,
-    };
-    let configured_mode = store.get_setting("sync_mode").ok().flatten();
-    for skill in &skills {
-        let allowed_adapters =
-            match enabled_installed_adapters_for_scenario_skill(store, &active_id, &skill.id) {
-                Ok(adapters) => adapters,
-                Err(_) => continue,
-            };
-        if !allowed_adapters
-            .iter()
-            .any(|adapter| adapter.key == tool_key)
-        {
-            continue;
-        }
-        let source = PathBuf::from(&skill.central_path);
-        let target = adapter
-            .skills_dir()
-            .join(sync_engine::target_dir_name(&source, &skill.name));
-        let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
-        match sync_engine::sync_skill(&source, &target, mode) {
-            Ok(actual_mode) => {
-                let now = chrono::Utc::now().timestamp_millis();
-                let target_record = SkillTargetRecord {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    skill_id: skill.id.clone(),
-                    tool: adapter.key.clone(),
-                    target_path: target.to_string_lossy().to_string(),
-                    mode: actual_mode.as_str().to_string(),
-                    status: "ok".to_string(),
-                    synced_at: Some(now),
-                    last_error: None,
-                };
-                store.insert_target(&target_record).ok();
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to sync skill {} to {} for tool {}: {e}",
-                    skill.id,
-                    target.display(),
-                    adapter.key
-                );
-            }
-        }
-    }
+    scenario_service::sync_active_scenario_to_tool(store, tool_key)
 }
 
 /// Remove all synced skill files and target records for a given tool.
@@ -200,23 +56,17 @@ pub async fn get_tool_status(
 ) -> Result<Vec<ToolInfoDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let adapters = tool_adapters::all_tool_adapters(&store);
-        let disabled = get_disabled_tools(&store);
-        let result: Vec<ToolInfoDto> = adapters
+        let result: Vec<ToolInfoDto> = tool_service::list_tool_info(&store)
             .into_iter()
-            .map(|a| ToolInfoDto {
-                key: a.key.clone(),
-                display_name: a.display_name.clone(),
-                installed: a.is_installed(),
-                skills_dir: a.skills_dir().to_string_lossy().to_string(),
-                enabled: !disabled.contains(&a.key),
-                is_custom: a.is_custom,
-                has_path_override: a.has_path_override(),
-                project_relative_skills_dir: if a.relative_skills_dir.is_empty() {
-                    None
-                } else {
-                    Some(a.relative_skills_dir.clone())
-                },
+            .map(|info: ToolInfo| ToolInfoDto {
+                key: info.key,
+                display_name: info.display_name,
+                installed: info.installed,
+                skills_dir: info.skills_dir,
+                enabled: info.enabled,
+                is_custom: info.is_custom,
+                has_path_override: info.has_path_override,
+                project_relative_skills_dir: info.project_relative_skills_dir,
             })
             .collect();
         Ok(result)
@@ -438,97 +288,7 @@ pub async fn remove_custom_tool(
 }
 
 pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {
-    const OLD_KEY: &str = "clawdbot";
-    const NEW_KEY: &str = "openclaw";
-
-    let mut changed = false;
-
-    let mut disabled = get_disabled_tools(store);
-    if disabled.iter().any(|k| k == OLD_KEY) {
-        for key in &mut disabled {
-            if key == OLD_KEY {
-                *key = NEW_KEY.to_string();
-            }
-        }
-        disabled.sort();
-        disabled.dedup();
-        set_disabled_tools(store, &disabled)?;
-        changed = true;
-    }
-
-    let mut custom_paths = get_custom_tool_paths(store);
-    if let Some(old_path) = custom_paths.remove(OLD_KEY) {
-        custom_paths.entry(NEW_KEY.to_string()).or_insert(old_path);
-        set_custom_tool_paths(store, &custom_paths)?;
-        changed = true;
-    }
-
-    // Backward compatibility: normalize any persisted "~" path forms.
-    let mut normalized_path_changed = false;
-    for value in custom_paths.values_mut() {
-        if let Ok(normalized) = normalize_skills_dir_input(value) {
-            if *value != normalized {
-                *value = normalized;
-                normalized_path_changed = true;
-            }
-        }
-    }
-    if normalized_path_changed {
-        set_custom_tool_paths(store, &custom_paths)?;
-        changed = true;
-    }
-
-    let custom_tools = get_custom_tools(store);
-    let mut custom_tools_changed = false;
-    let custom_tools = if custom_tools.iter().any(|c| c.key == OLD_KEY) {
-        let has_new = custom_tools.iter().any(|c| c.key == NEW_KEY);
-        let mut migrated = Vec::with_capacity(custom_tools.len());
-        let mut seen_keys = std::collections::HashSet::new();
-        for mut custom in custom_tools {
-            if custom.key == OLD_KEY {
-                if has_new {
-                    continue;
-                }
-                custom.key = NEW_KEY.to_string();
-            }
-            if seen_keys.insert(custom.key.clone()) {
-                migrated.push(custom);
-            }
-        }
-        custom_tools_changed = true;
-        changed = true;
-        migrated
-    } else {
-        custom_tools
-    };
-
-    let mut normalized_customs = custom_tools;
-    for custom in &mut normalized_customs {
-        if let Ok(normalized) = normalize_skills_dir_input(&custom.skills_dir) {
-            if custom.skills_dir != normalized {
-                custom.skills_dir = normalized;
-                custom_tools_changed = true;
-            }
-        }
-    }
-    if custom_tools_changed {
-        set_custom_tools(store, &normalized_customs)?;
-    }
-
-    if changed
-        || store
-            .has_tool_key_references(OLD_KEY)
-            .map_err(AppError::db)?
-    {
-        // Migrate historical per-tool records in DB tables only when needed.
-        store
-            .remap_tool_key_references(OLD_KEY, NEW_KEY)
-            .map_err(AppError::db)?;
-    }
-    if changed {
-        log::info!("Migrated legacy tool key {OLD_KEY} -> {NEW_KEY}");
-    }
-    Ok(())
+    tool_service::migrate_legacy_tool_keys(store)
 }
 
 #[cfg(test)]

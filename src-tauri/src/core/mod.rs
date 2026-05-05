@@ -1,3 +1,4 @@
+pub mod app_state;
 pub mod central_repo;
 pub mod content_hash;
 pub mod crypto;
@@ -11,6 +12,7 @@ pub mod migrations;
 pub mod project_scanner;
 pub mod repo_lock;
 pub mod scanner;
+pub mod scenario_service;
 pub mod skill_metadata;
 pub mod skill_store;
 pub mod skillsmp_api;
@@ -18,3 +20,4 @@ pub mod skillssh_api;
 pub mod sync_engine;
 pub mod sync_metadata;
 pub mod tool_adapters;
+pub mod tool_service;

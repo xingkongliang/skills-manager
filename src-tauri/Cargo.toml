@@ -6,6 +6,7 @@ authors = ["tianliang"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.77.2"
+default-run = "skills-manager"
 
 [lib]
 name = "app_lib"
@@ -49,3 +50,4 @@ aes-gcm = "0.10"
 rand = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }
 notify = "6.1.1"
+clap = { version = "4.5", features = ["derive"] }
