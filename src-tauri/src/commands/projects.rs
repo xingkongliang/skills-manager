@@ -398,18 +398,27 @@ fn cleanup_empty_dirs_up_to(start: &Path, root: &Path) {
     }
 }
 
-fn remove_symlink_entry(path: &Path) -> Result<(), AppError> {
-    let metadata = match std::fs::symlink_metadata(path) {
+fn remove_duplicate_symlink_entry(kept_path: &Path, duplicate_path: &Path) -> Result<(), AppError> {
+    let metadata = match std::fs::symlink_metadata(duplicate_path) {
         Ok(m) => m,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(AppError::io(err)),
     };
     if !metadata.file_type().is_symlink() {
         return Err(AppError::invalid_input(
-            "Duplicate skill entry is not a symlink — resolve manually",
+            "Duplicate skill entry is not a symlink - resolve manually",
         ));
     }
-    sync_engine::remove_target(path).map_err(AppError::io)
+
+    let kept_canonical = std::fs::canonicalize(kept_path).map_err(AppError::io)?;
+    let duplicate_canonical = std::fs::canonicalize(duplicate_path).map_err(AppError::io)?;
+    if kept_canonical != duplicate_canonical {
+        return Err(AppError::invalid_input(
+            "Duplicate skill entries point to different targets - resolve manually",
+        ));
+    }
+
+    sync_engine::remove_target(duplicate_path).map_err(AppError::io)
 }
 
 fn set_project_skill_enabled_state(
@@ -428,7 +437,7 @@ fn set_project_skill_enabled_state(
             ensure_dir_within_root(&enabled_path, skills_dir)?;
             if disabled_path.exists() {
                 ensure_dir_within_root(&disabled_path, disabled_dir)?;
-                remove_symlink_entry(&disabled_path)?;
+                remove_duplicate_symlink_entry(&enabled_path, &disabled_path)?;
                 if let Some(parent) = disabled_path.parent() {
                     cleanup_empty_dirs_up_to(parent, disabled_dir);
                 }
@@ -461,7 +470,7 @@ fn set_project_skill_enabled_state(
         ensure_dir_within_root(&disabled_path, disabled_dir)?;
         if enabled_path.exists() {
             ensure_dir_within_root(&enabled_path, skills_dir)?;
-            remove_symlink_entry(&enabled_path)?;
+            remove_duplicate_symlink_entry(&disabled_path, &enabled_path)?;
         }
         return Ok(());
     }
@@ -630,8 +639,7 @@ pub async fn add_project(
     path: String,
 ) -> Result<ProjectDto, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || add_project_impl(&store, path))
-    .await?
+    tauri::async_runtime::spawn_blocking(move || add_project_impl(&store, path)).await?
 }
 
 #[tauri::command]
@@ -1290,11 +1298,14 @@ mod tests {
         fs::create_dir_all(&skill).unwrap();
         fs::write(skill.join("SKILL.md"), "# Example").unwrap();
 
-        let dto = add_project_impl(&store, skills_root_tmp.path().to_string_lossy().to_string())
-            .unwrap();
+        let dto =
+            add_project_impl(&store, skills_root_tmp.path().to_string_lossy().to_string()).unwrap();
 
         assert_eq!(dto.workspace_type, "linked");
-        assert_eq!(dto.path, skills_root_tmp.path().to_string_lossy().to_string());
+        assert_eq!(
+            dto.path,
+            skills_root_tmp.path().to_string_lossy().to_string()
+        );
         assert!(!skills_root_tmp.path().join(".claude").exists());
 
         let mut disabled_root = skills_root_tmp.path().to_path_buf();
@@ -1319,16 +1330,18 @@ mod tests {
         fs::create_dir_all(&existing_skill).unwrap();
         fs::write(existing_skill.join("SKILL.md"), "# Example").unwrap();
 
-        let dto = add_project_impl(&store, project_root.path().to_string_lossy().to_string())
-            .unwrap();
+        let dto =
+            add_project_impl(&store, project_root.path().to_string_lossy().to_string()).unwrap();
 
         assert_eq!(dto.workspace_type, "project");
         assert!(project_root.path().join(".claude").join("skills").is_dir());
-        assert!(project_root
-            .path()
-            .join(".claude")
-            .join("skills-disabled")
-            .is_dir());
+        assert!(
+            project_root
+                .path()
+                .join(".claude")
+                .join("skills-disabled")
+                .is_dir()
+        );
     }
 
     #[cfg(unix)]
@@ -1427,6 +1440,88 @@ mod tests {
         assert!(!disabled_root.join(relative_path).exists());
         assert!(central_skill.exists());
         assert!(central_skill.join("SKILL.md").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_project_skill_enabled_state_enabling_rejects_duplicate_symlink_to_different_target() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempdir().unwrap();
+        let enabled_target = tmp.path().join("central").join("enabled-skill");
+        let disabled_target = tmp.path().join("central").join("disabled-skill");
+        let skills_root = tmp.path().join("skills");
+        let disabled_root = tmp.path().join("skills-disabled");
+        let relative_path = "understand-diff";
+
+        fs::create_dir_all(&enabled_target).unwrap();
+        fs::write(
+            enabled_target.join("SKILL.md"),
+            "---\nname: enabled-skill\n---\n",
+        )
+        .unwrap();
+        fs::create_dir_all(&disabled_target).unwrap();
+        fs::write(
+            disabled_target.join("SKILL.md"),
+            "---\nname: disabled-skill\n---\n",
+        )
+        .unwrap();
+        fs::create_dir_all(&skills_root).unwrap();
+        fs::create_dir_all(&disabled_root).unwrap();
+
+        symlink(&enabled_target, skills_root.join(relative_path)).unwrap();
+        symlink(&disabled_target, disabled_root.join(relative_path)).unwrap();
+
+        let err =
+            set_project_skill_enabled_state(&skills_root, &disabled_root, relative_path, true)
+                .unwrap_err();
+
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert!(skills_root.join(relative_path).exists());
+        assert!(disabled_root.join(relative_path).exists());
+        assert!(enabled_target.join("SKILL.md").is_file());
+        assert!(disabled_target.join("SKILL.md").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_project_skill_enabled_state_disabling_rejects_duplicate_symlink_to_different_target() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempdir().unwrap();
+        let enabled_target = tmp.path().join("central").join("enabled-skill");
+        let disabled_target = tmp.path().join("central").join("disabled-skill");
+        let skills_root = tmp.path().join("skills");
+        let disabled_root = tmp.path().join("skills-disabled");
+        let relative_path = "understand-diff";
+
+        fs::create_dir_all(&enabled_target).unwrap();
+        fs::write(
+            enabled_target.join("SKILL.md"),
+            "---\nname: enabled-skill\n---\n",
+        )
+        .unwrap();
+        fs::create_dir_all(&disabled_target).unwrap();
+        fs::write(
+            disabled_target.join("SKILL.md"),
+            "---\nname: disabled-skill\n---\n",
+        )
+        .unwrap();
+        fs::create_dir_all(&skills_root).unwrap();
+        fs::create_dir_all(&disabled_root).unwrap();
+
+        symlink(&enabled_target, skills_root.join(relative_path)).unwrap();
+        symlink(&disabled_target, disabled_root.join(relative_path)).unwrap();
+
+        let err =
+            set_project_skill_enabled_state(&skills_root, &disabled_root, relative_path, false)
+                .unwrap_err();
+
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert!(skills_root.join(relative_path).exists());
+        assert!(disabled_root.join(relative_path).exists());
+        assert!(enabled_target.join("SKILL.md").is_file());
+        assert!(disabled_target.join("SKILL.md").is_file());
     }
 
     #[test]
