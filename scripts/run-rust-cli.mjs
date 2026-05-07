@@ -41,7 +41,9 @@ const cargoArgs =
     ? ['run', '--quiet', ...baseArgs, '--', ...extraArgs]
     : mode === 'build'
       ? ['build', ...baseArgs]
-      : null;
+      : mode === 'install'
+        ? ['install', '--path', 'src-tauri', '--bin', 'skills-manager-cli', '--locked', '--force']
+        : null;
 
 if (!cargoArgs) {
   console.error(`unknown mode: ${mode}`);

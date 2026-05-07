@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -148,6 +149,51 @@ pub fn skills_dir() -> PathBuf {
     base_dir().join("skills")
 }
 
+/// Derive a stable per-skills-root state directory under the user's default base.
+///
+/// CLI's `--skills-root` lets agents operate on an external skills checkout
+/// (e.g. a freshly cloned `my-skills`) without touching the app's default repo.
+/// The manager still needs a home for its DB, scenarios, cache, and logs — but
+/// putting that state inside the external checkout would pollute the user's
+/// repo, and putting it in the parent directory would silently litter wherever
+/// the user happened to clone. Instead, namespace the state under
+/// `<default-base>/external/<sanitized-name>-<short-hash>/`, keyed by the
+/// canonical path of the skills root so repeat invocations reuse the same DB.
+pub fn external_base_dir(skills_root: &Path) -> PathBuf {
+    let canonical = skills_root
+        .canonicalize()
+        .unwrap_or_else(|_| skills_root.to_path_buf());
+    let name = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("external");
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.to_string_lossy().as_bytes());
+    let digest = hasher.finalize();
+    let short_hash: String = digest.iter().take(5).map(|b| format!("{:02x}", b)).collect();
+    default_base_dir()
+        .join("external")
+        .join(format!("{}-{}", sanitize_dir_name(name), short_hash))
+}
+
+fn sanitize_dir_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "external".to_string()
+    } else {
+        cleaned
+    }
+}
+
 pub fn scenarios_dir() -> PathBuf {
     base_dir().join("scenarios")
 }
@@ -289,4 +335,50 @@ pub fn ensure_central_repo() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_base_dir_lives_under_default_base_external() {
+        let dir = external_base_dir(Path::new("/tmp/some/my-skills"));
+        let prefix = default_base_dir().join("external");
+        assert!(
+            dir.starts_with(&prefix),
+            "expected {} to start with {}",
+            dir.display(),
+            prefix.display()
+        );
+    }
+
+    #[test]
+    fn external_base_dir_is_stable_for_same_path() {
+        let a = external_base_dir(Path::new("/tmp/some/my-skills"));
+        let b = external_base_dir(Path::new("/tmp/some/my-skills"));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn external_base_dir_differs_for_different_paths() {
+        let a = external_base_dir(Path::new("/tmp/one/my-skills"));
+        let b = external_base_dir(Path::new("/tmp/two/my-skills"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn external_base_dir_does_not_pollute_skills_root_or_its_parent() {
+        let skills_root = Path::new("/tmp/external-test/my-skills");
+        let dir = external_base_dir(skills_root);
+        assert!(!dir.starts_with(skills_root));
+        assert!(!dir.starts_with(skills_root.parent().unwrap()));
+    }
+
+    #[test]
+    fn sanitize_dir_name_replaces_unsafe_characters() {
+        assert_eq!(sanitize_dir_name("my skills"), "my-skills");
+        assert_eq!(sanitize_dir_name("a/b\\c:d"), "a-b-c-d");
+        assert_eq!(sanitize_dir_name(""), "external");
+    }
 }

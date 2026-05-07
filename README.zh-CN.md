@@ -144,12 +144,28 @@ npm run cli -- git commit -m "chore: update skills"
 - `git`：操作 git 管理的 `skills/` 仓库（`clone`、`pull`、`push`、`commit`、`versions`、`restore`）
 
 额外参数：
-- `--skills-root <path>`：直接针对某个已 clone / 已导出的 skills repo 操作，而不是本机 app 默认目录
+- `--skills-root <path>`：直接针对某个已 clone / 已导出的 skills repo 操作，而不是本机 app 默认目录。manager 的状态（DB、scenarios、cache、logs）会落在 `~/.skills-manager/external/<name>-<hash>/`，按 skills root 的规范化路径分目录隔离，外部仓库本身保持干净。
 - `--json`：给脚本 / agent 使用的机器可读输出
 
 ```bash
 npm run -s cli -- --skills-root /path/to/my-skills --json skills list
 ```
+
+#### 把 CLI 二进制安装到 PATH
+
+如果 agent / 脚本直接调用 `skills-manager-cli`（而不是 `npm run`），需要先把二进制放到 PATH 上：
+
+```bash
+npm run cli:install
+# 等价于：
+# cargo install --path src-tauri --bin skills-manager-cli --locked --force
+```
+
+二进制会装到 `~/.cargo/bin/skills-manager-cli`。代码更新后再跑一次即可刷新。
+
+#### 与桌面应用并发使用
+
+CLI 和桌面应用共享同一个 SQLite 数据库。SQLite 会串行化写入，所以数据是安全的，但运行中的应用不会自动刷新它的内存缓存 —— 在 CLI 跑完 `scenarios apply`、`git pull` 等会改状态的命令后，重启应用或手动刷新一次。
 
 ### 构建
 

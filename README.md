@@ -161,12 +161,28 @@ Available command groups:
 - `git` — operate on the git-backed `skills/` repository (`clone`, `pull`, `push`, `commit`, `versions`, `restore`)
 
 Extra flags:
-- `--skills-root <path>` — operate on a cloned/exported skills repo directly instead of the local app default
+- `--skills-root <path>` — operate on a cloned/exported skills repo directly instead of the local app default. The manager's state (DB, scenarios, cache, logs) lives in `~/.skills-manager/external/<name>-<hash>/`, namespaced by the canonical path of the skills root, so the external checkout itself stays clean.
 - `--json` — machine-readable output for scripts/agents
 
 ```bash
 npm run -s cli -- --skills-root /path/to/my-skills --json skills list
 ```
+
+#### Install the binary on PATH
+
+Agents and scripts that invoke `skills-manager-cli` directly (without `npm run`) need the binary on PATH. Install it with:
+
+```bash
+npm run cli:install
+# equivalent to:
+# cargo install --path src-tauri --bin skills-manager-cli --locked --force
+```
+
+This drops the binary at `~/.cargo/bin/skills-manager-cli`. Re-run after pulling updates to refresh it.
+
+#### Concurrent use with the desktop app
+
+The CLI and desktop app share the same SQLite database. SQLite serializes writes safely, but the running app does not auto-refresh its in-memory caches when the CLI mutates state — restart or trigger a manual refresh in the app after `scenarios apply`, `git pull`, or other CLI write operations.
 
 ### Build
 

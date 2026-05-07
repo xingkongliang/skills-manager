@@ -151,10 +151,7 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if let Some(skills_root) = &cli.skills_root {
-        let base = skills_root
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("--skills-root requires a non-root path"))?
-            .to_path_buf();
+        let base = central_repo::external_base_dir(skills_root);
         central_repo::set_runtime_base_dir_override(Some(base));
         central_repo::set_runtime_skills_dir_override(Some(skills_root.clone()));
     }
