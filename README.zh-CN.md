@@ -18,7 +18,7 @@
 
 | 我的 Skills | 项目 Skills |
 |:-----------:|:----------:|
-| <img src="assets/CleanShot_20260312_234539@2x.png" width="400" alt="我的 Skills" /> | <img src="assets/CleanShot_20260312_234613@2x.png" width="400" alt="项目 Skills" /> |
+| <img src="assets/CleanShot_20260419_003504@2x.png" width="400" alt="我的 Skills" /> | <img src="assets/CleanShot_20260419_003526@2x.png" width="400" alt="项目 Skills" /> |
 
 ## 功能
 
