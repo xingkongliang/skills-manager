@@ -10,7 +10,10 @@ pub static QUITTING: AtomicBool = AtomicBool::new(false);
 static TRAY_SCENARIO_SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const MAIN_TRAY_ID: &str = "main-tray";
 const TRAY_SCENARIO_ITEM_PREFIX: &str = "tray-scenario:";
+#[cfg(target_os = "macos")]
 const CUSTOM_TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray/tray-icon-32.png");
+#[cfg(not(target_os = "macos"))]
+const CUSTOM_TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray/tray-icon-color-32.png");
 
 fn parse_bool_setting(value: Option<String>, default: bool) -> bool {
     match value.as_deref().map(str::trim).map(str::to_ascii_lowercase) {

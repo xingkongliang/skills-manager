@@ -1,15 +1,21 @@
-"""Generate macOS menu-bar tray icons from the bare S artwork.
+"""Generate tray icons for macOS menu bar and Windows/Linux notification area.
 
-macOS treats menu-bar tray icons as template images: a transparent PNG with
-solid black pixels; the system inverts/tints for dark mode and click states.
-We take the alpha channel of the bare S and stamp it as solid black at each
-required size with a small inset so glyphs don't crowd the menu bar.
+macOS variant (tray-icon-{N}.png): the bare S silhouette stamped as solid
+white on a transparent background. macOS menu bars are dark, so a bright
+white glyph is visible without template inversion.
+
+Windows/Linux variant (tray-icon-color-{N}.png): the full colored app icon
+resampled to tray sizes. Windows taskbars don't auto-tint, and a single-tone
+silhouette is invisible against either light or dark taskbars, so we use the
+branded artwork which has its own contrast in both themes.
 
 Inputs:
     src-tauri/icons/icon-source.png   bare artwork on transparent background
+    src-tauri/icons/icon.png          full colored app icon (rounded square)
 
 Outputs:
-    src-tauri/icons/tray/tray-icon-{16,20,24,32}.png
+    src-tauri/icons/tray/tray-icon-{16,20,24,32}.png         (macOS)
+    src-tauri/icons/tray/tray-icon-color-{16,20,24,32}.png   (Windows/Linux)
 """
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ from PIL import Image
 
 REPO = Path(__file__).resolve().parent.parent
 SOURCE = REPO / "src-tauri" / "icons" / "icon-source.png"
+COLOR_SOURCE = REPO / "src-tauri" / "icons" / "icon.png"
 TRAY_DIR = REPO / "src-tauri" / "icons" / "tray"
 SIZES = (16, 20, 24, 32)
 INSET = 0.0         # fraction of canvas left blank around the glyph
@@ -58,16 +65,29 @@ def render_at(silh: Image.Image, size: int) -> Image.Image:
     return canvas.resize((size, size), Image.LANCZOS)
 
 
+def render_color(src: Image.Image, size: int) -> Image.Image:
+    """Downscale the full-color app icon to a tray size with SSAA."""
+    big = size * SSAA
+    scaled = src.resize((big, big), Image.LANCZOS)
+    return scaled.resize((size, size), Image.LANCZOS)
+
+
 def main() -> None:
     if not SOURCE.exists():
         raise SystemExit(f"missing source: {SOURCE}")
+    if not COLOR_SOURCE.exists():
+        raise SystemExit(f"missing color source: {COLOR_SOURCE}")
     src = Image.open(SOURCE).convert("RGBA")
+    color_src = Image.open(COLOR_SOURCE).convert("RGBA")
     silh = silhouette(src)
     TRAY_DIR.mkdir(parents=True, exist_ok=True)
     for size in SIZES:
         out = TRAY_DIR / f"tray-icon-{size}.png"
         render_at(silh, size).save(out, format="PNG", optimize=True)
         print(f"wrote {out}  size={size}")
+        color_out = TRAY_DIR / f"tray-icon-color-{size}.png"
+        render_color(color_src, size).save(color_out, format="PNG", optimize=True)
+        print(f"wrote {color_out}  size={size}")
 
 
 if __name__ == "__main__":
