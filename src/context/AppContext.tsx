@@ -134,10 +134,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshProjects();
   }, [setTranslatedError, refreshProjects]);
 
+  const refreshAppDataLockRef = useRef(false);
   const refreshAppData = useCallback(async () => {
-    setLoading(true);
-    await Promise.all([refreshPresets(), refreshTools(), refreshManagedSkills(), refreshProjects()]);
-    setLoading(false);
+    if (refreshAppDataLockRef.current) return;
+    refreshAppDataLockRef.current = true;
+    try {
+      setLoading(true);
+      await Promise.all([refreshPresets(), refreshTools(), refreshManagedSkills(), refreshProjects()]);
+      setLoading(false);
+    } finally {
+      refreshAppDataLockRef.current = false;
+    }
   }, [refreshManagedSkills, refreshProjects, refreshPresets, refreshTools]);
 
   const setViewedPresetId = useCallback((id: string) => {
@@ -218,16 +225,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let isRefreshing = false;
 
     const unlistenPromise = listen("app-files-changed", () => {
+      if (isRefreshing) return;
       if (refreshTimer) {
         clearTimeout(refreshTimer);
       }
       refreshTimer = setTimeout(() => {
-        refreshAppData().catch((error) => {
-          console.error("Failed to refresh after filesystem change:", error);
-        });
-      }, 500);
+        isRefreshing = true;
+        refreshAppData()
+          .catch((error) => {
+            console.error("Failed to refresh after filesystem change:", error);
+          })
+          .finally(() => {
+            isRefreshing = false;
+          });
+      }, 5000);
     });
 
     return () => {
