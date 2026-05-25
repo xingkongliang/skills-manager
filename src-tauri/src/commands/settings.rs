@@ -3,7 +3,9 @@ use std::process::Command;
 use std::sync::Arc;
 use tauri::{Manager, State};
 
-use crate::core::{central_repo, error::AppError, log_sanitize, skill_store::SkillStore, skillssh_api};
+use crate::core::{
+    central_repo, error::AppError, log_sanitize, skill_store::SkillStore, skillssh_api,
+};
 
 #[derive(serde::Serialize)]
 pub struct AppUpdateInfo {
@@ -33,11 +35,7 @@ pub async fn get_settings(
 /// log file layout.
 #[tauri::command]
 pub fn log_startup_event(label: String, elapsed_ms: u64) {
-    let sanitized: String = label
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(64)
-        .collect();
+    let sanitized: String = label.chars().filter(|c| !c.is_control()).take(64).collect();
     let display = if sanitized.is_empty() {
         "(empty)".to_string()
     } else {
@@ -444,7 +442,10 @@ fn collapse_consecutive_repeats(text: &str) -> String {
         let count = j - i;
         out.push(lines[i].to_string());
         if count >= 3 {
-            out.push(format!("... (line above repeated {} more times)", count - 1));
+            out.push(format!(
+                "... (line above repeated {} more times)",
+                count - 1
+            ));
         } else if count == 2 {
             out.push(lines[i + 1].to_string());
         }

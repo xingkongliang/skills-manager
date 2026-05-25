@@ -79,6 +79,14 @@
     "installNew": "Install New Skills",
     "recentActivity": "Recent Activity"
   },
+  "presetSelector": {
+    "title": "Presets",
+    "assignTo": "Assign to presets:",
+    "none": "None",
+    "added": "Added to preset",
+    "removed": "Removed from preset",
+    "error": "Error updating presets"
+  },
   "mySkills": {
     "title": "Library",
     "applyToDefault": "Apply Preset",

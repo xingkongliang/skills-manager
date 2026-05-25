@@ -79,6 +79,14 @@
     "installNew": "安装新 Skills",
     "recentActivity": "近期动态"
   },
+  "presetSelector": {
+    "title": "预设",
+    "assignTo": "分配到预设：",
+    "none": "无",
+    "added": "已添加到预设",
+    "removed": "已从预设移除",
+    "error": "更新预设失败"
+  },
   "mySkills": {
     "title": "技能库",
     "applyToDefault": "应用 Preset",

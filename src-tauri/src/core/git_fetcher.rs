@@ -99,10 +99,7 @@ pub fn validate_git_url(url: &str) -> Result<()> {
 /// paths case-sensitively or distinguish schemes are unaffected.
 fn canonicalize_clone_url(url: &str) -> String {
     let trimmed = url.trim().trim_end_matches('/');
-    trimmed
-        .strip_suffix(".git")
-        .unwrap_or(trimmed)
-        .to_string()
+    trimmed.strip_suffix(".git").unwrap_or(trimmed).to_string()
 }
 
 /// Compute a stable cache directory name for a given clone URL. Hashes the
@@ -148,10 +145,7 @@ fn lock_repo_cache(
     Ok(RepoCacheLock { _file: file })
 }
 
-fn materialize_cached_repo(
-    cached: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
-) -> Result<PathBuf> {
+fn materialize_cached_repo(cached: &Path, cancel: Option<&Arc<AtomicBool>>) -> Result<PathBuf> {
     let temp_dir =
         std::env::temp_dir().join(format!("{CLONE_TEMP_PREFIX}{}", uuid::Uuid::new_v4()));
 
@@ -824,7 +818,10 @@ fn split_tree_branch_path(path: &str, known_branches: &[String]) -> (String, Opt
 
     let mut parts = path.splitn(2, '/');
     let branch = parts.next().unwrap_or("").to_string();
-    let subpath = parts.next().filter(|s| !s.is_empty()).map(|s| s.to_string());
+    let subpath = parts
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
     (branch, subpath)
 }
 

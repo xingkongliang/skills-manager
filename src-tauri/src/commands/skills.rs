@@ -487,13 +487,13 @@ fn log_reimport_outcome(
 pub async fn install_local(
     source_path: String,
     name: Option<String>,
+    preset_ids: Option<Vec<String>>,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let outcome = (|| -> Result<(String, String), AppError> {
             let path = PathBuf::from(&source_path);
-            let active = store.get_active_scenario_id().ok().flatten();
             let metadata = InstallSourceMetadata {
                 source_type: "local".to_string(),
                 source_ref: Some(source_path.clone()),
@@ -509,7 +509,7 @@ pub async fn install_local(
                 installer::install_from_local(&path, name.as_deref()).map_err(AppError::io)?;
             let skill_name = result.name.clone();
             let skill_id =
-                store_installed_skill_unlocked(&store, &result, &metadata, active.as_deref())?;
+                store_installed_skill_unlocked(&store, &result, &metadata, preset_ids.as_deref())?;
             Ok((skill_id, skill_name))
         })();
         log_install_outcome(&store, "local", outcome.as_ref());
@@ -522,6 +522,7 @@ pub async fn install_local(
 pub async fn install_git(
     repo_url: String,
     name: Option<String>,
+    preset_ids: Option<Vec<String>>,
     store: State<'_, Arc<SkillStore>>,
     cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
     app_handle: tauri::AppHandle,
@@ -577,7 +578,6 @@ pub async fn install_git(
             emit_progress("installing");
             let install_result = (|| -> Result<(String, String), AppError> {
                 let _lock = RepoLock::acquire("install git skill").map_err(AppError::db)?;
-                let active = store.get_active_scenario_id().ok().flatten();
                 let skill_dir = resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)?;
                 let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
                 let result = installer::install_from_git_dir(&skill_dir, name.as_deref())
@@ -597,7 +597,7 @@ pub async fn install_git(
                     &store,
                     &result,
                     &metadata,
-                    active.as_deref(),
+                    preset_ids.as_deref(),
                 )?;
                 Ok((skill_id, skill_name))
             })();
@@ -619,6 +619,7 @@ pub async fn install_git(
 pub async fn install_from_skillssh(
     source: String,
     skill_id: String,
+    preset_ids: Option<Vec<String>>,
     store: State<'_, Arc<SkillStore>>,
     cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
     app_handle: tauri::AppHandle,
@@ -674,7 +675,6 @@ pub async fn install_from_skillssh(
             emit_progress("installing");
             let install_result = (|| -> Result<(String, String), AppError> {
                 let _lock = RepoLock::acquire("install skillssh skill").map_err(AppError::db)?;
-                let active = store.get_active_scenario_id().ok().flatten();
                 let skill_dir = resolve_skill_dir(&temp_dir, None, Some(&skill_id))?;
                 let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
                 let source_ref = format!("{}/{}", source, skill_id);
@@ -701,7 +701,7 @@ pub async fn install_from_skillssh(
                     &store,
                     &result,
                     &metadata,
-                    active.as_deref(),
+                    preset_ids.as_deref(),
                 )?;
                 Ok((new_id, skill_name))
             })();
@@ -815,6 +815,7 @@ pub async fn confirm_git_install(
     repo_url: String,
     temp_dir: String,
     items: Vec<SkillInstallItem>,
+    preset_ids: Option<Vec<String>>,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
@@ -831,9 +832,7 @@ pub async fn confirm_git_install(
             let skill_dir = resolve_skill_dir(&temp_path, parsed.subpath.as_deref(), None)?;
             let all_dirs = collect_git_skill_dirs(&skill_dir);
             let revision = git_fetcher::get_head_revision(&temp_path).map_err(AppError::git)?;
-            let active = store.get_active_scenario_id().ok().flatten();
-            let _lock = RepoLock::acquire("confirm git install")
-                .map_err(AppError::db)?;
+            let _lock = RepoLock::acquire("confirm git install").map_err(AppError::db)?;
 
             for dir in &all_dirs {
                 let rel_key = skill_rel_key(&skill_dir, dir);
@@ -860,7 +859,7 @@ pub async fn confirm_git_install(
                     remote_revision: Some(revision.clone()),
                     update_status: "up_to_date".to_string(),
                 };
-                store_installed_skill_unlocked(&store, &result, &metadata, active.as_deref())?;
+                store_installed_skill_unlocked(&store, &result, &metadata, preset_ids.as_deref())?;
             }
             Ok(())
         })();
@@ -1081,8 +1080,7 @@ pub async fn relink_local_skill_source(
             .map_err(AppError::db)?;
 
         let result = (|| -> Result<(), AppError> {
-            let _lock = RepoLock::acquire("relink local skill")
-                .map_err(AppError::db)?;
+            let _lock = RepoLock::acquire("relink local skill").map_err(AppError::db)?;
             let staged_path = staged_path_for(&skill.central_path);
             let install_result = installer::install_from_local_to_destination(
                 &path,
@@ -1142,8 +1140,7 @@ pub async fn detach_local_skill_source(
         }
 
         {
-            let _lock = RepoLock::acquire("detach local skill")
-                .map_err(AppError::db)?;
+            let _lock = RepoLock::acquire("detach local skill").map_err(AppError::db)?;
             store
                 .update_skill_after_reinstall(
                     &skill.id,
@@ -1225,7 +1222,10 @@ fn managed_skill_to_dto(
     }
 }
 
-pub fn managed_skill_by_id(store: &SkillStore, skill_id: &str) -> Result<ManagedSkillDto, AppError> {
+pub fn managed_skill_by_id(
+    store: &SkillStore,
+    skill_id: &str,
+) -> Result<ManagedSkillDto, AppError> {
     let skill = store
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?
@@ -1293,8 +1293,7 @@ pub fn update_git_skill_internal(
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
         let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
         let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
-        let _lock = RepoLock::acquire("update installed skill")
-            .map_err(AppError::db)?;
+        let _lock = RepoLock::acquire("update installed skill").map_err(AppError::db)?;
 
         if content_changed {
             let staged_path = staged_path_for(&skill.central_path);
@@ -1402,8 +1401,7 @@ pub fn reimport_local_skill_internal(
         .map_err(AppError::db)?;
 
     let result = (|| -> Result<(), AppError> {
-        let _lock = RepoLock::acquire("reimport local skill")
-            .map_err(AppError::db)?;
+        let _lock = RepoLock::acquire("reimport local skill").map_err(AppError::db)?;
         let staged_path = staged_path_for(&skill.central_path);
         let install_result =
             installer::install_from_local_to_destination(&path, Some(&skill.name), &staged_path)
@@ -1438,10 +1436,21 @@ pub fn store_installed_skill_unlocked(
     store: &SkillStore,
     result: &installer::InstallResult,
     metadata: &InstallSourceMetadata,
-    active_scenario_id: Option<&str>,
+    preset_ids: Option<&[String]>,
 ) -> Result<String, AppError> {
     let now = chrono::Utc::now().timestamp_millis();
     let central_path = result.central_path.to_string_lossy().to_string();
+
+    // If no explicit preset_ids, fall back to the active scenario (legacy behavior).
+    let p_ids: Vec<String> = match preset_ids {
+        Some(ids) => ids.to_vec(),
+        None => store
+            .get_active_scenario_id()
+            .ok()
+            .flatten()
+            .map(|id| vec![id])
+            .unwrap_or_default(),
+    };
 
     if let Some(existing) = store
         .get_skill_by_central_path(&central_path)
@@ -1463,20 +1472,17 @@ pub fn store_installed_skill_unlocked(
                 &metadata.update_status,
             )
             .map_err(AppError::db)?;
-        if let Some(scenario_id) = active_scenario_id {
-            store
-                .add_skill_to_scenario(scenario_id, &existing.id)
-                .map_err(AppError::db)?;
-        }
-        sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
-
-        if let Some(scenario_id) = active_scenario_id {
-            if let Err(e) =
-                super::presets::sync_skill_to_active_preset(store, scenario_id, &existing.id)
-            {
-                log::warn!("Failed to sync reinstalled skill to preset: {e}");
+        let current = store
+            .get_scenarios_for_skill(&existing.id)
+            .unwrap_or_default();
+        for sid in &p_ids {
+            if !current.contains(sid) {
+                store
+                    .add_skill_to_scenario(sid, &existing.id)
+                    .map_err(AppError::db)?;
             }
         }
+        sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
 
         return Ok(existing.id);
     }
@@ -1506,16 +1512,16 @@ pub fn store_installed_skill_unlocked(
     };
 
     store.insert_skill(&record).map_err(AppError::db)?;
-    if let Some(scenario_id) = active_scenario_id {
+    for sid in &p_ids {
         store
-            .add_skill_to_scenario(scenario_id, &id)
+            .add_skill_to_scenario(sid, &id)
             .map_err(AppError::db)?;
     }
     sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
 
-    if let Some(scenario_id) = active_scenario_id {
-        if let Err(e) = super::presets::sync_skill_to_active_preset(store, scenario_id, &id) {
-            log::warn!("Failed to sync newly installed skill to preset: {e}");
+    for sid in &p_ids {
+        if let Err(e) = super::presets::sync_skill_to_active_preset(store, sid, &id) {
+            log::warn!("Failed to sync newly installed skill to preset {sid}: {e}");
         }
     }
 
@@ -1937,6 +1943,7 @@ pub struct BatchImportResult {
 #[tauri::command]
 pub async fn batch_import_folder(
     folder_path: String,
+    preset_ids: Option<Vec<String>>,
     store: State<'_, Arc<SkillStore>>,
     app_handle: tauri::AppHandle,
 ) -> Result<BatchImportResult, AppError> {
@@ -1971,7 +1978,6 @@ pub async fn batch_import_folder(
         let mut imported = 0usize;
         let mut skipped = 0usize;
         let mut errors = Vec::new();
-        let active = store.get_active_scenario_id().ok().flatten();
 
         for (i, dir) in skill_dirs.iter().enumerate() {
             let name = skill_metadata::infer_skill_name(dir);
@@ -1991,10 +1997,11 @@ pub async fn batch_import_folder(
             let prospective_central = central_repo::skills_dir().join(&name);
             let central_str = prospective_central.to_string_lossy().to_string();
             if let Ok(Some(existing)) = store.get_skill_by_central_path(&central_str) {
-                if let Some(ref scenario_id) = active {
-                    if let Err(e) = store.add_skill_to_scenario(scenario_id, &existing.id) {
-                        errors.push(format!("{}: {}", name, e));
-                        continue;
+                if let Some(ref p_ids) = preset_ids {
+                    for sid in p_ids {
+                        if let Err(e) = store.add_skill_to_scenario(sid, &existing.id) {
+                            errors.push(format!("{}: {}", name, e));
+                        }
                     }
                 }
                 skipped += 1;
@@ -2002,8 +2009,7 @@ pub async fn batch_import_folder(
             }
 
             let install_result = (|| -> Result<String, AppError> {
-                let _lock = RepoLock::acquire("batch import skill")
-                    .map_err(AppError::db)?;
+                let _lock = RepoLock::acquire("batch import skill").map_err(AppError::db)?;
                 let result =
                     installer::install_from_local(dir, Some(&name)).map_err(AppError::io)?;
                 let metadata = InstallSourceMetadata {
@@ -2016,7 +2022,7 @@ pub async fn batch_import_folder(
                     remote_revision: None,
                     update_status: "local_only".to_string(),
                 };
-                store_installed_skill_unlocked(&store, &result, &metadata, active.as_deref())
+                store_installed_skill_unlocked(&store, &result, &metadata, preset_ids.as_deref())
             })();
 
             match install_result {
@@ -2168,7 +2174,11 @@ mod tests {
         let dir = root.join(rel);
         fs::create_dir_all(&dir).unwrap();
         let basename = dir.file_name().unwrap().to_string_lossy().to_string();
-        fs::write(dir.join("SKILL.md"), format!("---\nname: {basename}\n---\n")).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {basename}\n---\n"),
+        )
+        .unwrap();
         dir
     }
 

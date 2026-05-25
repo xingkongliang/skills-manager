@@ -44,7 +44,8 @@ const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
 
 export function InstallSkills() {
   const { t } = useTranslation();
-  const { refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById } = useApp();
+  const { presets, refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById } = useApp();
+  const [installPresetIds, setInstallPresetIds] = useState<string[]>([]);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<"market" | "local" | "git">("market");
@@ -297,7 +298,7 @@ export function InstallSkills() {
     const name = sourcePath.split("/").pop() || sourcePath;
     const toastId = toast.loading(t("install.toast.installing", { name }));
     try {
-      await api.installLocal(sourcePath);
+      await api.installLocal(sourcePath, undefined, installPresetIds.length > 0 ? installPresetIds : undefined);
     } catch (e) {
       const message = getErrorMessage(e, t("common.error"));
       setLocalError(message);
@@ -374,7 +375,8 @@ export function InstallSkills() {
       );
 
       const result: BatchImportResult = await api.batchImportFolder(
-        selected as string
+        selected as string,
+        installPresetIds.length > 0 ? installPresetIds : undefined
       );
 
       if (result.errors.length > 0) {
@@ -435,7 +437,7 @@ export function InstallSkills() {
           }
         }
       );
-      await api.installFromSkillssh(skill.source, skill.skill_id);
+      await api.installFromSkillssh(skill.source, skill.skill_id, installPresetIds.length > 0 ? installPresetIds : undefined);
       await Promise.all([refreshPresets(), refreshManagedSkills()]);
       toast.success(t("install.toast.success", { name: displayName }), {
         id: toastId,
@@ -529,7 +531,8 @@ export function InstallSkills() {
       await api.confirmGitInstall(
         repoUrl,
         gitPreview.temp_dir,
-        selected.map((s) => ({ rel_path: s.rel_path, name: s.name }))
+        selected.map((s) => ({ rel_path: s.rel_path, name: s.name })),
+        installPresetIds.length > 0 ? installPresetIds : undefined
       );
       await Promise.all([refreshPresets(), refreshManagedSkills()]);
       toast.success(t("install.toast.success", { name: selected.map((s) => s.name).join(", ") }));
@@ -745,6 +748,49 @@ export function InstallSkills() {
           })}
         </div>
       </div>
+
+      {presets.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 px-1 pb-2">
+          <span className="text-[13px] font-medium text-tertiary">{t("presetSelector.assignTo")}</span>
+          <button
+            type="button"
+            onClick={() => setInstallPresetIds([])}
+            className={cn(
+              "rounded-full px-2.5 py-1 text-[13px] font-medium transition-colors",
+              installPresetIds.length === 0
+                ? "bg-accent text-white"
+                : "bg-surface-hover text-muted hover:text-secondary"
+            )}
+          >
+            {t("presetSelector.none")}
+          </button>
+          {presets.map((preset) => {
+            const enabled = installPresetIds.includes(preset.id);
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => {
+                  setInstallPresetIds((prev) =>
+                    prev.includes(preset.id)
+                      ? prev.filter((id) => id !== preset.id)
+                      : [...prev, preset.id]
+                  );
+                }}
+                className={cn(
+                  "rounded-full px-2.5 py-1 text-[13px] font-medium transition-colors",
+                  enabled
+                    ? "bg-accent text-white"
+                    : "bg-surface-hover text-muted hover:text-secondary"
+                )}
+              >
+                {preset.icon && <span className="mr-1">{preset.icon}</span>}
+                {preset.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {activeTab === "market" && (
         <div className="animate-in fade-in duration-300">

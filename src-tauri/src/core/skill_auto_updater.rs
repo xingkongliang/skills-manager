@@ -149,8 +149,7 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     // operation to a single skill's network round-trip (rather than the
     // entire round). A skill whose lock is busy — a manual install/update is
     // running — is simply skipped; the next scheduled round picks it up.
-    let (mut checked, mut available, mut updated, mut failed) =
-        (0usize, 0usize, 0usize, 0usize);
+    let (mut checked, mut available, mut updated, mut failed) = (0usize, 0usize, 0usize, 0usize);
     for skill_id in ids {
         checked += 1;
 

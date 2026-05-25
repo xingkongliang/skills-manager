@@ -128,6 +128,7 @@ export function MySkills() {
   const { t } = useTranslation();
   const {
     viewedPreset,
+    presets,
     tools,
     managedSkills: skills,
     refreshPresets,
@@ -1879,6 +1880,8 @@ export function MySkills() {
         onToggleTool={handleToggleSkillTool}
         projects={projects}
         onProjectsChanged={refreshProjects}
+        presets={presets}
+        onRefresh={refreshManagedSkills}
       />
 
       <ConfirmDialog

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -619,7 +619,7 @@ mod tests {
     use super::*;
     use crate::core::{central_repo, skill_store::SkillStore};
     use std::sync::MutexGuard;
-    use tempfile::{TempDir, tempdir};
+    use tempfile::{tempdir, TempDir};
 
     struct TestRepo {
         _lock: MutexGuard<'static, ()>,

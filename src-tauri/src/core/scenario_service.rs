@@ -6,8 +6,7 @@ use std::time::Instant;
 use super::{
     error::AppError,
     skill_store::{ScenarioRecord, SkillStore, SkillTargetRecord},
-    sync_engine, tool_adapters,
-    tool_service,
+    sync_engine, tool_adapters, tool_service,
 };
 
 #[derive(Debug, Clone)]
@@ -82,7 +81,8 @@ pub fn collect_scenario_sync_targets(
     for skill in &skills {
         let source = PathBuf::from(&skill.central_path);
         let target_name = sync_engine::target_dir_name(&source, &skill.name);
-        let adapters = enabled_installed_adapters_for_scenario_skill(store, scenario_id, &skill.id)?;
+        let adapters =
+            enabled_installed_adapters_for_scenario_skill(store, scenario_id, &skill.id)?;
         for adapter in &adapters {
             let target = adapter.skills_dir().join(&target_name);
             let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
@@ -134,7 +134,10 @@ pub fn preview_scenario_sync(
 /// The reverse direction (existing `"symlink"`, desired `Copy`) returns
 /// `None` because the user actively changed the `sync_mode` setting and
 /// the on-disk symlink doesn't reflect that intent.
-fn skip_check_mode(existing_mode: &str, desired: sync_engine::SyncMode) -> Option<sync_engine::SyncMode> {
+fn skip_check_mode(
+    existing_mode: &str,
+    desired: sync_engine::SyncMode,
+) -> Option<sync_engine::SyncMode> {
     match (existing_mode, desired) {
         ("symlink", sync_engine::SyncMode::Symlink) => Some(sync_engine::SyncMode::Symlink),
         ("copy", sync_engine::SyncMode::Copy) => Some(sync_engine::SyncMode::Copy),
@@ -347,7 +350,9 @@ pub fn apply_scenario_to_default(store: &SkillStore, scenario_id: &str) -> Resul
         }
     }
 
-    store.set_active_scenario(scenario_id).map_err(AppError::db)?;
+    store
+        .set_active_scenario(scenario_id)
+        .map_err(AppError::db)?;
     sync_desired_targets(store, &desired_targets)
 }
 
@@ -358,7 +363,8 @@ pub fn sync_skill_to_active_scenario(
 ) -> Result<(), AppError> {
     if let Ok(Some(active_id)) = store.get_active_scenario_id() {
         if active_id == scenario_id {
-            let adapters = enabled_installed_adapters_for_scenario_skill(store, scenario_id, skill_id)?;
+            let adapters =
+                enabled_installed_adapters_for_scenario_skill(store, scenario_id, skill_id)?;
             let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
             let Ok(Some(skill)) = store.get_skill_by_id(skill_id) else {
                 return Ok(());
@@ -378,7 +384,8 @@ pub fn sync_skill_to_active_scenario(
                 }
 
                 let target = adapter.skills_dir().join(&target_name);
-                let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
+                let mode =
+                    sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
                 match sync_engine::sync_skill(&source, &target, mode) {
                     Ok(actual_mode) => {
                         let now = chrono::Utc::now().timestamp_millis();
@@ -423,7 +430,9 @@ pub fn ensure_default_startup_scenario(store: &SkillStore) -> Result<(), AppErro
             created_at: now,
             updated_at: now,
         };
-        store.insert_scenario(&default_scenario).map_err(AppError::db)?;
+        store
+            .insert_scenario(&default_scenario)
+            .map_err(AppError::db)?;
         scenarios.push(default_scenario);
     }
 
@@ -464,7 +473,9 @@ pub fn ensure_cli_scenario_state(store: &SkillStore) -> Result<(), AppError> {
             created_at: now,
             updated_at: now,
         };
-        store.insert_scenario(&default_scenario).map_err(AppError::db)?;
+        store
+            .insert_scenario(&default_scenario)
+            .map_err(AppError::db)?;
         scenarios.push(default_scenario);
     }
 
@@ -505,7 +516,8 @@ pub fn sync_active_scenario_to_tool(store: &SkillStore, tool_key: &str) {
             return;
         };
         for skill_id in skill_ids {
-            if let Ok(adapters) = enabled_installed_adapters_for_scenario_skill(store, &active_id, &skill_id)
+            if let Ok(adapters) =
+                enabled_installed_adapters_for_scenario_skill(store, &active_id, &skill_id)
             {
                 if adapters.iter().any(|adapter| adapter.key == tool_key) {
                     let _ = sync_skill_to_active_scenario(store, &active_id, &skill_id);
@@ -929,7 +941,10 @@ mod sync_desired_targets_tests {
         sync_desired_targets(&store, &desired).unwrap();
 
         // Sync must have run — target should now exist with the source content.
-        assert!(target.join("SKILL.md").exists(), "missing target was not re-synced");
+        assert!(
+            target.join("SKILL.md").exists(),
+            "missing target was not re-synced"
+        );
 
         central_repo::set_test_base_dir_override(None);
     }

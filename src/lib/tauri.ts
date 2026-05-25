@@ -231,11 +231,11 @@ export interface BatchDeleteSkillsResult {
 export const deleteManagedSkills = (skillIds: string[]) =>
   invoke<BatchDeleteSkillsResult>("delete_managed_skills", { skillIds });
 
-export const installLocal = (sourcePath: string, name?: string) =>
-  invoke<void>("install_local", { sourcePath, name: name || null });
+export const installLocal = (sourcePath: string, name?: string, presetIds?: string[]) =>
+  invoke<void>("install_local", { sourcePath, name: name || null, presetIds: presetIds ?? null });
 
-export const installGit = (repoUrl: string, name?: string) =>
-  invoke<void>("install_git", { repoUrl, name: name || null });
+export const installGit = (repoUrl: string, name?: string, presetIds?: string[]) =>
+  invoke<void>("install_git", { repoUrl, name: name || null, presetIds: presetIds ?? null });
 
 export interface GitSkillPreview {
   /** Path relative to the resolved scan root, using `/` separators. Stable key. */
@@ -257,14 +257,14 @@ export interface SkillInstallItem {
 export const previewGitInstall = (repoUrl: string) =>
   invoke<GitPreviewResult>("preview_git_install", { repoUrl });
 
-export const confirmGitInstall = (repoUrl: string, tempDir: string, items: SkillInstallItem[]) =>
-  invoke<void>("confirm_git_install", { repoUrl, tempDir, items });
+export const confirmGitInstall = (repoUrl: string, tempDir: string, items: SkillInstallItem[], presetIds?: string[]) =>
+  invoke<void>("confirm_git_install", { repoUrl, tempDir, items, presetIds: presetIds ?? null });
 
 export const cancelGitPreview = (tempDir: string) =>
   invoke<void>("cancel_git_preview", { tempDir });
 
-export const installFromSkillssh = (source: string, skillId: string) =>
-  invoke<void>("install_from_skillssh", { source, skillId });
+export const installFromSkillssh = (source: string, skillId: string, presetIds?: string[]) =>
+  invoke<void>("install_from_skillssh", { source, skillId, presetIds: presetIds ?? null });
 
 export const cancelInstall = (key: string) =>
   invoke<boolean>("cancel_install", { key });
@@ -313,8 +313,8 @@ export interface BatchImportResult {
   errors: string[];
 }
 
-export const batchImportFolder = (folderPath: string) =>
-  invoke<BatchImportResult>("batch_import_folder", { folderPath });
+export const batchImportFolder = (folderPath: string, presetIds?: string[]) =>
+  invoke<BatchImportResult>("batch_import_folder", { folderPath, presetIds: presetIds ?? null });
 
 export const getAllTags = () => invoke<string[]>("get_all_tags");
 
@@ -563,6 +563,9 @@ export const getPresetSkillOrder = (presetId: string) =>
 
 export const reorderPresetSkills = (presetId: string, skillIds: string[]) =>
   invoke<void>("reorder_preset_skills", { presetId, skillIds });
+
+export const setSkillPresets = (skillId: string, presetIds: string[]) =>
+  invoke<void>("set_skill_presets", { skillId, presetIds });
 
 // ── Projects ──
 

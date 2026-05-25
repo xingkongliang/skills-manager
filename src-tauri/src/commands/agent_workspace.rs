@@ -366,9 +366,9 @@ fn delete_agent_local_skill(
     let all_managed = store.get_all_skills().unwrap_or_default();
     let all_targets = store.get_all_targets().unwrap_or_default();
     if let Some(managed) = find_verified_center_match(&skill, &all_managed, &all_targets) {
-        let still_linked = all_targets
-            .iter()
-            .any(|t| t.skill_id == managed.id && target_path_equals_skill(&t.target_path, &skill.path));
+        let still_linked = all_targets.iter().any(|t| {
+            t.skill_id == managed.id && target_path_equals_skill(&t.target_path, &skill.path)
+        });
         if still_linked {
             return Err(AppError::invalid_input(
                 "Skill is managed by Skills Center — remove from the agent first.",

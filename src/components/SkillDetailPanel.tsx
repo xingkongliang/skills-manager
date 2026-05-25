@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Folder,
   ChevronDown,
@@ -6,13 +6,18 @@ import {
   Github,
   HardDrive,
   Globe,
+  Check,
+  Plus,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { cn } from "../utils";
 import {
   getSkillDocument,
   getSourceSkillDocument,
+  setSkillPresets,
   type ManagedSkill,
+  type Preset,
   type Project,
   type SkillDocument,
   type SourceSkillDocument,
@@ -25,6 +30,7 @@ import { SkillMarkdown } from "./SkillMarkdown";
 import { AgentToggleSection, type AgentToggleItem } from "./AgentToggleSection";
 import { SkillProjectsSection } from "./SkillProjectsSection";
 import { SyncDots } from "./SyncDots";
+import { getErrorMessage } from "../lib/error";
 
 interface Props {
   skill: ManagedSkill | null;
@@ -35,6 +41,8 @@ interface Props {
   onToggleTool?: (tool: string, enabled: boolean) => void;
   projects?: Project[];
   onProjectsChanged?: () => void;
+  presets?: Preset[];
+  onRefresh?: () => void;
 }
 
 export function SkillDetailPanel({
@@ -46,6 +54,8 @@ export function SkillDetailPanel({
   onToggleTool,
   projects,
   onProjectsChanged,
+  presets,
+  onRefresh,
 }: Props) {
   if (!skill) return null;
 
@@ -69,6 +79,8 @@ export function SkillDetailPanel({
       onToggleTool={onToggleTool}
       projects={projects}
       onProjectsChanged={onProjectsChanged}
+      presets={presets}
+      onRefresh={onRefresh}
     />
   );
 }
@@ -82,6 +94,8 @@ function SkillDetailPanelContent({
   onToggleTool,
   projects,
   onProjectsChanged,
+  presets,
+  onRefresh,
 }: {
   skill: ManagedSkill;
   onClose: () => void;
@@ -91,6 +105,8 @@ function SkillDetailPanelContent({
   onToggleTool?: (tool: string, enabled: boolean) => void;
   projects?: Project[];
   onProjectsChanged?: () => void;
+  presets?: Preset[];
+  onRefresh?: () => void;
 }) {
   const { t } = useTranslation();
   const [doc, setDoc] = useState<SkillDocument | null>(null);
@@ -101,6 +117,26 @@ function SkillDetailPanelContent({
   const localRequestIdRef = useRef(0);
   const sourceRequestIdRef = useRef(0);
   const skillId = skill.id;
+  const [presetToggleId, setPresetToggleId] = useState<string | null>(null);
+
+  const handleTogglePreset = useCallback(async (presetId: string) => {
+    if (presetToggleId) return;
+    setPresetToggleId(presetId);
+    try {
+      const currentPresets = skill.preset_ids;
+      const nextPresets = currentPresets.includes(presetId)
+        ? currentPresets.filter((id) => id !== presetId)
+        : [...currentPresets, presetId];
+      await setSkillPresets(skill.id, nextPresets);
+      toast.success(currentPresets.includes(presetId) ? t("presetSelector.removed") : t("presetSelector.added"));
+      onRefresh?.();
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("presetSelector.error")));
+    } finally {
+      setPresetToggleId(null);
+    }
+  }, [skill.id, skill.preset_ids, presetToggleId, onRefresh]);
+
   const supportsSourceDiff =
     skill.source_type === "git"
     || skill.source_type === "skillssh"
@@ -227,6 +263,34 @@ function SkillDetailPanelContent({
           {skill.central_path}
         </span>
       </div>
+      {presets && presets.length > 0 && (
+        <div className="mt-4 rounded-xl border border-border-subtle bg-surface/70 px-4 py-3">
+          <div className="mb-2 text-[13px] font-semibold text-secondary">{t("presetSelector.title")}</div>
+          <div className="flex flex-wrap gap-2">
+            {presets.map((preset) => {
+              const enabled = skill.preset_ids.includes(preset.id);
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => handleTogglePreset(preset.id)}
+                  disabled={presetToggleId === preset.id}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium transition-colors",
+                    enabled
+                      ? "bg-accent text-white"
+                      : "border border-border-subtle bg-bg-secondary text-muted hover:text-secondary"
+                  )}
+                >
+                  {enabled ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+                  {preset.icon && <span>{preset.icon}</span>}
+                  {preset.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {metadataItems.length > 0 && (
         <div className="mt-4 rounded-xl border border-border-subtle bg-surface/70">
           <button

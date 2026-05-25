@@ -8,8 +8,9 @@ use crate::core::{
     error::AppError,
     scenario_service::{self, BatchApplyMode},
     skill_store::{ScenarioRecord, SkillStore},
-    sync_metadata, tool_adapters,
+    sync_metadata,
     timing::should_log_first_or_slow,
+    tool_adapters,
 };
 
 fn refresh_tray_menu_best_effort(app: &tauri::AppHandle) {
@@ -43,9 +44,7 @@ pub struct PresetDto {
 static GET_PRESETS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
 
 #[tauri::command]
-pub async fn get_presets(
-    store: State<'_, Arc<SkillStore>>,
-) -> Result<Vec<PresetDto>, AppError> {
+pub async fn get_presets(store: State<'_, Arc<SkillStore>>) -> Result<Vec<PresetDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let start = Instant::now();
@@ -265,6 +264,41 @@ async fn apply_preset_to_default_impl(
     result
 }
 
+/// Replace all preset memberships for a skill. This is more efficient than
+/// calling add/remove individually when managing a skill's preset assignments.
+#[tauri::command]
+pub async fn set_skill_presets(
+    app: tauri::AppHandle,
+    skill_id: String,
+    preset_ids: Vec<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        sync_metadata::with_repo_lock("set skill presets", || {
+            let current = store.get_scenarios_for_skill(&skill_id)?;
+            for id in &current {
+                if !preset_ids.contains(id) {
+                    store.remove_skill_from_scenario(id, &skill_id)?;
+                }
+            }
+            for id in &preset_ids {
+                if !current.contains(id) {
+                    store.add_skill_to_scenario(id, &skill_id)?;
+                }
+            }
+            sync_metadata::write_all_from_db_unlocked(&store)
+        })
+        .map_err(AppError::db)?;
+        Ok(())
+    })
+    .await?;
+    if result.is_ok() {
+        refresh_tray_menu_best_effort(&app);
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn add_skill_to_preset(
     app: tauri::AppHandle,
@@ -448,10 +482,10 @@ mod tests {
     };
     use crate::core::skill_store::SkillRecord;
     use crate::core::tool_adapters::{self, CustomToolDef};
-    use std::path::PathBuf;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     fn sample_skill(id: &str, name: &str, central_path: &std::path::Path) -> SkillRecord {
