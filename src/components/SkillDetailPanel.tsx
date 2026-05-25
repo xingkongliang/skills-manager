@@ -24,6 +24,7 @@ import {
   type SkillToolToggle,
   type ToolInfo,
 } from "../lib/tauri";
+import { getPresetIconOption } from "../lib/presetIcons";
 import { DocumentDiffViewer } from "./DocumentDiffViewer";
 import { DetailSheet } from "./DetailSheet";
 import { SkillMarkdown } from "./SkillMarkdown";
@@ -269,6 +270,7 @@ function SkillDetailPanelContent({
           <div className="flex flex-wrap gap-2">
             {presets.map((preset) => {
               const enabled = skill.preset_ids.includes(preset.id);
+              const PresetIcon = getPresetIconOption(preset).icon;
               return (
                 <button
                   key={preset.id}
@@ -283,7 +285,7 @@ function SkillDetailPanelContent({
                   )}
                 >
                   {enabled ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
-                  {preset.icon && <span>{preset.icon}</span>}
+                  <PresetIcon className="h-3.5 w-3.5" />
                   {preset.name}
                 </button>
               );

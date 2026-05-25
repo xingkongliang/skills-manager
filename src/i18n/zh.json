@@ -658,6 +658,7 @@
     "renamed": "Preset 已重命名",
     "deleted": "Preset 已删除",
     "created": "Preset 已创建",
+    "createError": "创建 Preset 失败",
     "switched": "已切换到 \"{{name}}\""
   },
   "project": {

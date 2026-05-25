@@ -658,6 +658,7 @@
     "renamed": "Preset renamed",
     "deleted": "Preset deleted",
     "created": "Preset created",
+    "createError": "Failed to create preset",
     "switched": "Switched to \"{{name}}\""
   },
   "project": {

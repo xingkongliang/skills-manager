@@ -172,7 +172,11 @@ export function MySkills() {
 
   const [presetSkillOrder, setPresetSkillOrder] = useState<string[]>([]);
 
-  const viewedPresetName = viewedPreset?.name || t("mySkills.currentPresetFallback");
+  const presetNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of presets) map.set(p.id, p.name);
+    return map;
+  }, [presets]);
 
   // Fetch sort order whenever active preset changes
   useEffect(() => {
@@ -1680,12 +1684,17 @@ export function MySkills() {
                         {sourceIcon(skill.source_type)}
                         {sourceTypeLabel(skill)}
                       </span>
-                      {enabledInPreset && (
+                      {skill.preset_ids.length > 0 ? (
                         <>
                           <span className="text-faint">·</span>
                           <span className="truncate text-[13px] font-medium text-amber-600 dark:text-amber-400/80">
-                            {viewedPresetName}
+                            {skill.preset_ids.map((id) => presetNameMap.get(id)).filter(Boolean).join(", ")}
                           </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-faint">·</span>
+                          <span className="truncate text-[13px] text-faint">None</span>
                         </>
                       )}
                     </div>
@@ -1798,10 +1807,12 @@ export function MySkills() {
                     {sourceIcon(skill.source_type)}
                     {sourceTypeLabel(skill)}
                   </span>
-                  {enabledInPreset && (
+                  {skill.preset_ids.length > 0 ? (
                     <span className="text-[13px] font-medium text-amber-600 dark:text-amber-400/80">
-                      {viewedPresetName}
+                      {skill.preset_ids.map((id) => presetNameMap.get(id)).filter(Boolean).join(", ")}
                     </span>
+                  ) : (
+                    <span className="text-[13px] text-faint">None</span>
                   )}
                 </div>
 

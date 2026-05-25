@@ -29,6 +29,7 @@ import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import * as api from "../lib/tauri";
 import type { ScanResult, SkillsShSkill, BatchImportResult, GitPreviewResult } from "../lib/tauri";
+import { getPresetIconOption } from "../lib/presetIcons";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSearchParams, useNavigate } from "react-router-dom";
@@ -46,6 +47,7 @@ export function InstallSkills() {
   const { t } = useTranslation();
   const { presets, refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById } = useApp();
   const [installPresetIds, setInstallPresetIds] = useState<string[]>([]);
+  const installPresetTouched = useRef(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<"market" | "local" | "git">("market");
@@ -298,7 +300,7 @@ export function InstallSkills() {
     const name = sourcePath.split("/").pop() || sourcePath;
     const toastId = toast.loading(t("install.toast.installing", { name }));
     try {
-      await api.installLocal(sourcePath, undefined, installPresetIds.length > 0 ? installPresetIds : undefined);
+      await api.installLocal(sourcePath, undefined, installPresetTouched.current ? installPresetIds : undefined);
     } catch (e) {
       const message = getErrorMessage(e, t("common.error"));
       setLocalError(message);
@@ -376,7 +378,7 @@ export function InstallSkills() {
 
       const result: BatchImportResult = await api.batchImportFolder(
         selected as string,
-        installPresetIds.length > 0 ? installPresetIds : undefined
+        installPresetTouched.current ? installPresetIds : undefined
       );
 
       if (result.errors.length > 0) {
@@ -437,7 +439,7 @@ export function InstallSkills() {
           }
         }
       );
-      await api.installFromSkillssh(skill.source, skill.skill_id, installPresetIds.length > 0 ? installPresetIds : undefined);
+      await api.installFromSkillssh(skill.source, skill.skill_id, installPresetTouched.current ? installPresetIds : undefined);
       await Promise.all([refreshPresets(), refreshManagedSkills()]);
       toast.success(t("install.toast.success", { name: displayName }), {
         id: toastId,
@@ -532,7 +534,7 @@ export function InstallSkills() {
         repoUrl,
         gitPreview.temp_dir,
         selected.map((s) => ({ rel_path: s.rel_path, name: s.name })),
-        installPresetIds.length > 0 ? installPresetIds : undefined
+        installPresetTouched.current ? installPresetIds : undefined
       );
       await Promise.all([refreshPresets(), refreshManagedSkills()]);
       toast.success(t("install.toast.success", { name: selected.map((s) => s.name).join(", ") }));
@@ -754,7 +756,7 @@ export function InstallSkills() {
           <span className="text-[13px] font-medium text-tertiary">{t("presetSelector.assignTo")}</span>
           <button
             type="button"
-            onClick={() => setInstallPresetIds([])}
+            onClick={() => { installPresetTouched.current = true; setInstallPresetIds([]); }}
             className={cn(
               "rounded-full px-2.5 py-1 text-[13px] font-medium transition-colors",
               installPresetIds.length === 0
@@ -766,11 +768,13 @@ export function InstallSkills() {
           </button>
           {presets.map((preset) => {
             const enabled = installPresetIds.includes(preset.id);
+            const PresetIcon = getPresetIconOption(preset).icon;
             return (
               <button
                 key={preset.id}
                 type="button"
                 onClick={() => {
+                  installPresetTouched.current = true;
                   setInstallPresetIds((prev) =>
                     prev.includes(preset.id)
                       ? prev.filter((id) => id !== preset.id)
@@ -784,7 +788,7 @@ export function InstallSkills() {
                     : "bg-surface-hover text-muted hover:text-secondary"
                 )}
               >
-                {preset.icon && <span className="mr-1">{preset.icon}</span>}
+                <PresetIcon className="mr-1 h-3.5 w-3.5" />
                 {preset.name}
               </button>
             );

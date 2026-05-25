@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { cn } from "../utils";
 import { PRESET_ICON_OPTIONS } from "../lib/presetIcons";
+import { getErrorMessage } from "../lib/error";
 
 interface Props {
   open: boolean;
@@ -28,6 +30,8 @@ export function CreatePresetDialog({ open, onClose, onCreate }: Props) {
       setDescription("");
       setIcon(PRESET_ICON_OPTIONS[0].key);
       onClose();
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("preset.createError")));
     } finally {
       setLoading(false);
     }

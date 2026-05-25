@@ -114,7 +114,19 @@ pub async fn create_preset(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let now = chrono::Utc::now().timestamp_millis();
         let id = uuid::Uuid::new_v4().to_string();
-        let previous_active_id = store.get_active_scenario_id().map_err(AppError::db)?;
+
+        // Reject duplicate preset names
+        let existing_names: Vec<String> = store
+            .get_all_scenarios()
+            .map_err(AppError::db)?
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        if existing_names.iter().any(|n| n == &name) {
+            return Err(AppError::invalid_input(format!(
+                "A preset named \"{name}\" already exists"
+            )));
+        }
 
         let record = ScenarioRecord {
             id: id.clone(),
@@ -131,11 +143,6 @@ pub async fn create_preset(
             sync_metadata::write_all_from_db_unlocked(&store)
         })
         .map_err(AppError::db)?;
-
-        if let Some(previous_id) = previous_active_id.as_deref() {
-            unsync_scenario_skills(&store, previous_id)?;
-        }
-        store.set_active_scenario(&id).map_err(AppError::db)?;
 
         Ok(PresetDto {
             id,
