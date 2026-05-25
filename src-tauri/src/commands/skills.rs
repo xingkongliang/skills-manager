@@ -1441,15 +1441,16 @@ pub fn store_installed_skill_unlocked(
     let now = chrono::Utc::now().timestamp_millis();
     let central_path = result.central_path.to_string_lossy().to_string();
 
-    // If no explicit preset_ids, fall back to the active scenario (legacy behavior).
+    // Resolve target preset IDs:
+    // - If user explicitly provided preset_ids (even empty), use them as-is.
+    // - If user did not specify, fall back to the "Default" preset (create if missing).
     let p_ids: Vec<String> = match preset_ids {
         Some(ids) => ids.to_vec(),
-        None => store
-            .get_active_scenario_id()
-            .ok()
-            .flatten()
-            .map(|id| vec![id])
-            .unwrap_or_default(),
+        None => {
+            let default_id = crate::core::scenario_service::ensure_default_preset(store)
+                .map_err(AppError::db)?;
+            vec![default_id]
+        }
     };
 
     if let Some(existing) = store

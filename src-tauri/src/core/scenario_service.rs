@@ -6,7 +6,7 @@ use std::time::Instant;
 use super::{
     error::AppError,
     skill_store::{ScenarioRecord, SkillStore, SkillTargetRecord},
-    sync_engine, tool_adapters, tool_service,
+    sync_engine, sync_metadata, tool_adapters, tool_service,
 };
 
 #[derive(Debug, Clone)]
@@ -415,6 +415,29 @@ pub fn sync_skill_to_active_scenario(
         }
     }
     Ok(())
+}
+
+/// Find or create a preset named "Default" and return its ID.
+/// Used as the fallback target when no preset is explicitly chosen during install.
+pub fn ensure_default_preset(store: &SkillStore) -> Result<String, AppError> {
+    let scenarios = store.get_all_scenarios().map_err(AppError::db)?;
+    if let Some(existing) = scenarios.iter().find(|s| s.name == "Default") {
+        return Ok(existing.id.clone());
+    }
+    let now = chrono::Utc::now().timestamp_millis();
+    let id = uuid::Uuid::new_v4().to_string();
+    let record = ScenarioRecord {
+        id: id.clone(),
+        name: "Default".to_string(),
+        description: Some("Default preset".to_string()),
+        icon: None,
+        sort_order: 0,
+        created_at: now,
+        updated_at: now,
+    };
+    store.insert_scenario(&record).map_err(AppError::db)?;
+    sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+    Ok(id)
 }
 
 pub fn ensure_default_startup_scenario(store: &SkillStore) -> Result<(), AppError> {
