@@ -59,8 +59,12 @@ pub fn set_tool_order(store: &SkillStore, order: &[String]) -> Result<(), AppErr
 /// Merge a saved tool order with the actual list of available tool keys.
 /// - Keeps saved entries in their saved order (filtering out keys that no longer exist).
 /// - If saved is empty, seeds with the built-in default priority list.
-/// - Appends any remaining keys (e.g. newly registered agents) at the end in
-///   their natural adapter order.
+/// - Slots a newly-registered priority agent into its canonical position
+///   (right after the previous priority agent already present) so e.g. a new
+///   built-in `grok` lands next to `codex` even for users who already have a
+///   saved order, instead of being dumped at the bottom.
+/// - Appends any remaining keys (non-priority new agents) at the end in their
+///   natural adapter order.
 fn merge_order(saved: &[String], all_keys: &[String]) -> Vec<String> {
     let all_set: HashSet<&str> = all_keys.iter().map(|s| s.as_str()).collect();
     let mut out: Vec<String> = Vec::with_capacity(all_keys.len());
@@ -75,6 +79,21 @@ fn merge_order(saved: &[String], all_keys: &[String]) -> Vec<String> {
         for k in DEFAULT_PRIORITY_ORDER {
             if all_set.contains(*k) {
                 out.push((*k).to_string());
+            }
+        }
+    }
+
+    let mut anchor: Option<usize> = None;
+    for key in DEFAULT_PRIORITY_ORDER {
+        if !all_set.contains(*key) {
+            continue;
+        }
+        match out.iter().position(|x| x == key) {
+            Some(idx) => anchor = Some(idx),
+            None => {
+                let insert_at = anchor.map_or(0, |a| a + 1);
+                out.insert(insert_at, (*key).to_string());
+                anchor = Some(insert_at);
             }
         }
     }
@@ -318,4 +337,46 @@ pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {
         log::info!("Migrated legacy tool key {OLD_KEY} -> {NEW_KEY}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(keys: &[&str]) -> Vec<String> {
+        keys.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn fresh_install_uses_default_priority_order() {
+        let all = v(&["cursor", "claude_code", "codex", "grok", "gemini_cli", "opencode"]);
+        let order = merge_order(&[], &all);
+        // Priority list comes first, then remaining adapters in their natural order.
+        assert_eq!(order[0], "claude_code");
+        assert_eq!(order[1], "codex");
+        assert_eq!(order[2], "grok");
+    }
+
+    #[test]
+    fn new_priority_agent_slots_after_its_predecessor() {
+        // Existing user whose saved order predates `grok`.
+        let saved = v(&["claude_code", "codex", "gemini_cli", "cursor", "opencode"]);
+        let all = v(&["cursor", "claude_code", "codex", "grok", "gemini_cli", "opencode"]);
+        let order = merge_order(&saved, &all);
+        let codex = order.iter().position(|k| k == "codex").unwrap();
+        assert_eq!(order[codex + 1], "grok", "grok must land right after codex");
+        // Existing entries keep their relative order.
+        assert!(
+            order.iter().position(|k| k == "gemini_cli").unwrap()
+                > order.iter().position(|k| k == "grok").unwrap()
+        );
+    }
+
+    #[test]
+    fn non_priority_new_agent_appends_at_end() {
+        let saved = v(&["claude_code", "codex"]);
+        let all = v(&["claude_code", "codex", "some_new_tool"]);
+        let order = merge_order(&saved, &all);
+        assert_eq!(order.last().unwrap(), "some_new_tool");
+    }
 }
