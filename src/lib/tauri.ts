@@ -352,6 +352,12 @@ export const getAllTags = () => invoke<string[]>("get_all_tags");
 export const setSkillTags = (skillId: string, tags: string[]) =>
   invoke<void>("set_skill_tags", { skillId, tags });
 
+export const renameTag = (oldName: string, newName: string) =>
+  invoke<void>("rename_tag", { oldName, newName });
+
+export const deleteTag = (name: string) =>
+  invoke<void>("delete_tag", { name });
+
 // ── Sync ──
 
 export const syncSkillToTool = (skillId: string, tool: string) =>

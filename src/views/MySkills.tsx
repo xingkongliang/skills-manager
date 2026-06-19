@@ -21,6 +21,8 @@ import {
   Square,
   GripVertical,
   CircleSlash,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
@@ -144,6 +146,10 @@ export function MySkills() {
   const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [allTags, setAllTags] = useState<string[]>([]);
+  // Inline rename / delete of a tag directly from the filter bar (#233)
+  const [tagBeingRenamed, setTagBeingRenamed] = useState<string | null>(null);
+  const [tagRenameValue, setTagRenameValue] = useState("");
+  const [tagToDelete, setTagToDelete] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const refreshAfterDeleteRef = useRef<number | null>(null);
@@ -868,6 +874,51 @@ export function MySkills() {
     }
   };
 
+  // Replace `oldTag` with `newTag` in the active filter set so the current
+  // filtering survives a rename/delete.
+  const replaceTagInFilters = (oldTag: string, newTag?: string) =>
+    setTagFilters((prev) => {
+      if (!prev.has(oldTag)) return prev;
+      const next = new Set(prev);
+      next.delete(oldTag);
+      if (newTag) next.add(newTag);
+      return next;
+    });
+
+  const startRenameTag = (tag: string) => {
+    setTagBeingRenamed(tag);
+    setTagRenameValue(tag);
+  };
+
+  const submitRenameTag = async () => {
+    const oldName = tagBeingRenamed;
+    if (oldName === null) return;
+    const newName = tagRenameValue.trim();
+    setTagBeingRenamed(null);
+    if (!newName || newName === oldName) return;
+    try {
+      await api.renameTag(oldName, newName);
+      replaceTagInFilters(oldName, newName);
+      toast.success(t("mySkills.tags.tagRenamed"));
+      await refreshManagedSkills();
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    }
+  };
+
+  const handleDeleteTag = async () => {
+    const tag = tagToDelete;
+    if (tag === null) return;
+    try {
+      await api.deleteTag(tag);
+      replaceTagInFilters(tag);
+      toast.success(t("mySkills.tags.tagDeleted"));
+      await refreshManagedSkills();
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    }
+  };
+
   const getTagOptions = (skill: ManagedSkill, keyword: string) => {
     const needle = keyword.trim().toLowerCase();
     return allTags.filter((tag) => {
@@ -1406,17 +1457,62 @@ export function MySkills() {
             })()}
             {allTags.map((tag) => {
               const isActive = tagFilters.has(tag);
+              if (tagBeingRenamed === tag) {
+                return (
+                  <input
+                    key={tag}
+                    autoFocus
+                    value={tagRenameValue}
+                    onChange={(e) => setTagRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") submitRenameTag();
+                      else if (e.key === "Escape") setTagBeingRenamed(null);
+                    }}
+                    onBlur={submitRenameTag}
+                    className="w-24 rounded-full border border-accent-border bg-surface px-2.5 py-0.5 text-[12px] font-medium text-primary outline-none"
+                  />
+                );
+              }
               return (
-                <button
+                <div
                   key={tag}
-                  onClick={() => setTagFilters(toggleFilter(tagFilters, tag))}
                   className={cn(
-                    "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                    "group inline-flex items-center rounded-full text-[12px] font-medium transition-colors",
                     isActive ? getTagActiveColor(tag, allTags) : getTagColor(tag, allTags)
                   )}
                 >
-                  {tag}
-                </button>
+                  <button
+                    onClick={() => setTagFilters(toggleFilter(tagFilters, tag))}
+                    className="px-2.5 py-0.5"
+                  >
+                    {tag}
+                  </button>
+                  {/* onMouseDown preventDefault keeps focus on an open rename
+                      input so clicking these never triggers its blur-submit —
+                      otherwise renaming A→"B" then deleting B would silently
+                      merge-then-delete A's skills too. */}
+                  <span className="hidden items-center gap-0.5 pr-1.5 group-hover:flex">
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => startRenameTag(tag)}
+                      title={t("mySkills.tags.renameTag")}
+                      className="rounded p-0.5 opacity-70 hover:bg-black/10 hover:opacity-100"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setTagBeingRenamed(null);
+                        setTagToDelete(tag);
+                      }}
+                      title={t("mySkills.tags.deleteTag")}
+                      className="rounded p-0.5 opacity-70 hover:bg-black/10 hover:opacity-100"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </span>
+                </div>
               );
             })}
           </>
@@ -1918,6 +2014,13 @@ export function MySkills() {
         message={t("mySkills.batchDeleteConfirm", { count: selectedIds.size })}
         onClose={() => setBatchDeleteConfirm(false)}
         onConfirm={handleBatchDelete}
+      />
+      <ConfirmDialog
+        open={tagToDelete !== null}
+        title={t("mySkills.tags.deleteTag")}
+        message={t("mySkills.tags.deleteConfirm", { tag: tagToDelete || "" })}
+        onClose={() => setTagToDelete(null)}
+        onConfirm={handleDeleteTag}
       />
       <BatchTagDialog
         open={batchTagDialogOpen}

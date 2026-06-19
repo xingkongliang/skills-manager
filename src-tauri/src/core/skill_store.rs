@@ -1202,6 +1202,49 @@ impl SkillStore {
         Ok(map)
     }
 
+    /// Globally rename a tag across every skill that carries it. Returns the
+    /// ids of the affected skills so the caller can refresh their metadata.
+    /// If a skill already has `new`, the rows are merged (no duplicate) thanks
+    /// to `UPDATE OR IGNORE` followed by removing any leftover old rows.
+    pub fn rename_tag(&self, old: &str, new: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let affected: Vec<String> = {
+            let mut stmt =
+                conn.prepare("SELECT DISTINCT skill_id FROM skill_tags WHERE tag = ?1")?;
+            let rows = stmt.query_map(params![old], |row| row.get::<_, String>(0))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        // Guard self-rename: the cleanup DELETE below would otherwise wipe the
+        // tag entirely (the UPDATE is a no-op when old == new).
+        if old == new {
+            return Ok(affected);
+        }
+        // One transaction so a crash can't leave the tag half-renamed (the
+        // non-conflicting rows updated while merged rows still hold `old`).
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE OR IGNORE skill_tags SET tag = ?1 WHERE tag = ?2",
+            params![new, old],
+        )?;
+        tx.execute("DELETE FROM skill_tags WHERE tag = ?1", params![old])?;
+        tx.commit()?;
+        Ok(affected)
+    }
+
+    /// Globally remove a tag from every skill that carries it. Returns the ids
+    /// of the affected skills so the caller can refresh their metadata.
+    pub fn delete_tag(&self, name: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let affected: Vec<String> = {
+            let mut stmt =
+                conn.prepare("SELECT DISTINCT skill_id FROM skill_tags WHERE tag = ?1")?;
+            let rows = stmt.query_map(params![name], |row| row.get::<_, String>(0))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        conn.execute("DELETE FROM skill_tags WHERE tag = ?1", params![name])?;
+        Ok(affected)
+    }
+
     // ── Audit log ──
 
     /// Append an audit entry. Best-effort: errors are swallowed so callers
@@ -1424,4 +1467,89 @@ fn map_skill_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SkillRecord> {
         last_checked_at: row.get(17)?,
         last_check_error: row.get(18)?,
     })
+}
+
+#[cfg(test)]
+mod tag_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn skill(id: &str) -> SkillRecord {
+        SkillRecord {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            source_type: "import".to_string(),
+            source_ref: None,
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: format!("/tmp/{id}"),
+            content_hash: None,
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        }
+    }
+
+    #[test]
+    fn rename_tag_updates_all_and_merges_into_existing() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        store.insert_skill(&skill("a")).unwrap();
+        store.insert_skill(&skill("b")).unwrap();
+        store.set_tags_for_skill("a", &["old".into()]).unwrap();
+        // b already carries the target name, so the rename must merge, not dup.
+        store
+            .set_tags_for_skill("b", &["old".into(), "new".into()])
+            .unwrap();
+
+        let mut affected = store.rename_tag("old", "new").unwrap();
+        affected.sort();
+        assert_eq!(affected, vec!["a".to_string(), "b".to_string()]);
+
+        assert_eq!(store.get_all_tags().unwrap(), vec!["new".to_string()]);
+        let map = store.get_tags_map().unwrap();
+        assert_eq!(map.get("a").unwrap(), &vec!["new".to_string()]);
+        assert_eq!(map.get("b").unwrap(), &vec!["new".to_string()]);
+    }
+
+    #[test]
+    fn rename_tag_to_itself_is_noop_not_delete() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        store.insert_skill(&skill("a")).unwrap();
+        store.set_tags_for_skill("a", &["keep".into()]).unwrap();
+
+        let affected = store.rename_tag("keep", "keep").unwrap();
+        assert_eq!(affected, vec!["a".to_string()]);
+        // The tag must survive a self-rename, not be wiped.
+        assert_eq!(store.get_all_tags().unwrap(), vec!["keep".to_string()]);
+    }
+
+    #[test]
+    fn delete_tag_removes_from_all_skills() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        store.insert_skill(&skill("a")).unwrap();
+        store.insert_skill(&skill("b")).unwrap();
+        store
+            .set_tags_for_skill("a", &["keep".into(), "drop".into()])
+            .unwrap();
+        store.set_tags_for_skill("b", &["drop".into()]).unwrap();
+
+        let mut affected = store.delete_tag("drop").unwrap();
+        affected.sort();
+        assert_eq!(affected, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(store.get_all_tags().unwrap(), vec!["keep".to_string()]);
+        let map = store.get_tags_map().unwrap();
+        assert_eq!(map.get("a").unwrap(), &vec!["keep".to_string()]);
+        assert!(map.get("b").is_none());
+    }
 }

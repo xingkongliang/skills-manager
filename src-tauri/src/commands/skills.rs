@@ -2134,6 +2134,52 @@ pub async fn set_skill_tags(
     .await?
 }
 
+/// Globally rename a tag across all skills (used by the tag filter bar). If the
+/// new name already exists, the tags are merged.
+#[tauri::command]
+pub async fn rename_tag(
+    old_name: String,
+    new_name: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let new_name = new_name.trim().to_string();
+        if new_name.is_empty() {
+            return Err(AppError::invalid_input("Tag name cannot be empty"));
+        }
+        if new_name == old_name {
+            return Ok(());
+        }
+        sync_metadata::with_repo_lock("rename tag", || {
+            let affected = store.rename_tag(&old_name, &new_name)?;
+            for skill_id in &affected {
+                sync_metadata::ensure_skill_metadata_unlocked(&store, skill_id)?;
+            }
+            Ok(())
+        })
+        .map_err(AppError::db)
+    })
+    .await?
+}
+
+/// Globally delete a tag from all skills (used by the tag filter bar).
+#[tauri::command]
+pub async fn delete_tag(name: String, store: State<'_, Arc<SkillStore>>) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        sync_metadata::with_repo_lock("delete tag", || {
+            let affected = store.delete_tag(&name)?;
+            for skill_id in &affected {
+                sync_metadata::ensure_skill_metadata_unlocked(&store, skill_id)?;
+            }
+            Ok(())
+        })
+        .map_err(AppError::db)
+    })
+    .await?
+}
+
 #[tauri::command]
 pub async fn cancel_install(
     key: String,

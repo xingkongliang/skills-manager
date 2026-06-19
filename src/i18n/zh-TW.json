@@ -219,7 +219,12 @@
       "addTag": "新增標籤...",
       "noTags": "無標籤",
       "tagAdded": "標籤已新增",
-      "tagsUpdated": "標籤已更新"
+      "tagsUpdated": "標籤已更新",
+      "renameTag": "重新命名標籤",
+      "deleteTag": "刪除標籤",
+      "tagRenamed": "標籤已重新命名",
+      "tagDeleted": "標籤已刪除",
+      "deleteConfirm": "確定從所有技能中移除標籤「{{tag}}」嗎？"
     },
     "selectMode": "多選",
     "selectedCount": "已選 {{count}} 個",

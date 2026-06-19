@@ -249,7 +249,12 @@
       "addTag": "Add tag...",
       "noTags": "No tags",
       "tagAdded": "Tag added",
-      "tagsUpdated": "Tags updated"
+      "tagsUpdated": "Tags updated",
+      "renameTag": "Rename tag",
+      "deleteTag": "Delete tag",
+      "tagRenamed": "Tag renamed",
+      "tagDeleted": "Tag deleted",
+      "deleteConfirm": "Remove the tag \"{{tag}}\" from all skills?"
     },
     "selectMode": "Select",
     "selectedCount": "{{count}} selected",
