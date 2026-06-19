@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.25.0] - 2026-06-19
+
+### Release Overview
+- This release adds global tag rename and delete from the skill filter bar via a right-click context menu.
+
+### User-facing
+- **Right-click tag management from the filter bar** — Right-click any tag pill in the filter bar to open a context menu with Rename and Delete options.
+- **Rename tags globally** — The Rename action opens a modal dialog, applies the new tag name to all skills, and updates any active filters automatically.
+- **Delete tags globally with confirmation** — The Delete action asks for confirmation before removing the tag from all skills.
+- **Cleaner filter pills** — The previous hover-icon design (✏️/🗑️ on each pill) has been removed; left-click still filters by tag as before.
+
+### Developer & Governance
+- Added `src/components/TagRenameDialog.tsx` for the modal rename dialog.
+- The backend `rename_tag` / `delete_tag` SQLite commands were already shipped in v1.24.0; this release wires them into the redesigned filter-bar UX.
+- Added `tagName` and `manageHint` i18n keys to English, Simplified Chinese, and Traditional Chinese.
+
 ## [1.24.0] - 2026-06-18
 
 ### Release Overview
