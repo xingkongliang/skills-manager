@@ -222,6 +222,8 @@
       "tagsUpdated": "標籤已更新",
       "renameTag": "重新命名標籤",
       "deleteTag": "刪除標籤",
+      "tagName": "標籤名稱",
+      "manageHint": "右鍵重新命名或刪除",
       "tagRenamed": "標籤已重新命名",
       "tagDeleted": "標籤已刪除",
       "deleteConfirm": "確定從所有技能中移除標籤「{{tag}}」嗎？"
@@ -421,7 +423,7 @@
     "language": "語言",
     "help": "說明",
     "about": "關於",
-    "version": "Skills Manager 1.24.0",
+    "version": "Skills Manager 1.25.0",
     "tagline": "跨平台。極簡、高效、無感多 Preset 切換。",
     "checkUpdate": "檢查更新",
     "checking": "檢查中…",

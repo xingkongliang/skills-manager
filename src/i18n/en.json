@@ -252,6 +252,8 @@
       "tagsUpdated": "Tags updated",
       "renameTag": "Rename tag",
       "deleteTag": "Delete tag",
+      "tagName": "Tag name",
+      "manageHint": "Right-click to rename or delete",
       "tagRenamed": "Tag renamed",
       "tagDeleted": "Tag deleted",
       "deleteConfirm": "Remove the tag \"{{tag}}\" from all skills?"
@@ -470,7 +472,7 @@
     "language": "Language",
     "help": "Help",
     "about": "About",
-    "version": "Skills Manager 1.24.0",
+    "version": "Skills Manager 1.25.0",
     "tagline": "Cross-platform. Minimal, efficient, seamless multi-preset switching.",
     "checkUpdate": "Check for Updates",
     "checking": "Checking…",
