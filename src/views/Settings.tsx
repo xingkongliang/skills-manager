@@ -13,6 +13,7 @@ import {
   Sun,
   Moon,
   Monitor,
+  PanelTop,
   AlertTriangle,
   BookOpen,
   Bug,
@@ -54,6 +55,7 @@ import { open as dialogOpen, confirm as dialogConfirm } from "@tauri-apps/plugin
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
+import { useWindowChrome } from "../context/WindowChromeContext";
 import { AgentIcon } from "../components/AgentIcon";
 import * as api from "../lib/tauri";
 import { applyTextSize } from "../lib/textScale";
@@ -164,6 +166,10 @@ export function Settings() {
   const { tools, presets, refreshTools, openHelp } = useApp();
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const { theme, setTheme } = useThemeContext();
+  const {
+    appWindowControls,
+    setAppWindowControls: setWindowChromeControls,
+  } = useWindowChrome();
   const [syncMode, setSyncMode] = useState("symlink");
   const [defaultPreset, setDefaultPreset] = useState("");
   const [closeAction, setCloseAction] = useState("");
@@ -422,6 +428,14 @@ export function Settings() {
     if (!enabled && closeAction === "hide") {
       setCloseAction("close");
       await api.setSettings("close_action", "close");
+    }
+  };
+
+  const handleAppWindowControlsChange = async (enabled: boolean) => {
+    try {
+      await setWindowChromeControls(enabled);
+    } catch {
+      toast.error(t("common.error"));
     }
   };
 
@@ -1375,6 +1389,36 @@ export function Settings() {
                     </button>
                   );
                 })}
+              </div>
+            </div>
+
+            {/* Window controls */}
+            <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.windowControls")}</h3>
+                <p className="text-[13px] text-muted">{t("settings.windowControlsDesc")}</p>
+              </div>
+              <div className="flex flex-wrap rounded-[4px] border border-border-subtle bg-background p-px">
+                <button
+                  type="button"
+                  onClick={() => handleAppWindowControlsChange(true)}
+                  className={cn(
+                    segmentedButtonClass,
+                    appWindowControls ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+                  )}
+                >
+                  <PanelTop className="w-3 h-3" /> {t("settings.windowControls_app")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAppWindowControlsChange(false)}
+                  className={cn(
+                    segmentedButtonClass,
+                    !appWindowControls ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+                  )}
+                >
+                  <Monitor className="w-3 h-3" /> {t("settings.windowControls_system")}
+                </button>
               </div>
             </div>
 

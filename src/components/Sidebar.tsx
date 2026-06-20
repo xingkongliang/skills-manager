@@ -28,6 +28,7 @@ import { AgentIcon } from "./AgentIcon";
 import * as api from "../lib/tauri";
 import type { SyncHealth, ToolCategory, ToolInfo } from "../lib/tauri";
 import { getPresetIconOption } from "../lib/presetIcons";
+import { useWindowChrome } from "../context/WindowChromeContext";
 
 function getSyncHealthIndicator(health: SyncHealth, skillCount: number): { color: string; title: string } | null {
   if (skillCount === 0) return null;
@@ -47,6 +48,7 @@ export function Sidebar() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
+  const { sidebarTopPadding } = useWindowChrome();
   const { presets, viewedPreset, setViewedPresetId, refreshPresets, refreshManagedSkills, projects, refreshProjects, tools, managedSkills } = useApp();
   const [showCreate, setShowCreate] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
@@ -375,9 +377,8 @@ export function Sidebar() {
   return (
     <>
       <div className="w-[220px] flex-shrink-0 bg-bg-secondary border-r border-border-subtle h-full flex flex-col select-none relative z-10">
-        {/* Traffic-light safe zone */}
-        <div className="h-[38px] shrink-0" />
-        {/* App logo — sits below macOS window controls */}
+        <div className="shrink-0" style={{ height: sidebarTopPadding }} />
+        {/* App logo */}
         <div className="flex items-center px-3 gap-3 pb-2.5 shrink-0">
           <img
             src="/icons/32x32.png"

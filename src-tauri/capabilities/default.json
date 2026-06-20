@@ -7,7 +7,11 @@
   ],
   "permissions": [
     "core:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-set-decorations",
     "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize",
     "dialog:default",
     "dialog:allow-open",
     "opener:default",

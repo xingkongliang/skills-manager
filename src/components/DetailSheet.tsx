@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
+import { useWindowChrome } from "../context/WindowChromeContext";
 
 const IS_MACOS = navigator.userAgent.includes("Mac");
 
@@ -21,10 +22,15 @@ export function DetailSheet({
   onClose,
   children,
 }: DetailSheetProps) {
+  const { detailSheetTopOffset } = useWindowChrome();
+
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed top-[28px] right-0 bottom-0 left-[220px] z-40 isolate">
+    <div
+      className="fixed right-0 bottom-0 left-[220px] z-40 isolate"
+      style={{ top: detailSheetTopOffset }}
+    >
       <div
         className={
           IS_MACOS
