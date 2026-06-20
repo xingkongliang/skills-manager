@@ -736,6 +736,16 @@ export function Settings() {
     () => installedTools.filter((tool) => tool.enabled),
     [installedTools]
   );
+  const autoUpdateIntervalOptions = [
+    { value: "off", label: t("settings.autoUpdate.intervalOff") },
+    { value: "1h", label: t("settings.autoUpdate.interval1h") },
+    { value: "6h", label: t("settings.autoUpdate.interval6h") },
+    { value: "24h", label: t("settings.autoUpdate.interval24h") },
+  ] as const;
+  const autoUpdateApplyOptions = [
+    { value: "off", label: t("settings.autoUpdate.applyOff") },
+    { value: "on", label: t("settings.autoUpdate.applyOn") },
+  ] as const;
   const customTools = useMemo(() => tools.filter((tool) => tool.is_custom), [tools]);
   const builtInTools = useMemo(() => tools.filter((tool) => !tool.is_custom), [tools]);
   const mainstreamTools = useMemo(
@@ -1563,16 +1573,24 @@ export function Settings() {
                     : ""}
                 </p>
               </div>
-              <select
-                value={autoUpdateInterval}
-                onChange={(e) => handleAutoUpdateIntervalChange(e.target.value)}
-                className={`${fieldClass} shrink-0`}
-              >
-                <option value="off">{t("settings.autoUpdate.intervalOff")}</option>
-                <option value="1h">{t("settings.autoUpdate.interval1h")}</option>
-                <option value="6h">{t("settings.autoUpdate.interval6h")}</option>
-                <option value="24h">{t("settings.autoUpdate.interval24h")}</option>
-              </select>
+              <div className="flex flex-wrap rounded-[4px] border border-border-subtle bg-background p-px">
+                {autoUpdateIntervalOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={autoUpdateInterval === option.value}
+                    onClick={() => handleAutoUpdateIntervalChange(option.value)}
+                    className={cn(
+                      segmentedButtonClass,
+                      autoUpdateInterval === option.value
+                        ? "bg-surface-active text-secondary"
+                        : "text-muted hover:text-tertiary"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="flex items-center justify-between gap-4 px-4 py-2.5">
               <div className="min-w-0">
@@ -1583,14 +1601,24 @@ export function Settings() {
                   {t("settings.autoUpdate.applyDesc")}
                 </p>
               </div>
-              <select
-                value={autoUpdateApply}
-                onChange={(e) => handleAutoUpdateApplyChange(e.target.value)}
-                className={`${fieldClass} shrink-0`}
-              >
-                <option value="off">{t("settings.autoUpdate.applyOff")}</option>
-                <option value="on">{t("settings.autoUpdate.applyOn")}</option>
-              </select>
+              <div className="flex flex-wrap rounded-[4px] border border-border-subtle bg-background p-px">
+                {autoUpdateApplyOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={autoUpdateApply === option.value}
+                    onClick={() => handleAutoUpdateApplyChange(option.value)}
+                    className={cn(
+                      segmentedButtonClass,
+                      autoUpdateApply === option.value
+                        ? "bg-surface-active text-secondary"
+                        : "text-muted hover:text-tertiary"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </section>
