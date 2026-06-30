@@ -112,7 +112,17 @@ export interface Preset {
 export interface DiscoveredGroup {
   name: string;
   fingerprint: string | null;
-  locations: { id: string; tool: string; found_path: string }[];
+  collection: string | null;
+  collection_url: string | null;
+  locations: {
+    id: string;
+    tool: string;
+    found_path: string;
+    is_symlink: boolean;
+    link_target: string | null;
+    collection: string | null;
+    collection_url: string | null;
+  }[];
   imported: boolean;
   found_at: number;
 }

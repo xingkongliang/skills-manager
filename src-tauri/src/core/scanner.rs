@@ -1,6 +1,6 @@
 use anyhow::Result;
-use serde::Serialize;
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::content_hash;
@@ -18,6 +18,8 @@ pub struct ScanPlan {
 pub struct DiscoveredGroup {
     pub name: String,
     pub fingerprint: Option<String>,
+    pub collection: Option<String>,
+    pub collection_url: Option<String>,
     pub locations: Vec<DiscoveredLocation>,
     pub imported: bool,
     pub found_at: i64,
@@ -28,6 +30,28 @@ pub struct DiscoveredLocation {
     pub id: String,
     pub tool: String,
     pub found_path: String,
+    pub is_symlink: bool,
+    pub link_target: Option<String>,
+    pub collection: Option<String>,
+    pub collection_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SkillCollection {
+    pub(crate) source: String,
+    pub(crate) source_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillLockFile {
+    skills: std::collections::HashMap<String, SkillLockEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillLockEntry {
+    source: Option<String>,
+    source_url: Option<String>,
 }
 
 /// Directories to skip during recursive scans (internal/tool-specific metadata).
@@ -215,11 +239,20 @@ pub fn scan_local_skills_with_adapters(
 }
 
 pub fn group_discovered(records: &[DiscoveredSkillRecord]) -> Vec<DiscoveredGroup> {
-    use std::collections::HashMap;
+    group_discovered_with_registry(records, &HashMap::new())
+}
+
+pub(crate) fn group_discovered_with_registry(
+    records: &[DiscoveredSkillRecord],
+    registry: &HashMap<String, SkillCollection>,
+) -> Vec<DiscoveredGroup> {
     let mut groups: HashMap<String, DiscoveredGroup> = HashMap::new();
+    let prefix_counts = repeated_collection_prefix_counts(records);
 
     for rec in records {
         let name = rec.name_guess.clone().unwrap_or_else(|| "unknown".into());
+        let collection = collection_for_record(&name, &rec.found_path, registry, &prefix_counts);
+        let link_info = link_info_for_path(&rec.found_path);
         let group_key = if let Some(fingerprint) = rec.fingerprint.as_deref() {
             format!("fp:{name}:{fingerprint}")
         } else {
@@ -228,10 +261,16 @@ pub fn group_discovered(records: &[DiscoveredSkillRecord]) -> Vec<DiscoveredGrou
         let entry = groups.entry(group_key).or_insert_with(|| DiscoveredGroup {
             name,
             fingerprint: rec.fingerprint.clone(),
+            collection: collection.as_ref().map(|c| c.source.clone()),
+            collection_url: collection.as_ref().and_then(|c| c.source_url.clone()),
             locations: Vec::new(),
             imported: false,
             found_at: rec.found_at,
         });
+        if entry.collection.is_none() {
+            entry.collection = collection.as_ref().map(|c| c.source.clone());
+            entry.collection_url = collection.as_ref().and_then(|c| c.source_url.clone());
+        }
 
         if rec.imported_skill_id.is_some() {
             entry.imported = true;
@@ -246,12 +285,158 @@ pub fn group_discovered(records: &[DiscoveredSkillRecord]) -> Vec<DiscoveredGrou
             id: rec.id.clone(),
             tool: rec.tool.clone(),
             found_path: rec.found_path.clone(),
+            is_symlink: link_info.is_symlink,
+            link_target: link_info.target,
+            collection: collection.as_ref().map(|c| c.source.clone()),
+            collection_url: collection.as_ref().and_then(|c| c.source_url.clone()),
         });
     }
 
     let mut result: Vec<_> = groups.into_values().collect();
-    result.sort_by(|a, b| a.name.cmp(&b.name));
+    for group in &mut result {
+        group.locations.sort_by(|a, b| {
+            a.is_symlink
+                .cmp(&b.is_symlink)
+                .then_with(|| a.tool.cmp(&b.tool))
+                .then_with(|| a.found_path.cmp(&b.found_path))
+        });
+    }
+    result.sort_by(|a, b| match (&a.collection, &b.collection) {
+        (Some(a_collection), Some(b_collection)) => a_collection
+            .cmp(b_collection)
+            .then_with(|| a.name.cmp(&b.name)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.name.cmp(&b.name),
+    });
     result
+}
+
+fn collection_for_record(
+    name: &str,
+    path: &str,
+    registry: &HashMap<String, SkillCollection>,
+    prefix_counts: &HashMap<String, usize>,
+) -> Option<SkillCollection> {
+    skill_collection_for_path(path)
+        .or_else(|| registry.get(name).cloned())
+        .or_else(|| prefix_collection_for_name(name, prefix_counts))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LinkInfo {
+    is_symlink: bool,
+    target: Option<String>,
+}
+
+fn link_info_for_path(path: &str) -> LinkInfo {
+    let path = Path::new(path);
+    let is_symlink = std::fs::symlink_metadata(path)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(false);
+    if !is_symlink {
+        return LinkInfo {
+            is_symlink: false,
+            target: None,
+        };
+    }
+
+    LinkInfo {
+        is_symlink: true,
+        target: resolve_link_target(path).map(|target| target.to_string_lossy().into_owned()),
+    }
+}
+
+fn resolve_link_target(path: &Path) -> Option<PathBuf> {
+    let target = std::fs::read_link(path).ok()?;
+    if target.is_absolute() {
+        Some(target)
+    } else {
+        Some(path.parent().unwrap_or_else(|| Path::new("")).join(target))
+    }
+}
+
+fn skill_collection_for_path(path: &str) -> Option<SkillCollection> {
+    let path = Path::new(path);
+    skill_collection_for_physical_path(path).or_else(|| {
+        resolve_link_target(path)
+            .as_deref()
+            .and_then(skill_collection_for_physical_path)
+    })
+}
+
+fn skill_collection_for_physical_path(path: &Path) -> Option<SkillCollection> {
+    let skill_name = path.file_name()?.to_str()?;
+    let mut dir = path.parent();
+    while let Some(current) = dir {
+        let lock_path = current.join(".skill-lock.json");
+        if let Some(collection) = read_skill_collection_from_lock(&lock_path, skill_name) {
+            return Some(collection);
+        }
+        dir = current.parent();
+    }
+    None
+}
+
+fn read_skill_collection_from_lock(lock_path: &Path, skill_name: &str) -> Option<SkillCollection> {
+    let content = std::fs::read_to_string(lock_path).ok()?;
+    let lock: SkillLockFile = serde_json::from_str(&content).ok()?;
+    let entry = lock.skills.get(skill_name)?;
+    let source = entry.source.as_deref()?.trim();
+    if source.is_empty() {
+        return None;
+    }
+    Some(SkillCollection {
+        source: source.to_string(),
+        source_url: entry
+            .source_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    })
+}
+
+fn repeated_collection_prefix_counts(records: &[DiscoveredSkillRecord]) -> HashMap<String, usize> {
+    let mut counts = HashMap::new();
+    for name in records.iter().filter_map(|rec| rec.name_guess.as_deref()) {
+        if let Some(prefix) = collection_prefix_for_name(name) {
+            *counts.entry(prefix).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+pub(crate) fn repeated_collection_prefixes(records: &[DiscoveredSkillRecord]) -> Vec<String> {
+    let mut prefixes: Vec<_> = repeated_collection_prefix_counts(records)
+        .into_iter()
+        .filter_map(|(prefix, count)| (count >= 2).then_some(prefix))
+        .collect();
+    prefixes.sort();
+    prefixes
+}
+
+fn prefix_collection_for_name(
+    name: &str,
+    prefix_counts: &HashMap<String, usize>,
+) -> Option<SkillCollection> {
+    let prefix = collection_prefix_for_name(name)?;
+    if prefix_counts.get(&prefix).copied().unwrap_or(0) < 2 {
+        return None;
+    }
+    Some(SkillCollection {
+        source: prefix,
+        source_url: None,
+    })
+}
+
+fn collection_prefix_for_name(name: &str) -> Option<String> {
+    let (prefix, _) = name.split_once('-')?;
+    let prefix = prefix.trim();
+    if prefix.len() < 3 || !prefix.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(prefix.to_string())
 }
 
 #[cfg(test)]
@@ -462,5 +647,322 @@ mod tests {
         let groups = group_discovered(&records);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].locations.len(), 2);
+    }
+
+    #[test]
+    fn grouping_keeps_skill_lock_collection_members_adjacent() {
+        let tmp = tempdir().unwrap();
+        let skills_root = tmp.path().join("skills");
+        write_skill(&skills_root.join("z-superpower"));
+        write_skill(&skills_root.join("a-other"));
+        write_skill(&skills_root.join("m-superpower"));
+        fs::write(
+            tmp.path().join(".skill-lock.json"),
+            r#"{
+              "version": 3,
+              "skills": {
+                "z-superpower": {
+                  "source": "obra/superpowers",
+                  "sourceType": "github",
+                  "sourceUrl": "https://github.com/obra/superpowers.git"
+                },
+                "m-superpower": {
+                  "source": "obra/superpowers",
+                  "sourceType": "github",
+                  "sourceUrl": "https://github.com/obra/superpowers.git"
+                },
+                "a-other": {
+                  "source": "vercel-labs/skills",
+                  "sourceType": "github",
+                  "sourceUrl": "https://github.com/vercel-labs/skills.git"
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let records = vec![
+            DiscoveredSkillRecord {
+                id: "1".into(),
+                tool: "shared".into(),
+                found_path: skills_root
+                    .join("z-superpower")
+                    .to_string_lossy()
+                    .into_owned(),
+                name_guess: Some("z-superpower".into()),
+                fingerprint: Some("hash-z".into()),
+                found_at: 10,
+                imported_skill_id: None,
+            },
+            DiscoveredSkillRecord {
+                id: "2".into(),
+                tool: "shared".into(),
+                found_path: skills_root.join("a-other").to_string_lossy().into_owned(),
+                name_guess: Some("a-other".into()),
+                fingerprint: Some("hash-a".into()),
+                found_at: 20,
+                imported_skill_id: None,
+            },
+            DiscoveredSkillRecord {
+                id: "3".into(),
+                tool: "shared".into(),
+                found_path: skills_root
+                    .join("m-superpower")
+                    .to_string_lossy()
+                    .into_owned(),
+                name_guess: Some("m-superpower".into()),
+                fingerprint: Some("hash-m".into()),
+                found_at: 30,
+                imported_skill_id: None,
+            },
+        ];
+
+        let names: Vec<_> = group_discovered(&records)
+            .into_iter()
+            .map(|group| group.name)
+            .collect();
+
+        assert_eq!(names, vec!["m-superpower", "z-superpower", "a-other"]);
+    }
+
+    #[test]
+    fn grouping_reads_collection_from_symlink_target_lock() {
+        let tmp = tempdir().unwrap();
+        let agents_root = tmp.path().join("agents");
+        let agents_skills = agents_root.join("skills");
+        let visible_skills = tmp.path().join("claude").join("skills");
+        let target = agents_skills.join("using-superpowers");
+        let link = visible_skills.join("using-superpowers");
+        write_skill(&target);
+        fs::create_dir_all(&visible_skills).unwrap();
+        fs::write(
+            agents_root.join(".skill-lock.json"),
+            r#"{
+              "version": 3,
+              "skills": {
+                "using-superpowers": {
+                  "source": "obra/superpowers",
+                  "sourceUrl": "https://github.com/obra/superpowers.git"
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&target, &link).unwrap();
+
+        let groups = group_discovered(&[DiscoveredSkillRecord {
+            id: "1".into(),
+            tool: "claude_code".into(),
+            found_path: link.to_string_lossy().into_owned(),
+            name_guess: Some("using-superpowers".into()),
+            fingerprint: Some("hash-superpowers".into()),
+            found_at: 10,
+            imported_skill_id: None,
+        }]);
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].collection.as_deref(), Some("obra/superpowers"));
+    }
+
+    #[test]
+    fn grouping_reports_symlink_location_target() {
+        let tmp = tempdir().unwrap();
+        let target = tmp
+            .path()
+            .join("agents")
+            .join("skills")
+            .join("linked-skill");
+        let link = tmp.path().join("codex").join("skills").join("linked-skill");
+        write_skill(&target);
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&target, &link).unwrap();
+
+        let groups = group_discovered(&[DiscoveredSkillRecord {
+            id: "1".into(),
+            tool: "codex".into(),
+            found_path: link.to_string_lossy().into_owned(),
+            name_guess: Some("linked-skill".into()),
+            fingerprint: Some("hash-linked".into()),
+            found_at: 10,
+            imported_skill_id: None,
+        }]);
+
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].locations[0].is_symlink);
+        assert_eq!(
+            groups[0].locations[0].link_target.as_deref(),
+            Some(target.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn grouping_orders_physical_location_before_symlink_locations() {
+        let tmp = tempdir().unwrap();
+        let target = tmp
+            .path()
+            .join("agents")
+            .join("skills")
+            .join("review-skill");
+        let claude_link = tmp
+            .path()
+            .join("claude")
+            .join("skills")
+            .join("review-skill");
+        let codex_link = tmp.path().join("codex").join("skills").join("review-skill");
+        write_skill(&target);
+        fs::create_dir_all(claude_link.parent().unwrap()).unwrap();
+        fs::create_dir_all(codex_link.parent().unwrap()).unwrap();
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&target, &claude_link).unwrap();
+            std::os::unix::fs::symlink(&target, &codex_link).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(&target, &claude_link).unwrap();
+            std::os::windows::fs::symlink_dir(&target, &codex_link).unwrap();
+        }
+
+        let groups = group_discovered(&[
+            DiscoveredSkillRecord {
+                id: "1".into(),
+                tool: "codex".into(),
+                found_path: codex_link.to_string_lossy().into_owned(),
+                name_guess: Some("review-skill".into()),
+                fingerprint: Some("hash-review".into()),
+                found_at: 10,
+                imported_skill_id: None,
+            },
+            DiscoveredSkillRecord {
+                id: "2".into(),
+                tool: "claude_code".into(),
+                found_path: claude_link.to_string_lossy().into_owned(),
+                name_guess: Some("review-skill".into()),
+                fingerprint: Some("hash-review".into()),
+                found_at: 20,
+                imported_skill_id: None,
+            },
+            DiscoveredSkillRecord {
+                id: "3".into(),
+                tool: "vercel".into(),
+                found_path: target.to_string_lossy().into_owned(),
+                name_guess: Some("review-skill".into()),
+                fingerprint: Some("hash-review".into()),
+                found_at: 30,
+                imported_skill_id: None,
+            },
+        ]);
+
+        assert_eq!(groups.len(), 1);
+        let tools: Vec<_> = groups[0]
+            .locations
+            .iter()
+            .map(|location| location.tool.as_str())
+            .collect();
+
+        assert_eq!(tools, vec!["vercel", "claude_code", "codex"]);
+    }
+
+    #[test]
+    fn grouping_uses_external_registry_source_before_prefix_fallback() {
+        use std::collections::HashMap;
+
+        let records = vec![
+            DiscoveredSkillRecord {
+                id: "1".into(),
+                tool: "claude_code".into(),
+                found_path: "/tmp/gitnexus-cli".into(),
+                name_guess: Some("gitnexus-cli".into()),
+                fingerprint: Some("hash-cli".into()),
+                found_at: 10,
+                imported_skill_id: None,
+            },
+            DiscoveredSkillRecord {
+                id: "2".into(),
+                tool: "claude_code".into(),
+                found_path: "/tmp/gitnexus-exploring".into(),
+                name_guess: Some("gitnexus-exploring".into()),
+                fingerprint: Some("hash-exploring".into()),
+                found_at: 20,
+                imported_skill_id: None,
+            },
+        ];
+        let mut registry = HashMap::new();
+        registry.insert(
+            "gitnexus-cli".to_string(),
+            SkillCollection {
+                source: "abhigyanpatwari/gitnexus".to_string(),
+                source_url: Some("https://github.com/abhigyanpatwari/gitnexus.git".to_string()),
+            },
+        );
+        registry.insert(
+            "gitnexus-exploring".to_string(),
+            SkillCollection {
+                source: "abhigyanpatwari/gitnexus".to_string(),
+                source_url: Some("https://github.com/abhigyanpatwari/gitnexus.git".to_string()),
+            },
+        );
+
+        let groups = group_discovered_with_registry(&records, &registry);
+
+        assert!(groups
+            .iter()
+            .all(|group| group.collection.as_deref() == Some("abhigyanpatwari/gitnexus")));
+    }
+
+    #[test]
+    fn grouping_uses_repeated_name_prefix_as_collection_fallback() {
+        let records = vec![
+            DiscoveredSkillRecord {
+                id: "1".into(),
+                tool: "claude_code".into(),
+                found_path: "/tmp/gitnexus-cli".into(),
+                name_guess: Some("gitnexus-cli".into()),
+                fingerprint: Some("hash-cli".into()),
+                found_at: 10,
+                imported_skill_id: None,
+            },
+            DiscoveredSkillRecord {
+                id: "2".into(),
+                tool: "claude_code".into(),
+                found_path: "/tmp/gitnexus-exploring".into(),
+                name_guess: Some("gitnexus-exploring".into()),
+                fingerprint: Some("hash-exploring".into()),
+                found_at: 20,
+                imported_skill_id: None,
+            },
+            DiscoveredSkillRecord {
+                id: "3".into(),
+                tool: "claude_code".into(),
+                found_path: "/tmp/frontend-design".into(),
+                name_guess: Some("frontend-design".into()),
+                fingerprint: Some("hash-design".into()),
+                found_at: 30,
+                imported_skill_id: None,
+            },
+        ];
+
+        let groups = group_discovered(&records);
+        let gitnexus: Vec<_> = groups
+            .iter()
+            .filter(|group| group.collection.as_deref() == Some("gitnexus"))
+            .map(|group| group.name.as_str())
+            .collect();
+
+        assert_eq!(gitnexus, vec!["gitnexus-cli", "gitnexus-exploring"]);
+        assert!(groups
+            .iter()
+            .find(|group| group.name == "frontend-design")
+            .and_then(|group| group.collection.as_deref())
+            .is_none());
     }
 }

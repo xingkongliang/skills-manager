@@ -22,6 +22,7 @@ import {
   MoreHorizontal,
   Pencil,
   Calendar,
+  Link2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -41,6 +42,8 @@ const MARKET_SEARCH_STEP = 60;
 const MARKET_SEARCH_DEBOUNCE_MS = 450;
 const MARKET_SEARCH_CACHE_TTL_MS = 120_000;
 const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
+
+type ScanLocation = ScanResult["groups"][number]["locations"][number];
 
 export function InstallSkills() {
   const { t } = useTranslation();
@@ -601,6 +604,58 @@ export function InstallSkills() {
 
   const scanGroups = scanResult?.groups ?? [];
   const pendingGroups = scanGroups.filter((group) => !group.imported);
+  const scanGroupSections = useMemo(() => {
+    const sections: {
+      key: string;
+      collection: string | null;
+      collectionUrl: string | null;
+      groups: typeof scanGroups;
+    }[] = [];
+    const byKey = new Map<string, (typeof sections)[number]>();
+
+    for (const group of scanGroups) {
+      const key = group.collection ?? "__ungrouped__";
+      let section = byKey.get(key);
+      if (!section) {
+        section = {
+          key,
+          collection: group.collection,
+          collectionUrl: group.collection_url,
+          groups: [],
+        };
+        byKey.set(key, section);
+        sections.push(section);
+      }
+      section.groups.push(group);
+    }
+
+    return sections;
+  }, [scanGroups]);
+  const renderScanLocation = (location: ScanLocation, muted = false) => (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="inline-flex shrink-0 rounded-[4px] border border-border-subtle bg-surface px-1.5 py-px text-[13px] font-medium text-tertiary">
+        {location.tool}
+      </span>
+      {location.is_symlink ? (
+        <span
+          className="inline-flex shrink-0 items-center rounded-[4px] border border-cyan-500/20 bg-cyan-500/10 px-1 py-px text-cyan-500 dark:text-cyan-300"
+          title={t("install.scan.symlink")}
+        >
+          <Link2 className="h-3 w-3" />
+        </span>
+      ) : (
+        <span
+          className="inline-flex shrink-0 items-center rounded-[4px] border border-emerald-500/20 bg-emerald-500/10 px-1 py-px text-emerald-500 dark:text-emerald-300"
+          title={t("install.scan.physical")}
+        >
+          <FolderInput className="h-3 w-3" />
+        </span>
+      )}
+      <code className={cn("block min-w-0 truncate text-[13px]", muted ? "text-muted" : "text-tertiary")}>
+        {location.found_path}
+      </code>
+    </div>
+  );
   const sourceOptions = useMemo(
     () => Array.from(new Set(marketSkills.map((skill) => skill.source))),
     [marketSkills]
@@ -1310,8 +1365,37 @@ export function InstallSkills() {
                 </div>
               ) : (
                 <>
-                  <div className="app-panel-muted overflow-hidden">
-                    {scanGroups.map((group) => {
+                  <div className="space-y-3">
+                    {scanGroupSections.map((section) => (
+                      <div
+                        key={section.key}
+                        className="overflow-hidden rounded-xl border border-border-subtle bg-bg-secondary"
+                      >
+                        {section.collection ? (
+                          <div className="flex items-center justify-between gap-3 border-b border-border-subtle bg-surface/70 px-3 py-2.5">
+                            <div className="min-w-0">
+                              <div className="truncate text-[12px] font-semibold text-secondary">
+                                {t("install.scan.collection", { name: section.collection })}
+                              </div>
+                              <div className="mt-0.5 text-[11px] text-muted">
+                                {t("install.scan.collectionCount", { count: section.groups.length })}
+                              </div>
+                            </div>
+                            {section.collectionUrl ? (
+                              <button
+                                type="button"
+                                onClick={() => openUrl(section.collectionUrl!)}
+                                className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-border-subtle bg-surface px-2 py-1 text-[12px] text-tertiary transition-colors hover:bg-surface-hover hover:text-secondary"
+                                title={section.collectionUrl}
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                                {t("install.scan.source")}
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <div>
+                          {section.groups.map((group) => {
                       const [primaryLocation, ...otherLocations] = group.locations;
                       const primaryPath = primaryLocation?.found_path;
                       const isImporting = !!primaryPath && importingPaths.has(primaryPath);
@@ -1389,14 +1473,7 @@ export function InstallSkills() {
                               </div>
 
                               {primaryLocation ? (
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <span className="inline-flex shrink-0 rounded-[4px] border border-border-subtle bg-surface px-1.5 py-px text-[13px] font-medium text-tertiary">
-                                    {primaryLocation.tool}
-                                  </span>
-                                  <code className="block min-w-0 truncate text-[13px] text-tertiary">
-                                    {primaryLocation.found_path}
-                                  </code>
-                                </div>
+                                renderScanLocation(primaryLocation)
                               ) : null}
                             </div>
 
@@ -1422,21 +1499,17 @@ export function InstallSkills() {
                             <div className="border-t border-border-subtle bg-surface/40 px-3 py-1.5">
                               <div className="space-y-1">
                                 {otherLocations.map((location) => (
-                                  <div key={location.id} className="flex min-w-0 items-center gap-2">
-                                    <span className="inline-flex shrink-0 rounded-[4px] border border-border-subtle bg-surface px-1.5 py-px text-[13px] font-medium text-tertiary">
-                                      {location.tool}
-                                    </span>
-                                    <code className="block min-w-0 truncate text-[13px] text-muted">
-                                      {location.found_path}
-                                    </code>
-                                  </div>
+                                  <div key={location.id}>{renderScanLocation(location, true)}</div>
                                 ))}
                               </div>
                             </div>
                           ) : null}
                         </article>
                       );
-                    })}
+                        })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </>
               )}

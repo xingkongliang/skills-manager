@@ -64,11 +64,16 @@ impl ToolAdapter {
     }
 
     fn candidate_paths(relative: &str) -> Vec<PathBuf> {
-        let mut candidates = vec![Self::home().join(relative)];
+        let configured_path = normalize_config_path(relative);
+        let mut candidates = vec![if configured_path.is_absolute() {
+            configured_path.clone()
+        } else {
+            Self::home().join(&configured_path)
+        }];
 
         if let Some(suffix) = relative.strip_prefix(".config/") {
             if let Some(config_dir) = dirs::config_dir() {
-                let config_path = config_dir.join(suffix);
+                let config_path = config_dir.join(normalize_config_path(suffix));
                 if !candidates.contains(&config_path) {
                     candidates.push(config_path);
                 }
@@ -144,6 +149,17 @@ impl ToolAdapter {
     }
 }
 
+fn normalize_config_path(path: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(path.replace('/', "\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from(path)
+    }
+}
+
 pub fn default_tool_adapters() -> Vec<ToolAdapter> {
     vec![
         ToolAdapter {
@@ -171,6 +187,22 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: None,
         },
         ToolAdapter {
+            // Vercel's Agent Resources skills installer manages the shared
+            // `~/.agents/skills` tree. Other agents may point at entries in
+            // this tree via symlink, but the root itself should be surfaced as
+            // its own source instead of being labeled as Codex or Copilot.
+            key: "vercel".into(),
+            display_name: "Vercel".into(),
+            relative_skills_dir: ".agents/skills".into(),
+            relative_detect_dir: ".agents".into(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: None,
+            category: ToolCategory::Coding,
+            is_custom: false,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        },
+        ToolAdapter {
             // oh-my-pi (omp) reads native skills from asymmetric paths: the
             // user-level scan is `~/.omp/agent/skills` (the active profile's
             // agent dir), while the project-level scan walks up for
@@ -189,11 +221,7 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
         },
         ToolAdapter {
             // Codex CLI reads user-level skills from `~/.codex/skills/` and
-            // project-level skills from `<repo>/.codex/skills/`. The shared
-            // `~/.agents/skills` location is kept as a discovery fallback so
-            // skills synced there by other adapters (or by older skills-manager
-            // versions that deployed Codex there by mistake) still surface in
-            // the Codex tab.
+            // project-level skills from `<repo>/.codex/skills/`.
             //
             // Note: `AGENT_SKILLS_PATH` (openai/codex#13074) is a proposed
             // env var that would let Codex load from `<custom>/.agents/skills`;
@@ -203,7 +231,7 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             display_name: "Codex".into(),
             relative_skills_dir: ".codex/skills".into(),
             relative_detect_dir: ".codex".into(),
-            additional_scan_dirs: vec![".agents/skills".into()],
+            additional_scan_dirs: vec![],
             override_skills_dir: None,
             category: ToolCategory::Coding,
             is_custom: false,
@@ -314,8 +342,7 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             display_name: "GitHub Copilot".into(),
             relative_skills_dir: ".copilot/skills".into(),
             relative_detect_dir: ".copilot".into(),
-            // GitHub Copilot now reads skills from the unified `~/.agents/skills` location too.
-            additional_scan_dirs: vec![".agents/skills".into()],
+            additional_scan_dirs: vec![],
             override_skills_dir: None,
             category: ToolCategory::Coding,
             is_custom: false,
@@ -912,8 +939,8 @@ pub fn enabled_installed_adapters(
 #[cfg(test)]
 mod tests {
     use super::{
-        CustomToolDef, ToolCategory, all_tool_adapters, default_tool_adapters,
-        find_adapter_with_store,
+        all_tool_adapters, default_tool_adapters, find_adapter_with_store, CustomToolDef,
+        ToolCategory,
     };
     use crate::core::skill_store::SkillStore;
 
@@ -970,7 +997,11 @@ mod tests {
             CustomToolDef {
                 key: "omp_agent".to_string(),
                 display_name: "Legacy Custom OMP".to_string(),
-                skills_dir: tmp.path().join("legacy-skills").to_string_lossy().into_owned(),
+                skills_dir: tmp
+                    .path()
+                    .join("legacy-skills")
+                    .to_string_lossy()
+                    .into_owned(),
                 project_relative_skills_dir: Some(".legacy/skills".to_string()),
                 category: ToolCategory::Lobster,
             },
@@ -983,7 +1014,10 @@ mod tests {
             },
         ];
         store
-            .set_setting("custom_tools", &serde_json::to_string(&custom_tools).unwrap())
+            .set_setting(
+                "custom_tools",
+                &serde_json::to_string(&custom_tools).unwrap(),
+            )
             .unwrap();
 
         let adapters = all_tool_adapters(&store);
@@ -1009,7 +1043,10 @@ mod tests {
         assert!(custom_adapter.is_custom);
         assert_eq!(custom_adapter.category, ToolCategory::Lobster);
         assert_eq!(custom_adapter.skills_dir(), custom_skills);
-        assert_eq!(custom_adapter.project_relative_skills_dir(), custom_project_path);
+        assert_eq!(
+            custom_adapter.project_relative_skills_dir(),
+            custom_project_path
+        );
 
         let found = find_adapter_with_store(&store, "omp_agent").unwrap();
         assert_eq!(found.display_name, "OMP Agent");
@@ -1031,5 +1068,53 @@ mod tests {
         assert_eq!(adapter.relative_skills_dir, ".config/opencode/skills");
         // Project path under workspace: .opencode/skills
         assert_eq!(adapter.project_relative_skills_dir(), ".opencode/skills");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn built_in_skill_paths_use_windows_separators_for_display() {
+        let adapter = default_tool_adapters()
+            .into_iter()
+            .find(|adapter| adapter.key == "claude_code")
+            .expect("claude_code adapter should exist");
+
+        let path = adapter.skills_dir().to_string_lossy().to_string();
+
+        assert!(
+            !path.contains("/skills"),
+            "display path should not preserve config forward slashes: {path}"
+        );
+    }
+
+    #[test]
+    fn codex_and_github_copilot_do_not_claim_shared_agents_skill_root() {
+        let adapters = default_tool_adapters();
+        for key in ["codex", "github_copilot"] {
+            let adapter = adapters
+                .iter()
+                .find(|adapter| adapter.key == key)
+                .unwrap_or_else(|| panic!("{key} adapter should exist"));
+
+            assert!(
+                !adapter
+                    .additional_scan_dirs
+                    .iter()
+                    .any(|dir| dir == ".agents/skills"),
+                "{key} should not label ~/.agents/skills as its own skill path"
+            );
+        }
+    }
+
+    #[test]
+    fn vercel_adapter_owns_shared_agents_skill_root() {
+        let adapters = default_tool_adapters();
+        let adapter = adapters
+            .iter()
+            .find(|adapter| adapter.key == "vercel")
+            .expect("vercel adapter should exist");
+
+        assert_eq!(adapter.display_name, "Vercel");
+        assert_eq!(adapter.relative_skills_dir, ".agents/skills");
+        assert_eq!(adapter.relative_detect_dir, ".agents");
     }
 }

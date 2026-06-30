@@ -382,6 +382,11 @@
       "noResults": "没有发现可导入的本地 Skills",
       "noResultsHint": "当前目录可能已经全部纳入管理，或者相关 Agent 目录中还没有 Skills。",
       "locations": "{{count}} 个来源位置",
+      "collection": "{{name}} 合集",
+      "collectionCount": "此合集 {{count}} 个技能",
+      "source": "来源",
+      "symlink": "软连接",
+      "physical": "本体目录",
       "listHint": "检测到现有本地 Skills，可直接导入到中央仓库并加入当前 Preset。",
       "listImportedHint": "扫描结果都已纳入中央仓库，无需重复导入。",
       "stats": {

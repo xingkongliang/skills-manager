@@ -1,11 +1,15 @@
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 
 use crate::core::{
-    error::AppError, installer, scanner, skill_store::SkillStore, sync_metadata, tool_adapters,
+    error::AppError, installer, scanner, skill_store::SkillStore, skillssh_api, sync_metadata,
+    tool_adapters,
 };
+
+const COLLECTION_HINT_CACHE_TTL: i64 = 86_400; // 24 hours
 
 fn canonicalize_lossy(path: &str) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
@@ -38,6 +42,73 @@ fn match_imported_skill_id(
     }
 
     None
+}
+
+fn registry_collection_hints(
+    store: &SkillStore,
+    records: &[crate::core::skill_store::DiscoveredSkillRecord],
+) -> HashMap<String, scanner::SkillCollection> {
+    let names: HashSet<String> = records
+        .iter()
+        .filter_map(|rec| rec.name_guess.clone())
+        .collect();
+    let proxy_url = store.proxy_url();
+    let mut hints = HashMap::new();
+
+    for prefix in scanner::repeated_collection_prefixes(records) {
+        let cache_key = format!("collection_hint_{}", prefix);
+        let cached = store
+            .get_cache(&cache_key, COLLECTION_HINT_CACHE_TTL)
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str::<Vec<skillssh_api::SkillsShSkill>>(&json).ok());
+
+        let skills = match cached {
+            Some(skills) => skills,
+            None => match skillssh_api::search_skills(&prefix, 100, proxy_url.as_deref()) {
+                Ok(skills) => {
+                    if let Ok(json) = serde_json::to_string(&skills) {
+                        store.set_cache(&cache_key, &json).ok();
+                    }
+                    skills
+                }
+                Err(err) => {
+                    log::debug!("skills.sh collection lookup failed for {prefix}: {err}");
+                    continue;
+                }
+            },
+        };
+
+        for skill in skills {
+            if !names.contains(&skill.skill_id) || skill.source.trim().is_empty() {
+                continue;
+            }
+            hints.entry(skill.skill_id.clone()).or_insert_with(|| {
+                let source = skill.source.trim().to_string();
+                scanner::SkillCollection {
+                    source: source.clone(),
+                    source_url: registry_source_url(&source),
+                }
+            });
+        }
+    }
+
+    hints
+}
+
+fn registry_source_url(source: &str) -> Option<String> {
+    let parts: Vec<_> = source.split('/').collect();
+    if parts.len() == 2
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && !part.contains("://") && !part.contains(' '))
+    {
+        return Some(format!("https://github.com/{source}.git"));
+    }
+    Some(format!(
+        "https://skills.sh/search?q={}",
+        urlencoding::encode(source)
+    ))
 }
 
 #[derive(Debug, Serialize)]
@@ -73,7 +144,8 @@ pub async fn scan_local_skills(
         }
 
         let all_discovered = store.get_all_discovered().map_err(AppError::db)?;
-        let groups = scanner::group_discovered(&all_discovered);
+        let registry = registry_collection_hints(&store, &all_discovered);
+        let groups = scanner::group_discovered_with_registry(&all_discovered, &registry);
 
         Ok(ScanResultDto {
             tools_scanned: plan.tools_scanned,

@@ -334,6 +334,11 @@
       "noResults": "沒有發現可匯入的本機 Skills",
       "noResultsHint": "當前目錄可能已經全部納入管理，或者相關 Agent 目錄中還沒有 Skills。",
       "locations": "{{count}} 個來源位置",
+      "collection": "{{name}} 合集",
+      "collectionCount": "此合集 {{count}} 個技能",
+      "source": "來源",
+      "symlink": "軟連結",
+      "physical": "本體目錄",
       "listHint": "偵測到現有本機 Skills，可直接匯入到中央倉庫並加入當前 Preset。",
       "listImportedHint": "掃描結果都已納入中央倉庫，無需重複匯入。",
       "stats": {

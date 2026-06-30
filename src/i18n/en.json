@@ -382,6 +382,11 @@
       "noResults": "No local skills found",
       "noResultsHint": "Everything may already be managed, or those tool folders do not contain skills yet.",
       "locations": "{{count}} locations",
+      "collection": "{{name}} collection",
+      "collectionCount": "{{count}} skills in this collection",
+      "source": "Source",
+      "symlink": "Symlink",
+      "physical": "Local folder",
       "listHint": "Existing local skills were found and can be imported directly into the central library.",
       "listImportedHint": "Everything in this scan is already in the central library.",
       "stats": {
