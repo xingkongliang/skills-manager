@@ -16,19 +16,8 @@ permissions:
 
 jobs:
   rust-tests:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # macOS covers the unix code paths; Windows covers the
-          # cfg(windows) paths (symlink/junction sync, removal).
-          - platform: macos-latest
-            label: macOS
-          - platform: windows-latest
-            label: Windows
-
-    runs-on: ${{ matrix.platform }}
-    name: Rust tests (${{ matrix.label }})
+    runs-on: windows-latest
+    name: Rust tests (Windows)
 
     steps:
       - name: Checkout repository

@@ -11,25 +11,8 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-            label: macOS-arm64
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-            label: macOS-x64
-          - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            label: Linux-x64
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
-            label: Windows-x64
-
-    runs-on: ${{ matrix.platform }}
-    name: Build (${{ matrix.label }})
+    runs-on: windows-latest
+    name: Build (Windows-x64)
 
     steps:
       - name: Checkout repository
@@ -46,7 +29,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-pc-windows-msvc
 
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -59,21 +42,10 @@ jobs:
           # failure at negligible cost. See v1.22.3 Windows-x64 run.
           save-if: false
 
-      - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
       - name: Install frontend dependencies
         run: npm ci
 
       - name: Windows smoke check
-        if: matrix.platform == 'windows-latest'
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
       - name: Extract changelog for current version
@@ -109,7 +81,7 @@ jobs:
             echo ""
             echo "### 当前校验状态"
             echo ""
-            echo "- ✅ 跨平台构建通过（macOS Intel / macOS ARM / Windows x64 / Linux x64）"
+            echo "- ✅ Windows x64 构建通过"
             echo "- ✅ TypeScript typecheck 通过"
             echo ""
             echo "---"
@@ -123,7 +95,7 @@ jobs:
             echo ""
             echo "### Current Verification"
             echo ""
-            echo "- ✅ Cross-platform build passed (macOS Intel / macOS ARM / Windows x64 / Linux x64)"
+            echo "- ✅ Windows x64 build passed"
             echo "- ✅ TypeScript typecheck passed"
             echo ""
             echo "</details>"
@@ -142,11 +114,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Ad-hoc sign macOS bundles so Gatekeeper reports "unverified developer"
-          # (dismissable via right-click → Open) instead of "app is damaged".
-          # Without this, the linker-only signature has no sealed resources and
-          # `codesign --verify` fails. See issue #138.
-          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && '-' || '' }}
         with:
           tagName: v__VERSION__
           releaseName: 'Skills Manager v__VERSION__'
@@ -154,19 +121,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           updaterJsonKeepUniversal: true
-          args: --target ${{ matrix.target }}
-
-      - name: Verify macOS bundle signature
-        if: startsWith(matrix.platform, 'macos')
-        run: |
-          set -euo pipefail
-          APP_PATH="src-tauri/target/${{ matrix.target }}/release/bundle/macos/skills-manager.app"
-          if [ ! -d "$APP_PATH" ]; then
-            echo "Expected app bundle not found at $APP_PATH" >&2
-            exit 1
-          fi
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-          codesign -dvvv "$APP_PATH" 2>&1 | grep -E 'Signature|Sealed Resources|Identifier'
+          args: --target x86_64-pc-windows-msvc
 
   verify-updater-assets:
     needs: build

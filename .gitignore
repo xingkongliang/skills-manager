@@ -7,6 +7,10 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# npm is the tracked package manager for this repo
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
 node_modules
 dist
 dist-ssr
@@ -36,4 +40,3 @@ docs
 reference
 CLAUDE.md
 .loop-log
-
