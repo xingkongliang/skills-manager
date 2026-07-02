@@ -466,17 +466,9 @@ export function MySkills() {
       const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
       const status = await api.gitBackupStatus().catch(() => null);
       setGitStatus(status);
-
-      if (savedRemote) {
-        setGitRemoteConfig(savedRemote);
-        return;
-      }
-
-      const detectedRemote = status?.remote_url?.trim() || "";
-      if (detectedRemote) {
-        setGitRemoteConfig(detectedRemote);
-        api.setSettings("git_backup_remote_url", detectedRemote).catch(() => {});
-      }
+      // The saved setting is the single source of truth. Do not backfill from
+      // `.git/config` — that made a cleared URL reappear after disconnect (#260).
+      setGitRemoteConfig(savedRemote);
     })();
   }, []);
 

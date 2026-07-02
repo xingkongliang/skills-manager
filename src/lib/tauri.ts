@@ -522,6 +522,9 @@ export const gitBackupInit = () => invoke<void>("git_backup_init");
 export const gitBackupSetRemote = (url: string) =>
   invoke<void>("git_backup_set_remote", { url });
 
+export const gitBackupRemoveRemote = () =>
+  invoke<void>("git_backup_remove_remote");
+
 export const gitBackupCommit = (message: string) =>
   invoke<void>("git_backup_commit", { message });
 

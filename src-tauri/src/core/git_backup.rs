@@ -237,6 +237,23 @@ pub(crate) fn set_remote_unlocked(skills_dir: &Path, url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove the remote origin. Idempotent: succeeds when the repo or the
+/// remote does not exist, so a retry after a partial disconnect converges.
+/// Local repository and remote data are untouched.
+pub fn remove_remote(skills_dir: &Path) -> Result<()> {
+    let _lock = RepoLock::acquire_foreground("git remove remote")?;
+    remove_remote_unlocked(skills_dir)
+}
+
+fn remove_remote_unlocked(skills_dir: &Path) -> Result<()> {
+    if run_git(skills_dir, &["remote", "get-url", "origin"]).is_err() {
+        return Ok(());
+    }
+    run_git_checked(skills_dir, &["remote", "remove", "origin"])?;
+    log::info!("git remove_remote: origin removed");
+    Ok(())
+}
+
 /// Stage all changes and create a commit.
 #[allow(dead_code)]
 pub fn commit_all(skills_dir: &Path, message: &str) -> Result<()> {
@@ -1086,6 +1103,41 @@ mod tests {
     }
 
     // ── first push to an empty remote (the no_upstream scenario) ──
+
+    // ── remove_remote ──
+    // Tested via the unlocked inner so cases run in parallel without
+    // serializing on the process-wide repo lock.
+
+    #[test]
+    fn remove_remote_deletes_origin_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .arg("init")
+            .output()
+            .unwrap()
+            .status
+            .success());
+        run_git_checked(
+            dir,
+            &["remote", "add", "origin", "https://github.com/acme/repo.git"],
+        )
+        .unwrap();
+
+        remove_remote_unlocked(dir).unwrap();
+        assert!(run_git(dir, &["remote", "get-url", "origin"]).is_err());
+
+        // A second disconnect (no origin left) must still succeed.
+        remove_remote_unlocked(dir).unwrap();
+    }
+
+    #[test]
+    fn remove_remote_on_non_repo_is_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        remove_remote_unlocked(tmp.path()).unwrap();
+    }
 
     #[test]
     fn push_first_time_to_empty_remote_with_no_upstream() {

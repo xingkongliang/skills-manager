@@ -84,6 +84,22 @@ pub async fn git_backup_set_remote(
     .await?
 }
 
+/// Disconnect the local machine from the backup remote (#260): remove the
+/// git origin and clear the saved remote URL setting. Remote repository data
+/// and the local repo are kept.
+#[tauri::command]
+pub async fn git_backup_remove_remote(store: State<'_, Arc<SkillStore>>) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    let skills_dir = central_repo::skills_dir();
+    tokio::task::spawn_blocking(move || {
+        git_backup::remove_remote(&skills_dir).map_err(AppError::git)?;
+        store
+            .set_setting("git_backup_remote_url", "")
+            .map_err(AppError::db)
+    })
+    .await?
+}
+
 #[tauri::command]
 pub async fn git_backup_commit(
     store: State<'_, Arc<SkillStore>>,

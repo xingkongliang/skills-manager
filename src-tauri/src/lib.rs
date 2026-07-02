@@ -967,6 +967,7 @@ pub fn run() {
             commands::git_backup::git_backup_status,
             commands::git_backup::git_backup_init,
             commands::git_backup::git_backup_set_remote,
+            commands::git_backup::git_backup_remove_remote,
             commands::git_backup::git_backup_commit,
             commands::git_backup::git_backup_push,
             commands::git_backup::git_backup_pull,

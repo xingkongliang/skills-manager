@@ -5,6 +5,7 @@ import {
   RefreshCw,
   Globe,
   Link as LinkIcon,
+  Unlink,
   Copy,
   Settings2,
   Github,
@@ -184,6 +185,7 @@ export function Settings() {
   const [installing, setInstalling] = useState(false);
   const [gitRemoteInput, setGitRemoteInput] = useState("");
   const [gitRemoteSaving, setGitRemoteSaving] = useState(false);
+  const [gitRemoteDisconnecting, setGitRemoteDisconnecting] = useState(false);
   const [proxyInput, setProxyInput] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
   const [textSize, setTextSize] = useState("default");
@@ -350,21 +352,11 @@ export function Settings() {
     }).catch(() => {});
     api.getCentralRepoPathOverride().then(setCentralRepoPathOverride).catch(() => {});
 
-    (async () => {
-      const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
-      if (savedRemote) {
-        setGitRemoteInput(savedRemote);
-        return;
-      }
-
-      // Fallback: if repo already has remote configured, auto-fill and persist it.
-      const status = await api.gitBackupStatus().catch(() => null);
-      const detectedRemote = status?.remote_url?.trim() || "";
-      if (detectedRemote) {
-        setGitRemoteInput(detectedRemote);
-        api.setSettings("git_backup_remote_url", detectedRemote).catch(() => {});
-      }
-    })();
+    // The saved setting is the single source of truth. Do not backfill from
+    // `.git/config` — that made a cleared URL reappear on reopen (#260).
+    api.getSettings("git_backup_remote_url").then((v) => {
+      setGitRemoteInput(v?.trim() || "");
+    }).catch(() => {});
   }, []);
 
   const handleRefresh = async () => {
@@ -698,6 +690,19 @@ export function Settings() {
       toast.error(t("common.error"));
     } finally {
       setGitRemoteSaving(false);
+    }
+  };
+
+  const handleDisconnectGitRemote = async () => {
+    setGitRemoteDisconnecting(true);
+    try {
+      await api.gitBackupRemoveRemote();
+      setGitRemoteInput("");
+      toast.success(t("settings.gitDisconnected"));
+    } catch {
+      toast.error(t("common.error"));
+    } finally {
+      setGitRemoteDisconnecting(false);
     }
   };
 
@@ -1624,7 +1629,20 @@ export function Settings() {
                   )}
                   {t("common.save")}
                 </button>
+                <button
+                  onClick={handleDisconnectGitRemote}
+                  disabled={gitRemoteDisconnecting}
+                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+                >
+                  {gitRemoteDisconnecting ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Unlink className="w-3 h-3" />
+                  )}
+                  {t("settings.gitDisconnect")}
+                </button>
               </div>
+              <p className="text-[12px] text-muted mt-2">{t("settings.gitDisconnectHint")}</p>
             </div>
           </div>
         </section>
