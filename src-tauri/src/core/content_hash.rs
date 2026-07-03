@@ -111,6 +111,25 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    /// Project-workspace skills may now be symlinks to the central library
+    /// (#225). Sync-status classification hashes the project path directly,
+    /// so hashing through a symlinked root must see the real content.
+    #[cfg(unix)]
+    #[test]
+    fn hash_through_symlinked_root_matches_real_directory() {
+        let tmp = tempdir().unwrap();
+        let real = tmp.path().join("skill");
+        fs::create_dir_all(&real).unwrap();
+        fs::write(real.join("SKILL.md"), "# hello").unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert_eq!(
+            hash_directory(&link).unwrap(),
+            hash_directory(&real).unwrap()
+        );
+    }
+
     #[test]
     fn hash_deterministic_same_content() {
         let tmp1 = tempdir().unwrap();

@@ -996,13 +996,14 @@ pub async fn export_skill_to_project(
             }
         }
 
+        let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
         for agent_key in &agent_keys {
             let (skills_root, _) = resolve_agent_skills_roots(&store, &project, agent_key)
                 .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
             let target_dir = skills_root.join(&dir_name);
             std::fs::create_dir_all(&skills_root)?;
-            sync_engine::sync_skill(&source, &target_dir, sync_engine::SyncMode::Copy)
-                .map_err(AppError::io)?;
+            let mode = sync_engine::sync_mode_for_tool(agent_key, configured_mode.as_deref());
+            sync_engine::sync_skill(&source, &target_dir, mode).map_err(AppError::io)?;
         }
 
         Ok(())
@@ -1037,6 +1038,14 @@ pub async fn update_project_skill_from_center(
         let managed = find_best_center_match(skill, &all_managed)
             .ok_or_else(|| AppError::not_found("No matching skill in center"))?;
 
+        // Mirror the global-workspace protection (agent_workspace.rs): never
+        // overwrite a project copy that has unsynced local edits (#225 review).
+        if classify_sync_status(skill, Some(managed)) == "project_newer" {
+            return Err(AppError::invalid_input(
+                "Project skill is newer than the Skills Center version",
+            ));
+        }
+
         let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
             .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
         let target_path = PathBuf::from(&skill.path);
@@ -1054,8 +1063,9 @@ pub async fn update_project_skill_from_center(
         }
 
         let source = PathBuf::from(&managed.central_path);
-        sync_engine::sync_skill(&source, &target_path, sync_engine::SyncMode::Copy)
-            .map_err(AppError::io)?;
+        let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+        let mode = sync_engine::sync_mode_for_tool(&agent, configured_mode.as_deref());
+        sync_engine::sync_skill(&source, &target_path, mode).map_err(AppError::io)?;
         Ok(())
     })
     .await?

@@ -451,7 +451,7 @@
     "changeDir": "更改目录",
     "openInFinder": "打开文件夹",
     "syncMode": "默认同步模式",
-    "syncModeDesc": "推荐使用符号链接，占用空间极小且修改可实时生效。",
+    "syncModeDesc": "推荐使用符号链接，占用空间极小且修改可实时生效。全局与项目工作区均生效；注意项目里的符号链接指向本机中央库，不会随仓库带走。",
     "symlink": "符号链接",
     "copy": "文件复制",
     "currentPreset": "当前 Preset",

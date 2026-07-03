@@ -451,7 +451,7 @@
     "changeDir": "Change Directory",
     "openInFinder": "Open Folder",
     "syncMode": "Default Sync Mode",
-    "syncModeDesc": "Symlinks are recommended — minimal disk usage with live updates.",
+    "syncModeDesc": "Symlinks are recommended — minimal disk usage with live updates. Applies to both global and project workspaces; note that symlinks in a project point to this machine's central library and won't travel with the repo.",
     "symlink": "Symlink",
     "copy": "File Copy",
     "currentPreset": "Current Preset",

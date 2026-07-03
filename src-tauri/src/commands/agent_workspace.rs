@@ -452,8 +452,9 @@ fn update_agent_local_skill_from_center(
     ensure_agent_skill_path(&target_path, &skills_root)?;
 
     let source = PathBuf::from(&managed.central_path);
-    sync_engine::sync_skill(&source, &target_path, sync_engine::SyncMode::Copy)
-        .map_err(AppError::io)?;
+    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+    let mode = sync_engine::sync_mode_for_tool(agent, configured_mode.as_deref());
+    sync_engine::sync_skill(&source, &target_path, mode).map_err(AppError::io)?;
     Ok(())
 }
 

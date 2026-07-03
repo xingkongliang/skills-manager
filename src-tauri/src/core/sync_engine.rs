@@ -1,13 +1,19 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-/// Refuse to copy when `dst` would land inside `src` (or equal `src`).
-/// Otherwise the recursive copy walks into the freshly-created `dst` and
-/// produces unbounded `<dst>/<dst>/<dst>/...` nesting (issue #61).
+/// Refuse to sync when `src` and `dst` overlap in either direction (equal,
+/// dst inside src, or src inside dst). Otherwise the recursive copy walks
+/// into the freshly-created `dst` and produces unbounded nesting (issue #61),
+/// or the pre-copy removal of `dst` deletes the source along with it (#199).
+///
+/// `src` must exist and canonicalize — every caller is about to read from it,
+/// and all destructive steps (remove target / remove destination) happen after
+/// this check, so failing here protects the existing target. A missing `dst`
+/// is the normal case for a fresh install and is judged via its parent.
 pub(crate) fn ensure_dst_not_inside_src(src: &Path, dst: &Path) -> Result<()> {
-    let Ok(src_canon) = src.canonicalize() else {
-        return Ok(());
-    };
+    let src_canon = src
+        .canonicalize()
+        .with_context(|| format!("Source {:?} does not exist or is not accessible", src))?;
     let dst_canon: Option<PathBuf> = dst.canonicalize().ok().or_else(|| {
         let parent = dst.parent()?.canonicalize().ok()?;
         let name = dst.file_name()?;
@@ -19,6 +25,13 @@ pub(crate) fn ensure_dst_not_inside_src(src: &Path, dst: &Path) -> Result<()> {
                 "Destination {:?} is inside source {:?}; refusing to copy to avoid infinite recursion",
                 dst,
                 src
+            );
+        }
+        if src_canon.starts_with(&dst_canon) {
+            anyhow::bail!(
+                "Source {:?} is inside destination {:?}; refusing to avoid deleting the source",
+                src,
+                dst
             );
         }
     }
@@ -501,6 +514,44 @@ mod tests {
         fs::create_dir_all(&src).unwrap();
 
         ensure_dst_not_inside_src(&src, &dst).unwrap();
+    }
+
+    #[test]
+    fn ensure_dst_not_inside_src_rejects_missing_source() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("does-not-exist");
+        let dst = tmp.path().join("target");
+        fs::create_dir_all(&dst).unwrap();
+
+        let err = ensure_dst_not_inside_src(&src, &dst).unwrap_err();
+        assert!(err.to_string().contains("not accessible"), "{err}");
+    }
+
+    #[test]
+    fn ensure_dst_not_inside_src_rejects_source_inside_destination() {
+        let tmp = tempdir().unwrap();
+        let dst = tmp.path().join("skills");
+        let src = dst.join("nested");
+        fs::create_dir_all(&src).unwrap();
+
+        let err = ensure_dst_not_inside_src(&src, &dst).unwrap_err();
+        assert!(err.to_string().contains("deleting the source"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_dst_not_inside_src_rejects_dangling_symlink_source() {
+        // A dangling symlink source used to slip past the guard (canonicalize
+        // failure returned Ok) and let the caller delete the destination
+        // before the copy inevitably failed (#199 hardening).
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("dangling");
+        std::os::unix::fs::symlink(tmp.path().join("gone"), &src).unwrap();
+        let dst = tmp.path().join("target");
+        fs::create_dir_all(&dst).unwrap();
+
+        let err = ensure_dst_not_inside_src(&src, &dst).unwrap_err();
+        assert!(err.to_string().contains("not accessible"), "{err}");
     }
 
     #[test]
