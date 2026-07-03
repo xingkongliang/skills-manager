@@ -26,6 +26,10 @@ pub struct ContentEntry {
     /// `mode & 0o111` on unix when metadata is readable, else `None`.
     /// Always `None` on non-unix. `None` means "not folded into the hash".
     pub exec_bits: Option<u32>,
+    /// Modification time in ms since the Unix epoch, captured during the walk
+    /// so callers don't need a second `metadata()` syscall (or a separate
+    /// recursive walk) just to learn when the content last changed.
+    pub modified_ms: Option<i64>,
 }
 
 impl ContentEntry {
@@ -78,19 +82,30 @@ pub fn list_content_files(dir: &Path) -> Vec<ContentEntry> {
             #[cfg(windows)]
             let relative_path = relative_path.replace('\\', "/");
             let exec_bits = exec_bits_of(entry.path());
+            // Reuse WalkDir's already-fetched metadata for the mtime: no extra
+            // stat, and no separate recursive walk to answer "last modified?".
+            let modified_ms = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64);
             ContentEntry {
                 relative_path,
                 path: entry.into_path(),
                 exec_bits,
+                modified_ms,
             }
         })
         .collect()
 }
 
-pub fn hash_directory(dir: &Path) -> Result<String> {
+/// Hash a prepared content-file list. Split out from [`hash_directory`] so a
+/// caller that already walked the tree (via [`list_content_files`]) can hash
+/// and inspect the same entries without walking again (#248).
+pub fn hash_entries(entries: &[ContentEntry]) -> String {
     let mut hasher = Sha256::new();
-
-    for entry in list_content_files(dir) {
+    for entry in entries {
         hasher.update(entry.relative_path.as_bytes());
         if let Ok(content) = std::fs::read(&entry.path) {
             hasher.update(&content);
@@ -101,8 +116,18 @@ pub fn hash_directory(dir: &Path) -> Result<String> {
             hasher.update(&bits.to_le_bytes());
         }
     }
+    hex::encode(hasher.finalize())
+}
 
-    Ok(hex::encode(hasher.finalize()))
+/// Latest content-file modification time (ms since epoch) from a prepared
+/// entry list. Scoped to the same files the hash covers: dirs, `.git`,
+/// `.DS_Store`, and `*.pyc` are excluded, so it reflects real content change.
+pub fn latest_modified_ms(entries: &[ContentEntry]) -> Option<i64> {
+    entries.iter().filter_map(|e| e.modified_ms).max()
+}
+
+pub fn hash_directory(dir: &Path) -> Result<String> {
+    Ok(hash_entries(&list_content_files(dir)))
 }
 
 #[cfg(test)]
@@ -256,6 +281,42 @@ mod tests {
         let rels: Vec<_> = entries.iter().map(|e| e.relative_path.clone()).collect();
         // Sorted by path, ignore-listed files excluded, subdirs included.
         assert_eq!(rels, vec!["a.txt", "b.txt", "sub/c.md"]);
+    }
+
+    #[test]
+    fn latest_modified_ms_reflects_content_files_and_ignores_empty() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("a.txt"), "a").unwrap();
+        fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("sub/b.md"), "b").unwrap();
+        fs::write(tmp.path().join(".DS_Store"), "junk").unwrap();
+
+        let entries = list_content_files(tmp.path());
+        // Matches the max mtime over exactly the enumerated (non-ignored)
+        // content files, computed from the same single walk with no extra stat.
+        assert_eq!(
+            latest_modified_ms(&entries),
+            entries.iter().filter_map(|e| e.modified_ms).max()
+        );
+        assert!(latest_modified_ms(&entries).is_some());
+
+        // No content files → no timestamp.
+        let empty = tempdir().unwrap();
+        assert_eq!(latest_modified_ms(&list_content_files(empty.path())), None);
+    }
+
+    #[test]
+    fn hash_entries_matches_hash_directory() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("sub/c.md"), "nested").unwrap();
+
+        // The split-out entry hasher must agree with the whole-directory hash.
+        assert_eq!(
+            hash_entries(&list_content_files(tmp.path())),
+            hash_directory(tmp.path()).unwrap()
+        );
     }
 
     #[cfg(unix)]

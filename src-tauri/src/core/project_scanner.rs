@@ -184,6 +184,15 @@ fn read_skills_from_dir_recursive(
 
             let files = list_files(&path);
 
+            // One recursive walk feeds both the content hash and the
+            // last-modified time (#248). Previously this ran three separate
+            // walks per skill: `hash_directory`, plus `latest_modified_millis`
+            // which called `canonicalize()` on every node, so the workspace
+            // scan cost scaled at ~3× the necessary syscalls per skill.
+            let content_entries = content_hash::list_content_files(&path);
+            let content_hash = Some(content_hash::hash_entries(&content_entries));
+            let last_modified_at = content_hash::latest_modified_ms(&content_entries);
+
             skills.push(ProjectSkillInfo {
                 name,
                 dir_name: dir_name.clone(),
@@ -198,8 +207,8 @@ fn read_skills_from_dir_recursive(
                 in_center: false,
                 sync_status: "project_only".to_string(),
                 center_skill_id: None,
-                last_modified_at: latest_modified_millis(&path),
-                content_hash: content_hash::hash_directory(&path).ok(),
+                last_modified_at,
+                content_hash,
             });
             continue;
         }
@@ -304,50 +313,6 @@ fn list_files(dir: &Path) -> Vec<String> {
     }
     files.sort();
     files
-}
-
-fn latest_modified_millis(dir: &Path) -> Option<i64> {
-    use std::collections::HashSet;
-    use std::path::PathBuf;
-
-    fn walk(path: &Path, current: &mut Option<i64>, visited: &mut HashSet<PathBuf>) {
-        // Canonicalize to detect symlink cycles
-        let canon = match std::fs::canonicalize(path) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        if !visited.insert(canon) {
-            return;
-        }
-
-        let Ok(meta) = std::fs::metadata(path) else {
-            return;
-        };
-        if let Ok(modified) = meta.modified() {
-            if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
-                let ts = duration.as_millis() as i64;
-                if current.map_or(true, |value| ts > value) {
-                    *current = Some(ts);
-                }
-            }
-        }
-
-        if !meta.is_dir() {
-            return;
-        }
-
-        let Ok(entries) = std::fs::read_dir(path) else {
-            return;
-        };
-        for entry in entries.filter_map(|e| e.ok()) {
-            walk(&entry.path(), current, visited);
-        }
-    }
-
-    let mut latest = None;
-    let mut visited = HashSet::new();
-    walk(dir, &mut latest, &mut visited);
-    latest
 }
 
 #[cfg(test)]

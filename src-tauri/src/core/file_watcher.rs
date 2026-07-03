@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -11,6 +12,45 @@ use super::{central_repo, skill_store::SkillStore, tool_adapters};
 const APP_FS_CHANGED_EVENT: &str = "app-files-changed";
 const WATCH_RESCAN_INTERVAL: Duration = Duration::from_secs(3);
 const WATCH_EMIT_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// How long a single app-initiated write suppresses watcher emits. Covers a
+/// batch of back-to-back `sync_skill`/`remove_target` calls plus the latency
+/// before the OS delivers their events. Kept short so a genuine external edit
+/// made moments after a sync is still surfaced by the next event or rescan.
+const SELF_WRITE_MUTE: Duration = Duration::from_millis(1200);
+
+/// Monotonic-ms deadline (relative to [`EPOCH`]) until which watcher emits are
+/// suppressed because the app itself is writing to watched dirs (#248: the
+/// app's own sync writes echoed back as `app-files-changed`, forcing a
+/// redundant full `refreshAppData` - and historically refresh storms). 0 = not
+/// muted. A monotonic base avoids wall-clock jumps breaking the window.
+static SUPPRESS_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+static EPOCH: OnceLock<Instant> = OnceLock::new();
+
+fn now_ms() -> u64 {
+    EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// Pure predicate split out so the mute window is unit-testable without touching
+/// the process-global clock or atomic.
+fn muted_at(now_ms: u64, suppress_until_ms: u64) -> bool {
+    now_ms < suppress_until_ms
+}
+
+/// Suppress `app-files-changed` emissions for [`SELF_WRITE_MUTE`] because the
+/// app is about to write to a watched directory. The frontend already refreshes
+/// after the user action that triggered the write, so echoing those writes back
+/// is pure redundant work. Extends (never shrinks) an in-flight window, so a
+/// burst of writes keeps the watcher quiet until the burst settles. A no-op when
+/// no watcher is running (e.g. the CLI), since nothing reads the flag.
+pub fn mute_self_writes() {
+    let deadline = now_ms().saturating_add(SELF_WRITE_MUTE.as_millis() as u64);
+    SUPPRESS_UNTIL_MS.fetch_max(deadline, Ordering::Relaxed);
+}
+
+fn self_write_muted() -> bool {
+    muted_at(now_ms(), SUPPRESS_UNTIL_MS.load(Ordering::Relaxed))
+}
 
 fn collect_watch_paths(store: &SkillStore) -> Vec<PathBuf> {
     let mut paths = vec![central_repo::skills_dir(), central_repo::scenarios_dir()];
@@ -156,6 +196,7 @@ pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Ar
         loop {
             if last_sync.elapsed() >= WATCH_RESCAN_INTERVAL {
                 if sync_watch_set(&mut watcher, &mut watched, &store)
+                    && !self_write_muted()
                     && last_emit.elapsed() >= WATCH_EMIT_DEBOUNCE
                 {
                     if let Err(err) = app.emit(APP_FS_CHANGED_EVENT, ()) {
@@ -169,7 +210,10 @@ pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Ar
 
             match rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(Ok(event)) => {
-                    if !should_emit(&event) || last_emit.elapsed() < WATCH_EMIT_DEBOUNCE {
+                    if !should_emit(&event)
+                        || self_write_muted()
+                        || last_emit.elapsed() < WATCH_EMIT_DEBOUNCE
+                    {
                         continue;
                     }
                     if let Err(err) = app.emit(APP_FS_CHANGED_EVENT, ()) {
@@ -190,10 +234,21 @@ pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Ar
 
 #[cfg(test)]
 mod tests {
-    use super::collect_watch_paths;
+    use super::{collect_watch_paths, muted_at};
     use crate::core::skill_store::{ProjectRecord, SkillStore};
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn self_write_mute_window_is_half_open() {
+        // Muted strictly before the deadline; the deadline instant itself and
+        // anything after are live again, so the window can never wedge shut.
+        assert!(muted_at(5, 10));
+        assert!(!muted_at(10, 10));
+        assert!(!muted_at(11, 10));
+        // A zeroed deadline (never muted) is never active.
+        assert!(!muted_at(0, 0));
+    }
 
     #[test]
     fn linked_workspace_watch_paths_only_include_selected_roots() {

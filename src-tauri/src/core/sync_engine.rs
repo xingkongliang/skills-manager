@@ -78,6 +78,10 @@ pub fn sync_skill(source: &Path, target: &Path, mode: SyncMode) -> Result<SyncMo
         return Ok(mode);
     }
 
+    // A real write to a watched dir follows: mute the watcher so this
+    // app-initiated change doesn't echo back as a redundant refresh (#248).
+    crate::core::file_watcher::mute_self_writes();
+
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create parent dir {:?}", parent))?;
@@ -214,6 +218,9 @@ pub fn remove_target(target: &Path) -> Result<()> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err.into()),
     };
+
+    // An actual removal from a watched dir follows: mute the self-write echo.
+    crate::core::file_watcher::mute_self_writes();
 
     if metadata.file_type().is_symlink() {
         #[cfg(windows)]
