@@ -95,6 +95,14 @@ pub fn get_central_repo_path_override() -> Option<String> {
     central_repo::configured_base_dir().map(|path| path.to_string_lossy().to_string())
 }
 
+/// Warning codes recorded while resolving the central repository at startup
+/// (e.g. unreadable config, invalid configured path). Non-empty means the app
+/// fell back to the default location and the user should be told (#228).
+#[tauri::command]
+pub fn get_central_repo_warnings() -> Vec<String> {
+    central_repo::startup_warnings()
+}
+
 #[tauri::command]
 pub async fn set_central_repo_path(path: Option<String>) -> Result<String, AppError> {
     tauri::async_runtime::spawn_blocking(move || {

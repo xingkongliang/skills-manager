@@ -444,6 +444,8 @@
     "exportLogsDone": "已匯出日誌（{{count}} 個檔案），請把 zip 拖到 GitHub issue 附件區。",
     "exportLogsFailed": "匯出日誌失敗。",
     "panicBanner": "上次執行 Skills Manager 時發生崩潰（{{time}}）。",
+    "repoWarning_config_unreadable": "中央庫設定檔已損壞或無法讀取，本次啟動已回退到預設路徑（~/.skills-manager）。如果技能庫看起來是空的，你的資料仍在先前設定的路徑裡——請到「中央倉庫路徑」重新指定。",
+    "repoWarning_repo_path_invalid": "設定的中央倉庫路徑無效，本次啟動已回退到預設路徑（~/.skills-manager）。如果技能庫看起來是空的，請到「中央倉庫路徑」重新指定資料所在位置。",
     "panicDismiss": "忽略",
     "gitBackup": "Git 同步",
     "gitBackupDesc": "將 Skill 庫備份到 Git 倉庫，支援版本管理和多機同步。",

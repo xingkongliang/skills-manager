@@ -493,6 +493,8 @@
     "exportLogsDone": "Logs exported ({{count}} file(s)). Drag the zip into your GitHub issue.",
     "exportLogsFailed": "Failed to export logs.",
     "panicBanner": "Skills Manager crashed during the last session ({{time}}).",
+    "repoWarning_config_unreadable": "The central library config file is unreadable or corrupt, so this session fell back to the default location (~/.skills-manager). If your library looks empty, your data is still at the previously configured path — set “Central Repo Path” back to it.",
+    "repoWarning_repo_path_invalid": "The configured central repository path is invalid, so this session fell back to the default location (~/.skills-manager). If your library looks empty, re-set “Central Repo Path” to where your data lives.",
     "panicDismiss": "Dismiss",
     "gitBackup": "Git Sync",
     "gitBackupDesc": "Back up your skill library to a Git repository for version control and multi-machine sync.",

@@ -493,6 +493,8 @@
     "exportLogsDone": "已导出日志（{{count}} 个文件），请把 zip 拖到 GitHub issue 附件区。",
     "exportLogsFailed": "导出日志失败。",
     "panicBanner": "上次运行 Skills Manager 时发生崩溃（{{time}}）。",
+    "repoWarning_config_unreadable": "中央库配置文件已损坏或无法读取，本次启动已回退到默认路径（~/.skills-manager）。如果技能库看起来是空的，你的数据仍在之前配置的路径里——请到「中央仓库路径」重新指定。",
+    "repoWarning_repo_path_invalid": "配置的中央仓库路径无效，本次启动已回退到默认路径（~/.skills-manager）。如果技能库看起来是空的，请到「中央仓库路径」重新指定数据所在位置。",
     "panicDismiss": "忽略",
     "gitBackup": "Git 同步",
     "gitBackupDesc": "将 Skill 库备份到 Git 仓库，支持版本管理和多机同步。",

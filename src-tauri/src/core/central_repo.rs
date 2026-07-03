@@ -10,6 +10,27 @@ const CONFIG_FILE_NAME: &str = "repo-config.json";
 
 static BASE_DIR_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static SKILLS_DIR_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+static STARTUP_WARNINGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+fn push_startup_warning(code: &str) {
+    let mut warnings = STARTUP_WARNINGS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !warnings.iter().any(|w| w == code) {
+        warnings.push(code.to_string());
+    }
+}
+
+/// Warning codes recorded while resolving the central repository at startup.
+/// The frontend maps them to localized banner text (`settings.repoWarning_*`).
+pub fn startup_warnings() -> Vec<String> {
+    STARTUP_WARNINGS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
 
 /// Global mutex shared by every test that mutates the base-dir override via
 /// [`set_test_base_dir_override`]. The override is process-wide static state,
@@ -46,14 +67,40 @@ fn config_file_path() -> PathBuf {
         .join(CONFIG_FILE_NAME)
 }
 
-fn load_config() -> RepoPathConfig {
-    let path = config_file_path();
+/// Distinguishes "no config file" (normal fresh install) from "config file
+/// exists but cannot be used" (must never be silently treated as a fresh
+/// install — that is how a configured library turns into an empty default
+/// one and users report "all my skills are gone", issue #228 review).
+#[derive(Debug)]
+enum ConfigState {
+    Missing,
+    Valid(RepoPathConfig),
+    Invalid(String),
+}
+
+fn load_config_state_from(path: &Path) -> ConfigState {
     let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
-        Err(_) => return RepoPathConfig::default(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return ConfigState::Missing,
+        Err(err) => {
+            return ConfigState::Invalid(format!("cannot read {}: {err}", path.display()));
+        }
     };
+    match serde_json::from_str(&raw) {
+        Ok(config) => ConfigState::Valid(config),
+        Err(err) => ConfigState::Invalid(format!("corrupt JSON in {}: {err}", path.display())),
+    }
+}
 
-    serde_json::from_str(&raw).unwrap_or_default()
+fn load_config_state() -> ConfigState {
+    load_config_state_from(&config_file_path())
+}
+
+fn load_config() -> RepoPathConfig {
+    match load_config_state() {
+        ConfigState::Valid(config) => config,
+        ConfigState::Missing | ConfigState::Invalid(_) => RepoPathConfig::default(),
+    }
 }
 
 fn save_config(config: &RepoPathConfig) -> Result<()> {
@@ -356,27 +403,60 @@ fn migrate_repo_if_needed(config: &mut RepoPathConfig, current_base: &Path) -> R
 }
 
 pub fn ensure_central_repo() -> Result<()> {
-    let mut config = load_config();
+    // A config file that exists but cannot be used means the app is about to
+    // run against the default location even though the user configured (and
+    // populated) another one. Never let that pass silently — it presents as
+    // "the library was rebuilt empty, all skills lost" (#228 review).
+    let mut config = match load_config_state() {
+        ConfigState::Valid(config) => {
+            if let Some(raw) = config.repo_path.as_deref() {
+                if let Err(err) = normalize_path(raw) {
+                    log::error!(
+                        "central repo: configured repo_path {raw:?} is invalid ({err}); \
+                         falling back to the default location"
+                    );
+                    push_startup_warning("repo_path_invalid");
+                }
+            }
+            config
+        }
+        ConfigState::Missing => RepoPathConfig::default(),
+        ConfigState::Invalid(detail) => {
+            log::error!(
+                "central repo: config is unreadable ({detail}); \
+                 falling back to the default location"
+            );
+            push_startup_warning("config_unreadable");
+            RepoPathConfig::default()
+        }
+    };
+
     let current_base = base_dir();
     migrate_repo_if_needed(&mut config, &current_base)?;
+
+    // Legacy `.agent-skills` migration must run before create_dir_all below:
+    // it renames entries into `current_base` and skips ones that already
+    // exist, so pre-created empty dirs would silently swallow it (the old
+    // ordering made this branch dead code).
+    let legacy_path = dirs::home_dir().map(|home| home.join(".agent-skills"));
+    if let Some(old_path) = legacy_path {
+        if old_path.exists() && !current_base.join("skills").exists() {
+            log::info!("Migrating from old path {:?}", old_path);
+            fs::create_dir_all(&current_base)?;
+            if let Ok(entries) = fs::read_dir(&old_path) {
+                for entry in entries.flatten() {
+                    let dest = current_base.join(entry.file_name());
+                    if !dest.exists() {
+                        let _ = fs::rename(entry.path(), &dest);
+                    }
+                }
+            }
+        }
+    }
 
     let dirs = [skills_dir(), scenarios_dir(), cache_dir(), logs_dir()];
     for d in &dirs {
         fs::create_dir_all(d)?;
-    }
-
-    // Migrate from old path if it exists
-    let old_path = dirs::home_dir().unwrap().join(".agent-skills");
-    if old_path.exists() && !current_base.join("skills").exists() {
-        log::info!("Migrating from old path {:?}", old_path);
-        if let Ok(entries) = fs::read_dir(&old_path) {
-            for entry in entries.flatten() {
-                let dest = current_base.join(entry.file_name());
-                if !dest.exists() {
-                    let _ = fs::rename(entry.path(), &dest);
-                }
-            }
-        }
     }
 
     Ok(())
@@ -385,6 +465,40 @@ pub fn ensure_central_repo() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── load_config_state_from ──
+
+    #[test]
+    fn config_state_missing_file_is_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = load_config_state_from(&tmp.path().join("repo-config.json"));
+        assert!(matches!(state, ConfigState::Missing));
+    }
+
+    #[test]
+    fn config_state_valid_json_is_valid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("repo-config.json");
+        fs::write(&path, r#"{ "repo_path": "/tmp/lib", "pending_migration_from": null }"#)
+            .unwrap();
+        match load_config_state_from(&path) {
+            ConfigState::Valid(config) => {
+                assert_eq!(config.repo_path.as_deref(), Some("/tmp/lib"));
+            }
+            other => panic!("expected Valid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_state_corrupt_json_is_invalid_not_fresh_install() {
+        // A corrupt config must never be treated like a missing one — that is
+        // the "library rebuilt empty, all skills lost" failure mode (#228).
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("repo-config.json");
+        fs::write(&path, "{ not json").unwrap();
+        let state = load_config_state_from(&path);
+        assert!(matches!(state, ConfigState::Invalid(_)), "{state:?}");
+    }
 
     #[test]
     fn external_base_dir_lives_under_default_base_external() {

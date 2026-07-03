@@ -175,6 +175,7 @@ export function Settings() {
   const [reportingIssue, setReportingIssue] = useState(false);
   const [exportingLogs, setExportingLogs] = useState(false);
   const [lastPanic, setLastPanic] = useState<api.PanicInfo | null>(null);
+  const [repoWarnings, setRepoWarnings] = useState<string[]>([]);
   const [centralRepoPath, setCentralRepoPath] = useState("");
   const [centralRepoPathOverride, setCentralRepoPathOverride] = useState<string | null>(null);
   const [editingCentralRepoPath, setEditingCentralRepoPath] = useState(false);
@@ -324,6 +325,7 @@ export function Settings() {
 
   useEffect(() => {
     api.checkLastPanic().then(setLastPanic).catch(() => {});
+    api.getCentralRepoWarnings().then(setRepoWarnings).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1649,6 +1651,16 @@ export function Settings() {
 
         {/* About */}
         <section className="space-y-2">
+          {repoWarnings.length > 0 && (
+            <div className="app-panel flex flex-wrap items-start gap-2 p-3 border border-amber-500/40 bg-amber-500/10">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" />
+              <div className="min-w-0 flex-1 space-y-1 text-[13px] text-amber-800 dark:text-amber-300">
+                {repoWarnings.map((code) => (
+                  <p key={code}>{t(`settings.repoWarning_${code}`)}</p>
+                ))}
+              </div>
+            </div>
+          )}
           {lastPanic && (
             <div className="app-panel flex flex-wrap items-center justify-between gap-2 p-3 border border-red-500/40 bg-red-500/10">
               <div className="flex min-w-0 items-center gap-2 text-[13px] text-red-700 dark:text-red-300">
