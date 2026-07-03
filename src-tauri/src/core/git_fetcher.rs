@@ -1,6 +1,6 @@
 use crate::core::central_repo;
 use crate::core::skill_metadata;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use git2::{Direction, Repository};
 use sha2::{Digest, Sha256};
@@ -743,8 +743,17 @@ pub fn find_skill_dir(repo_dir: &Path, skill_id: Option<&str>) -> Result<PathBuf
         if let Some(path) = name_match {
             return Ok(path);
         }
+
+        // A specific skill id was requested but nothing matched. Error instead
+        // of falling through to a container/root — otherwise the installer would
+        // copy the entire `skills/` container (or an unrelated root skill) under
+        // the requested name, duplicating every skill in the repo. See issue #278.
+        bail!("Skill '{}' not found in {}", id, repo_dir.display());
     }
 
+    // No skill id requested — resolve a repo-wide skill location. The fallbacks
+    // below are intended for enumeration flows (collect_git_skill_dirs walks the
+    // resolved container to list individual skills), not for a single install.
     // Check if root is a skill
     let has_skill_md = ["SKILL.md", "skill.md"]
         .iter()
@@ -1087,16 +1096,48 @@ mod tests {
     }
 
     #[test]
-    fn find_skill_dir_invalid_id_falls_through_to_repo_default() {
-        // If skill_id matches nothing valid, falls back to repo-level defaults.
-        // Here the root has SKILL.md so the fallback returns the root.
+    fn find_skill_dir_errors_when_skill_id_missing_even_if_root_is_skill() {
+        // When a skill id is requested but doesn't match, we must error even if
+        // the repo root happens to be a skill — previously this fell back to the
+        // root and installed an unrelated skill under the requested name (#278).
         let tmp = tempdir().unwrap();
         fs::write(tmp.path().join("SKILL.md"), "---\nname: root\n---").unwrap();
         let bogus_dir = tmp.path().join("my-skill");
         fs::create_dir_all(&bogus_dir).unwrap();
 
-        let found = find_skill_dir(tmp.path(), Some("my-skill")).unwrap();
-        assert_eq!(found, tmp.path());
+        let found = find_skill_dir(tmp.path(), Some("my-skill"));
+        assert!(
+            found.is_err(),
+            "expected error for missing skill id, got {:?}",
+            found
+        );
+    }
+
+    #[test]
+    fn find_skill_dir_errors_when_requested_skill_id_missing() {
+        // Repro for "install a skill whose name doesn't exist upstream" (issue #278).
+        // Repo layout mirrors mattpocock/skills: skills/<category>/<skill>/SKILL.md.
+        // Asking for a skill id that doesn't exist MUST error, not silently return
+        // the skills/ container (which would install the entire repo as one skill).
+        let tmp = tempdir().unwrap();
+        let ask_matt = tmp.path().join("skills").join("engineering").join("ask-matt");
+        let tdd = tmp.path().join("skills").join("engineering").join("tdd");
+        fs::create_dir_all(&ask_matt).unwrap();
+        fs::write(ask_matt.join("SKILL.md"), "---\nname: ask-matt\n---").unwrap();
+        fs::create_dir_all(&tdd).unwrap();
+        fs::write(tdd.join("SKILL.md"), "---\nname: tdd\n---").unwrap();
+
+        // Existing skill resolves fine.
+        let found = find_skill_dir(tmp.path(), Some("ask-matt")).unwrap();
+        assert_eq!(found, ask_matt);
+
+        // Missing skill id must error instead of returning the skills/ container.
+        let missing = find_skill_dir(tmp.path(), Some("caveman"));
+        assert!(
+            missing.is_err(),
+            "expected an error for missing skill id, got {:?}",
+            missing
+        );
     }
 
     #[test]
