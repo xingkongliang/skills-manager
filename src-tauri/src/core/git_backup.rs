@@ -1822,6 +1822,12 @@ mod tests {
             assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         };
         git(&["init", "-b", "main"]);
+        // Persist the identity into repo-local config so the production commit
+        // path (commit_all_unlocked, plain run_git) has an author on CI runners
+        // that lack a global git identity — the transient `-c` flags above only
+        // apply to this closure's own invocations.
+        git(&["config", "user.email", "t@e.c"]);
+        git(&["config", "user.name", "T"]);
         std::fs::create_dir_all(dir.join("skill-a")).unwrap();
         std::fs::write(dir.join("skill-a/SKILL.md"), "v1").unwrap();
         git(&["add", "-A"]);
