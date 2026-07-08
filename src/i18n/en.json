@@ -45,8 +45,8 @@
         "description": "Link a project to browse per-agent local skill folders, compare with the central library, and import or export changes. Use Preset pills to activate skill groups, or open + Add Skills to pick from your library with a multi-agent target picker."
       },
       "backup": {
-        "title": "Backup",
-        "description": "Use the Backup page to connect a repository, run a backup, restore a snapshot, and disconnect this machine. Skills, tags, presets, and preset membership are backed up; secrets and machine-specific settings are not."
+        "title": "Backup & Sync",
+        "description": "Sign in with GitHub once on the Backup page — backups then run automatically, and devices connected to the same repository stay in sync with each other. If the same skill is edited on two devices, it shows up under \"Needs attention\" with three choices (keep mine / use remote / keep both); a safety snapshot precedes every choice. Secrets and machine-specific settings are never backed up."
       },
       "settings": {
         "title": "Settings",
@@ -96,12 +96,31 @@
       "syncedDesc": "Latest visible snapshot: {{when}}.",
       "noSnapshot": "no snapshot yet",
       "failed": "Backup failed",
-      "pendingSkills": "{{count}} skill(s) have changes not yet backed up."
+      "pendingSkills": "{{count}} skill(s) have changes not yet backed up.",
+      "remoteOnly": "Updates from your other devices",
+      "remoteOnlyDesc": "{{remote}} update(s) were pushed by your other devices. Syncing merges them into this machine — nothing here is uploaded or overwritten.",
+      "pendingBothDesc": "Local changes: {{local}} · remote updates: {{remote}}. Syncing merges both per skill — neither side overwrites the other."
     },
     "actions": {
       "backupNow": "Back Up Now",
       "backupAgain": "Back Up Again",
-      "retry": "Retry Backup"
+      "retry": "Retry Backup",
+      "syncNow": "Sync Now"
+    },
+    "merge": {
+      "applied": "Merged {{count}} update(s) from your other devices.",
+      "newConflicts": "{{count}} skill(s) were changed on two devices at once. Your local version is kept — review them below."
+    },
+    "conflicts": {
+      "title": "Needs attention",
+      "desc": "These skills were changed on two devices at the same time. Your local version stays in place until you choose; a safety snapshot is taken before any choice is applied.",
+      "itemDesc": "Local and remote versions differ",
+      "keepLocal": "Keep mine",
+      "useRemote": "Use remote",
+      "keepBoth": "Keep both",
+      "resolved": "Conflict resolved — safety snapshot {{tag}} saved.",
+      "blockedBothDevices": "The same skill has an unresolved conflict on both devices. Resolve it on either device first, then sync again.",
+      "autoPaused": "Remote updates touching these skills resume automatically after you decide; sync manually to pick everything up now."
     },
     "connection": {
       "title": "Connection",
@@ -110,6 +129,10 @@
       "branch": "Branch",
       "none": "Not connected",
       "unknown": "Unknown"
+    },
+    "auto": {
+      "title": "Automatic backup",
+      "desc": "Back up automatically a few minutes after changes settle; a local save also runs when the app quits."
     },
     "device": {
       "label": "This device",
@@ -138,7 +161,9 @@
       "deviceDenied": "Authorization was declined on GitHub. Nothing was changed.",
       "deviceFallbackPat": "If github.com is hard to reach from your network, use a personal access token below instead.",
       "patToggle": "Use a personal access token instead (advanced)",
-      "publicRepoWarning": "Heads up: the connected backup repository is PUBLIC — anyone can read your skills, tags, and presets. If that's not intended, make it private on GitHub: repository Settings → General → Danger Zone → Change visibility."
+      "publicRepoWarning": "Heads up: the connected backup repository is PUBLIC — anyone can read your skills, tags, and presets. If that's not intended, make it private on GitHub: repository Settings → General → Danger Zone → Change visibility.",
+      "reconnect": "Reconnect GitHub",
+      "reconnectTitle": "Reconnect GitHub"
     },
     "history": {
       "title": "Backup History",
@@ -156,13 +181,27 @@
       },
       "sizeHint": "Very large skill folders may make backups slow. The planned default limit is 100 MB per skill folder, with oversized skills kept local.",
       "repoTooLarge": "Backup is {{size}} in total — past 1 GB backups may get slow.",
-      "oversizedSkill": "\"{{name}}\" is {{size}} — skills over 100 MB may make backups slow."
+      "oversizedSkill": "\"{{name}}\" is {{size}} — already backed up; large skills may make backups slow.",
+      "oversizedExcluded": "\"{{name}}\" is {{size}} — over the 100 MB limit, kept on this machine and not backed up."
     },
     "disconnect": {
       "title": "Disconnect This Machine",
       "desc": "Removes the backup connection and the access credential saved on this machine only. Local skills and remote backup data are kept.",
       "confirmTitle": "Disconnect backup?",
-      "confirmMessage": "This removes the saved remote connection and this machine's access credential. Your local skills and remote repository will remain."
+      "confirmMessage": "This removes the saved remote connection and this machine's access credential. Your local skills and remote repository will remain.",
+      "revoke": "Revoke Authorization",
+      "revokeHintOauth": "Revoking on GitHub invalidates the authorization for ALL devices signed in with this account; each will need to reconnect.",
+      "revokeHintPat": "Deleting the token on GitHub only affects devices using that token.",
+      "revokeConfirmTitle": "Revoke GitHub authorization?",
+      "revokeConfirmOauth": "GitHub's application settings page will open — remove \"skills-manager\" there. This invalidates the authorization on ALL your devices, and this machine will be disconnected now. Remote backup data is kept.",
+      "revokeConfirmPat": "GitHub's token settings page will open — delete the backup token there. Devices using that token lose access, and this machine will be disconnected now. Remote backup data is kept.",
+      "revokeHintUnknown": "How this machine was connected wasn't recorded — both the app-authorization and token pages will open so you can revoke whichever applies.",
+      "revokeConfirmUnknown": "GitHub's app-authorization and token settings pages will both open — revoke whichever this machine was using. This machine will be disconnected now. Remote backup data is kept.",
+      "deleteRemote": "Delete remote backup",
+      "deleteRemoteDesc": "Permanently deletes the backup repository on GitHub. Other devices will no longer be able to sync. Skills on this machine are kept.",
+      "deleteRemoteAction": "Open deletion page",
+      "deleteRemoteConfirm": "The repository settings page on GitHub will open. Delete the repository in its Danger Zone — GitHub asks you to type the repository name to confirm. Afterwards, other devices will report that the backup no longer exists.",
+      "deleteRemoteOpened": "Repository settings opened in the browser. After deleting, use \"Disconnect This Machine\" to clear the local connection."
     },
     "summary": {
       "title": "Library Summary",
@@ -238,6 +277,8 @@
     "gitRepoNeedRemote": "Set remote first",
     "gitRepoFixSetup": "Fix Sync Setup",
     "gitSyncSuccessWithVersion": "Sync completed · Snapshot {{tag}}",
+    "needsAttention": "Needs attention",
+    "needsAttentionHint": "This skill has a sync conflict — open the Backup page to resolve it",
     "gitInlineUpToDate": "Git · Up to date",
     "gitInlineNotConfigured": "Git · Backup not set up",
     "gitInlineNeedFix": "Git · Sync setup needs fixing",
@@ -575,7 +616,7 @@
     "language": "Language",
     "help": "Help",
     "about": "About",
-    "version": "Skills Manager 1.27.0",
+    "version": "Skills Manager 1.28.1",
     "tagline": "Cross-platform. Minimal, efficient, seamless multi-preset switching.",
     "checkUpdate": "Check for Updates",
     "checking": "Checking…",
@@ -630,6 +671,8 @@
     "gitDisconnectHint": "Disconnect removes the remote configuration from this machine only. Local skills and the remote repository are kept.",
     "gitEngineGit2": "Built-in Git engine (experimental)",
     "gitEngineGit2Desc": "Use the app's built-in Git engine for HTTPS backup network operations — no system git needed, credentials injected from the keychain. SSH and custom remotes always use system git. Turn off to revert at any time.",
+    "gitMergeEngineObject": "Skill-aware sync merge",
+    "gitMergeEngineObjectDesc": "Default. Merges synced changes per skill instead of per text line: renames combine with edits, and conflicting skills are kept locally and listed on the Backup page for review instead of blocking the sync. Turn off to fall back to the legacy line-based git merge.",
     "gitStartBackup": "Set Up Backup",
     "gitStartHint": "If Remote URL is filled, it will clone from remote; otherwise it initializes a local repository.",
     "gitSetupTitle": "Set Up Git Backup",

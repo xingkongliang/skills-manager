@@ -55,6 +55,15 @@ pub struct SkillTargetRecord {
     pub source_hash: Option<String>,
 }
 
+/// One row of the pending-conflict projection (merge-engine design §4).
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingConflictRow {
+    pub skill_id: String,
+    pub theirs_commit: String,
+    pub theirs_path: Option<String>,
+    pub detected_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DiscoveredSkillRecord {
     pub id: String,
@@ -413,6 +422,20 @@ impl SkillStore {
         Ok(())
     }
 
+    /// Park every skill's `central_path` on a unique placeholder before a
+    /// reindex rewrites them. Path reassignments between existing skills
+    /// (renames, collision reshuffles after a merge) would otherwise collide
+    /// with the UNIQUE constraint mid-loop — e.g. skill A moving onto the
+    /// path skill B is about to vacate.
+    pub fn park_central_paths_for_reindex(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE skills SET central_path = 'sm-reindex-parked://' || id",
+            [],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_skill(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM skills WHERE id = ?1", params![id])?;
@@ -557,6 +580,45 @@ impl SkillStore {
             params![key, data, now],
         )?;
         Ok(())
+    }
+
+    // ── Pending conflicts (merge-engine design §4) ──
+    // A rebuildable UI projection of the trailer-derived pending set; never
+    // an input to merge decisions.
+
+    pub fn replace_pending_conflicts(&self, rows: &[PendingConflictRow]) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM pending_conflicts", [])?;
+        for row in rows {
+            tx.execute(
+                "INSERT OR REPLACE INTO pending_conflicts
+                 (skill_id, theirs_commit, theirs_path, detected_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![row.skill_id, row.theirs_commit, row.theirs_path, row.detected_at],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn list_pending_conflicts(&self) -> Result<Vec<PendingConflictRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT skill_id, theirs_commit, theirs_path, detected_at
+             FROM pending_conflicts ORDER BY detected_at DESC, skill_id",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PendingConflictRow {
+                    skill_id: row.get(0)?,
+                    theirs_commit: row.get(1)?,
+                    theirs_path: row.get(2)?,
+                    detected_at: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     // ── Settings ──

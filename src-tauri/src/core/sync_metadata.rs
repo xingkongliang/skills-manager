@@ -22,7 +22,7 @@ pub struct SchemaFile {
     pub created_by: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceMeta {
     #[serde(rename = "type")]
     pub source_type: String,
@@ -32,7 +32,7 @@ pub struct SourceMeta {
     pub branch: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkillMetaFile {
     pub schema_version: u32,
     pub skill_id: String,
@@ -154,6 +154,11 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
         .into_iter()
         .map(|skill| (skill.id.clone(), skill))
         .collect();
+
+    // Every surviving row gets its central_path rewritten below; park them
+    // on placeholders first so path reassignments between skills (renames or
+    // merge collision reshuffles) cannot trip the UNIQUE constraint mid-loop.
+    store.park_central_paths_for_reindex()?;
 
     for meta in skills {
         let skill_dir = skills_root.join(&meta.path);
@@ -564,7 +569,10 @@ fn relative_skill_path(central_path: &str) -> Result<String> {
     Ok(value)
 }
 
-fn path_key(path: &str) -> String {
+/// Case/Unicode-folded key of a relative skill path. Shared with the merge
+/// engine (§2.1): metadata rebuilt during a merge must use the exact same
+/// folding as metadata written from the DB.
+pub(crate) fn path_key(path: &str) -> String {
     path.split('/')
         .map(|part| caseless::default_case_fold_str(&part.nfc().collect::<String>()))
         .collect::<Vec<_>>()
@@ -581,12 +589,21 @@ fn sorted_tags(tags: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Canonical on-disk JSON encoding for metadata files. The merge engine
+/// reuses this to rebuild merged metadata blobs so that two devices merging
+/// the same pair of commits produce byte-identical blobs → identical tree
+/// OIDs (§2.1 / §10).
+pub(crate) fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut bytes = serde_json::to_vec_pretty(value)?;
-    bytes.push(b'\n');
+    let bytes = canonical_json_bytes(value)?;
     let tmp = path.with_extension(format!("json.tmp.{}", uuid::Uuid::now_v7()));
     {
         let mut file = fs::File::create(&tmp)?;

@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 6;
+const LATEST_VERSION: u32 = 7;
 
 /// Run all pending migrations on the database.
 ///
@@ -53,6 +53,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         3 => migrate_v3_to_v4(conn),
         4 => migrate_v4_to_v5(conn),
         5 => migrate_v5_to_v6(conn),
+        6 => migrate_v6_to_v7(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -272,6 +273,24 @@ fn migrate_v4_to_v5(conn: &Connection) -> Result<()> {
 /// forces one copy on the first post-upgrade sync. No backfill needed.
 fn migrate_v5_to_v6(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "skill_targets", "source_hash", "TEXT")?;
+    Ok(())
+}
+
+/// v6 → v7: pending-conflict projection for the object merge engine
+/// (merge-engine design §4). A local UI cache only — the source of truth is
+/// the commit trailers plus `refs/skills-manager/conflict/*`, from which
+/// this table is rebuilt at startup and after every merge.
+fn migrate_v6_to_v7(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS pending_conflicts (
+            skill_id TEXT PRIMARY KEY,
+            theirs_commit TEXT NOT NULL,
+            theirs_path TEXT,
+            detected_at INTEGER NOT NULL
+        );
+        ",
+    )?;
     Ok(())
 }
 

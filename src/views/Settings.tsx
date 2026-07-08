@@ -190,6 +190,8 @@ export function Settings() {
   const [gitRemoteSaving, setGitRemoteSaving] = useState(false);
   const [gitRemoteDisconnecting, setGitRemoteDisconnecting] = useState(false);
   const [gitEngineGit2, setGitEngineGit2] = useState(false);
+  // Object merge is the default since 3d-β; "system" is the opt-out.
+  const [gitMergeEngineObject, setGitMergeEngineObject] = useState(true);
   const [proxyInput, setProxyInput] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
   const [textSize, setTextSize] = useState("default");
@@ -364,6 +366,9 @@ export function Settings() {
     }).catch(() => {});
     api.getSettings("git_backup_engine").then((v) => {
       setGitEngineGit2(v?.trim() === "git2");
+    }).catch(() => {});
+    api.getSettings("merge_engine").then((v) => {
+      setGitMergeEngineObject((v ?? "").trim() !== "system");
     }).catch(() => {});
   }, []);
 
@@ -1686,6 +1691,28 @@ export function Settings() {
                 <span className="min-w-0">
                   <span className="block text-[13px] text-secondary">{t("settings.gitEngineGit2")}</span>
                   <span className="block text-[12px] text-muted">{t("settings.gitEngineGit2Desc")}</span>
+                </span>
+              </label>
+              <label className="mt-3 flex cursor-pointer items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={gitMergeEngineObject}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    setGitMergeEngineObject(next);
+                    try {
+                      await api.setSettings("merge_engine", next ? "object" : "system");
+                      toast.success(t("common.success"));
+                    } catch {
+                      setGitMergeEngineObject(!next);
+                      toast.error(t("common.error"));
+                    }
+                  }}
+                  className="mt-0.5 h-3.5 w-3.5 accent-[var(--color-accent)]"
+                />
+                <span className="min-w-0">
+                  <span className="block text-[13px] text-secondary">{t("settings.gitMergeEngineObject")}</span>
+                  <span className="block text-[12px] text-muted">{t("settings.gitMergeEngineObjectDesc")}</span>
                 </span>
               </label>
             </div>

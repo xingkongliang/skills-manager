@@ -45,8 +45,8 @@
         "description": "關聯專案後，可以檢視專案內各 Agent 的本地 Skills 目錄、對照中央倉庫，並依需求雙向匯入或匯出。使用 Preset 標籤啟用技能組，或點 + 新增 Skills 透過多 Agent 目標選擇器從技能庫挑選。"
       },
       "backup": {
-        "title": "備份",
-        "description": "在備份頁連接倉庫、立即備份、還原快照或斷開本機。技能、標籤、Preset 及成員關係會備份；密鑰和本機專屬設定不會備份。"
+        "title": "備份與同步",
+        "description": "在備份頁用 GitHub 登入一次，之後備份自動進行；連接同一儲存庫的多台裝置會自動保持一致。同一技能在兩台裝置被同時修改時會進入「需要處理」，三選一（保留本機 / 使用遠端 / 兩個都保留），每次選擇前都會先建安全快照。密鑰和本機專屬設定永不備份。"
       },
       "settings": {
         "title": "設定",
@@ -96,12 +96,31 @@
       "syncedDesc": "最近可見快照：{{when}}。",
       "noSnapshot": "暫無快照",
       "failed": "備份失敗",
-      "pendingSkills": "有 {{count}} 個技能的變更尚未備份。"
+      "pendingSkills": "有 {{count}} 個技能的變更尚未備份。",
+      "remoteOnly": "其他裝置有更新",
+      "remoteOnlyDesc": "其他裝置推送了 {{remote}} 項更新。同步會把它們合併到本機——本機不會上傳或覆蓋任何內容。",
+      "pendingBothDesc": "本機變更：{{local}} · 遠端更新：{{remote}}。同步會按技能合併雙方的修改——任何一端都不會被覆蓋。"
     },
     "actions": {
       "backupNow": "立即備份",
       "backupAgain": "再次備份",
-      "retry": "重試備份"
+      "retry": "重試備份",
+      "syncNow": "立即同步"
+    },
+    "merge": {
+      "applied": "已合併來自其他裝置的 {{count}} 項更新。",
+      "newConflicts": "有 {{count}} 個技能在兩台裝置上被同時修改，已暫時保留本機版本——請在下方處理。"
+    },
+    "conflicts": {
+      "title": "需要處理",
+      "desc": "這些技能在兩台裝置上被同時修改。做出選擇前將保留本機版本；套用任一選擇前都會先建立安全快照。",
+      "itemDesc": "本機與遠端版本不一致",
+      "keepLocal": "保留本機",
+      "useRemote": "使用遠端",
+      "keepBoth": "兩個都保留",
+      "resolved": "衝突已解決——已儲存安全快照 {{tag}}。",
+      "blockedBothDevices": "同一個技能在兩台裝置上都有未處理的衝突。請先在任一台裝置上解決它，再重新同步。",
+      "autoPaused": "涉及這些技能的遠端更新將在你做出選擇後自動繼續；也可以立即手動同步全部拉取。"
     },
     "connection": {
       "title": "連接",
@@ -110,6 +129,10 @@
       "branch": "分支",
       "none": "未連接",
       "unknown": "未知"
+    },
+    "auto": {
+      "title": "自動備份",
+      "desc": "變更停止幾分鐘後自動備份；結束應用程式時也會先在本機保存一次。"
     },
     "device": {
       "label": "本機裝置",
@@ -138,7 +161,9 @@
       "deviceDenied": "授權在 GitHub 上被拒絕，未做任何變更。",
       "deviceFallbackPat": "如果你的網路存取 github.com 不穩定，可改用下方的個人存取權杖方式。",
       "patToggle": "改用個人存取權杖（進階）",
-      "publicRepoWarning": "注意：連線的備份儲存庫是公開的——任何人都能看到你的技能、標籤和 Preset。如非有意，請到 GitHub 儲存庫的 Settings → General → Danger Zone → Change visibility 改為私有。"
+      "publicRepoWarning": "注意：連線的備份儲存庫是公開的——任何人都能看到你的技能、標籤和 Preset。如非有意，請到 GitHub 儲存庫的 Settings → General → Danger Zone → Change visibility 改為私有。",
+      "reconnect": "重新連線 GitHub",
+      "reconnectTitle": "重新連線 GitHub"
     },
     "history": {
       "title": "備份歷史",
@@ -156,13 +181,27 @@
       },
       "sizeHint": "超大的技能目錄會拖慢備份。規劃中的預設限制是單一技能目錄 100 MB，超限技能保留在本機。",
       "repoTooLarge": "備份總大小為 {{size}}——超過 1 GB 後備份可能變慢。",
-      "oversizedSkill": "「{{name}}」大小為 {{size}}——超過 100 MB 的技能可能拖慢備份。"
+      "oversizedSkill": "「{{name}}」大小為 {{size}}——已在備份中；超大技能可能拖慢備份。",
+      "oversizedExcluded": "「{{name}}」大小為 {{size}}——超過 100 MB 上限，僅保留在本機，不參與備份。"
     },
     "disconnect": {
       "title": "斷開本機",
       "desc": "僅移除本機的備份連線和儲存的存取憑證。本地技能與遠端備份資料都會保留。",
       "confirmTitle": "斷開備份？",
-      "confirmMessage": "將移除本機儲存的遠端連線和存取憑證。本地技能與遠端儲存庫不受影響。"
+      "confirmMessage": "將移除本機儲存的遠端連線和存取憑證。本地技能與遠端儲存庫不受影響。",
+      "revoke": "撤銷授權",
+      "revokeHintOauth": "在 GitHub 撤銷授權會使該帳號下所有裝置的授權全部失效，各裝置需重新連線。",
+      "revokeHintPat": "在 GitHub 刪除該 token 只影響使用它的裝置。",
+      "revokeConfirmTitle": "撤銷 GitHub 授權？",
+      "revokeConfirmOauth": "將開啟 GitHub 的應用授權管理頁面，請在那裡移除「skills-manager」。撤銷後該帳號下所有裝置的授權都會失效；本機連線會立即斷開。遠端備份資料保留。",
+      "revokeConfirmPat": "將開啟 GitHub 的 token 管理頁面，請在那裡刪除備份所用的 token。使用該 token 的裝置會失去存取；本機連線會立即斷開。遠端備份資料保留。",
+      "revokeHintUnknown": "本機的連線方式未被記錄——將同時開啟應用授權和 token 兩個管理頁面，請撤銷實際使用的那個。",
+      "revokeConfirmUnknown": "將同時開啟 GitHub 的應用授權管理和 token 管理頁面，請撤銷本機實際使用的那一種。本機連線會立即斷開。遠端備份資料保留。",
+      "deleteRemote": "刪除遠端備份",
+      "deleteRemoteDesc": "從 GitHub 永久刪除備份儲存庫，其他裝置將無法再同步。本機技能保留。",
+      "deleteRemoteAction": "開啟刪除頁面",
+      "deleteRemoteConfirm": "將開啟 GitHub 的儲存庫設定頁面，請在頁面底部 Danger Zone 中刪除儲存庫——GitHub 會要求輸入儲存庫名稱二次確認。刪除後其他裝置同步時會提示遠端不存在。",
+      "deleteRemoteOpened": "已在瀏覽器開啟儲存庫設定頁面。刪除完成後，可用「斷開本機」清除本機連線。"
     },
     "summary": {
       "title": "技能庫概覽",
@@ -240,6 +279,8 @@
     "gitRepoNeedRemote": "先設定遠端倉庫",
     "gitRepoFixSetup": "修復同步設定",
     "gitSyncSuccessWithVersion": "同步完成 · 快照 {{tag}}",
+    "needsAttention": "需要處理",
+    "needsAttentionHint": "此技能存在同步衝突——點擊前往備份頁處理",
     "gitInlineUpToDate": "Git · 已最新",
     "gitInlineNotConfigured": "Git · 未設定備份",
     "gitInlineNeedFix": "Git · 同步設定需要修復",
@@ -526,7 +567,7 @@
     "language": "語言",
     "help": "說明",
     "about": "關於",
-    "version": "Skills Manager 1.27.0",
+    "version": "Skills Manager 1.28.1",
     "tagline": "跨平台。極簡、高效、無感多 Preset 切換。",
     "checkUpdate": "檢查更新",
     "checking": "檢查中…",
@@ -575,6 +616,8 @@
     "gitDisconnectHint": "斷開只會清除本機的遠端設定；本機技能和遠端倉庫資料都會保留。",
     "gitEngineGit2": "內建 Git 引擎（實驗性）",
     "gitEngineGit2Desc": "HTTPS 備份的網路操作改用應用內建的 Git 引擎——不依賴系統 git，憑證從鑰匙圈記憶體注入。SSH 與自訂遠端始終走系統 git。可隨時關閉還原。",
+    "gitMergeEngineObject": "按技能合併同步",
+    "gitMergeEngineObjectDesc": "預設開啟。同步時按技能物件而非文字行合併：重新命名與內容修改自動組合；真正衝突的技能會保留本機版本並在備份頁列出待處理，而不是阻塞同步。關閉則回退到舊的按行 git 合併。",
     "gitStartBackup": "設定備份",
     "gitStartHint": "填寫遠端位址會從遠端複製；留空則初始化本機倉庫。",
     "gitSetupTitle": "設定 Git 備份",

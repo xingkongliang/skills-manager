@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.28.1] - 2026-07-05
+
+### Release Overview
+- Hardening patch from the first real-world multi-device sync: legacy leftovers from older app versions no longer permanently block merging, sync failures show their actual reason, and the Backup page says "sync" instead of "back up" when remote updates are involved.
+
+### User-facing
+- **Legacy leftovers no longer block syncing** — Libraries that were backed up by older app versions could carry invisible remains (skill folders without metadata, half-written temp files committed long ago). The very first real two-device merge hit exactly this and failed permanently with an opaque error. Merging now cleans temp junk out of the merged result automatically and tolerates pre-existing unmanaged folders — they sync along untouched; only inconsistencies a merge itself would introduce still abort.
+- **Failure cards show the real reason** — Sync errors previously displayed only the outermost summary ("object merge aborted") while the actual cause stayed hidden; the full error chain now reaches the Backup page, making failures diagnosable without log spelunking.
+- **"Sync Now" instead of "Back Up Now"** — With "local changes: 0 · remote updates: 1" the button said "Back Up Now", reading like a push that might overwrite the remote. The pending state now distinguishes its three situations: remote-only updates get their own title ("Updates from your other devices"), an explicit "nothing here is uploaded or overwritten" description, and a "Sync Now" button; mixed states say that syncing merges per skill and neither side overwrites the other.
+
+### Developer & Governance
+- Plan-stage input self-heal: residual files inside the managed metadata namespace that the app never writes (`*.tmp.*` atomic-write leftovers, non-JSON strays) are dropped from the merged tree; every commit path also deletes such leftovers from the working tree first — a push-only machine never runs the reconcile cleanup, which is how one got committed in the first place.
+- Validator rule 4 gains a grandfather set: skill dirs already unclaimed in either merge input are tolerated (viewpoint-independent: the union of both tips); the merged tree stays strict about orphans a merge would introduce. Input-tip validation (old-client checks) additionally tolerates committed metadata junk via the new `validate_input_tip`.
+- `classify_git_chain` preserves the full anyhow error chain (`{:#}`) for all backup command errors.
+- A codex review of the incident fixes surfaced two gaps, both fixed: the old-client tip validation still hard-failed on committed temp files, and the legacy-dirt integration test silently lost its "junk already in history" topology because the app's own commit path now cleans temp files — it commits via raw git now and was mutation-verified (disabling the plan-stage drop makes it fail). Backend tests: 377.
+## [1.28.0] - 2026-07-04
+
+### Release Overview
+- Backup becomes true multi-device sync: changes back up automatically and flow between your devices hands-free, merges understand skills instead of text lines, and a conflict never blocks a sync or overwrites your work — it waits for your decision with a safety snapshot behind every choice.
+
+### User-facing
+- **Automatic backup** — A couple of minutes after you stop editing, changes are committed and uploaded in the background; quitting the app saves locally first and the next launch uploads it. A new Backup-page toggle controls it (on by default), and a failed run stays visible as a status card with a plain-language reason instead of a vanishing toast.
+- **Hands-free two-way sync** — When another device pushed changes, the background round now merges them in and pushes back automatically — connected devices converge without anyone clicking Sync. Manual "Back Up Now" still works anytime.
+- **Skill-aware merging** — Syncs now merge per skill instead of per text line: renaming a skill on one machine combines cleanly with editing its content on another, deletions propagate only when the other side didn't touch the skill, and metadata always moves together with its folder.
+- **Conflicts wait for you instead of blocking** — If the same skill was edited on two devices at once, everything else syncs normally; that skill keeps your local version and appears under "Needs attention" on the Backup page and as an amber badge on its Library card. Choose keep mine / use remote / keep both (the remote copy lands as a normal skill named after its device) — a safety snapshot is taken before any choice, so every decision is undoable. While a conflict is open, remote changes to that skill pause automatic sync; everything else keeps flowing.
+- **Backups signed by device** — Each device gets a name (editable on the Backup page); backup history and merge summaries show which device made each change, so "yesterday 22:14 · Work Laptop · 3 skills updated" reads like a timeline.
+- **Sync races resolved silently** — Backing up while another device pushes at the same moment no longer surfaces as a scary "needs recovery" error: the whole sync runs as one transaction that automatically refetches, re-merges, and retries the upload.
+- **Oversized skills stay local** — Skills over 100 MB are excluded from backup by default (kept fully usable on this machine, labeled on the Backup page). Skills already backed up are never silently removed; shrink an excluded skill and it re-enters the backup automatically.
+- **Fuller disconnect options** — Alongside "Disconnect this machine", the Backup page now offers "Revoke authorization" (opens the right GitHub page for how you connected, then disconnects locally) and a danger-zone "Delete remote backup" routed through GitHub's own type-the-name confirmation.
+- **Reconnect in one click** — When the backup fails because the GitHub authorization was revoked or expired, the status card now offers "Reconnect GitHub" to run the sign-in again in place.
+- **Protection against old app versions** — If an older Skills Manager wrote to the same backup, syncing detects it: harmless writes proceed with an upgrade reminder, unsafe line-level merges are blocked with the device named, and repositories never touched by a new version keep the old sync behavior unchanged.
+
+### Developer & Governance
+- New `core/merge` engine (merge-engine design v4, four codex design reviews): component-level three-way decisions (content / path / attrs), canonical metadata rebuild for byte-identical convergence (tree-OID-equal merges on both devices), viewpoint-free path-collision reassignment with pending placeholders, and a strict merged-tree validator that aborts with zero changes on any invariant violation.
+- Pending conflicts derive from commit trailers (`Skills-Manager-Conflicts` / `Resolved`) so they replicate via push/pull and survive re-clones; hidden refs pin the counterpart version against GC with a staging→promote protocol; a crash-safe apply sequence (pre-merge/applying anchors) plus a startup recovery that settles the working tree and rescues user edits into snapshot tags.
+- Protocol markers (`.skills-manager/protocol.json` + commit trailer) ride every app commit, powering two-tier old-client detection with a legacy fallback; the app's own line merges (escape hatch and legacy path) are stamped so other devices don't misattribute them.
+- The object merge is the default engine with `merge_engine=system` as the opt-out; the GUI sync and CLI `git pull` share one gated path, and a new one-lock `git_backup_sync` command replaces the frontend commit/pull/push orchestration (push rejections retry fetch+merge up to 3×).
+- Two codex code reviews on the implementation (6 + 5 findings): fixed a checkout-rollback crash window, stale conflict pointers after offline re-declarations, UseRemote nested-path data loss, oversized-exclusion gaps in init/restore/shrink paths, and unknown-auth-method revocation; declined findings are documented with rationale (and one pinned by an empirical test).
+- Fixed a latent reindex bug: path reassignments between skills (rename chains after merges) could trip the `central_path` UNIQUE constraint mid-loop; rows now park on placeholders first.
+- CLI gains `git prune-sync-refs` to clean `refs/skills-manager/*` copies that mirror-style pushes uploaded to the remote; SQLite migration v7 adds the rebuildable `pending_conflicts` projection.
+- Backend test suite grows from 304 to 375 (decision matrix, tree-OID convergence, two-repo integration incl. the R3 counterexample, crash-recovery branches, protocol violations, damping, oversized exclusion); README backup section and the in-app help rewritten for the redesigned product.
 ## [1.27.0] - 2026-07-03
 
 ### Release Overview

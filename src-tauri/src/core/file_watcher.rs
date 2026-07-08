@@ -173,6 +173,17 @@ fn is_in_git_dir(path: &Path) -> bool {
         .any(|c| c.as_os_str() == std::ffi::OsStr::new(".git"))
 }
 
+/// Whether the event touches the central repository's working tree (the part
+/// auto-backup cares about). `.git` internals don't count — commits, fetches
+/// and pushes must not re-arm the auto-backup debounce.
+fn touches_central_repo(event: &Event) -> bool {
+    let skills_dir = central_repo::skills_dir();
+    event
+        .paths
+        .iter()
+        .any(|p| p.starts_with(&skills_dir) && !is_in_git_dir(p))
+}
+
 pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Arc<SkillStore>) {
     std::thread::spawn(move || {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -210,6 +221,9 @@ pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Ar
 
             match rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(Ok(event)) => {
+                    if touches_central_repo(&event) {
+                        super::auto_backup::notify_central_change();
+                    }
                     if !should_emit(&event)
                         || self_write_muted()
                         || last_emit.elapsed() < WATCH_EMIT_DEBOUNCE

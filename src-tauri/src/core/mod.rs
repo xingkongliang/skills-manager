@@ -1,5 +1,6 @@
 pub mod app_state;
 pub mod audit_log;
+pub mod auto_backup;
 pub mod central_repo;
 pub mod content_hash;
 pub mod crypto;
@@ -13,6 +14,7 @@ pub mod github_api;
 pub mod install_cancel;
 pub mod installer;
 pub mod log_sanitize;
+pub mod merge;
 pub mod migrations;
 pub mod panic_log;
 pub mod path_guard;

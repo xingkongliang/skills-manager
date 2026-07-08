@@ -170,6 +170,15 @@ export function MySkills() {
     api.getPresetSkillOrder(viewedPreset.id).then(setPresetSkillOrder).catch(() => {});
   }, [viewedPreset, skills]);
 
+  // Skills with an unresolved sync conflict get a "needs attention" badge
+  // that jumps to the Backup page (merge-engine design §4 UI).
+  const [conflictIds, setConflictIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    api.gitBackupPendingConflicts()
+      .then((rows) => setConflictIds(new Set(rows.map((row) => row.skill_id))))
+      .catch(() => setConflictIds(new Set()));
+  }, [skills]);
+
   const refreshAllTags = async () => {
     try {
       const tags = await api.getAllTags();
@@ -1240,16 +1249,27 @@ export function MySkills() {
                     <p className="text-[13px] leading-[18px] text-muted truncate">
                       {skill.description || "—"}
                     </p>
-                    {badge && (
+                    {(badge || conflictIds.has(skill.id)) && (
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <span
-                          className={cn(
-                            "rounded-full px-2 py-0.5 text-[13px] font-medium",
-                            badge.className
-                          )}
-                        >
-                          {badge.label}
-                        </span>
+                        {conflictIds.has(skill.id) && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); navigate("/backup"); }}
+                            className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[13px] font-medium text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+                            title={t("mySkills.needsAttentionHint")}
+                          >
+                            {t("mySkills.needsAttention")}
+                          </button>
+                        )}
+                        {badge && (
+                          <span
+                            className={cn(
+                              "rounded-full px-2 py-0.5 text-[13px] font-medium",
+                              badge.className
+                            )}
+                          >
+                            {badge.label}
+                          </span>
+                        )}
                         {isMissingLocalSource && (
                           <>
                             <button
@@ -1438,6 +1458,15 @@ export function MySkills() {
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2.5">
+                  {conflictIds.has(skill.id) && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); navigate("/backup"); }}
+                      className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[12px] font-medium text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+                      title={t("mySkills.needsAttentionHint")}
+                    >
+                      {t("mySkills.needsAttention")}
+                    </button>
+                  )}
                   {badge && (
                     <span
                       className={cn(

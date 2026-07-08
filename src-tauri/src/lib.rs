@@ -760,6 +760,11 @@ pub fn quit_app(app: &tauri::AppHandle) {
             log::error!("Failed to destroy main window while quitting: {err}");
         }
     }
+    // 退出前 auto-backup (§3.4): local commit only, fail-fast on a busy lock,
+    // after the window is gone so quitting feels instant.
+    if let Some(store) = app.try_state::<Arc<core::skill_store::SkillStore>>() {
+        core::auto_backup::commit_on_exit(&store);
+    }
     app.exit(0);
 }
 
@@ -873,6 +878,22 @@ pub fn run() {
                 "startup: skill auto-updater spawned in {} ms",
                 step.elapsed().as_millis()
             );
+
+            // Object-merge crash recovery (merge-engine design §5): finish or
+            // roll back an interrupted sync apply before any background work
+            // can touch the repo. Best-effort, never blocks startup.
+            let store_for_merge_recovery = store_for_setup.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                core::merge::recover_on_startup(
+                    &store_for_merge_recovery,
+                    &core::central_repo::skills_dir(),
+                );
+            });
+
+            // Automatic backup (§3.4): debounced commit+push after central-repo
+            // changes; the first round also uploads whatever the exit-time
+            // commit captured last session.
+            core::auto_backup::start(app.handle().clone(), store_for_setup.clone());
 
             // One-time (idempotent) security migration: move credentials
             // embedded in the backup remote URL into the OS keychain so no
@@ -1005,6 +1026,9 @@ pub fn run() {
             commands::git_backup::git_backup_restore_version,
             commands::git_backup::backup_device_name,
             commands::git_backup::backup_set_device_name,
+            commands::git_backup::git_backup_pending_conflicts,
+            commands::git_backup::git_backup_resolve_conflict,
+            commands::git_backup::git_backup_sync,
             // Projects
             commands::projects::get_projects,
             commands::projects::add_project,

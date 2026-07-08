@@ -38,6 +38,9 @@
 <p align="center"><strong>Project Workspace</strong></p>
 <p align="center"><img src="assets/demo/project-workspace.png" width="800" alt="Project Workspace" /></p>
 
+<p align="center"><strong>Backup & Multi-Device Sync</strong></p>
+<p align="center"><img src="assets/demo/backup.png" width="800" alt="Backup and multi-device sync" /></p>
+
 <p align="center"><strong>Settings</strong></p>
 <p align="center"><img src="assets/demo/settings.png" width="800" alt="Settings" /></p>
 
@@ -56,7 +59,7 @@
 - **Update tracking** — Check for upstream updates on Git-based skills; re-import local ones.
 - **Skill preview and source inspection** — Read `SKILL.md` / `README.md`, inspect source metadata, and compare local content with the upstream version inside the app.
 - **Custom tools** — Add your own agents/tools with custom skills directories, or override the default path for any built-in tool.
-- **Git backup and restore** — Version-control your skill library with Git for backup and multi-machine sync, then restore snapshot versions from Version History when needed.
+- **Backup & multi-device sync** — Connect a private GitHub repository with one sign-in (or any Git remote), and the app backs your library up automatically and keeps all connected devices in sync. Merges are skill-aware — a rename on one machine combines cleanly with an edit on another — and true conflicts never block: your local version stays put until you choose keep mine / use remote / keep both. Snapshot versions are restorable at any time.
 - **Activity log & Export Logs** — Install / remove / update / sync operations are recorded locally. Use **Settings → Export Logs** to bundle recent logs and activity history into a single zip for easier issue reports.
 - **Flexible app settings** — Configure repo path, sync mode, theme, text size, language, tray behavior, proxy, Git remote, update checks, and the order agents appear throughout the app — all in one place.
 
@@ -79,31 +82,32 @@
 3. Click a **Preset** pill to activate its skills for that agent, or use **+ Add Skills** to pick from your library and toggle target agents inline. Active presets show a ✓; partial installs show a count badge.
 4. To manage project-local skills, open a **Project Workspace** and use the same preset pills or the **+ Add Skills** picker with its multi-agent target selector.
 5. Configure agent paths, custom tools, theme, language, proxy, and Git preferences in **Settings**.
-6. If you want history or multi-machine sync, set a Git remote in **Settings** and run **Start Backup** or **Sync to Git** from the **Library**.
+6. If you want history or multi-machine sync, open **Backup** in the sidebar and click **Sign in with GitHub** — backup and cross-device sync run automatically from then on.
 
-## Git Backup
+## Backup & Multi-Device Sync
 
-Back up the `skills/` folder inside your current central repository to a Git repo for version history and multi-machine sync. By default this is `~/.skills-manager/skills/`.
+The **Backup** page (sidebar) keeps your skill library versioned in a Git repository. One device gets versioned backup with restorable snapshots; several devices connected to the same repository stay in sync with each other automatically. The remote stays a plain Git repository — you can `git clone` it anywhere, no lock-in.
 
-### Quick setup
+### Connect
 
-1. Create a private repository (recommended).
-2. Open **Settings → Git Sync Configuration** and save your remote URL.
-3. Open **Library**.
-4. Choose one:
-- Existing remote: click **Start Backup** to clone from the configured remote.
-- New local repo: click **Start Backup** to initialize locally, then use **Sync to Git**.
-5. Use **Sync to Git** from the Library toolbar.
+- **Sign in with GitHub** (recommended): an 8-digit device-flow sign-in creates a private `skills-manager-backup` repository for you. The token is stored in the OS keychain — never in files or the repo config.
+- **Advanced**: paste any Git URL (HTTPS + PAT, SSH, self-hosted) under **Settings → Git Sync Configuration**.
+- On a new machine with an empty library, the first launch asks: **start fresh, or restore from a backup?**
 
-`Sync to Git` automatically handles pull, commit, and push based on current repo status.
-Each successful sync creates a snapshot version tag. You can open **Version History** in the **Library**, inspect the timeline, and restore any snapshot as a new commit.
+### How syncing works
 
-### Authentication
+- **Automatic**: local changes are committed and pushed in the background a couple of minutes after you stop editing; updates pushed by your other devices are merged in and pushed back automatically. **Back Up Now** is always available for an immediate run, and every backup in the history shows which device made it.
+- **Skill-aware merging**: changes are merged per skill, not per text line — renaming a skill on one machine combines cleanly with editing its content on another.
+- **Conflicts never block or overwrite**: if the same skill was edited on two devices at once, everything else syncs normally while that skill keeps your local version and appears under **Needs attention** (also badged on its card in the Library). Pick **keep mine / use remote / keep both** — a safety snapshot is taken before any choice is applied, so every decision is undoable.
+- **Snapshots & restore**: manual backups create snapshot versions; open the Backup page history to restore any of them. A restore first saves the current state as its own snapshot.
 
-- SSH URL (`git@github.com:...`): requires SSH key configured on your machine and added to GitHub.
-- HTTPS URL (`https://github.com/...`): push usually requires a Personal Access Token (PAT).
+### What's included
 
-> **Note:** The SQLite database (`skills-manager.db` inside your current central repository, `~/.skills-manager/skills-manager.db` by default) is not included in Git — it stores metadata that can be rebuilt by scanning the skill files.
+Skills, tags, presets, and per-agent skill toggles are backed up. Secrets (API keys, tokens, proxy settings) and machine-specific wiring never leave the machine. Skills over 100 MB stay local and are excluded from backup automatically (labeled on the Backup page). The SQLite database is not in Git — it stores metadata that is rebuilt from the skill files.
+
+### Disconnecting
+
+The Backup page offers three levels: **disconnect this machine** (other devices and remote data untouched), **revoke the GitHub authorization**, or **delete the remote backup** entirely (routed through GitHub's own type-the-name confirmation).
 
 ## Supported Tools
 
@@ -113,7 +117,7 @@ You can also add custom tools in **Settings** and manage their skills the same w
 
 ## In-App Help
 
-The **Help** button in **Settings** mirrors the current product flow: recommended workflows, presets, skill installation, the Library (with the Untagged filter and per-card delete), the Global Workspace and the **+ Add Skills** sheet, Project Workspaces with the multi-agent target picker, Git backup, and environment-level settings (including Export Logs for issue reports). It is intended as the in-app version of this quick-start guide.
+The **Help** button in **Settings** mirrors the current product flow: recommended workflows, presets, skill installation, the Library (with the Untagged filter and per-card delete), the Global Workspace and the **+ Add Skills** sheet, Project Workspaces with the multi-agent target picker, backup & multi-device sync, and environment-level settings (including Export Logs for issue reports). It is intended as the in-app version of this quick-start guide.
 
 ## Tech Stack
 
