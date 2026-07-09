@@ -3,11 +3,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail};
-use app_lib::commands::skills as cmd;
+use app_lib::commands::{projects as project_cmd, skills as cmd};
 use app_lib::core::{
     app_state, central_repo, error::AppError, git_backup, git_fetcher, installer, merge,
     repo_lock::RepoLock, scenario_service, skill_metadata, skill_store::SkillStore, skillssh_api,
-    sync_engine, sync_metadata, tool_service,
+    sync_engine, sync_metadata, tool_adapters, tool_service,
 };
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -31,6 +31,7 @@ enum Commands {
     Skills(SkillsArgs),
     #[command(alias = "scenarios")]
     Presets(PresetArgs),
+    Projects(ProjectArgs),
     Git(GitArgs),
 }
 
@@ -202,6 +203,51 @@ enum PresetCommand {
     RemoveSkill {
         preset: String,
         skills: Vec<String>,
+    },
+}
+
+#[derive(Args, Debug)]
+struct ProjectArgs {
+    #[command(subcommand)]
+    command: ProjectCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum ProjectCommand {
+    List,
+    Add {
+        path: String,
+    },
+    Scan {
+        root: String,
+    },
+    Targets {
+        project: String,
+    },
+    Skills {
+        project: String,
+        /// Agent/tool key filter, e.g. codex
+        #[arg(long, alias = "agent")]
+        tool: Option<String>,
+    },
+    ApplyPreset {
+        project: String,
+        preset: String,
+        /// Agent/tool key. Repeat to target more than one agent.
+        #[arg(long, alias = "agent")]
+        tool: Vec<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    #[command(alias = "unlink-preset")]
+    RemovePreset {
+        project: String,
+        preset: String,
+        /// Agent/tool key. Repeat to target more than one agent.
+        #[arg(long, alias = "agent")]
+        tool: Vec<String>,
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -393,6 +439,33 @@ struct PresetMembershipReport {
     missing: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct ProjectPresetTarget {
+    skill_id: String,
+    skill_name: String,
+    tool: String,
+    target_path: Option<String>,
+    action: String,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectPresetReport {
+    ok: bool,
+    project_id: String,
+    project_name: String,
+    project_path: String,
+    preset_id: String,
+    preset_name: String,
+    dry_run: bool,
+    persistent_link: bool,
+    added: usize,
+    removed: usize,
+    skipped: usize,
+    failed: usize,
+    targets: Vec<ProjectPresetTarget>,
+}
+
 enum InstallKind {
     Local,
     Git,
@@ -451,6 +524,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Tools(args) => run_tools(args, &store, cli.json),
         Commands::Skills(args) => run_skills(args, &store, cli.json),
         Commands::Presets(args) => run_presets(args, &store, cli.json),
+        Commands::Projects(args) => run_projects(args, &store, cli.json),
         Commands::Git(args) => run_git(args, &store, cli.skills_root.is_some(), cli.json),
     }
 }
@@ -641,7 +715,11 @@ fn show_skill(store: &SkillStore, reference: &str) -> anyhow::Result<SkillDetail
 
 fn export_skill(store: &SkillStore, reference: &str, dest: &Path) -> anyhow::Result<String> {
     let skill = resolve_skill(store, reference)?;
-    sync_engine::sync_skill(Path::new(&skill.central_path), dest, sync_engine::SyncMode::Copy)?;
+    sync_engine::sync_skill(
+        Path::new(&skill.central_path),
+        dest,
+        sync_engine::SyncMode::Copy,
+    )?;
     Ok(dest.to_string_lossy().to_string())
 }
 
@@ -734,7 +812,9 @@ fn classify_ref(
 fn is_skillssh_shorthand(s: &str) -> bool {
     // owner/repo, owner/repo/skill, owner/repo@skill
     fn seg_ok(s: &str) -> bool {
-        !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '-'))
     }
     let (head, _at_skill) = match s.split_once('@') {
         Some((h, t)) if seg_ok(t) => (h, Some(t)),
@@ -745,10 +825,7 @@ fn is_skillssh_shorthand(s: &str) -> bool {
     (parts.len() == 2 || parts.len() == 3) && parts.iter().all(|p| seg_ok(p))
 }
 
-fn resolve_sync_target(
-    store: &SkillStore,
-    target: &SyncTarget,
-) -> anyhow::Result<Option<String>> {
+fn resolve_sync_target(store: &SkillStore, target: &SyncTarget) -> anyhow::Result<Option<String>> {
     match target {
         SyncTarget::None => Ok(None),
         SyncTarget::Active => Ok(store.get_active_scenario_id()?),
@@ -772,9 +849,7 @@ fn run_install(
     let (skill_id, install_name, central_path, source_type) = match kind {
         InstallKind::Local => install_local_action(store, reference, name, preset_id.as_deref())?,
         InstallKind::Git => install_git_action(store, reference, name, preset_id.as_deref())?,
-        InstallKind::Skillssh => {
-            install_skillssh_action(store, reference, preset_id.as_deref())?
-        }
+        InstallKind::Skillssh => install_skillssh_action(store, reference, preset_id.as_deref())?,
     };
 
     Ok(InstallReport {
@@ -813,9 +888,8 @@ fn install_local_action(
     };
     let central_path = result.central_path.to_string_lossy().to_string();
     let install_name = result.name.clone();
-    let skill_id =
-        cmd::store_installed_skill_unlocked(store, &result, &metadata, active_scenario)
-            .map_err(map_app_err)?;
+    let skill_id = cmd::store_installed_skill_unlocked(store, &result, &metadata, active_scenario)
+        .map_err(map_app_err)?;
     Ok((skill_id, install_name, central_path, "local".to_string()))
 }
 
@@ -837,8 +911,8 @@ fn install_git_action(
     )?;
     let result = (|| -> anyhow::Result<(String, String, String)> {
         let _lock = RepoLock::acquire_foreground("cli install git")?;
-        let skill_dir =
-            cmd::resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None).map_err(map_app_err)?;
+        let skill_dir = cmd::resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)
+            .map_err(map_app_err)?;
         let revision = git_fetcher::get_head_revision(&temp_dir)?;
         let install_result = installer::install_from_git_dir(&skill_dir, name)?;
         let metadata = cmd::InstallSourceMetadata {
@@ -872,7 +946,8 @@ fn install_skillssh_action(
     let proxy_url = store.proxy_url();
     let repo_url = format!("https://github.com/{}.git", source);
     let cancel = Arc::new(AtomicBool::new(false));
-    let temp_dir = git_fetcher::clone_repo_ref(&repo_url, None, Some(&cancel), proxy_url.as_deref())?;
+    let temp_dir =
+        git_fetcher::clone_repo_ref(&repo_url, None, Some(&cancel), proxy_url.as_deref())?;
     let result = (|| -> anyhow::Result<(String, String, String)> {
         let _lock = RepoLock::acquire_foreground("cli install skillssh")?;
         let skill_dir =
@@ -970,24 +1045,22 @@ fn run_update(
                     },
                 }
             }
-            "local" | "import" => {
-                match cmd::reimport_local_skill_internal(store, &skill.id) {
-                    Ok(_) => UpdateReport {
-                        skill_id: skill.id.clone(),
-                        name: skill.name.clone(),
-                        source_type: skill.source_type.clone(),
-                        refreshed: true,
-                        error: None,
-                    },
-                    Err(e) => UpdateReport {
-                        skill_id: skill.id.clone(),
-                        name: skill.name.clone(),
-                        source_type: skill.source_type.clone(),
-                        refreshed: false,
-                        error: Some(e.message.clone()),
-                    },
-                }
-            }
+            "local" | "import" => match cmd::reimport_local_skill_internal(store, &skill.id) {
+                Ok(_) => UpdateReport {
+                    skill_id: skill.id.clone(),
+                    name: skill.name.clone(),
+                    source_type: skill.source_type.clone(),
+                    refreshed: true,
+                    error: None,
+                },
+                Err(e) => UpdateReport {
+                    skill_id: skill.id.clone(),
+                    name: skill.name.clone(),
+                    source_type: skill.source_type.clone(),
+                    refreshed: false,
+                    error: Some(e.message.clone()),
+                },
+            },
             other => UpdateReport {
                 skill_id: skill.id.clone(),
                 name: skill.name.clone(),
@@ -1095,10 +1168,7 @@ fn run_remove(
         });
     }
     if !yes {
-        bail!(
-            "refusing to delete {} skill(s) without --yes",
-            ids.len()
-        );
+        bail!("refusing to delete {} skill(s) without --yes", ids.len());
     }
 
     let result = cmd::delete_managed_skills_by_ids(store, &ids).map_err(map_app_err)?;
@@ -1135,7 +1205,11 @@ fn run_deprecated_set_enabled(
         } else {
             false
         };
-        let enabled_after = if requested_enabled { true } else { skill.enabled };
+        let enabled_after = if requested_enabled {
+            true
+        } else {
+            skill.enabled
+        };
         let message = if requested_enabled {
             "Deprecated no-op: skills are enabled by adding them to a preset; this command only restores legacy sync inclusion."
         } else {
@@ -1299,7 +1373,12 @@ fn run_adopt(
                      https://github.com/owner/repo/tree/branch/path/to/skill"
                 );
             }
-            Some((parsed.clone_url, subpath, parsed.branch, Some(url.to_string())))
+            Some((
+                parsed.clone_url,
+                subpath,
+                parsed.branch,
+                Some(url.to_string()),
+            ))
         } else {
             None
         };
@@ -1494,7 +1573,11 @@ fn run_tag(args: TagArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> 
     match args.command {
         TagCommand::Add { reference, tags } => {
             let skill = resolve_skill(store, &reference)?;
-            let mut current = store.get_tags_map()?.get(&skill.id).cloned().unwrap_or_default();
+            let mut current = store
+                .get_tags_map()?
+                .get(&skill.id)
+                .cloned()
+                .unwrap_or_default();
             for t in tags {
                 if !current.iter().any(|c| c == &t) {
                     current.push(t);
@@ -1513,7 +1596,11 @@ fn run_tag(args: TagArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> 
         }
         TagCommand::Remove { reference, tags } => {
             let skill = resolve_skill(store, &reference)?;
-            let mut current = store.get_tags_map()?.get(&skill.id).cloned().unwrap_or_default();
+            let mut current = store
+                .get_tags_map()?
+                .get(&skill.id)
+                .cloned()
+                .unwrap_or_default();
             current.retain(|c| !tags.iter().any(|t| t == c));
             store.set_tags_for_skill(&skill.id, &current)?;
             sync_metadata::ensure_skill_metadata(store, &skill.id)?;
@@ -1529,7 +1616,11 @@ fn run_tag(args: TagArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> 
         TagCommand::List { reference } => {
             if let Some(r) = reference {
                 let skill = resolve_skill(store, &r)?;
-                let tags = store.get_tags_map()?.get(&skill.id).cloned().unwrap_or_default();
+                let tags = store
+                    .get_tags_map()?
+                    .get(&skill.id)
+                    .cloned()
+                    .unwrap_or_default();
                 print_json(
                     &TagReport {
                         skill_id: skill.id,
@@ -1554,14 +1645,13 @@ fn run_presets(args: PresetArgs, store: &SkillStore, json: bool) -> anyhow::Resu
         PresetCommand::Current => print_json(&current_preset(store)?, json),
         PresetCommand::Preview { reference } => {
             let preset = resolve_scenario(store, &reference)?;
-            let preview = scenario_service::preview_scenario_sync(store, &preset.id)
-                .map_err(map_app_err)?;
+            let preview =
+                scenario_service::preview_scenario_sync(store, &preset.id).map_err(map_app_err)?;
             print_json(&preview, json);
         }
         PresetCommand::Apply { reference } => {
             let preset = resolve_scenario(store, &reference)?;
-            scenario_service::apply_scenario_to_default(store, &preset.id)
-                .map_err(map_app_err)?;
+            scenario_service::apply_scenario_to_default(store, &preset.id).map_err(map_app_err)?;
             print_json(&current_preset(store)?, json);
         }
         PresetCommand::Deactivate { reference } => {
@@ -1585,8 +1675,7 @@ fn run_presets(args: PresetArgs, store: &SkillStore, json: bool) -> anyhow::Resu
                 // any skills it shares with the active preset. Unsync this
                 // preset first, then re-sync the active preset so the shared
                 // targets are restored.
-                scenario_service::unsync_scenario_skills(store, &preset.id)
-                    .map_err(map_app_err)?;
+                scenario_service::unsync_scenario_skills(store, &preset.id).map_err(map_app_err)?;
                 if let Some(active_id) = active.as_deref() {
                     scenario_service::sync_scenario_skills(store, active_id)
                         .map_err(map_app_err)?;
@@ -1715,6 +1804,327 @@ fn replacement_preset_after_deactivate(
         .find(|scenario| scenario.id != deactivated_id))
 }
 
+// ── projects ──────────────────────────────────────────────────────────────
+
+fn run_projects(args: ProjectArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> {
+    match args.command {
+        ProjectCommand::List => print_json(
+            &project_cmd::get_projects_internal(store).map_err(map_app_err)?,
+            json,
+        ),
+        ProjectCommand::Add { path } => {
+            let project = project_cmd::add_project_internal(store, path).map_err(map_app_err)?;
+            print_json(&project, json);
+        }
+        ProjectCommand::Scan { root } => {
+            let projects =
+                project_cmd::scan_projects_internal(store, &root).map_err(map_app_err)?;
+            print_json(&projects, json);
+        }
+        ProjectCommand::Targets { project } => {
+            let p = resolve_project(store, &project)?;
+            let targets =
+                project_cmd::project_agent_targets_internal(store, &p.id).map_err(map_app_err)?;
+            print_json(&targets, json);
+        }
+        ProjectCommand::Skills { project, tool } => {
+            let p = resolve_project(store, &project)?;
+            let mut skills =
+                project_cmd::get_project_skills_internal(store, &p.id).map_err(map_app_err)?;
+            if let Some(tool) = tool {
+                skills.retain(|skill| skill.agent == tool);
+            }
+            print_json(&skills, json);
+        }
+        ProjectCommand::ApplyPreset {
+            project,
+            preset,
+            tool,
+            dry_run,
+        } => {
+            let report = apply_project_preset(store, &project, &preset, &tool, dry_run, true)?;
+            print_json(&report, json);
+        }
+        ProjectCommand::RemovePreset {
+            project,
+            preset,
+            tool,
+            dry_run,
+        } => {
+            let report = apply_project_preset(store, &project, &preset, &tool, dry_run, false)?;
+            print_json(&report, json);
+        }
+    }
+    Ok(())
+}
+
+fn resolve_project(store: &SkillStore, reference: &str) -> anyhow::Result<project_cmd::ProjectDto> {
+    let projects = project_cmd::get_projects_internal(store).map_err(map_app_err)?;
+    let direct_matches: Vec<_> = projects
+        .into_iter()
+        .filter(|project| {
+            project.id == reference || project.name == reference || project.path == reference
+        })
+        .collect();
+    if direct_matches.len() == 1 {
+        return Ok(direct_matches.into_iter().next().unwrap());
+    }
+    if direct_matches.len() > 1 {
+        bail!("ambiguous project ref '{}'", reference);
+    }
+
+    let ref_path = Path::new(reference);
+    if let Ok(ref_canon) = ref_path.canonicalize() {
+        let matches: Vec<_> = project_cmd::get_projects_internal(store)
+            .map_err(map_app_err)?
+            .into_iter()
+            .filter(|project| {
+                Path::new(&project.path)
+                    .canonicalize()
+                    .map(|path| path == ref_canon)
+                    .unwrap_or(false)
+            })
+            .collect();
+        if matches.len() == 1 {
+            return Ok(matches.into_iter().next().unwrap());
+        }
+        if matches.len() > 1 {
+            bail!("ambiguous project path '{}'", reference);
+        }
+    }
+
+    Err(anyhow!("project not found: {}", reference))
+}
+
+fn selected_project_tools(
+    store: &SkillStore,
+    project: &project_cmd::ProjectDto,
+    requested: &[String],
+) -> anyhow::Result<Vec<String>> {
+    let targets =
+        project_cmd::project_agent_targets_internal(store, &project.id).map_err(map_app_err)?;
+    let available: std::collections::HashSet<String> = targets
+        .iter()
+        .filter(|target| target.installed && target.enabled)
+        .map(|target| target.key.clone())
+        .collect();
+
+    let selected = if requested.is_empty() {
+        available.into_iter().collect::<Vec<_>>()
+    } else {
+        let mut missing = Vec::new();
+        let mut selected = Vec::new();
+        for tool in requested {
+            if available.contains(tool) {
+                selected.push(tool.clone());
+            } else {
+                missing.push(tool.clone());
+            }
+        }
+        if !missing.is_empty() {
+            bail!(
+                "project target is not available/enabled: {}",
+                missing.join(", ")
+            );
+        }
+        selected
+    };
+
+    if selected.is_empty() {
+        bail!("no enabled installed project targets");
+    }
+    Ok(selected)
+}
+
+fn project_target_path(
+    store: &SkillStore,
+    project: &project_cmd::ProjectDto,
+    tool: &str,
+    skill_name: &str,
+) -> Option<String> {
+    let dir_name = project_cmd::slugify_skill_names(vec![skill_name.to_string()])
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "skill".to_string());
+    if project.workspace_type == "linked" {
+        return Some(
+            Path::new(&project.path)
+                .join(dir_name)
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+    let adapter = tool_adapters::find_adapter_with_store(store, tool)?;
+    Some(
+        Path::new(&project.path)
+            .join(adapter.project_relative_skills_dir())
+            .join(dir_name)
+            .to_string_lossy()
+            .to_string(),
+    )
+}
+
+fn apply_project_preset(
+    store: &SkillStore,
+    project_ref: &str,
+    preset_ref: &str,
+    requested_tools: &[String],
+    dry_run: bool,
+    add: bool,
+) -> anyhow::Result<ProjectPresetReport> {
+    let project = resolve_project(store, project_ref)?;
+    let preset = resolve_scenario(store, preset_ref)?;
+    let tools = selected_project_tools(store, &project, requested_tools)?;
+    let preset_skill_ids = store.get_skill_ids_for_scenario(&preset.id)?;
+    let project_skills =
+        project_cmd::get_project_skills_internal(store, &project.id).map_err(map_app_err)?;
+
+    let mut targets = Vec::new();
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+
+    for skill_id in preset_skill_ids {
+        let Some(skill) = store.get_skill_by_id(&skill_id)? else {
+            continue;
+        };
+        for tool in &tools {
+            let existing = project_skills.iter().find(|project_skill| {
+                project_skill.agent == *tool
+                    && project_skill.center_skill_id.as_deref() == Some(skill.id.as_str())
+            });
+            let target_path = existing
+                .map(|project_skill| project_skill.path.clone())
+                .or_else(|| project_target_path(store, &project, tool, &skill.name));
+
+            if add {
+                if existing.is_some() {
+                    skipped += 1;
+                    targets.push(ProjectPresetTarget {
+                        skill_id: skill.id.clone(),
+                        skill_name: skill.name.clone(),
+                        tool: tool.clone(),
+                        target_path,
+                        action: "skipped_existing".to_string(),
+                        error: None,
+                    });
+                    continue;
+                }
+                if dry_run {
+                    added += 1;
+                    targets.push(ProjectPresetTarget {
+                        skill_id: skill.id.clone(),
+                        skill_name: skill.name.clone(),
+                        tool: tool.clone(),
+                        target_path,
+                        action: "would_add".to_string(),
+                        error: None,
+                    });
+                    continue;
+                }
+                match project_cmd::export_skill_to_project_internal(
+                    store,
+                    &skill.id,
+                    &project.id,
+                    Some(vec![tool.clone()]),
+                ) {
+                    Ok(()) => {
+                        added += 1;
+                        targets.push(ProjectPresetTarget {
+                            skill_id: skill.id.clone(),
+                            skill_name: skill.name.clone(),
+                            tool: tool.clone(),
+                            target_path,
+                            action: "added".to_string(),
+                            error: None,
+                        });
+                    }
+                    Err(err) => {
+                        failed += 1;
+                        targets.push(ProjectPresetTarget {
+                            skill_id: skill.id.clone(),
+                            skill_name: skill.name.clone(),
+                            tool: tool.clone(),
+                            target_path,
+                            action: "failed".to_string(),
+                            error: Some(err.message),
+                        });
+                    }
+                }
+            } else if let Some(existing) = existing {
+                if dry_run {
+                    removed += 1;
+                    targets.push(ProjectPresetTarget {
+                        skill_id: skill.id.clone(),
+                        skill_name: skill.name.clone(),
+                        tool: tool.clone(),
+                        target_path,
+                        action: "would_remove".to_string(),
+                        error: None,
+                    });
+                    continue;
+                }
+                match project_cmd::delete_project_skill_internal(
+                    store,
+                    &project.id,
+                    &existing.relative_path,
+                    tool,
+                ) {
+                    Ok(()) => {
+                        removed += 1;
+                        targets.push(ProjectPresetTarget {
+                            skill_id: skill.id.clone(),
+                            skill_name: skill.name.clone(),
+                            tool: tool.clone(),
+                            target_path,
+                            action: "removed".to_string(),
+                            error: None,
+                        });
+                    }
+                    Err(err) => {
+                        failed += 1;
+                        targets.push(ProjectPresetTarget {
+                            skill_id: skill.id.clone(),
+                            skill_name: skill.name.clone(),
+                            tool: tool.clone(),
+                            target_path,
+                            action: "failed".to_string(),
+                            error: Some(err.message),
+                        });
+                    }
+                }
+            } else {
+                skipped += 1;
+                targets.push(ProjectPresetTarget {
+                    skill_id: skill.id.clone(),
+                    skill_name: skill.name.clone(),
+                    tool: tool.clone(),
+                    target_path,
+                    action: "skipped_missing".to_string(),
+                    error: None,
+                });
+            }
+        }
+    }
+
+    Ok(ProjectPresetReport {
+        ok: failed == 0,
+        project_id: project.id,
+        project_name: project.name,
+        project_path: project.path,
+        preset_id: preset.id,
+        preset_name: preset.name,
+        dry_run,
+        persistent_link: false,
+        added,
+        removed,
+        skipped,
+        failed,
+        targets,
+    })
+}
+
 fn resolve_scenario(
     store: &SkillStore,
     reference: &str,
@@ -1742,7 +2152,12 @@ fn resolve_scenario(
 
 // ── git ───────────────────────────────────────────────────────────────────
 
-fn run_git(args: GitArgs, store: &SkillStore, has_skills_root: bool, json: bool) -> anyhow::Result<()> {
+fn run_git(
+    args: GitArgs,
+    store: &SkillStore,
+    has_skills_root: bool,
+    json: bool,
+) -> anyhow::Result<()> {
     match args.command {
         GitCommand::Status => {
             print_json(&git_backup::get_status(&central_repo::skills_dir())?, json)
@@ -1751,7 +2166,10 @@ fn run_git(args: GitArgs, store: &SkillStore, has_skills_root: bool, json: bool)
             // No settings store on this path; the hostname default matches
             // what the GUI derives, and the GUI reconciles the repo identity
             // on its next backup anyway.
-            git_backup::init_repo(&central_repo::skills_dir(), &git_backup::default_device_name())?;
+            git_backup::init_repo(
+                &central_repo::skills_dir(),
+                &git_backup::default_device_name(),
+            )?;
             print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
         }
         GitCommand::Clone { url } => {
