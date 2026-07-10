@@ -1021,6 +1021,44 @@ pub fn export_skill_to_project_internal(
     Ok(())
 }
 
+/// Return the on-disk directory that would collide with exporting a skill named
+/// `skill_name` to `agent` in `project_id`, or `None` when the export path is
+/// clear. This mirrors the "already exists" guard in
+/// [`export_skill_to_project_internal`] so a dry run can flag the case a real
+/// run would reject: a directory of the same slug already exists but isn't a
+/// matched central skill.
+pub fn project_export_conflict_path(
+    store: &SkillStore,
+    project_id: &str,
+    agent: &str,
+    skill_name: &str,
+) -> Result<Option<String>, AppError> {
+    let project = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let dir_name = slugify_skill_dir_name(skill_name);
+    ensure_safe_skill_relative_path(&dir_name)?;
+
+    let Some((skills_root, disabled_root)) = resolve_agent_skills_roots(store, &project, agent)
+    else {
+        return Ok(None);
+    };
+
+    let enabled_dir = skills_root.join(&dir_name);
+    if enabled_dir.exists() {
+        return Ok(Some(enabled_dir.to_string_lossy().to_string()));
+    }
+    if let Some(disabled_root) = disabled_root {
+        let disabled_dir = disabled_root.join(&dir_name);
+        if disabled_dir.exists() {
+            return Ok(Some(disabled_dir.to_string_lossy().to_string()));
+        }
+    }
+    Ok(None)
+}
+
 #[tauri::command]
 pub async fn export_skill_to_project(
     store: State<'_, Arc<SkillStore>>,

@@ -2012,6 +2012,32 @@ fn apply_project_preset(
                     continue;
                 }
                 if dry_run {
+                    // A real run would reject a directory that already exists
+                    // but isn't a matched central skill (the `existing` check
+                    // above only sees tracked skills). Preview that failure so
+                    // dry-run and the real run agree.
+                    if let Some(conflict) = project_cmd::project_export_conflict_path(
+                        store,
+                        &project.id,
+                        tool,
+                        &skill.name,
+                    )
+                    .map_err(map_app_err)?
+                    {
+                        failed += 1;
+                        targets.push(ProjectPresetTarget {
+                            skill_id: skill.id.clone(),
+                            skill_name: skill.name.clone(),
+                            tool: tool.clone(),
+                            target_path: Some(conflict),
+                            action: "would_fail".to_string(),
+                            error: Some(format!(
+                                "Skill \"{}\" already exists in this workspace for agent {}",
+                                skill.name, tool
+                            )),
+                        });
+                        continue;
+                    }
                     added += 1;
                     targets.push(ProjectPresetTarget {
                         skill_id: skill.id.clone(),
@@ -2244,4 +2270,158 @@ fn print_json<T: Serialize>(value: &T, json: bool) {
         serde_json::to_string_pretty(value).unwrap()
     };
     println!("{rendered}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use app_lib::core::skill_store::{ProjectRecord, ScenarioRecord, SkillRecord};
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// Backs the store, a preset holding one central skill, and a linked
+    /// workspace whose single agent target is always installed + enabled —
+    /// so preset application is deterministic without touching the real
+    /// central repo or system-installed tools.
+    struct Fixture {
+        _tmp: tempfile::TempDir,
+        store: SkillStore,
+        project_path: PathBuf,
+        project_id: String,
+        preset_id: String,
+    }
+
+    fn setup() -> Fixture {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+
+        // Central skill referenced by the preset.
+        let central = tmp.path().join("central").join("preset-skill");
+        fs::create_dir_all(&central).unwrap();
+        fs::write(central.join("SKILL.md"), "# Preset Skill\n").unwrap();
+        store
+            .insert_skill(&SkillRecord {
+                id: "skill-1".into(),
+                name: "Preset Skill".into(),
+                description: None,
+                source_type: "local".into(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: central.to_string_lossy().to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: 0,
+                updated_at: 0,
+                status: "ok".into(),
+                update_status: "local_only".into(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+
+        // Preset (scenario) containing that skill.
+        store
+            .insert_scenario(&ScenarioRecord {
+                id: "preset-1".into(),
+                name: "Preset One".into(),
+                description: None,
+                icon: None,
+                sort_order: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+        store.add_skill_to_scenario("preset-1", "skill-1").unwrap();
+
+        // Linked workspace: its lone agent target reports installed + enabled.
+        let project_path = tmp.path().join("workspace");
+        let disabled_path = tmp.path().join("workspace-disabled");
+        fs::create_dir_all(&project_path).unwrap();
+        fs::create_dir_all(&disabled_path).unwrap();
+        store
+            .insert_project(&ProjectRecord {
+                id: "project-1".into(),
+                name: "Workspace One".into(),
+                path: project_path.to_string_lossy().to_string(),
+                workspace_type: "linked".into(),
+                linked_agent_key: Some("agent".into()),
+                linked_agent_name: Some("Agent".into()),
+                disabled_path: Some(disabled_path.to_string_lossy().to_string()),
+                sort_order: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+
+        Fixture {
+            _tmp: tmp,
+            store,
+            project_path,
+            project_id: "project-1".into(),
+            preset_id: "preset-1".into(),
+        }
+    }
+
+    #[test]
+    fn resolve_project_matches_by_id_name_and_path() {
+        let fx = setup();
+        let path_string = fx.project_path.to_string_lossy().to_string();
+        for reference in [fx.project_id.as_str(), "Workspace One", path_string.as_str()] {
+            let project = resolve_project(&fx.store, reference).unwrap();
+            assert_eq!(project.id, fx.project_id, "ref {reference}");
+        }
+    }
+
+    #[test]
+    fn resolve_project_errors_when_missing() {
+        let fx = setup();
+        let err = match resolve_project(&fx.store, "does-not-exist") {
+            Ok(_) => panic!("expected a missing-project error"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("project not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn apply_project_preset_dry_run_add_previews_new_skill() {
+        let fx = setup();
+        let report =
+            apply_project_preset(&fx.store, &fx.project_id, &fx.preset_id, &[], true, true).unwrap();
+        assert!(report.ok);
+        assert!(report.dry_run);
+        assert_eq!(report.added, 1);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.targets.len(), 1);
+        assert_eq!(report.targets[0].action, "would_add");
+    }
+
+    #[test]
+    fn apply_project_preset_dry_run_add_flags_existing_directory_conflict() {
+        let fx = setup();
+        // A directory of the same slug already exists but is not a tracked
+        // central skill (no SKILL.md, so it is never read as a project skill).
+        // A real run would fail with "already exists"; the dry run must agree
+        // instead of optimistically reporting "would_add".
+        fs::create_dir_all(fx.project_path.join("preset-skill")).unwrap();
+
+        let report =
+            apply_project_preset(&fx.store, &fx.project_id, &fx.preset_id, &[], true, true).unwrap();
+        assert!(!report.ok);
+        assert_eq!(report.added, 0);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.targets.len(), 1);
+        assert_eq!(report.targets[0].action, "would_fail");
+        assert!(report.targets[0]
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("already exists"));
+    }
 }
