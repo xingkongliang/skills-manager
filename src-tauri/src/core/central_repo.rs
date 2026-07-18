@@ -397,6 +397,136 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+/// How a directory should land in the backup area before it is overwritten.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackupKind {
+    /// The caller is about to overwrite `src` in place, so the old tree is
+    /// *moved* out of the way (source disappears, backup holds the only copy).
+    Move,
+    /// The caller keeps `src` as-is and only wants a snapshot, so the tree is
+    /// *copied* (source stays put, backup is a duplicate).
+    Copy,
+}
+
+/// Back a directory up under `<central_root>/backups/<skill_dir_name>/<ts>-<reason>/`.
+///
+/// Non-destructive by construction: the destination is always a *new* directory
+/// (a `-1`, `-2`, … suffix is added if the timestamped name already exists) so
+/// an existing backup is never overwritten. Returns the directory the backup
+/// actually landed in.
+///
+/// `Move` is cross-volume safe: `src` may live on a different drive than the
+/// central repo (project on `D:`, library on `C:`), where `std::fs::rename`
+/// fails with `EXDEV`. On any rename failure we fall back to a recursive
+/// copy-then-delete so the observable semantics stay "move".
+pub fn backup_directory(
+    central_root: &Path,
+    src: &Path,
+    skill_dir_name: &str,
+    reason: &str,
+    timestamp_ms: i64,
+    kind: BackupKind,
+) -> Result<PathBuf> {
+    let parent = central_root
+        .join("backups")
+        .join(sanitize_backup_component(skill_dir_name));
+    fs::create_dir_all(&parent).with_context(|| {
+        format!("Failed to create backup directory {}", parent.display())
+    })?;
+
+    let base_name = format!("{}-{}", timestamp_ms, sanitize_backup_component(reason));
+    let dest = unique_backup_dir(&parent, &base_name);
+
+    match kind {
+        BackupKind::Move => move_directory(src, &dest)?,
+        BackupKind::Copy => copy_dir_with_rollback(src, &dest)?,
+    }
+    Ok(dest)
+}
+
+/// Pick a not-yet-existing directory under `parent`, adding `-1`, `-2`, … to
+/// `base_name` on collision so an existing backup is never clobbered.
+//
+// TOCTOU note: there is a gap between the `exists()` check and the caller's
+// later `create_dir_all`/rename into the returned path. That race is acceptable
+// here because every central-repo write is serialized by `RepoLock` (see
+// core::repo_lock) — two backups never run concurrently, so no other writer can
+// claim the name in between. Do not reach for an atomic create-if-absent here.
+fn unique_backup_dir(parent: &Path, base_name: &str) -> PathBuf {
+    let candidate = parent.join(base_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let mut n = 1u32;
+    loop {
+        let candidate = parent.join(format!("{base_name}-{n}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Move `src` to `dest`, falling back to copy-then-delete when a plain rename
+/// can't cross volumes (or the OS otherwise refuses it).
+fn move_directory(src: &Path, dest: &Path) -> Result<()> {
+    match fs::rename(src, dest) {
+        Ok(()) => Ok(()),
+        Err(_) => move_via_copy_delete(src, dest),
+    }
+}
+
+/// The cross-volume fallback, factored out so it is unit-testable on a single
+/// volume (a genuine cross-drive tempdir is hard to arrange in tests): copy the
+/// whole tree, then remove the source, preserving "move" semantics.
+fn move_via_copy_delete(src: &Path, dest: &Path) -> Result<()> {
+    copy_dir_with_rollback(src, dest)?;
+    fs::remove_dir_all(src).with_context(|| {
+        format!(
+            "Failed to remove source {} after backup copy to {}",
+            src.display(),
+            dest.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Recursively copy `src` into `dest`, rolling back a half-written `dest` if the
+/// copy fails partway. Without this, a consumer could later mistake a truncated
+/// half-tree for a valid backup. The rollback is best-effort — if it too fails,
+/// the original copy error still propagates. For `Move` the source is only
+/// removed *after* a successful copy, so a failed backup never loses data.
+fn copy_dir_with_rollback(src: &Path, dest: &Path) -> Result<()> {
+    if let Err(err) = copy_dir_recursive(src, dest) {
+        // Discard whatever partial tree was written so it can't be consumed.
+        let _ = fs::remove_dir_all(dest);
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// Clean one path component destined for a backup directory name. Everything
+/// outside `[A-Za-z0-9-_]` becomes `-`, which also neutralises `/`, `\`, and
+/// `.` — so no `..` component and no separator can smuggle the backup outside
+/// `backups/<skill>/`. Empty input degrades to a stable placeholder.
+fn sanitize_backup_component(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "unknown".to_string()
+    } else {
+        cleaned
+    }
+}
+
 /// Whether two paths resolve to the same directory. Falls back to a lexical
 /// comparison when either side can't be canonicalized (e.g. the target does not
 /// exist yet), so a purely cosmetic difference (case, `8.3` names, a symlink)
@@ -821,6 +951,253 @@ mod tests {
         let parent = external_base_dir(Path::new("a/../nonexistent-norm-target"));
         assert_eq!(plain, dot);
         assert_eq!(plain, parent);
+    }
+
+    // ── backup_directory (F2) ──
+
+    /// Build a small source tree with a nested file and return its root.
+    fn make_src_tree(root: &Path) {
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("top.txt"), b"top").unwrap();
+        fs::write(root.join("nested/inner.txt"), b"inner").unwrap();
+    }
+
+    #[test]
+    fn backup_move_creates_backup_and_removes_source() {
+        let central = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let src = work.path().join("my-skill");
+        make_src_tree(&src);
+
+        let dest = backup_directory(
+            central.path(),
+            &src,
+            "my-skill",
+            "overwrite",
+            1_700_000_000_000,
+            BackupKind::Move,
+        )
+        .unwrap();
+
+        // Source is gone (moved), backup holds the full tree.
+        assert!(!src.exists(), "move must remove the source");
+        assert_eq!(fs::read(dest.join("top.txt")).unwrap(), b"top");
+        assert_eq!(fs::read(dest.join("nested/inner.txt")).unwrap(), b"inner");
+        // Lands under backups/<skill>/<ts>-<reason>/.
+        assert!(dest.starts_with(central.path().join("backups").join("my-skill")));
+        assert_eq!(
+            dest.file_name().and_then(|n| n.to_str()),
+            Some("1700000000000-overwrite")
+        );
+    }
+
+    #[test]
+    fn backup_copy_creates_backup_and_keeps_source() {
+        let central = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let src = work.path().join("my-skill");
+        make_src_tree(&src);
+
+        let dest = backup_directory(
+            central.path(),
+            &src,
+            "my-skill",
+            "snapshot",
+            42,
+            BackupKind::Copy,
+        )
+        .unwrap();
+
+        // Source still intact, backup is a duplicate.
+        assert_eq!(fs::read(src.join("top.txt")).unwrap(), b"top");
+        assert_eq!(fs::read(dest.join("top.txt")).unwrap(), b"top");
+        assert_eq!(fs::read(dest.join("nested/inner.txt")).unwrap(), b"inner");
+    }
+
+    #[test]
+    fn backup_same_timestamp_and_reason_gets_suffix_never_overwrites() {
+        let central = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+
+        let src1 = work.path().join("skill-a");
+        fs::create_dir_all(&src1).unwrap();
+        fs::write(src1.join("v1.txt"), b"first").unwrap();
+        let first = backup_directory(
+            central.path(),
+            &src1,
+            "skill",
+            "overwrite",
+            777,
+            BackupKind::Move,
+        )
+        .unwrap();
+
+        let src2 = work.path().join("skill-b");
+        fs::create_dir_all(&src2).unwrap();
+        fs::write(src2.join("v2.txt"), b"second").unwrap();
+        let second = backup_directory(
+            central.path(),
+            &src2,
+            "skill",
+            "overwrite",
+            777,
+            BackupKind::Move,
+        )
+        .unwrap();
+
+        assert_ne!(first, second, "same ts+reason must not collide");
+        assert_eq!(second.file_name().and_then(|n| n.to_str()), Some("777-overwrite-1"));
+        // Neither backup was clobbered.
+        assert_eq!(fs::read(first.join("v1.txt")).unwrap(), b"first");
+        assert_eq!(fs::read(second.join("v2.txt")).unwrap(), b"second");
+    }
+
+    #[test]
+    fn backup_sanitizes_illegal_reason_and_cannot_escape() {
+        let central = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let src = work.path().join("s");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("f.txt"), b"x").unwrap();
+
+        let dest = backup_directory(
+            central.path(),
+            &src,
+            "skill",
+            "../../etc/passwd",
+            5,
+            BackupKind::Copy,
+        )
+        .unwrap();
+
+        // Stays inside the skill's backup area — no traversal escaped.
+        let skill_backups = central.path().join("backups").join("skill");
+        assert!(dest.starts_with(&skill_backups), "{}", dest.display());
+        // Strong guard: walk EVERY component of the full path and assert none is
+        // a `..` parent-dir segment. A lexical `starts_with` alone can be fooled
+        // by an embedded `..`; component inspection cannot.
+        assert!(
+            !has_parent_dir_component(&dest),
+            "no path component may be `..`: {}",
+            dest.display()
+        );
+        // The reason component itself carries no separators or `..`.
+        let name = dest.file_name().unwrap().to_str().unwrap();
+        assert!(!name.contains('/') && !name.contains('\\') && !name.contains(".."));
+        // "../../etc/passwd": 6 leading separators + join dash → 7 dashes.
+        assert_eq!(name, "5-------etc-passwd");
+    }
+
+    /// True if any component of `path` is a `..` parent-dir segment.
+    fn has_parent_dir_component(path: &Path) -> bool {
+        path.components()
+            .any(|c| matches!(c, Component::ParentDir))
+    }
+
+    #[test]
+    fn move_via_copy_delete_moves_tree_and_removes_source() {
+        // Directly exercises the cross-volume fallback path (rename → EXDEV):
+        // copy the tree, then delete the source, preserving move semantics.
+        let work = tempfile::tempdir().unwrap();
+        let src = work.path().join("src");
+        make_src_tree(&src);
+        let dest = work.path().join("dest");
+
+        move_via_copy_delete(&src, &dest).unwrap();
+
+        assert!(!src.exists(), "source removed after copy");
+        assert_eq!(fs::read(dest.join("top.txt")).unwrap(), b"top");
+        assert_eq!(fs::read(dest.join("nested/inner.txt")).unwrap(), b"inner");
+    }
+
+    #[test]
+    fn copy_failure_rolls_back_partial_dest_and_keeps_source() {
+        // Deterministically force a mid-copy failure: pre-create `dest/nested`
+        // as a FILE so copying src's `nested/` DIRECTORY into it fails. The
+        // rollback must then wipe the whole half-written `dest`, and — because
+        // this is the Move fallback — the source stays fully intact (no data
+        // lost on a failed backup). This is the same code path the untestable
+        // cross-volume Copy rollback takes.
+        let work = tempfile::tempdir().unwrap();
+        let src = work.path().join("src");
+        make_src_tree(&src); // src/top.txt + src/nested/inner.txt
+        let dest = work.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("nested"), b"i am a file, not a dir").unwrap();
+
+        let err = move_via_copy_delete(&src, &dest);
+        assert!(err.is_err(), "copy into a file-blocked subdir must fail");
+
+        // Half-written backup fully rolled back — nothing to mis-consume.
+        assert!(!dest.exists(), "partial dest must be removed on failure");
+        // Source untouched: move never deletes before a successful copy.
+        assert_eq!(fs::read(src.join("top.txt")).unwrap(), b"top");
+        assert_eq!(fs::read(src.join("nested/inner.txt")).unwrap(), b"inner");
+    }
+
+    #[test]
+    fn backup_sanitizes_illegal_skill_name_and_cannot_escape() {
+        // Traversal defense is independent of `reason`: a hostile
+        // `skill_dir_name` must also stay under backups/ with no `..` component.
+        let central = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let src = work.path().join("s");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("f.txt"), b"x").unwrap();
+
+        let dest = backup_directory(
+            central.path(),
+            &src,
+            "../../evil",
+            "overwrite",
+            5,
+            BackupKind::Copy,
+        )
+        .unwrap();
+
+        assert!(dest.starts_with(central.path().join("backups")));
+        assert!(
+            !has_parent_dir_component(&dest),
+            "no `..` component: {}",
+            dest.display()
+        );
+    }
+
+    #[test]
+    fn backup_empty_reason_uses_unknown_placeholder() {
+        let central = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let src = work.path().join("s");
+        fs::create_dir_all(&src).unwrap();
+
+        let dest = backup_directory(
+            central.path(),
+            &src,
+            "skill",
+            "",
+            9,
+            BackupKind::Copy,
+        )
+        .unwrap();
+
+        assert_eq!(dest.file_name().and_then(|n| n.to_str()), Some("9-unknown"));
+    }
+
+    #[test]
+    fn backup_missing_source_returns_err_not_panic() {
+        let central = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let missing = work.path().join("does-not-exist");
+
+        let result = backup_directory(
+            central.path(),
+            &missing,
+            "skill",
+            "overwrite",
+            1,
+            BackupKind::Copy,
+        );
+        assert!(result.is_err(), "missing source must be a graceful Err");
     }
 
     #[test]
