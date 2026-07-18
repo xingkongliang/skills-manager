@@ -5,7 +5,7 @@ use tauri::State;
 
 use crate::commands::projects::{
     classify_sync_status, ensure_dir_within_root, ensure_safe_skill_relative_path,
-    source_ref_matches_skill_path, ProjectSkillDocumentDto,
+    snapshot_before_explicit_pull, source_ref_matches_skill_path, ProjectSkillDocumentDto,
 };
 use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
 use crate::core::{
@@ -605,6 +605,10 @@ fn update_agent_local_skill_from_center(
     ensure_agent_skill_path(&target_path, &skills_root)?;
 
     let source = PathBuf::from(&managed.central_path);
+    // Same safety net as the project path: an explicit pull may overwrite a
+    // diverged local copy, so snapshot the target first when it differs from the
+    // center content. Symlinked targets hash equal and are skipped.
+    snapshot_before_explicit_pull(&target_path, &source, &skill.name)?;
     let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
     let mode = sync_engine::sync_mode_for_tool(agent, configured_mode.as_deref());
     sync_engine::sync_skill(&source, &target_path, mode).map_err(AppError::io)?;
@@ -1377,10 +1381,217 @@ mod tests {
             })
             .unwrap();
 
+        // The center side is now judged by the central directory's real
+        // filesystem mtime (not `updated_at`). A freshly installed center is
+        // ~now, same as the agent copy, so pin it old to restore this test's
+        // intent: the agent copy is genuinely newer → the pull must be rejected.
+        set_file_mtime_ms(&existing.central_path.join("SKILL.md"), 1_000);
+
         let result = update_agent_local_skill_from_center(&store, "test_agent", "local-tool");
         assert!(result.is_err());
         let local_content = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
         assert!(local_content.contains("agent newer"));
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    /// Pin a file's mtime to a fixed epoch-ms value so classification is judged
+    /// against a deterministic timestamp instead of the wall clock.
+    fn set_file_mtime_ms(path: &std::path::Path, ms: i64) {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap();
+        file.set_modified(time).unwrap();
+    }
+
+    /// Wire up a store + agent + center match where the local copy diverges from
+    /// the center by content, with both sides pinned to `mtime_ms` so the sync
+    /// status is `diverged` (never `project_newer`). Copy sync mode keeps the
+    /// test off symlink privileges. Returns the on-disk skill dir and the center
+    /// directory. The caller drives `update_agent_local_skill_from_center`.
+    fn setup_diverged_pull(
+        temp: &std::path::Path,
+        store: &SkillStore,
+        local_body: &str,
+        center_body: &str,
+        mtime_ms: i64,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        // Copy mode: the overwrite lands as a real directory, so the assertions
+        // never depend on symlink creation privileges (flaky on Windows).
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        // Identical frontmatter on both sides: the body is the *only*
+        // distinguishing content, so equal bodies produce byte-identical files
+        // (hash-equal) and differing bodies produce a genuine divergence.
+        let center_source = temp.join("center-source");
+        std::fs::create_dir_all(&center_source).unwrap();
+        std::fs::write(
+            center_source.join("SKILL.md"),
+            format!("---\nname: local-tool\ndescription: Shared skill\n---\n{center_body}\n"),
+        )
+        .unwrap();
+        let existing = installer::install_from_local(&center_source, Some("local-tool")).unwrap();
+
+        let skills_root = temp.join("agent-skills");
+        let skill_dir = skills_root.join("local-tool");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: local-tool\ndescription: Shared skill\n---\n{local_body}\n"),
+        )
+        .unwrap();
+
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::json!([
+                    {
+                        "key": "test_agent",
+                        "display_name": "Test Agent",
+                        "skills_dir": skills_root.to_string_lossy(),
+                        "project_relative_skills_dir": ".test-agent/skills"
+                    }
+                ])
+                .to_string(),
+            )
+            .unwrap();
+
+        store
+            .insert_skill(&SkillRecord {
+                id: "existing-center".to_string(),
+                name: "local-tool".to_string(),
+                description: existing.description.clone(),
+                source_type: "local".to_string(),
+                source_ref: Some(skill_dir.to_string_lossy().to_string()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: existing.central_path.to_string_lossy().to_string(),
+                content_hash: Some(content_hash::hash_directory(&existing.central_path).unwrap()),
+                enabled: true,
+                created_at: 0,
+                updated_at: 0,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: Some(0),
+                last_check_error: None,
+            })
+            .unwrap();
+
+        // Both sides on the same clock → `diverged`, which the direction button
+        // is allowed to overwrite (it is not `project_newer`).
+        set_file_mtime_ms(&skill_dir.join("SKILL.md"), mtime_ms);
+        set_file_mtime_ms(&existing.central_path.join("SKILL.md"), mtime_ms);
+
+        (skill_dir, existing.central_path)
+    }
+
+    #[test]
+    fn pulling_from_center_snapshots_diverged_local_before_overwriting() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let center_root = temp.path().join("center");
+        central_repo::set_test_base_dir_override(Some(center_root.clone()));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        let (skill_dir, _center_dir) = setup_diverged_pull(
+            temp.path(),
+            &store,
+            "agent divergent edits",
+            "center authoritative",
+            5_000,
+        );
+
+        let result = update_agent_local_skill_from_center(&store, "test_agent", "local-tool");
+        assert!(result.is_ok(), "diverged pull must be allowed: {result:?}");
+
+        // The local edits were snapshotted before the overwrite: a backup of the
+        // pre-overwrite target must exist and still carry the user's content.
+        let backups_root = center_root.join("backups").join("local-tool");
+        let snapshot = std::fs::read_dir(&backups_root)
+            .unwrap()
+            .next()
+            .expect("a backup directory must have been created")
+            .unwrap()
+            .path();
+        let snapshotted = std::fs::read_to_string(snapshot.join("SKILL.md")).unwrap();
+        assert!(
+            snapshotted.contains("agent divergent edits"),
+            "backup must preserve the user's local edits, got: {snapshotted}"
+        );
+
+        // And the target itself was actually overwritten with the center copy.
+        let local_now = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+        assert!(
+            local_now.contains("center authoritative"),
+            "target must be overwritten with center content, got: {local_now}"
+        );
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn pulling_from_center_does_not_snapshot_when_local_matches_center() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let center_root = temp.path().join("center");
+        central_repo::set_test_base_dir_override(Some(center_root.clone()));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        // Identical bodies → no divergence, no edit to lose, so no backup churn.
+        let (_skill_dir, _center_dir) =
+            setup_diverged_pull(temp.path(), &store, "identical", "identical", 5_000);
+
+        let result = update_agent_local_skill_from_center(&store, "test_agent", "local-tool");
+        assert!(result.is_ok(), "in-sync pull must be allowed: {result:?}");
+
+        assert!(
+            !center_root.join("backups").join("local-tool").exists(),
+            "matching content must not produce a redundant snapshot"
+        );
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn pulling_from_center_rejects_newer_local_without_snapshotting() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let center_root = temp.path().join("center");
+        central_repo::set_test_base_dir_override(Some(center_root.clone()));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        // Local pinned well after the center → deterministically `project_newer`.
+        let (skill_dir, _center_dir) = setup_diverged_pull(
+            temp.path(),
+            &store,
+            "agent newer edits",
+            "center older",
+            5_000,
+        );
+        set_file_mtime_ms(&skill_dir.join("SKILL.md"), 50_000);
+
+        let result = update_agent_local_skill_from_center(&store, "test_agent", "local-tool");
+        assert!(result.is_err(), "project_newer must still be rejected");
+
+        // Rejection happens before any write: the local copy is untouched and no
+        // backup was taken (the guard, not the safety net, fired).
+        let local_content = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+        assert!(local_content.contains("agent newer edits"));
+        assert!(
+            !center_root.join("backups").join("local-tool").exists(),
+            "rejected pull must not snapshot"
+        );
 
         central_repo::set_test_base_dir_override(None);
     }

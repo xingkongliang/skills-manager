@@ -8,7 +8,10 @@ use tauri::State;
 
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
 use crate::core::timing::should_log_first_or_slow;
-use crate::core::{error::AppError, installer, project_scanner, sync_engine, tool_adapters};
+use crate::core::{
+    central_repo, content_hash, error::AppError, installer, project_scanner, sync_engine,
+    tool_adapters,
+};
 
 #[derive(Serialize, Default)]
 pub struct SyncHealthDto {
@@ -501,6 +504,52 @@ pub(crate) fn classify_sync_status(
     } else {
         "diverged".to_string()
     }
+}
+
+/// Decide whether an explicit "pull from center" must snapshot the target
+/// before it gets overwritten. The direction buttons deliberately overwrite the
+/// local copy, but they must never *silently* discard a user's local edits: back
+/// up only when the target already exists AND its content differs from the
+/// center content about to be written. This is the safety net for the `diverged`
+/// case that legitimately slips past the `project_newer` guard. A symlink target
+/// hashes equal to the center (it *is* the center) so this returns `false` and
+/// avoids a redundant snapshot; a copy carrying real edits hashes different and
+/// returns `true`. Because the decision keys off content hashes alone, it never
+/// has to special-case the sync mode.
+pub(crate) fn explicit_pull_needs_backup(target: &Path, center: &Path) -> Result<bool, AppError> {
+    if !target.exists() {
+        return Ok(false);
+    }
+    let target_hash = content_hash::hash_directory(target).map_err(AppError::io)?;
+    let center_hash = content_hash::hash_directory(center).map_err(AppError::io)?;
+    Ok(target_hash != center_hash)
+}
+
+/// Snapshot `target` under `<central_root>/backups/` when an explicit pull from
+/// center would otherwise silently drop local edits. Shared by the project and
+/// global-workspace direction buttons so both honor the same safety net. No-op
+/// when the target is absent or already matches the center content.
+pub(crate) fn snapshot_before_explicit_pull(
+    target: &Path,
+    center: &Path,
+    fallback_dir_name: &str,
+) -> Result<(), AppError> {
+    if explicit_pull_needs_backup(target, center)? {
+        let dir_name = target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| fallback_dir_name.to_string());
+        central_repo::backup_directory(
+            &central_repo::base_dir(),
+            target,
+            &dir_name,
+            "explicit-pull-from-center",
+            chrono::Utc::now().timestamp_millis(),
+            central_repo::BackupKind::Copy,
+        )
+        .map_err(AppError::io)?;
+    }
+    Ok(())
 }
 
 static GET_PROJECTS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
@@ -1030,55 +1079,70 @@ pub async fn update_project_skill_from_center(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
-
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let configs = agent_skill_configs(&store);
-        let skills = read_workspace_skills(&record, &configs);
-        let skill = skills
-            .iter()
-            .find(|s| s.relative_path == skill_relative_path && s.agent == agent)
-            .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
-
-        let all_managed = store.get_all_skills().unwrap_or_default();
-        let managed = find_best_center_match(skill, &all_managed)
-            .ok_or_else(|| AppError::not_found("No matching skill in center"))?;
-
-        // Mirror the global-workspace protection (agent_workspace.rs): never
-        // overwrite a project copy that has unsynced local edits (#225 review).
-        if classify_sync_status(skill, Some(managed)) == "project_newer" {
-            return Err(AppError::invalid_input(
-                "Project skill is newer than the Skills Center version",
-            ));
-        }
-
-        let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
-            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
-        let target_path = PathBuf::from(&skill.path);
-        if target_path.starts_with(&skills_root) {
-            ensure_dir_within_root(&target_path, &skills_root)?;
-        } else if disabled_root
-            .as_ref()
-            .map(|root| target_path.starts_with(root))
-            .unwrap_or(false)
-        {
-            let disabled_root = disabled_root.expect("checked above");
-            ensure_dir_within_root(&target_path, &disabled_root)?;
-        } else {
-            return Err(AppError::invalid_input("Invalid skill directory path"));
-        }
-
-        let source = PathBuf::from(&managed.central_path);
-        let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-        let mode = sync_engine::sync_mode_for_tool(&agent, configured_mode.as_deref());
-        sync_engine::sync_skill(&source, &target_path, mode).map_err(AppError::io)?;
-        Ok(())
+        update_project_skill_from_center_inner(&store, &project_id, &skill_relative_path, &agent)
     })
     .await?
+}
+
+fn update_project_skill_from_center_inner(
+    store: &SkillStore,
+    project_id: &str,
+    skill_relative_path: &str,
+    agent: &str,
+) -> Result<(), AppError> {
+    ensure_safe_skill_relative_path(skill_relative_path)?;
+
+    let record = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let configs = agent_skill_configs(store);
+    let skills = read_workspace_skills(&record, &configs);
+    let skill = skills
+        .iter()
+        .find(|s| s.relative_path == skill_relative_path && s.agent == agent)
+        .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
+
+    let all_managed = store.get_all_skills().unwrap_or_default();
+    let managed = find_best_center_match(skill, &all_managed)
+        .ok_or_else(|| AppError::not_found("No matching skill in center"))?;
+
+    // Mirror the global-workspace protection (agent_workspace.rs): never
+    // overwrite a project copy that has unsynced local edits (#225 review).
+    if classify_sync_status(skill, Some(managed)) == "project_newer" {
+        return Err(AppError::invalid_input(
+            "Project skill is newer than the Skills Center version",
+        ));
+    }
+
+    let (skills_root, disabled_root) = resolve_agent_skills_roots(store, &record, agent)
+        .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
+    let target_path = PathBuf::from(&skill.path);
+    if target_path.starts_with(&skills_root) {
+        ensure_dir_within_root(&target_path, &skills_root)?;
+    } else if disabled_root
+        .as_ref()
+        .map(|root| target_path.starts_with(root))
+        .unwrap_or(false)
+    {
+        let disabled_root = disabled_root.expect("checked above");
+        ensure_dir_within_root(&target_path, &disabled_root)?;
+    } else {
+        return Err(AppError::invalid_input("Invalid skill directory path"));
+    }
+
+    let source = PathBuf::from(&managed.central_path);
+    // Explicit "pull from center" honors the overwrite direction, but a
+    // divergent copy that slipped past the project_newer guard still holds
+    // the user's local edits — snapshot it before sync_skill clobbers them so
+    // nothing is silently lost. Symlink targets hash equal to the center and
+    // are skipped (there is no local edit to lose).
+    snapshot_before_explicit_pull(&target_path, &source, &skill.name)?;
+    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+    let mode = sync_engine::sync_mode_for_tool(agent, configured_mode.as_deref());
+    sync_engine::sync_skill(&source, &target_path, mode).map_err(AppError::io)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1153,13 +1217,15 @@ pub async fn delete_project_skill(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_sync_status, ensure_distinct_linked_workspace_roots,
+        classify_sync_status, ensure_distinct_linked_workspace_roots, explicit_pull_needs_backup,
         remove_workspace_skill_target, set_project_skill_enabled_state,
+        update_project_skill_from_center_inner,
     };
     use crate::core::content_hash;
     use crate::core::error::ErrorKind;
     use crate::core::project_scanner::ProjectSkillInfo;
-    use crate::core::skill_store::SkillRecord;
+    use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
+    use crate::core::{central_repo, installer};
     use std::fs;
     use tempfile::tempdir;
 
@@ -1213,6 +1279,162 @@ mod tests {
             last_modified_at,
             content_hash,
         }
+    }
+
+    // --- Explicit "pull from center" backup safety net (#225 follow-up) ---
+    // The decision "does an explicit overwrite need to snapshot the target
+    // first?" is the load-bearing predicate: it is what keeps a user's local
+    // edits from vanishing when a `diverged` skill slips past the project_newer
+    // guard. Pin it exhaustively as a pure function so the two command handlers
+    // can lean on a single verified point.
+
+    #[test]
+    fn explicit_pull_backs_up_when_target_differs_from_center() {
+        let center = tempdir().unwrap();
+        fs::write(center.path().join("SKILL.md"), "# center\n").unwrap();
+        let target = tempdir().unwrap();
+        fs::write(target.path().join("SKILL.md"), "# local edits\n").unwrap();
+
+        // Target exists and holds edits the center does not → must snapshot.
+        assert!(explicit_pull_needs_backup(target.path(), center.path()).unwrap());
+    }
+
+    #[test]
+    fn explicit_pull_skips_backup_when_target_matches_center() {
+        let center = tempdir().unwrap();
+        fs::write(center.path().join("SKILL.md"), "# same\n").unwrap();
+        let target = tempdir().unwrap();
+        fs::write(target.path().join("SKILL.md"), "# same\n").unwrap();
+
+        // Identical content — this is the symlink-to-center case reduced to its
+        // observable property — so no redundant snapshot.
+        assert!(!explicit_pull_needs_backup(target.path(), center.path()).unwrap());
+    }
+
+    #[test]
+    fn explicit_pull_skips_backup_when_target_missing() {
+        let center = tempdir().unwrap();
+        fs::write(center.path().join("SKILL.md"), "# center\n").unwrap();
+        let target = tempdir().unwrap();
+        let missing = target.path().join("brand-new-skill");
+
+        // Nothing on disk yet → nothing to lose, so no backup even though the
+        // center is non-empty (an empty tree would otherwise hash "different").
+        assert!(!explicit_pull_needs_backup(&missing, center.path()).unwrap());
+    }
+
+    /// Project-side mirror of the agent-side snapshot integration test. Drives
+    /// the real `update_project_skill_from_center_inner` against a linked
+    /// workspace whose skill diverges from the center by content (mtimes pinned
+    /// equal so it is `diverged`, not `project_newer`). The explicit pull must
+    /// snapshot the target's local edits before overwriting it with the center
+    /// copy — this guards the command's `snapshot_before_explicit_pull` wiring
+    /// against silent removal, which a pure-function test alone cannot catch.
+    #[test]
+    fn project_pull_from_center_snapshots_diverged_local_before_overwriting() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempdir().unwrap();
+        let center_root = temp.path().join("center");
+        central_repo::set_test_base_dir_override(Some(center_root.clone()));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        // Copy mode keeps the overwrite off symlink privileges (flaky on Windows).
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        // Linked workspace: skills live directly under the workspace root, so no
+        // custom-tool adapter wiring is needed to reach the code path.
+        let workspace = temp.path().join("workspace");
+        let skill_dir = workspace.join("example-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: example-skill\ndescription: Shared skill\n---\nproject divergent edits\n",
+        )
+        .unwrap();
+
+        store
+            .insert_project(&ProjectRecord {
+                id: "proj-1".to_string(),
+                name: "Linked WS".to_string(),
+                path: workspace.to_string_lossy().to_string(),
+                workspace_type: "linked".to_string(),
+                linked_agent_key: Some("linked-agent".to_string()),
+                linked_agent_name: Some("Linked Agent".to_string()),
+                disabled_path: None,
+                sort_order: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+
+        // Center copy: identical frontmatter, different body → genuine divergence.
+        let center_source = temp.path().join("center-source");
+        fs::create_dir_all(&center_source).unwrap();
+        fs::write(
+            center_source.join("SKILL.md"),
+            "---\nname: example-skill\ndescription: Shared skill\n---\ncenter authoritative\n",
+        )
+        .unwrap();
+        let existing =
+            installer::install_from_local(&center_source, Some("example-skill")).unwrap();
+
+        store
+            .insert_skill(&SkillRecord {
+                id: "center-skill".to_string(),
+                name: "example-skill".to_string(),
+                description: existing.description.clone(),
+                source_type: "local".to_string(),
+                source_ref: Some(skill_dir.to_string_lossy().to_string()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: existing.central_path.to_string_lossy().to_string(),
+                content_hash: Some(content_hash::hash_directory(&existing.central_path).unwrap()),
+                enabled: true,
+                created_at: 0,
+                updated_at: 0,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: Some(0),
+                last_check_error: None,
+            })
+            .unwrap();
+
+        // Both sides on the same clock → `diverged` (overwrite allowed), not
+        // `project_newer` (which would reject before the snapshot ever runs).
+        set_file_mtime_ms(&skill_dir.join("SKILL.md"), 5_000);
+        set_file_mtime_ms(&existing.central_path.join("SKILL.md"), 5_000);
+
+        let result =
+            update_project_skill_from_center_inner(&store, "proj-1", "example-skill", "linked-agent");
+        assert!(result.is_ok(), "diverged project pull must be allowed: {result:?}");
+
+        // The local edits were snapshotted before being overwritten.
+        let backups_root = center_root.join("backups").join("example-skill");
+        let snapshot = fs::read_dir(&backups_root)
+            .unwrap()
+            .next()
+            .expect("a backup directory must have been created")
+            .unwrap()
+            .path();
+        let snapshotted = fs::read_to_string(snapshot.join("SKILL.md")).unwrap();
+        assert!(
+            snapshotted.contains("project divergent edits"),
+            "backup must preserve the user's local edits, got: {snapshotted}"
+        );
+
+        // And the target itself was overwritten with the center copy.
+        let local_now = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+        assert!(
+            local_now.contains("center authoritative"),
+            "target must be overwritten with center content, got: {local_now}"
+        );
+
+        central_repo::set_test_base_dir_override(None);
     }
 
     #[test]
