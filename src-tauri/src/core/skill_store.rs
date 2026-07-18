@@ -464,6 +464,25 @@ impl SkillStore {
         Ok(())
     }
 
+    /// Update only the observability fields of an existing target row without
+    /// touching its path/mode/hash/synced_at. Used by the deploy guard to flag
+    /// a target as `target_ahead` (user edited the spoke) so later automatic
+    /// deploys preserve it and don't re-snapshot. No-op if the row is absent.
+    pub fn update_target_status(
+        &self,
+        skill_id: &str,
+        tool: &str,
+        status: &str,
+        last_error: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE skill_targets SET status = ?1, last_error = ?2 WHERE skill_id = ?3 AND tool = ?4",
+            params![status, last_error, skill_id, tool],
+        )?;
+        Ok(())
+    }
+
     pub fn get_targets_for_skill(&self, skill_id: &str) -> Result<Vec<SkillTargetRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
