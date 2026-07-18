@@ -482,11 +482,21 @@ pub(crate) fn classify_sync_status(
         return "diverged".to_string();
     };
 
-    let center_updated_at = managed.updated_at;
+    // Both sides must be judged by the SAME clock: the real filesystem mtime of
+    // the content files. The project side already carries that (`last_modified_at`),
+    // so the center side must too. `managed.updated_at` is a DB bookkeeping stamp
+    // that every app-side write bumps to now(), so it is not comparable against a
+    // filesystem mtime — using it made an up-to-date project read as `center_newer`
+    // right after any unrelated DB write. That mismatch is the bug this fixes.
+    // Only fall back to `updated_at` when the central directory has no readable
+    // content files to stat (e.g. it was moved or deleted).
+    let center_modified_at =
+        crate::core::content_hash::latest_modified_millis(Path::new(&managed.central_path))
+            .unwrap_or(managed.updated_at);
     let threshold_ms = 1_000;
-    if project_modified_at > center_updated_at + threshold_ms {
+    if project_modified_at > center_modified_at + threshold_ms {
         "project_newer".to_string()
-    } else if center_updated_at > project_modified_at + threshold_ms {
+    } else if center_modified_at > project_modified_at + threshold_ms {
         "center_newer".to_string()
     } else {
         "diverged".to_string()
@@ -1228,7 +1238,12 @@ mod tests {
     #[test]
     fn classify_sync_status_falls_back_to_timestamps_when_live_hash_differs() {
         let center_dir = tempdir().unwrap();
-        fs::write(center_dir.path().join("SKILL.md"), "# Center\n").unwrap();
+        let center_skill = center_dir.path().join("SKILL.md");
+        fs::write(&center_skill, "# Center\n").unwrap();
+        // The center side is now compared by its real filesystem mtime, so pin
+        // it to an old value; otherwise a freshly created tempdir looks newer
+        // than the project's timestamp and the branch under test never fires.
+        set_file_mtime_ms(&center_skill, 1_000);
 
         let project_dir = tempdir().unwrap();
         fs::write(project_dir.path().join("SKILL.md"), "# Project changed\n").unwrap();
@@ -1249,6 +1264,143 @@ mod tests {
             classify_sync_status(&project, Some(&managed)),
             "project_newer"
         );
+    }
+
+    /// Pin a file's mtime to a fixed epoch-ms value so the central copy's
+    /// filesystem timestamp is deterministic and independent of wall clock.
+    fn set_file_mtime_ms(path: &std::path::Path, ms: i64) {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
+        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(time).unwrap();
+    }
+
+    /// Regression for the two-clocks bug: the center side must be judged by the
+    /// central directory's real filesystem mtime, never by `managed.updated_at`.
+    /// Here the project's files are genuinely newer than the central copy, but a
+    /// later `updated_at` (as a stray DB write would produce) would flip the old
+    /// code to "center_newer". The fix must still report "project_newer".
+    #[test]
+    fn classify_treats_project_as_newer_when_updated_at_bumped_but_files_older() {
+        let center_dir = tempdir().unwrap();
+        let center_skill = center_dir.path().join("SKILL.md");
+        fs::write(&center_skill, "# Center\n").unwrap();
+        // Central files are OLD on disk...
+        set_file_mtime_ms(&center_skill, 10_000);
+
+        let project_dir = tempdir().unwrap();
+        fs::write(project_dir.path().join("SKILL.md"), "# Project changed\n").unwrap();
+        let project_hash = content_hash::hash_directory(project_dir.path()).unwrap();
+
+        // ...but `updated_at` was bumped far into the future by an app write.
+        let bumped_updated_at = 9_999_999_999;
+        let managed = sample_managed_skill(
+            center_dir.path().to_string_lossy().to_string(),
+            Some("stale-db-hash".to_string()),
+            bumped_updated_at,
+        );
+        // Project fs mtime is newer than the central copy (10_000) but older
+        // than the bumped `updated_at` — the exact trap the old code fell into.
+        let project = sample_project_skill(
+            project_dir.path().to_string_lossy().to_string(),
+            Some(project_hash),
+            Some(50_000),
+        );
+
+        assert_eq!(
+            classify_sync_status(&project, Some(&managed)),
+            "project_newer"
+        );
+    }
+
+    /// Positive coverage for `center_newer`: the central copy's real filesystem
+    /// mtime is genuinely newer than the project's. `updated_at` is set *earlier*
+    /// than the project, so this label can only arise from reading fs mtime — it
+    /// also guards against any regression back to comparing `updated_at`.
+    #[test]
+    fn classify_reports_center_newer_when_central_files_are_actually_newer() {
+        let center_dir = tempdir().unwrap();
+        let center_skill = center_dir.path().join("SKILL.md");
+        fs::write(&center_skill, "# Center v2\n").unwrap();
+        set_file_mtime_ms(&center_skill, 50_000);
+
+        let project_dir = tempdir().unwrap();
+        fs::write(project_dir.path().join("SKILL.md"), "# Project\n").unwrap();
+        let project_hash = content_hash::hash_directory(project_dir.path()).unwrap();
+
+        let managed = sample_managed_skill(
+            center_dir.path().to_string_lossy().to_string(),
+            Some("stale-db-hash".to_string()),
+            1_000,
+        );
+        let project = sample_project_skill(
+            project_dir.path().to_string_lossy().to_string(),
+            Some(project_hash),
+            Some(10_000),
+        );
+
+        assert_eq!(
+            classify_sync_status(&project, Some(&managed)),
+            "center_newer"
+        );
+    }
+
+    /// Covers the `unwrap_or(managed.updated_at)` fallback: an empty central dir
+    /// has no readable content files, so `latest_modified_millis` returns None
+    /// and the code falls back to `updated_at`. With `updated_at` far earlier
+    /// than the project mtime, that fallback path must yield `project_newer`.
+    #[test]
+    fn classify_falls_back_to_updated_at_when_central_has_no_content_files() {
+        // Empty central directory — no files for the mtime walk to stat.
+        let center_dir = tempdir().unwrap();
+
+        let project_dir = tempdir().unwrap();
+        fs::write(project_dir.path().join("SKILL.md"), "# Project\n").unwrap();
+        let project_hash = content_hash::hash_directory(project_dir.path()).unwrap();
+
+        let managed = sample_managed_skill(
+            center_dir.path().to_string_lossy().to_string(),
+            Some("stale-db-hash".to_string()),
+            1_000,
+        );
+        let project = sample_project_skill(
+            project_dir.path().to_string_lossy().to_string(),
+            Some(project_hash),
+            Some(50_000),
+        );
+
+        assert_eq!(
+            classify_sync_status(&project, Some(&managed)),
+            "project_newer"
+        );
+    }
+
+    /// Covers the `diverged` outcome: the two filesystem mtimes differ by less
+    /// than the 1000ms threshold while the hashes disagree, so neither side is
+    /// declared newer.
+    #[test]
+    fn classify_reports_diverged_when_mtimes_within_threshold() {
+        let center_dir = tempdir().unwrap();
+        let center_skill = center_dir.path().join("SKILL.md");
+        fs::write(&center_skill, "# Center\n").unwrap();
+        set_file_mtime_ms(&center_skill, 10_000);
+
+        let project_dir = tempdir().unwrap();
+        fs::write(project_dir.path().join("SKILL.md"), "# Project\n").unwrap();
+        let project_hash = content_hash::hash_directory(project_dir.path()).unwrap();
+
+        let managed = sample_managed_skill(
+            center_dir.path().to_string_lossy().to_string(),
+            Some("stale-db-hash".to_string()),
+            1_000,
+        );
+        // 500ms apart — inside the 1000ms threshold.
+        let project = sample_project_skill(
+            project_dir.path().to_string_lossy().to_string(),
+            Some(project_hash),
+            Some(10_500),
+        );
+
+        assert_eq!(classify_sync_status(&project, Some(&managed)), "diverged");
     }
 
     #[test]

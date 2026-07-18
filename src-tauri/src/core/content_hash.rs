@@ -126,6 +126,18 @@ pub fn latest_modified_ms(entries: &[ContentEntry]) -> Option<i64> {
     entries.iter().filter_map(|e| e.modified_ms).max()
 }
 
+/// Latest content-file modification time (ms since epoch) for a directory,
+/// walking it fresh. Dir-taking wrapper over [`list_content_files`] +
+/// [`latest_modified_ms`] for callers that only hold a path and can't reuse an
+/// existing walk — sync-status classification uses it to read the central
+/// copy's real filesystem mtime. Returns `None` when the directory has no
+/// readable content files (missing, empty, or unreadable). Symlink cycles are a
+/// non-issue: the underlying walk does not follow symlinks, so a self-referential
+/// link is simply never traversed.
+pub fn latest_modified_millis(dir: &Path) -> Option<i64> {
+    latest_modified_ms(&list_content_files(dir))
+}
+
 pub fn hash_directory(dir: &Path) -> Result<String> {
     Ok(hash_entries(&list_content_files(dir)))
 }
@@ -303,6 +315,51 @@ mod tests {
         // No content files → no timestamp.
         let empty = tempdir().unwrap();
         assert_eq!(latest_modified_ms(&list_content_files(empty.path())), None);
+    }
+
+    /// Force a file's mtime to a fixed epoch-ms value so mtime-ordering tests
+    /// don't depend on wall-clock timing or filesystem resolution.
+    fn set_file_mtime_ms(path: &Path, ms: i64) {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
+        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(time).unwrap();
+    }
+
+    #[test]
+    fn latest_modified_millis_returns_newest_content_file() {
+        let tmp = tempdir().unwrap();
+        let old = tmp.path().join("old.txt");
+        let new = tmp.path().join("new.txt");
+        fs::write(&old, "a").unwrap();
+        fs::write(&new, "b").unwrap();
+        set_file_mtime_ms(&old, 1_000);
+        set_file_mtime_ms(&new, 5_000);
+
+        // The newest content file's mtime wins over older siblings.
+        assert_eq!(latest_modified_millis(tmp.path()), Some(5_000));
+    }
+
+    #[test]
+    fn latest_modified_millis_missing_directory_is_none() {
+        let tmp = tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        assert_eq!(latest_modified_millis(&missing), None);
+    }
+
+    /// A symlink pointing back at its own directory must not send the walk into
+    /// an infinite loop; the call has to terminate and still report the real
+    /// content file's mtime.
+    #[cfg(unix)]
+    #[test]
+    fn latest_modified_millis_survives_symlink_cycle() {
+        let tmp = tempdir().unwrap();
+        let file = tmp.path().join("real.txt");
+        fs::write(&file, "content").unwrap();
+        set_file_mtime_ms(&file, 3_000);
+        // Self-referential cycle: <dir>/loop -> <dir>.
+        std::os::unix::fs::symlink(tmp.path(), tmp.path().join("loop")).unwrap();
+
+        assert_eq!(latest_modified_millis(tmp.path()), Some(3_000));
     }
 
     #[test]
