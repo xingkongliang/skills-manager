@@ -8,11 +8,12 @@ use walkdir::WalkDir;
 
 use crate::core::{
     audit_log::AuditDraft,
-    central_repo,
+    central_repo, content_hash,
     error::AppError,
     git_fetcher,
     install_cancel::InstallCancelRegistry,
     installer,
+    reconcile::{reconcile, Reconcile, SideState},
     repo_lock::RepoLock,
     scanner,
     skill_metadata::{self, is_valid_skill_dir},
@@ -1580,6 +1581,53 @@ pub fn update_git_skill_internal(
     }
 }
 
+/// mtime tie-break tolerance for the reimport source↔center decision, in ms.
+/// Mirrors the folder-sync threshold used elsewhere: a difference at or under
+/// this is treated as "can't tell who is newer" rather than trusting sub-second
+/// filesystem timestamps across two independently-written trees.
+const REIMPORT_MTIME_THRESHOLD_MS: i64 = 1000;
+
+/// What [`reimport_local_skill_internal`] should do with a freshly staged
+/// source once it has compared that source against the live center copy.
+///
+/// Why its own enum instead of matching [`Reconcile`] inline at the call site:
+/// the reimport write-point collapses reconcile's four verdicts onto three
+/// distinct IO actions, and that collapse is exactly the bug-fix surface (an
+/// older source must never silently roll back a newer center). Isolating it as
+/// a pure value keeps the decision exhaustively unit-testable with no store, DB,
+/// or filesystem in the loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReimportDecision {
+    /// Source and center already hold identical content — drop the staged copy,
+    /// do not swap.
+    SkipInSync,
+    /// Source is the newer version — back up the current center, then overwrite
+    /// it with the staged source.
+    OverwriteCenter,
+    /// Center is newer than, or has diverged from, the source — keep the center
+    /// untouched and drop the staged copy. This is the regression fix: reimport
+    /// used to overwrite unconditionally and could revert a user's newer central
+    /// edits with a stale external source.
+    KeepCenter,
+}
+
+/// Decide the reimport action for the source↔center plane from each side's
+/// observable state (content hash + filesystem mtime).
+///
+/// The source↔center plane has no trustworthy last-synced baseline — a reimport
+/// re-reads an arbitrary external source that was never tracked against the
+/// center — so we pass `baseline_hash = None` and let [`reconcile`] degrade to
+/// pure newest-wins by mtime. `a = source`, `b = center`, so `TakeA` means the
+/// source won. `TakeB` and `Diverged` both map to `KeepCenter`: we never let an
+/// older or unrankable source overwrite the center.
+fn decide_reimport(source: &SideState, center: &SideState, threshold_ms: i64) -> ReimportDecision {
+    match reconcile(None, source, center, threshold_ms) {
+        Reconcile::InSync => ReimportDecision::SkipInSync,
+        Reconcile::TakeA { .. } => ReimportDecision::OverwriteCenter,
+        Reconcile::TakeB { .. } | Reconcile::Diverged => ReimportDecision::KeepCenter,
+    }
+}
+
 pub fn reimport_local_skill_internal(
     store: &SkillStore,
     skill_id: &str,
@@ -1623,20 +1671,100 @@ pub fn reimport_local_skill_internal(
         let install_result =
             installer::install_from_local_to_destination(&path, Some(&skill.name), &staged_path)
                 .map_err(AppError::io)?;
-        swap_skill_directory(&staged_path, Path::new(&skill.central_path))?;
-        store
-            .update_skill_after_install(
-                &skill.id,
-                &skill.name,
-                install_result.description.as_deref(),
-                None,
-                None,
-                Some(&install_result.content_hash),
-                "local_only",
-            )
-            .map_err(AppError::db)?;
-        resync_copy_targets(store, &skill.id)?;
-        sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+
+        // Decide source↔center on the freshly staged source vs. the *live*
+        // center (re-hashed here, since the DB's stored hash can be stale after
+        // an out-of-band edit). No baseline: this plane was never synced, so
+        // only newest-wins-by-mtime applies. `a = source`, `b = center`.
+        let central_path = Path::new(&skill.central_path);
+        let decision = if !central_path.exists() {
+            // Center gone (e.g. the user deleted it and reimports to recover).
+            // There is nothing to compare or back up — rebuild it from source.
+            // Without this, an absent center hashes to the empty-dir digest with
+            // no mtime, reconcile returns Diverged, and the recovery would be
+            // wrongly skipped.
+            ReimportDecision::OverwriteCenter
+        } else {
+            let source = SideState {
+                hash: Some(install_result.content_hash.clone()),
+                mtime_ms: content_hash::latest_modified_millis(&path),
+            };
+            let center = SideState {
+                hash: content_hash::hash_directory(central_path).ok(),
+                mtime_ms: content_hash::latest_modified_millis(central_path),
+            };
+            decide_reimport(&source, &center, REIMPORT_MTIME_THRESHOLD_MS)
+        };
+
+        match decision {
+            ReimportDecision::SkipInSync => {
+                // Identical content — don't swap, and don't leak the staged copy.
+                remove_path_if_exists(&staged_path)?;
+                store
+                    .update_skill_check_state(&skill.id, None, "local_only", None)
+                    .map_err(AppError::db)?;
+            }
+            ReimportDecision::KeepCenter => {
+                // The fix: an older/diverged source must not roll back the
+                // center. Drop the staged copy, keep the center, record why.
+                remove_path_if_exists(&staged_path)?;
+                let detail =
+                    "kept center (newer than / diverged from source), skipped reimport";
+                log::info!("reimport {}: {detail}", skill.id);
+                store.log_audit(
+                    AuditDraft::new("reimport")
+                        .skill(skill.id.clone(), skill.name.clone())
+                        .ok()
+                        .detail(detail),
+                );
+                store
+                    .update_skill_check_state(&skill.id, None, "local_only", None)
+                    .map_err(AppError::db)?;
+            }
+            ReimportDecision::OverwriteCenter => {
+                // Snapshot the current center *before* overwriting it. `Copy`,
+                // NOT `Move`: the center must stay in place so that
+                // `swap_skill_directory`'s atomic rename-with-rollback can put it
+                // back if the swap fails — its rollback keys off "current center
+                // still exists" (rename it aside, restore on error). A `Move`
+                // would vacate `central_path` first, defeating that rollback: a
+                // failed rename (e.g. an external process holding a handle on
+                // Windows, which RepoLock cannot fence out) would then leave the
+                // skill missing entirely — a crash-safety regression versus the
+                // pre-fix code. The extra copy is the deliberate price of keeping
+                // the swap's rollback intact. When the center is absent (rebuild
+                // case) there is nothing to snapshot.
+                if central_path.exists() {
+                    let dir_name = central_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| skill.name.clone());
+                    central_repo::backup_directory(
+                        &central_repo::base_dir(),
+                        central_path,
+                        &dir_name,
+                        "reimport-source-newer",
+                        chrono::Utc::now().timestamp_millis(),
+                        central_repo::BackupKind::Copy,
+                    )
+                    .map_err(AppError::io)?;
+                }
+                swap_skill_directory(&staged_path, central_path)?;
+                store
+                    .update_skill_after_install(
+                        &skill.id,
+                        &skill.name,
+                        install_result.description.as_deref(),
+                        None,
+                        None,
+                        Some(&install_result.content_hash),
+                        "local_only",
+                    )
+                    .map_err(AppError::db)?;
+                resync_copy_targets(store, &skill.id)?;
+                sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+            }
+        }
         Ok(())
     })();
 
@@ -2489,5 +2617,222 @@ mod tests {
         assert_ne!(k_a, k_b);
         assert_eq!(k_a, "category-a/foo");
         assert_eq!(k_b, "category-b/foo");
+    }
+
+    // ── reimport source↔center decision ─────────────────────────────────────
+
+    fn side(hash: Option<&str>, mtime_ms: Option<i64>) -> SideState {
+        SideState {
+            hash: hash.map(|s| s.to_string()),
+            mtime_ms,
+        }
+    }
+
+    #[test]
+    fn decide_reimport_identical_content_skips() {
+        // Same hash on both sides → nothing to write, regardless of mtime.
+        assert_eq!(
+            decide_reimport(&side(Some("h"), Some(1)), &side(Some("h"), Some(9_999)), 1000),
+            ReimportDecision::SkipInSync
+        );
+    }
+
+    #[test]
+    fn decide_reimport_source_strictly_newer_overwrites() {
+        // Different content, source mtime newer than center by > threshold.
+        assert_eq!(
+            decide_reimport(
+                &side(Some("src"), Some(5_000)),
+                &side(Some("ctr"), Some(1_000)),
+                1000
+            ),
+            ReimportDecision::OverwriteCenter
+        );
+    }
+
+    #[test]
+    fn decide_reimport_center_strictly_newer_keeps_center() {
+        // The core regression: an older source must not roll back a newer center.
+        assert_eq!(
+            decide_reimport(
+                &side(Some("src"), Some(1_000)),
+                &side(Some("ctr"), Some(5_000)),
+                1000
+            ),
+            ReimportDecision::KeepCenter
+        );
+    }
+
+    #[test]
+    fn decide_reimport_tie_within_threshold_keeps_center() {
+        // Different content but mtimes within the threshold → Diverged → we
+        // cannot rank them, so the center is kept (never a coin-flip overwrite).
+        assert_eq!(
+            decide_reimport(
+                &side(Some("src"), Some(1_500)),
+                &side(Some("ctr"), Some(1_000)),
+                1000
+            ),
+            ReimportDecision::KeepCenter
+        );
+    }
+
+    #[test]
+    fn decide_reimport_unrankable_missing_mtime_keeps_center() {
+        // A side's mtime unreadable → unrankable → keep the center, never
+        // silently overwrite it.
+        assert_eq!(
+            decide_reimport(
+                &side(Some("src"), None),
+                &side(Some("ctr"), Some(1_000)),
+                1000
+            ),
+            ReimportDecision::KeepCenter
+        );
+    }
+
+    /// Pin a file's mtime to a fixed epoch-ms value so a freshly created
+    /// tempdir's wall-clock timestamp can't perturb newest-wins comparisons.
+    fn set_file_mtime_ms(path: &Path, ms: i64) {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
+        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(time).unwrap();
+    }
+
+    /// Stage a reimport scenario: a center skill dir under `skills_dir()` and a
+    /// separate external source dir, each with its own content and pinned mtime,
+    /// wired to a DB record whose `source_ref` points at the source. Returns the
+    /// central and backups-root paths for assertions.
+    fn setup_reimport(
+        repo: &TestRepo,
+        center_content: &str,
+        center_mtime: i64,
+        source_content: &str,
+        source_mtime: i64,
+    ) -> (PathBuf, PathBuf) {
+        let central = central_repo::skills_dir().join("my-skill");
+        fs::create_dir_all(&central).unwrap();
+        fs::write(central.join("SKILL.md"), center_content).unwrap();
+        set_file_mtime_ms(&central.join("SKILL.md"), center_mtime);
+
+        let source = repo._tmp.path().join("external-source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), source_content).unwrap();
+        set_file_mtime_ms(&source.join("SKILL.md"), source_mtime);
+
+        let mut rec = sample_skill("skill-1", "my-skill", &central);
+        rec.source_type = "local".to_string();
+        rec.source_ref = Some(source.to_string_lossy().to_string());
+        repo.store.insert_skill(&rec).unwrap();
+
+        let backups = central_repo::base_dir().join("backups");
+        (central, backups)
+    }
+
+    #[test]
+    fn reimport_keeps_center_when_center_is_newer() {
+        // Regression: source is older than the user's central edits. Reimport
+        // must NOT revert the center, must NOT back anything up, must NOT error.
+        let repo = test_repo();
+        let center_content = "---\nname: my-skill\n---\ncenter-newer-edit\n";
+        let source_content = "---\nname: my-skill\n---\nstale-source\n";
+        let (central, backups) =
+            setup_reimport(&repo, center_content, 5_000_000, source_content, 1_000);
+
+        let result = reimport_local_skill_internal(&repo.store, "skill-1");
+
+        assert!(result.is_ok(), "reimport should succeed, got {result:?}");
+        assert_eq!(
+            fs::read_to_string(central.join("SKILL.md")).unwrap(),
+            center_content,
+            "center must be left untouched"
+        );
+        assert!(!backups.exists(), "no backup when the center is kept");
+        // Symmetric with the SkipInSync test: the staged copy must not leak.
+        let staged_leftover = fs::read_dir(central_repo::skills_dir())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains("staged"));
+        assert!(!staged_leftover, "staged copy must be cleaned up");
+        let reloaded = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
+        assert_ne!(reloaded.update_status, "error");
+    }
+
+    #[test]
+    fn reimport_rebuilds_center_when_missing() {
+        // Recovery path: the user deleted the central copy and reimports to get
+        // it back. With no center to compare against, reimport must rebuild it
+        // from source rather than no-op, and has nothing to back up.
+        let repo = test_repo();
+        let source_content = "---\nname: my-skill\n---\nrecovered\n";
+        let source = repo._tmp.path().join("external-source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), source_content).unwrap();
+
+        // Central path is recorded but intentionally never created on disk.
+        let central = central_repo::skills_dir().join("my-skill");
+        let mut rec = sample_skill("skill-1", "my-skill", &central);
+        rec.source_type = "local".to_string();
+        rec.source_ref = Some(source.to_string_lossy().to_string());
+        repo.store.insert_skill(&rec).unwrap();
+        assert!(!central.exists(), "precondition: center is missing");
+
+        let result = reimport_local_skill_internal(&repo.store, "skill-1");
+
+        assert!(result.is_ok(), "reimport should rebuild, got {result:?}");
+        assert_eq!(
+            fs::read_to_string(central.join("SKILL.md")).unwrap(),
+            source_content,
+            "center must be rebuilt from source"
+        );
+        assert!(
+            !central_repo::base_dir().join("backups").exists(),
+            "nothing to back up when the center was absent"
+        );
+    }
+
+    #[test]
+    fn reimport_overwrites_and_backs_up_when_source_is_newer() {
+        let repo = test_repo();
+        let center_content = "---\nname: my-skill\n---\nold-center\n";
+        let source_content = "---\nname: my-skill\n---\nfresh-source\n";
+        let (central, backups) =
+            setup_reimport(&repo, center_content, 1_000, source_content, 5_000_000);
+
+        let result = reimport_local_skill_internal(&repo.store, "skill-1");
+
+        assert!(result.is_ok(), "reimport should succeed, got {result:?}");
+        assert_eq!(
+            fs::read_to_string(central.join("SKILL.md")).unwrap(),
+            source_content,
+            "center must now hold the newer source content"
+        );
+        // The old center content must survive as a backup.
+        let skill_backups = backups.join("my-skill");
+        assert!(skill_backups.exists(), "old center must be backed up");
+        let backed_up = fs::read_dir(&skill_backups).unwrap().any(|entry| {
+            let md = entry.unwrap().path().join("SKILL.md");
+            md.exists() && fs::read_to_string(&md).unwrap() == center_content
+        });
+        assert!(backed_up, "a backup holding the old center content must exist");
+    }
+
+    #[test]
+    fn reimport_is_noop_when_source_and_center_match() {
+        let repo = test_repo();
+        let content = "---\nname: my-skill\n---\nidentical\n";
+        let (central, backups) = setup_reimport(&repo, content, 5_000_000, content, 1_000);
+
+        let result = reimport_local_skill_internal(&repo.store, "skill-1");
+
+        assert!(result.is_ok(), "reimport should succeed, got {result:?}");
+        assert_eq!(fs::read_to_string(central.join("SKILL.md")).unwrap(), content);
+        assert!(!backups.exists(), "identical content needs no backup");
+        // The staged copy must not leak into skills_dir.
+        let staged_leftover = fs::read_dir(central_repo::skills_dir())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains("staged"));
+        assert!(!staged_leftover, "staged copy must be cleaned up");
     }
 }
