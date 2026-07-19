@@ -481,8 +481,8 @@ fn unique_backup_dir(parent: &Path, base_name: &str) -> PathBuf {
 /// Recursively copy `src` into `dest`, rolling back a half-written `dest` if the
 /// copy fails partway. Without this, a consumer could later mistake a truncated
 /// half-tree for a valid backup. The rollback is best-effort — if it too fails,
-/// the original copy error still propagates. For `Move` the source is only
-/// removed *after* a successful copy, so a failed backup never loses data.
+/// the original copy error still propagates. `src` is only ever a copy input
+/// (never removed), so a failed backup never loses data.
 fn copy_dir_with_rollback(src: &Path, dest: &Path) -> Result<()> {
     if let Err(err) = copy_dir_recursive(src, dest) {
         // Discard whatever partial tree was written so it can't be consumed.
