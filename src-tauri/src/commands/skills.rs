@@ -1252,6 +1252,30 @@ fn resolve_remotes_concurrent(
     remotes: Vec<RemoteKey>,
     proxy_url: Option<String>,
 ) -> HashMap<RemoteKey, Result<String, String>> {
+    resolve_concurrent(remotes, |key| {
+        git_fetcher::resolve_remote_revision(
+            &key.clone_url,
+            key.branch.as_deref(),
+            proxy_url.as_deref(),
+        )
+        .map_err(|err| err.to_string())
+    })
+}
+
+/// Run `resolve` over every remote concurrently (bounded by
+/// `MAX_CHECK_CONCURRENCY`) with work-stealing, and collect each result. Factored
+/// out of [`resolve_remotes_concurrent`] so the concurrency contract is testable
+/// with an injected resolver instead of live network: every remote is resolved
+/// exactly once, a per-remote failure is stored as `Err` rather than aborting the
+/// batch, and — since this function never touches `RepoLock` — resolution always
+/// runs off the central-repo lock.
+fn resolve_concurrent<F>(
+    remotes: Vec<RemoteKey>,
+    resolve: F,
+) -> HashMap<RemoteKey, Result<String, String>>
+where
+    F: Fn(&RemoteKey) -> Result<String, String> + Sync,
+{
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let next = AtomicUsize::new(0);
@@ -1265,12 +1289,7 @@ fn resolve_remotes_concurrent(
                 let idx = next.fetch_add(1, Ordering::Relaxed);
                 let Some(key) = remotes.get(idx) else { break };
 
-                let resolved = git_fetcher::resolve_remote_revision(
-                    &key.clone_url,
-                    key.branch.as_deref(),
-                    proxy_url.as_deref(),
-                )
-                .map_err(|err| err.to_string());
+                let resolved = resolve(key);
                 if let Ok(mut map) = results.lock() {
                     map.insert(key.clone(), resolved);
                 }
@@ -2673,6 +2692,83 @@ mod tests {
             }],
             1,
             "a different branch is a separate remote"
+        );
+    }
+
+    fn remote(url: &str, branch: Option<&str>) -> RemoteKey {
+        RemoteKey {
+            clone_url: url.to_string(),
+            branch: branch.map(|b| b.to_string()),
+        }
+    }
+
+    /// Work-stealing must cover every remote exactly once and collect each
+    /// resolver result under its own key — this exercises the real concurrent
+    /// loop, not just `RemoteKey`'s hashing.
+    #[test]
+    fn resolve_concurrent_resolves_every_remote_exactly_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let remotes: Vec<RemoteKey> =
+            (0..20).map(|i| remote(&format!("https://example.test/r{i}"), None)).collect();
+        let calls = AtomicUsize::new(0);
+
+        let out = resolve_concurrent(remotes.clone(), |key| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(format!("rev:{}", key.clone_url))
+        });
+
+        assert_eq!(calls.load(Ordering::Relaxed), remotes.len(), "each remote resolved exactly once");
+        assert_eq!(out.len(), remotes.len());
+        for key in &remotes {
+            assert!(matches!(out.get(key), Some(Ok(v)) if *v == format!("rev:{}", key.clone_url)));
+        }
+    }
+
+    /// A single remote failing must be stored as `Err` for that key alone and
+    /// never abort the batch (the "检查全部 both crawled and popped failures" fix
+    /// depends on this isolation).
+    #[test]
+    fn resolve_concurrent_isolates_per_remote_failures() {
+        let ok = remote("https://example.test/ok", None);
+        let bad = remote("https://example.test/bad", Some("main"));
+
+        let out = resolve_concurrent(vec![ok.clone(), bad.clone()], |key| {
+            if key.clone_url.ends_with("/bad") {
+                Err("boom".to_string())
+            } else {
+                Ok("rev".to_string())
+            }
+        });
+
+        assert!(matches!(out.get(&ok), Some(Ok(v)) if v == "rev"));
+        assert!(matches!(out.get(&bad), Some(Err(e)) if e == "boom"));
+    }
+
+    /// The resolutions must genuinely overlap: with several remotes and a
+    /// resolver that lingers, more than one worker is inside `resolve` at once.
+    /// Because `resolve_concurrent` holds no `RepoLock`, this is also the proof
+    /// that the network step runs off the central-repo lock.
+    #[test]
+    fn resolve_concurrent_runs_remotes_in_parallel() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let remotes: Vec<RemoteKey> =
+            (0..8).map(|i| remote(&format!("r{i}"), None)).collect();
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+
+        let out = resolve_concurrent(remotes, |_key| {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok("rev".to_string())
+        });
+
+        assert_eq!(out.len(), 8);
+        assert!(
+            peak.load(Ordering::SeqCst) >= 2,
+            "expected concurrent resolution, peak in-flight was {}",
+            peak.load(Ordering::SeqCst)
         );
     }
 }
