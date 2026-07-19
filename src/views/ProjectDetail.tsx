@@ -513,39 +513,67 @@ export function ProjectDetail() {
     }
   };
 
-  // Push the variant that drives the "update to center" status (the newest /
-  // just-edited copy) to center, then re-align every *other* agent copy of the
-  // same skill FROM the freshly-pushed center. Without the re-align, a skill
-  // that lives under multiple agents (e.g. .claude + .opencode) would push only
-  // one variant, and the row would immediately flip to "center_newer" — driven
-  // by the still-stale sibling copies — right after the user updated *to*
-  // center, which is baffling. Pushing the winner and pulling the rest lands the
-  // whole group in_sync. We never blindly push every variant to center: a
-  // sibling that is *older* than center would clobber it (a silent rollback);
-  // the pull direction instead carries its own guards (snapshot-before-overwrite
-  // and refuse-to-overwrite-a-newer-copy), so nothing is lost.
-  const pushSkillToCenterAndAlign = async (skill: ProjectSkillGroup) => {
-    if (!id) return;
+  // A variant carries local work when its own status is project_newer or
+  // diverged. Only these should ever be *pushed* to center; only the rest are
+  // safe to *overwrite* when realigning.
+  const isLocallyEdited = (v: ProjectSkill) =>
+    v.sync_status === "project_newer" || v.sync_status === "diverged";
+
+  // Push the *edited* variant to center, then realign every other agent copy of
+  // the same skill that has NO local edits FROM the freshly-pushed center.
+  //
+  // Winner selection: prefer a variant whose OWN status shows local edits, not
+  // the group's priority status. Variants are sorted alphabetically, so keying
+  // off the group status pushed whichever copy sorted first (e.g. `.claude`)
+  // even when a different copy (e.g. `.opencode`) was the one actually edited.
+  // The frontend has no mtime/hash, so when several variants were edited
+  // independently we cannot tell which is authoritative: we push one and
+  // deliberately leave the other edited copies flagged (reported via
+  // `skippedEdited`) rather than silently overwriting them.
+  //
+  // Realigning only the un-edited siblings lands a multi-agent group back
+  // in_sync (otherwise the row flips to "center_newer" off the stale siblings
+  // right after the user updated *to* center) without ever discarding local
+  // work — so this never relies on the pull-side "refuse a newer copy" guard,
+  // which cannot fire here anyway (the just-pushed center is newest by mtime).
+  const pushSkillToCenterAndAlign = async (
+    skill: ProjectSkillGroup
+  ): Promise<{ alignFailed: number; skippedEdited: number }> => {
+    if (!id) return { alignFailed: 0, skippedEdited: 0 };
     const winner =
+      skill.variants.find(isLocallyEdited) ??
       skill.variants.find((v) => v.sync_status === skill.status) ??
       skill.primaryVariant;
     await api.updateProjectSkillToCenter(id, winner.relative_path, winner.agent);
+
     const others = skill.variants.filter((v) => v !== winner);
-    // Best-effort per sibling: a genuinely-newer one is refused by the pull
-    // guard and simply stays flagged instead of failing the whole operation.
-    await Promise.allSettled(
-      others.map((v) =>
+    const alignable = others.filter((v) => !isLocallyEdited(v));
+    const skippedEdited = others.length - alignable.length;
+    const results = await Promise.allSettled(
+      alignable.map((v) =>
         api.updateProjectSkillFromCenter(id, v.relative_path, v.agent)
       )
     );
+    const alignFailed = results.filter((r) => r.status === "rejected").length;
+    return { alignFailed, skippedEdited };
   };
 
   const handleUpdateCenter = async (skill: ProjectSkillGroup) => {
     if (!id) return;
     setUpdatingCenterSkill(getSkillKey(skill));
     try {
-      await pushSkillToCenterAndAlign(skill);
-      toast.success(t("project.updateCenterSuccess", { name: skill.name }));
+      const { alignFailed, skippedEdited } = await pushSkillToCenterAndAlign(skill);
+      if (skippedEdited > 0) {
+        toast.warning(
+          t("project.updateCenterSkippedEdited", { name: skill.name, count: skippedEdited })
+        );
+      } else if (alignFailed > 0) {
+        toast.warning(
+          t("project.updateCenterAlignFailed", { name: skill.name, count: alignFailed })
+        );
+      } else {
+        toast.success(t("project.updateCenterSuccess", { name: skill.name }));
+      }
       await Promise.all([refreshManagedSkills(), refreshPresets(), loadSkills()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
@@ -716,6 +744,7 @@ export function ProjectDetail() {
     try {
       let updated = 0;
       let failed = 0;
+      let skipped = 0;
       for (const skill of selectedSkills) {
         const canUpdateCenter =
           skill.status === "project_only" ||
@@ -723,14 +752,22 @@ export function ProjectDetail() {
           skill.status === "diverged";
         if (!canUpdateCenter) continue;
         try {
-          await pushSkillToCenterAndAlign(skill);
-          updated++;
+          const { alignFailed, skippedEdited } = await pushSkillToCenterAndAlign(skill);
+          skipped += skippedEdited;
+          // The push landed but some sibling failed to realign → the group is
+          // not fully in sync, so count it as failed rather than reporting a
+          // clean success.
+          if (alignFailed > 0) failed++;
+          else updated++;
         } catch {
           failed++;
         }
       }
       if (updated > 0) {
         toast.success(t("project.batchUpdatedCenter", { count: updated }));
+      }
+      if (skipped > 0) {
+        toast.warning(t("project.batchUpdateCenterSkipped", { count: skipped }));
       }
       if (failed > 0) {
         toast.error(t("project.batchUpdateCenterFailed", { count: failed }));
