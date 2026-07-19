@@ -1,7 +1,8 @@
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::State;
 use walkdir::WalkDir;
@@ -1128,30 +1129,81 @@ pub async fn check_all_skill_updates(
     let proxy_url = store.proxy_url();
     tauri::async_runtime::spawn_blocking(move || {
         let force_check = force.unwrap_or(false);
-        let ids: Vec<String> = store
-            .get_all_skills()
-            .map_err(AppError::db)?
-            .into_iter()
-            .map(|skill| skill.id)
-            .collect();
-        let mut failed = Vec::new();
+        let skills = store.get_all_skills().map_err(AppError::db)?;
 
-        for skill_id in ids {
-            // Take the central-repo lock per skill so a concurrent manual
-            // install/update can't race the `update_status` write. Lock
-            // contention is reported as a per-skill failure so the caller
-            // knows the check didn't complete.
+        // ── Phase A: resolve every distinct remote once, concurrently ──
+        // Collect the git-backed skills that still need a network check keyed by
+        // (clone_url, branch). Skills installed from subdirectories of the same
+        // monorepo collapse to a single `ls-remote`, and each remote is queried
+        // off the central-repo lock so a slow remote (e.g. vercel/ai's ref
+        // advertisement runs ~30s) never starves a concurrent check into a 20s
+        // lock-timeout "busy" failure — the reason "检查全部" both crawled and
+        // popped failures.
+        let mut remotes: HashSet<RemoteKey> = HashSet::new();
+        for skill in &skills {
+            if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+                continue;
+            }
+            match should_skip_update_check(&store, skill, force_check) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                // A transient skip-decision error (e.g. a settings read) must not
+                // abort the whole batch: fall through so Phase B still checks this
+                // skill and collects any real failure per-skill, as before.
+                Err(err) => log::warn!(
+                    "check all: skip-decision for {} failed, checking anyway: {}",
+                    skill.id, err.message
+                ),
+            }
+            if let Ok(source) = git_source_from_skill(skill) {
+                remotes.insert(RemoteKey::from(source));
+            }
+        }
+        let remote_revisions = if remotes.is_empty() {
+            HashMap::new()
+        } else {
+            resolve_remotes_concurrent(remotes.into_iter().collect(), proxy_url.clone())
+        };
+
+        // ── Phase B: apply the resolved revisions + local-source checks ──
+        // Phase A already did every network read, so this loop only computes and
+        // writes each skill's status columns. Re-take the central-repo lock per
+        // skill around that write — the same guard the pre-concurrent code used so
+        // a concurrent manual install/update can't race the `update_status` write
+        // — but now the lock is never held across a slow `ls-remote`, because the
+        // network happened off the lock in Phase A. Feeding the prefetched
+        // revision in keeps this path off the network entirely (the inline-resolve
+        // fallback in check_skill_update_internal_with_remote is unreachable here:
+        // any skill that needs a network check was resolved into Phase A's map).
+        // Lock contention is still reported per skill so the caller knows the
+        // check didn't complete for it.
+        let mut failed = Vec::new();
+        for skill in &skills {
+            let prefetched = if matches!(skill.source_type.as_str(), "git" | "skillssh") {
+                git_source_from_skill(skill)
+                    .ok()
+                    .and_then(|source| remote_revisions.get(&RemoteKey::from(source)).cloned())
+            } else {
+                None
+            };
             let _lock = match RepoLock::acquire("check skill update") {
                 Ok(lock) => lock,
                 Err(err) => {
-                    failed.push(format!("{skill_id}: {err}"));
+                    failed.push(format!("{}: {}", skill.id, err));
                     continue;
                 }
             };
-            if let Err(err) =
-                check_skill_update_internal(&store, &skill_id, force_check, proxy_url.as_deref())
-            {
-                failed.push(format!("{skill_id}: {err}"));
+            if let Err(err) = check_skill_update_internal_with_remote(
+                &store,
+                &skill.id,
+                force_check,
+                proxy_url.as_deref(),
+                prefetched,
+            ) {
+                // Surface the real per-skill reason so a batch that "just fails"
+                // is diagnosable from the logs, not only the aggregated toast.
+                log::warn!("check all: {} failed: {}", skill.id, err.message);
+                failed.push(format!("{}: {}", skill.id, err));
             }
         }
 
@@ -1166,6 +1218,67 @@ pub async fn check_all_skill_updates(
         }
     })
     .await?
+}
+
+/// A distinct remote to resolve once during a batch check. Several skills can
+/// share one — e.g. many skills installed from subdirectories of a single
+/// monorepo — so keying by (clone_url, branch) collapses the redundant network
+/// queries the per-skill loop used to make.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct RemoteKey {
+    clone_url: String,
+    branch: Option<String>,
+}
+
+impl From<GitSkillSource> for RemoteKey {
+    fn from(source: GitSkillSource) -> Self {
+        RemoteKey {
+            clone_url: source.clone_url,
+            branch: source.branch,
+        }
+    }
+}
+
+/// Upper bound on concurrent `ls-remote` queries during a batch check. Collapses
+/// the wall-clock cost of a large library from "sum of every remote" to "slowest
+/// single remote" without opening an unbounded number of git subprocesses.
+const MAX_CHECK_CONCURRENCY: usize = 8;
+
+/// Resolve each remote's head revision concurrently, without the central-repo
+/// lock — these are read-only remote reads. A failed resolution is stored as
+/// `Err(message)` so Phase B can mark just that remote's skills as errored
+/// without aborting the batch.
+fn resolve_remotes_concurrent(
+    remotes: Vec<RemoteKey>,
+    proxy_url: Option<String>,
+) -> HashMap<RemoteKey, Result<String, String>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let next = AtomicUsize::new(0);
+    let results: Mutex<HashMap<RemoteKey, Result<String, String>>> =
+        Mutex::new(HashMap::with_capacity(remotes.len()));
+    let worker_count = MAX_CHECK_CONCURRENCY.min(remotes.len().max(1));
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| loop {
+                let idx = next.fetch_add(1, Ordering::Relaxed);
+                let Some(key) = remotes.get(idx) else { break };
+
+                let resolved = git_fetcher::resolve_remote_revision(
+                    &key.clone_url,
+                    key.branch.as_deref(),
+                    proxy_url.as_deref(),
+                )
+                .map_err(|err| err.to_string());
+                if let Ok(mut map) = results.lock() {
+                    map.insert(key.clone(), resolved);
+                }
+            });
+        }
+    });
+
+    results.into_inner().unwrap_or_default()
 }
 
 #[tauri::command]
@@ -1743,6 +1856,22 @@ pub fn check_skill_update_internal(
     force: bool,
     proxy_url: Option<&str>,
 ) -> Result<ManagedSkillDto, AppError> {
+    check_skill_update_internal_with_remote(store, skill_id, force, proxy_url, None)
+}
+
+/// Like [`check_skill_update_internal`], but accepts an already-resolved remote
+/// revision so a batch check can query each distinct remote once, concurrently
+/// and off the central-repo lock, then feed the result back in here. `prefetched`
+/// is `Some(Ok(rev))` / `Some(Err(message))` for a git-backed skill whose remote
+/// was resolved ahead of time, or `None` to resolve inline (the single-skill
+/// path and any skill Phase A didn't pre-resolve).
+pub fn check_skill_update_internal_with_remote(
+    store: &SkillStore,
+    skill_id: &str,
+    force: bool,
+    proxy_url: Option<&str>,
+    prefetched: Option<Result<String, String>>,
+) -> Result<ManagedSkillDto, AppError> {
     let skill = store
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?
@@ -1771,11 +1900,18 @@ pub fn check_skill_update_internal(
                     .map_err(AppError::db)?;
             }
 
-            match git_fetcher::resolve_remote_revision(
-                &git_source.clone_url,
-                git_source.branch.as_deref(),
-                proxy_url,
-            ) {
+            // Use the pre-resolved revision when the batch check supplied one;
+            // otherwise resolve inline (single-skill path).
+            let remote_result = match prefetched {
+                Some(result) => result,
+                None => git_fetcher::resolve_remote_revision(
+                    &git_source.clone_url,
+                    git_source.branch.as_deref(),
+                    proxy_url,
+                )
+                .map_err(|err| err.to_string()),
+            };
+            match remote_result {
                 Ok(remote_revision) => {
                     let update_status = match skill.source_revision.as_deref() {
                         Some(current) if current == remote_revision => "up_to_date",
@@ -1791,8 +1927,7 @@ pub fn check_skill_update_internal(
                         )
                         .map_err(AppError::db)?;
                 }
-                Err(err) => {
-                    let message = err.to_string();
+                Err(message) => {
                     store
                         .update_skill_check_state(
                             &skill.id,
@@ -2489,5 +2624,55 @@ mod tests {
         assert_ne!(k_a, k_b);
         assert_eq!(k_a, "category-a/foo");
         assert_eq!(k_b, "category-b/foo");
+    }
+
+    // ── RemoteKey dedup (batch check_all fan-out) ──
+
+    fn source(clone_url: &str, branch: Option<&str>, subpath: Option<&str>) -> GitSkillSource {
+        GitSkillSource {
+            clone_url: clone_url.to_string(),
+            branch: branch.map(str::to_string),
+            subpath: subpath.map(str::to_string),
+            locator_skill_id: None,
+        }
+    }
+
+    /// The whole point of keying Phase A by `RemoteKey`: skills installed from
+    /// different subdirectories of the same monorepo (same clone_url + branch)
+    /// must collapse to one network query, while a different branch stays
+    /// distinct. This is what turns 4 `mattpocock/skills` skills into 1
+    /// `ls-remote` instead of 4.
+    #[test]
+    fn remote_key_dedups_by_url_and_branch_ignoring_subpath() {
+        let mut per_remote: HashMap<RemoteKey, usize> = HashMap::new();
+        let skills = [
+            source("https://github.com/mattpocock/skills.git", None, Some("a")),
+            source("https://github.com/mattpocock/skills.git", None, Some("b")),
+            source("https://github.com/mattpocock/skills.git", None, None),
+            source("https://github.com/vercel/ai.git", None, None),
+            // Same repo, different branch → must NOT collapse with the None-branch group.
+            source("https://github.com/mattpocock/skills.git", Some("next"), None),
+        ];
+        for s in skills {
+            *per_remote.entry(RemoteKey::from(s)).or_insert(0) += 1;
+        }
+
+        assert_eq!(per_remote.len(), 3, "distinct remotes to query");
+        assert_eq!(
+            per_remote[&RemoteKey {
+                clone_url: "https://github.com/mattpocock/skills.git".to_string(),
+                branch: None,
+            }],
+            3,
+            "three subpaths of one repo/branch share a single query"
+        );
+        assert_eq!(
+            per_remote[&RemoteKey {
+                clone_url: "https://github.com/mattpocock/skills.git".to_string(),
+                branch: Some("next".to_string()),
+            }],
+            1,
+            "a different branch is a separate remote"
+        );
     }
 }
