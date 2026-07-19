@@ -513,11 +513,38 @@ export function ProjectDetail() {
     }
   };
 
+  // Push the variant that drives the "update to center" status (the newest /
+  // just-edited copy) to center, then re-align every *other* agent copy of the
+  // same skill FROM the freshly-pushed center. Without the re-align, a skill
+  // that lives under multiple agents (e.g. .claude + .opencode) would push only
+  // one variant, and the row would immediately flip to "center_newer" — driven
+  // by the still-stale sibling copies — right after the user updated *to*
+  // center, which is baffling. Pushing the winner and pulling the rest lands the
+  // whole group in_sync. We never blindly push every variant to center: a
+  // sibling that is *older* than center would clobber it (a silent rollback);
+  // the pull direction instead carries its own guards (snapshot-before-overwrite
+  // and refuse-to-overwrite-a-newer-copy), so nothing is lost.
+  const pushSkillToCenterAndAlign = async (skill: ProjectSkillGroup) => {
+    if (!id) return;
+    const winner =
+      skill.variants.find((v) => v.sync_status === skill.status) ??
+      skill.primaryVariant;
+    await api.updateProjectSkillToCenter(id, winner.relative_path, winner.agent);
+    const others = skill.variants.filter((v) => v !== winner);
+    // Best-effort per sibling: a genuinely-newer one is refused by the pull
+    // guard and simply stays flagged instead of failing the whole operation.
+    await Promise.allSettled(
+      others.map((v) =>
+        api.updateProjectSkillFromCenter(id, v.relative_path, v.agent)
+      )
+    );
+  };
+
   const handleUpdateCenter = async (skill: ProjectSkillGroup) => {
     if (!id) return;
     setUpdatingCenterSkill(getSkillKey(skill));
     try {
-      await api.updateProjectSkillToCenter(id, skill.primaryVariant.relative_path, skill.primaryVariant.agent);
+      await pushSkillToCenterAndAlign(skill);
       toast.success(t("project.updateCenterSuccess", { name: skill.name }));
       await Promise.all([refreshManagedSkills(), refreshPresets(), loadSkills()]);
     } catch (error: unknown) {
@@ -696,7 +723,7 @@ export function ProjectDetail() {
           skill.status === "diverged";
         if (!canUpdateCenter) continue;
         try {
-          await api.updateProjectSkillToCenter(id, skill.primaryVariant.relative_path, skill.primaryVariant.agent);
+          await pushSkillToCenterAndAlign(skill);
           updated++;
         } catch {
           failed++;
