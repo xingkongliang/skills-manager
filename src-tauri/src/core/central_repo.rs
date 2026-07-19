@@ -397,17 +397,6 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// How a directory should land in the backup area before it is overwritten.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackupKind {
-    /// The caller is about to overwrite `src` in place, so the old tree is
-    /// *moved* out of the way (source disappears, backup holds the only copy).
-    Move,
-    /// The caller keeps `src` as-is and only wants a snapshot, so the tree is
-    /// *copied* (source stays put, backup is a duplicate).
-    Copy,
-}
-
 /// Back a directory up under `<central_root>/backups/<skill_dir_name>/<reason>/`.
 ///
 /// One snapshot per `(skill, reason)`: the destination name is the reason alone,
@@ -417,23 +406,16 @@ pub enum BackupKind {
 /// spoke-ahead), which is why repeated overwrites can no longer grow it without
 /// bound. Returns the directory the backup landed in.
 ///
-/// The replacement is staged: the new snapshot is written to a temporary sibling
-/// on the same volume first, then swapped into place, so a mid-write failure
-/// never destroys the previous, still-valid backup. If the final swap fails the
-/// staged copy is left intact rather than deleted — for a `Move` the source is
-/// already gone, so the staged copy is the only surviving copy of the data and
-/// must not be discarded.
-///
-/// `Move` is cross-volume safe: `src` may live on a different drive than the
-/// central repo (project on `D:`, library on `C:`), where `std::fs::rename`
-/// fails with `EXDEV`. On any rename failure we fall back to a recursive
-/// copy-then-delete so the observable semantics stay "move".
+/// The snapshot is a copy: `src` is left in place, because every caller
+/// overwrites it afterwards through its own atomic swap and relies on the
+/// original still existing for that swap's rollback. The copy is staged under a
+/// temporary sibling on the same volume first, then swapped into place, so a
+/// mid-write failure never destroys the previous, still-valid backup.
 pub fn backup_directory(
     central_root: &Path,
     src: &Path,
     skill_dir_name: &str,
     reason: &str,
-    kind: BackupKind,
 ) -> Result<PathBuf> {
     let parent = central_root
         .join("backups")
@@ -448,16 +430,19 @@ pub fn backup_directory(
     // Stage the new snapshot under a temporary sibling, then swap it into place.
     // Until the swap completes the previous backup at `dest` stays untouched.
     let staging = unique_backup_dir(&parent, &format!("{reason_name}.incoming"));
-    match kind {
-        BackupKind::Move => move_directory(src, &staging)?,
-        BackupKind::Copy => copy_dir_with_rollback(src, &staging)?,
-    }
+    copy_dir_with_rollback(src, &staging)?;
 
     // Drop the previous snapshot only now that the replacement is fully written.
+    // If that removal fails, discard the staged copy too so a failed swap never
+    // leaves an orphan `.incoming` dir behind (the source is untouched by a copy,
+    // so nothing is lost).
     if dest.exists() {
-        fs::remove_dir_all(&dest).with_context(|| {
-            format!("Failed to remove previous backup {}", dest.display())
-        })?;
+        if let Err(err) = fs::remove_dir_all(&dest) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(err).with_context(|| {
+                format!("Failed to remove previous backup {}", dest.display())
+            });
+        }
     }
     fs::rename(&staging, &dest).with_context(|| {
         format!(
@@ -491,30 +476,6 @@ fn unique_backup_dir(parent: &Path, base_name: &str) -> PathBuf {
         }
         n += 1;
     }
-}
-
-/// Move `src` to `dest`, falling back to copy-then-delete when a plain rename
-/// can't cross volumes (or the OS otherwise refuses it).
-fn move_directory(src: &Path, dest: &Path) -> Result<()> {
-    match fs::rename(src, dest) {
-        Ok(()) => Ok(()),
-        Err(_) => move_via_copy_delete(src, dest),
-    }
-}
-
-/// The cross-volume fallback, factored out so it is unit-testable on a single
-/// volume (a genuine cross-drive tempdir is hard to arrange in tests): copy the
-/// whole tree, then remove the source, preserving "move" semantics.
-fn move_via_copy_delete(src: &Path, dest: &Path) -> Result<()> {
-    copy_dir_with_rollback(src, dest)?;
-    fs::remove_dir_all(src).with_context(|| {
-        format!(
-            "Failed to remove source {} after backup copy to {}",
-            src.display(),
-            dest.display()
-        )
-    })?;
-    Ok(())
 }
 
 /// Recursively copy `src` into `dest`, rolling back a half-written `dest` if the
@@ -989,23 +950,16 @@ mod tests {
     }
 
     #[test]
-    fn backup_move_creates_backup_and_removes_source() {
+    fn backup_creates_snapshot_and_keeps_source() {
         let central = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();
         let src = work.path().join("my-skill");
         make_src_tree(&src);
 
-        let dest = backup_directory(
-            central.path(),
-            &src,
-            "my-skill",
-            "overwrite",
-            BackupKind::Move,
-        )
-        .unwrap();
+        let dest = backup_directory(central.path(), &src, "my-skill", "overwrite").unwrap();
 
-        // Source is gone (moved), backup holds the full tree.
-        assert!(!src.exists(), "move must remove the source");
+        // Source stays put (the backup is a copy); backup holds the full tree.
+        assert_eq!(fs::read(src.join("top.txt")).unwrap(), b"top");
         assert_eq!(fs::read(dest.join("top.txt")).unwrap(), b"top");
         assert_eq!(fs::read(dest.join("nested/inner.txt")).unwrap(), b"inner");
         // Lands under backups/<skill>/<reason>/ — the reason alone names it.
@@ -1013,28 +967,6 @@ mod tests {
         assert_eq!(dest.file_name().and_then(|n| n.to_str()), Some("overwrite"));
         // No staging debris left behind on the happy path.
         assert!(!dest.with_file_name("overwrite.incoming").exists());
-    }
-
-    #[test]
-    fn backup_copy_creates_backup_and_keeps_source() {
-        let central = tempfile::tempdir().unwrap();
-        let work = tempfile::tempdir().unwrap();
-        let src = work.path().join("my-skill");
-        make_src_tree(&src);
-
-        let dest = backup_directory(
-            central.path(),
-            &src,
-            "my-skill",
-            "snapshot",
-            BackupKind::Copy,
-        )
-        .unwrap();
-
-        // Source still intact, backup is a duplicate.
-        assert_eq!(fs::read(src.join("top.txt")).unwrap(), b"top");
-        assert_eq!(fs::read(dest.join("top.txt")).unwrap(), b"top");
-        assert_eq!(fs::read(dest.join("nested/inner.txt")).unwrap(), b"inner");
     }
 
     #[test]
@@ -1054,7 +986,6 @@ mod tests {
             &src1,
             "skill",
             "overwrite",
-            BackupKind::Move,
         )
         .unwrap();
 
@@ -1066,7 +997,6 @@ mod tests {
             &src2,
             "skill",
             "overwrite",
-            BackupKind::Move,
         )
         .unwrap();
 
@@ -1096,7 +1026,6 @@ mod tests {
             &src,
             "skill",
             "../../etc/passwd",
-            BackupKind::Copy,
         )
         .unwrap();
 
@@ -1125,29 +1054,13 @@ mod tests {
     }
 
     #[test]
-    fn move_via_copy_delete_moves_tree_and_removes_source() {
-        // Directly exercises the cross-volume fallback path (rename → EXDEV):
-        // copy the tree, then delete the source, preserving move semantics.
-        let work = tempfile::tempdir().unwrap();
-        let src = work.path().join("src");
-        make_src_tree(&src);
-        let dest = work.path().join("dest");
-
-        move_via_copy_delete(&src, &dest).unwrap();
-
-        assert!(!src.exists(), "source removed after copy");
-        assert_eq!(fs::read(dest.join("top.txt")).unwrap(), b"top");
-        assert_eq!(fs::read(dest.join("nested/inner.txt")).unwrap(), b"inner");
-    }
-
-    #[test]
     fn copy_failure_rolls_back_partial_dest_and_keeps_source() {
         // Deterministically force a mid-copy failure: pre-create `dest/nested`
         // as a FILE so copying src's `nested/` DIRECTORY into it fails. The
-        // rollback must then wipe the whole half-written `dest`, and — because
-        // this is the Move fallback — the source stays fully intact (no data
-        // lost on a failed backup). This is the same code path the untestable
-        // cross-volume Copy rollback takes.
+        // rollback must then wipe the whole half-written `dest` so a consumer
+        // can never mistake a truncated tree for a valid backup, while the
+        // source stays fully intact (a copy never touches it). This is the exact
+        // rollback path `backup_directory` relies on when staging a snapshot.
         let work = tempfile::tempdir().unwrap();
         let src = work.path().join("src");
         make_src_tree(&src); // src/top.txt + src/nested/inner.txt
@@ -1155,12 +1068,12 @@ mod tests {
         fs::create_dir_all(&dest).unwrap();
         fs::write(dest.join("nested"), b"i am a file, not a dir").unwrap();
 
-        let err = move_via_copy_delete(&src, &dest);
+        let err = copy_dir_with_rollback(&src, &dest);
         assert!(err.is_err(), "copy into a file-blocked subdir must fail");
 
         // Half-written backup fully rolled back — nothing to mis-consume.
         assert!(!dest.exists(), "partial dest must be removed on failure");
-        // Source untouched: move never deletes before a successful copy.
+        // Source untouched.
         assert_eq!(fs::read(src.join("top.txt")).unwrap(), b"top");
         assert_eq!(fs::read(src.join("nested/inner.txt")).unwrap(), b"inner");
     }
@@ -1180,7 +1093,6 @@ mod tests {
             &src,
             "../../evil",
             "overwrite",
-            BackupKind::Copy,
         )
         .unwrap();
 
@@ -1204,7 +1116,6 @@ mod tests {
             &src,
             "skill",
             "",
-            BackupKind::Copy,
         )
         .unwrap();
 
@@ -1222,7 +1133,6 @@ mod tests {
             &missing,
             "skill",
             "overwrite",
-            BackupKind::Copy,
         );
         assert!(result.is_err(), "missing source must be a graceful Err");
     }

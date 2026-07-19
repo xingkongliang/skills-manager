@@ -310,13 +310,12 @@ pub fn sync_desired_targets(
                                     &desired.skill_name,
                                 );
                                 let central_root = central_repo::base_dir();
-                                // In-place snapshot (Copy) — the spoke stays put.
+                                // In-place snapshot — the spoke stays put.
                                 match central_repo::backup_directory(
                                     &central_root,
                                     &desired.target,
                                     &skill_dir_name,
                                     "spoke-ahead",
-                                    central_repo::BackupKind::Copy,
                                 ) {
                                     Ok(dest) => log::info!(
                                         "sync_desired_targets: preserved user-edited target for skill {} ({}) / {}; snapshot at {}",

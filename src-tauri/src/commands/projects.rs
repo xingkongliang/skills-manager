@@ -606,7 +606,6 @@ pub(crate) fn snapshot_before_explicit_pull(
             target,
             &dir_name,
             "explicit-pull-from-center",
-            central_repo::BackupKind::Copy,
         )
         .map_err(AppError::io)?;
     }
