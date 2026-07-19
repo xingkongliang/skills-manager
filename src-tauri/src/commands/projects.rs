@@ -184,6 +184,7 @@ fn project_to_dto(
     rec: &ProjectRecord,
     all_managed: &[SkillRecord],
     configs: &[project_scanner::AgentSkillConfig],
+    center: &mut CenterStatCache,
 ) -> ProjectDto {
     let skills = read_workspace_skills(rec, configs);
     let skill_count = skills.len();
@@ -191,7 +192,7 @@ fn project_to_dto(
     let mut health = SyncHealthDto::default();
     for skill in &skills {
         let matched = find_best_center_match(skill, all_managed);
-        let status = classify_sync_status(skill, matched);
+        let status = classify_sync_status_cached(skill, matched, center);
         match status.as_str() {
             "in_sync" => health.in_sync += 1,
             "project_newer" => health.project_newer += 1,
@@ -455,9 +456,53 @@ pub(crate) fn find_best_center_match<'a>(
         .map(|(managed, _)| managed)
 }
 
+/// Per-request memo for the two filesystem probes `classify_sync_status` runs on
+/// a center directory (a live content hash and the newest content-file mtime).
+/// The same central skill is referenced by many project/agent variants, so
+/// within one `get_projects` call its directory would otherwise be walked once
+/// per reference. Scoped to a single request and rebuilt from disk on every call,
+/// so it never goes stale — an external edit to the center is still seen on the
+/// next call.
+#[derive(Default)]
+pub(crate) struct CenterStatCache {
+    hashes: std::collections::HashMap<String, Option<String>>,
+    mtimes: std::collections::HashMap<String, Option<i64>>,
+}
+
+impl CenterStatCache {
+    fn hash(&mut self, central_path: &str) -> Option<String> {
+        self.hashes
+            .entry(central_path.to_string())
+            .or_insert_with(|| {
+                crate::core::content_hash::hash_directory(Path::new(central_path)).ok()
+            })
+            .clone()
+    }
+
+    fn mtime(&mut self, central_path: &str) -> Option<i64> {
+        *self
+            .mtimes
+            .entry(central_path.to_string())
+            .or_insert_with(|| {
+                crate::core::content_hash::latest_modified_millis(Path::new(central_path))
+            })
+    }
+}
+
 pub(crate) fn classify_sync_status(
     skill: &project_scanner::ProjectSkillInfo,
     managed: Option<&SkillRecord>,
+) -> String {
+    classify_sync_status_cached(skill, managed, &mut CenterStatCache::default())
+}
+
+/// Same decision as `classify_sync_status`, but reuses a caller-owned
+/// `CenterStatCache` so a batch (e.g. `get_projects` over every project) walks
+/// each center directory at most once instead of once per referencing variant.
+pub(crate) fn classify_sync_status_cached(
+    skill: &project_scanner::ProjectSkillInfo,
+    managed: Option<&SkillRecord>,
+    center: &mut CenterStatCache,
 ) -> String {
     let Some(managed) = managed else {
         return "project_only".to_string();
@@ -472,9 +517,7 @@ pub(crate) fn classify_sync_status(
 
     // DB hash may be stale — recompute center hash from disk as fallback
     if let Some(project_hash) = skill.content_hash.as_deref() {
-        if let Ok(live_center_hash) =
-            crate::core::content_hash::hash_directory(Path::new(&managed.central_path))
-        {
+        if let Some(live_center_hash) = center.hash(&managed.central_path) {
             if project_hash == live_center_hash {
                 return "in_sync".to_string();
             }
@@ -493,9 +536,9 @@ pub(crate) fn classify_sync_status(
     // right after any unrelated DB write. That mismatch is the bug this fixes.
     // Only fall back to `updated_at` when the central directory has no readable
     // content files to stat (e.g. it was moved or deleted).
-    let center_modified_at =
-        crate::core::content_hash::latest_modified_millis(Path::new(&managed.central_path))
-            .unwrap_or(managed.updated_at);
+    let center_modified_at = center
+        .mtime(&managed.central_path)
+        .unwrap_or(managed.updated_at);
     let threshold_ms = 1_000;
     if project_modified_at > center_modified_at + threshold_ms {
         "project_newer".to_string()
@@ -563,9 +606,13 @@ pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Proje
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
         let configs = agent_skill_configs(&store);
         let count = records.len();
+        // One CenterStatCache for the whole batch: a skill referenced by several
+        // projects/agent variants walks its center directory once, not once per
+        // reference.
+        let mut center = CenterStatCache::default();
         let dtos: Vec<ProjectDto> = records
             .iter()
-            .map(|r| project_to_dto(r, &all_managed, &configs))
+            .map(|r| project_to_dto(r, &all_managed, &configs, &mut center))
             .collect();
         let elapsed_ms = start.elapsed().as_millis();
         if should_log_first_or_slow(&GET_PROJECTS_FIRST_CALL, elapsed_ms, 100) {
@@ -617,7 +664,12 @@ pub async fn add_project(
         store.insert_project(&record).map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
         let configs = agent_skill_configs(&store);
-        Ok(project_to_dto(&record, &all_managed, &configs))
+        Ok(project_to_dto(
+            &record,
+            &all_managed,
+            &configs,
+            &mut CenterStatCache::default(),
+        ))
     })
     .await?
 }
@@ -693,7 +745,12 @@ pub async fn add_linked_workspace(
         store.insert_project(&record).map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
         let configs = agent_skill_configs(&store);
-        Ok(project_to_dto(&record, &all_managed, &configs))
+        Ok(project_to_dto(
+            &record,
+            &all_managed,
+            &configs,
+            &mut CenterStatCache::default(),
+        ))
     })
     .await?
 }
@@ -1217,9 +1274,9 @@ pub async fn delete_project_skill(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_sync_status, ensure_distinct_linked_workspace_roots, explicit_pull_needs_backup,
-        remove_workspace_skill_target, set_project_skill_enabled_state,
-        update_project_skill_from_center_inner,
+        classify_sync_status, classify_sync_status_cached, ensure_distinct_linked_workspace_roots,
+        explicit_pull_needs_backup, remove_workspace_skill_target, set_project_skill_enabled_state,
+        update_project_skill_from_center_inner, CenterStatCache,
     };
     use crate::core::content_hash;
     use crate::core::error::ErrorKind;
@@ -1435,6 +1492,41 @@ mod tests {
         );
 
         central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn center_stat_cache_walks_a_shared_center_once_across_variants() {
+        // A skill mirrored under two agents shares one central_path. Classifying
+        // both through one cache must probe that center's filesystem only once,
+        // while returning exactly the same verdict as the uncached path.
+        let center = tempdir().unwrap();
+        fs::write(center.path().join("SKILL.md"), "# center\n").unwrap();
+        let central_path = center.path().to_string_lossy().to_string();
+
+        // DB hash is intentionally stale, forcing classify past the fast path
+        // into the live-hash + mtime fallbacks (the two filesystem walks).
+        let managed = sample_managed_skill(central_path, Some("stale-db-hash".to_string()), 1_000);
+        let mut a =
+            sample_project_skill("proj-a".to_string(), Some("proj-hash".to_string()), Some(9_000));
+        a.agent = "claude_code".to_string();
+        let mut b =
+            sample_project_skill("proj-b".to_string(), Some("proj-hash".to_string()), Some(9_000));
+        b.agent = "cursor".to_string();
+
+        let mut cache = CenterStatCache::default();
+        let sa = classify_sync_status_cached(&a, Some(&managed), &mut cache);
+        let sb = classify_sync_status_cached(&b, Some(&managed), &mut cache);
+
+        // Same verdict as the one-shot uncached path...
+        assert_eq!(sa, classify_sync_status(&a, Some(&managed)));
+        assert_eq!(sb, classify_sync_status(&b, Some(&managed)));
+        // ...but the shared center was probed once, not once per variant.
+        assert_eq!(cache.hashes.len(), 1, "center hashed once for both variants");
+        assert_eq!(
+            cache.mtimes.len(),
+            1,
+            "center stat-walked once for both variants"
+        );
     }
 
     #[test]
