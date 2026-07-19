@@ -460,32 +460,51 @@ pub(crate) fn find_best_center_match<'a>(
 /// a center directory (a live content hash and the newest content-file mtime).
 /// The same central skill is referenced by many project/agent variants, so
 /// within one `get_projects` call its directory would otherwise be walked once
-/// per reference. Scoped to a single request and rebuilt from disk on every call,
-/// so it never goes stale — an external edit to the center is still seen on the
-/// next call.
+/// per reference — and once more per *probe*, since the hash and the mtime were
+/// two independent recursive walks. Both are now derived from a single cached
+/// walk (`list_content_files`) per path: the hash reads file contents on demand,
+/// the mtime reuses the metadata the walk already captured, so a center is
+/// traversed at most once regardless of how many references or probes hit it.
+/// Scoped to a single request and rebuilt from disk on every call, so it never
+/// goes stale — an external edit to the center is still seen on the next call.
 #[derive(Default)]
 pub(crate) struct CenterStatCache {
+    entries: std::collections::HashMap<String, Vec<content_hash::ContentEntry>>,
     hashes: std::collections::HashMap<String, Option<String>>,
     mtimes: std::collections::HashMap<String, Option<i64>>,
 }
 
 impl CenterStatCache {
-    fn hash(&mut self, central_path: &str) -> Option<String> {
-        self.hashes
+    /// The one directory walk both probes share, memoized per path. Everything
+    /// else is derived from this list, so the center is traversed at most once.
+    fn entries(&mut self, central_path: &str) -> &[content_hash::ContentEntry] {
+        self.entries
             .entry(central_path.to_string())
-            .or_insert_with(|| {
-                crate::core::content_hash::hash_directory(Path::new(central_path)).ok()
-            })
-            .clone()
+            .or_insert_with(|| content_hash::list_content_files(Path::new(central_path)))
+    }
+
+    fn hash(&mut self, central_path: &str) -> Option<String> {
+        if let Some(cached) = self.hashes.get(central_path) {
+            return cached.clone();
+        }
+        // hash_entries reads every content file; memoize so a repeated reference
+        // in the same batch doesn't re-read them. `hash_directory` was infallible
+        // (it only ever wrapped `Ok`), so `Some(..)` preserves the old behavior —
+        // even an empty/missing dir hashes to the stable empty-list digest.
+        let hash = Some(content_hash::hash_entries(self.entries(central_path)));
+        self.hashes.insert(central_path.to_string(), hash.clone());
+        hash
     }
 
     fn mtime(&mut self, central_path: &str) -> Option<i64> {
-        *self
-            .mtimes
-            .entry(central_path.to_string())
-            .or_insert_with(|| {
-                crate::core::content_hash::latest_modified_millis(Path::new(central_path))
-            })
+        if let Some(cached) = self.mtimes.get(central_path) {
+            return *cached;
+        }
+        // Cheap: the max over metadata the shared walk already captured — no
+        // extra stat and no file-content read.
+        let mtime = content_hash::latest_modified_ms(self.entries(central_path));
+        self.mtimes.insert(central_path.to_string(), mtime);
+        mtime
     }
 }
 
@@ -1526,6 +1545,28 @@ mod tests {
             1,
             "center stat-walked once for both variants"
         );
+    }
+
+    #[test]
+    fn center_stat_cache_walks_a_directory_once_for_both_probes() {
+        // The hash and the mtime used to be two independent recursive walks of
+        // the same center. Both now derive from one cached walk, so probing both
+        // leaves exactly one entry in the shared-walk cache — the directory is
+        // traversed once, not once per probe.
+        let center = tempdir().unwrap();
+        fs::write(center.path().join("SKILL.md"), "# center\n").unwrap();
+        let central_path = center.path().to_string_lossy().to_string();
+
+        let mut cache = CenterStatCache::default();
+        let hash = cache.hash(&central_path);
+        let mtime = cache.mtime(&central_path);
+
+        // Both probes still equal the standalone one-shot computations...
+        assert_eq!(hash, Some(content_hash::hash_directory(center.path()).unwrap()));
+        assert_eq!(mtime, content_hash::latest_modified_millis(center.path()));
+        assert!(mtime.is_some());
+        // ...and the shared walk ran exactly once to serve them both.
+        assert_eq!(cache.entries.len(), 1, "directory walked once for both probes");
     }
 
     #[test]
