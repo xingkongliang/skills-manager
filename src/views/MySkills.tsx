@@ -38,7 +38,7 @@ import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
 import { SyncDots } from "../components/SyncDots";
 import * as api from "../lib/tauri";
-import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
+import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
   ManagedSkill,
   ToolInfo,
@@ -191,6 +191,12 @@ export function MySkills() {
   useEffect(() => {
     refreshAllTags();
   }, [skills]);
+
+  // Prune tag filters whose tag disappeared (e.g. its last skill was deleted),
+  // otherwise a stale filter silently hides everything.
+  useEffect(() => {
+    setTagFilters((prev) => pruneStaleTagFilters(prev, allTags));
+  }, [allTags]);
 
   // Close the tag context menu on Escape (click-outside is handled by its backdrop).
   useEffect(() => {

@@ -28,7 +28,7 @@ import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectSkill } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
-import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
+import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 import type { WorkspaceConfig } from "./workspaceConfigs";
 
@@ -395,6 +395,12 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     }
     return Array.from(tags).sort((a, b) => a.localeCompare(b));
   }, [localSkills]);
+
+  // Prune tag filters whose tag disappeared (e.g. its last skill was deleted),
+  // otherwise a stale filter silently hides everything.
+  useEffect(() => {
+    setTagFilters((prev) => pruneStaleTagFilters(prev, allLocalTags));
+  }, [allLocalTags]);
 
   const visibleLocalSkills = useMemo(() => {
     const q = search.trim().toLowerCase();

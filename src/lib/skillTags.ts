@@ -1,5 +1,22 @@
 export const UNTAGGED_FILTER = "__untagged__";
 
+/**
+ * Drop tag filters that no longer match any existing tag.
+ * When the last skill carrying a tag is deleted the tag vanishes from the
+ * available set, but a filter still selecting it would linger and silently
+ * hide every remaining skill (the list looks empty for no visible reason).
+ * The always-valid UNTAGGED sentinel is never pruned.
+ * Returns `prev` unchanged (same reference) when nothing is stale, so it is
+ * safe to return directly from a `setState` updater without causing a loop.
+ */
+export function pruneStaleTagFilters(prev: Set<string>, availableTags: string[]): Set<string> {
+  if (prev.size === 0) return prev;
+  const available = new Set(availableTags);
+  available.add(UNTAGGED_FILTER);
+  const cleaned = new Set([...prev].filter((tag) => available.has(tag)));
+  return cleaned.size === prev.size ? prev : cleaned;
+}
+
 const TAG_COLOR_CLASSES = [
   "bg-blue-500/15 text-blue-600 dark:text-blue-400",
   "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",

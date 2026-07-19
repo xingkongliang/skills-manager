@@ -32,7 +32,7 @@ import { ProjectAgentDots } from "../components/ProjectAgentDots";
 import { PresetBar } from "../components/PresetBar";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
-import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
+import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import { cn } from "../utils";
 import * as api from "../lib/tauri";
 import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
@@ -456,6 +456,13 @@ export function ProjectDetail() {
     }
     return Array.from(tags).sort((a, b) => a.localeCompare(b));
   }, [groupedSkills]);
+
+  // Prune tag filters whose tag disappeared (e.g. its last skill was deleted),
+  // otherwise a stale filter silently hides everything.
+  useEffect(() => {
+    setTagFilters((prev) => pruneStaleTagFilters(prev, allTags));
+  }, [allTags]);
+
   const selectedSkills = useMemo(
     () => groupedSkills.filter((skill) => selectedIds.has(getSkillKey(skill))),
     [getSkillKey, groupedSkills, selectedIds]
