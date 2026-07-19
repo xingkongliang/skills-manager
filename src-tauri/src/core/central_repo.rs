@@ -408,12 +408,21 @@ pub enum BackupKind {
     Copy,
 }
 
-/// Back a directory up under `<central_root>/backups/<skill_dir_name>/<ts>-<reason>/`.
+/// Back a directory up under `<central_root>/backups/<skill_dir_name>/<reason>/`.
 ///
-/// Non-destructive by construction: the destination is always a *new* directory
-/// (a `-1`, `-2`, … suffix is added if the timestamped name already exists) so
-/// an existing backup is never overwritten. Returns the directory the backup
-/// actually landed in.
+/// One snapshot per `(skill, reason)`: the destination name is the reason alone,
+/// so a later backup for the same reason *replaces* the previous one instead of
+/// piling up a fresh timestamped directory every time. This bounds `backups/` to
+/// at most one entry per skill per overwrite path (reimport / explicit-pull /
+/// spoke-ahead), which is why repeated overwrites can no longer grow it without
+/// bound. Returns the directory the backup landed in.
+///
+/// The replacement is staged: the new snapshot is written to a temporary sibling
+/// on the same volume first, then swapped into place, so a mid-write failure
+/// never destroys the previous, still-valid backup. If the final swap fails the
+/// staged copy is left intact rather than deleted — for a `Move` the source is
+/// already gone, so the staged copy is the only surviving copy of the data and
+/// must not be discarded.
 ///
 /// `Move` is cross-volume safe: `src` may live on a different drive than the
 /// central repo (project on `D:`, library on `C:`), where `std::fs::rename`
@@ -424,7 +433,6 @@ pub fn backup_directory(
     src: &Path,
     skill_dir_name: &str,
     reason: &str,
-    timestamp_ms: i64,
     kind: BackupKind,
 ) -> Result<PathBuf> {
     let parent = central_root
@@ -434,18 +442,36 @@ pub fn backup_directory(
         format!("Failed to create backup directory {}", parent.display())
     })?;
 
-    let base_name = format!("{}-{}", timestamp_ms, sanitize_backup_component(reason));
-    let dest = unique_backup_dir(&parent, &base_name);
+    let reason_name = sanitize_backup_component(reason);
+    let dest = parent.join(&reason_name);
 
+    // Stage the new snapshot under a temporary sibling, then swap it into place.
+    // Until the swap completes the previous backup at `dest` stays untouched.
+    let staging = unique_backup_dir(&parent, &format!("{reason_name}.incoming"));
     match kind {
-        BackupKind::Move => move_directory(src, &dest)?,
-        BackupKind::Copy => copy_dir_with_rollback(src, &dest)?,
+        BackupKind::Move => move_directory(src, &staging)?,
+        BackupKind::Copy => copy_dir_with_rollback(src, &staging)?,
     }
+
+    // Drop the previous snapshot only now that the replacement is fully written.
+    if dest.exists() {
+        fs::remove_dir_all(&dest).with_context(|| {
+            format!("Failed to remove previous backup {}", dest.display())
+        })?;
+    }
+    fs::rename(&staging, &dest).with_context(|| {
+        format!(
+            "Failed to finalize backup {} at {}",
+            staging.display(),
+            dest.display()
+        )
+    })?;
     Ok(dest)
 }
 
 /// Pick a not-yet-existing directory under `parent`, adding `-1`, `-2`, … to
-/// `base_name` on collision so an existing backup is never clobbered.
+/// `base_name` on collision. Used to name the transient `.incoming` staging dir
+/// so a leftover from an earlier interrupted backup is never reused mid-write.
 //
 // TOCTOU note: there is a gap between the `exists()` check and the caller's
 // later `create_dir_all`/rename into the returned path. That race is acceptable
@@ -974,7 +1000,6 @@ mod tests {
             &src,
             "my-skill",
             "overwrite",
-            1_700_000_000_000,
             BackupKind::Move,
         )
         .unwrap();
@@ -983,12 +1008,11 @@ mod tests {
         assert!(!src.exists(), "move must remove the source");
         assert_eq!(fs::read(dest.join("top.txt")).unwrap(), b"top");
         assert_eq!(fs::read(dest.join("nested/inner.txt")).unwrap(), b"inner");
-        // Lands under backups/<skill>/<ts>-<reason>/.
+        // Lands under backups/<skill>/<reason>/ — the reason alone names it.
         assert!(dest.starts_with(central.path().join("backups").join("my-skill")));
-        assert_eq!(
-            dest.file_name().and_then(|n| n.to_str()),
-            Some("1700000000000-overwrite")
-        );
+        assert_eq!(dest.file_name().and_then(|n| n.to_str()), Some("overwrite"));
+        // No staging debris left behind on the happy path.
+        assert!(!dest.with_file_name("overwrite.incoming").exists());
     }
 
     #[test]
@@ -1003,7 +1027,6 @@ mod tests {
             &src,
             "my-skill",
             "snapshot",
-            42,
             BackupKind::Copy,
         )
         .unwrap();
@@ -1015,9 +1038,13 @@ mod tests {
     }
 
     #[test]
-    fn backup_same_timestamp_and_reason_gets_suffix_never_overwrites() {
+    fn backup_same_reason_overwrites_previous_and_does_not_accumulate() {
+        // One snapshot per (skill, reason): a second backup for the same reason
+        // replaces the first at the *same* path rather than piling up a new
+        // directory, so repeated overwrites can't grow backups/ without bound.
         let central = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();
+        let skill_backups = central.path().join("backups").join("skill");
 
         let src1 = work.path().join("skill-a");
         fs::create_dir_all(&src1).unwrap();
@@ -1027,7 +1054,6 @@ mod tests {
             &src1,
             "skill",
             "overwrite",
-            777,
             BackupKind::Move,
         )
         .unwrap();
@@ -1040,16 +1066,21 @@ mod tests {
             &src2,
             "skill",
             "overwrite",
-            777,
             BackupKind::Move,
         )
         .unwrap();
 
-        assert_ne!(first, second, "same ts+reason must not collide");
-        assert_eq!(second.file_name().and_then(|n| n.to_str()), Some("777-overwrite-1"));
-        // Neither backup was clobbered.
-        assert_eq!(fs::read(first.join("v1.txt")).unwrap(), b"first");
+        // Same destination both times.
+        assert_eq!(first, second, "same reason must reuse the same path");
+        // Only the latest snapshot survives; the previous file is gone.
+        assert!(!second.join("v1.txt").exists(), "old snapshot must be replaced");
         assert_eq!(fs::read(second.join("v2.txt")).unwrap(), b"second");
+        // backups/skill/ holds exactly one entry — no accumulation, no staging debris.
+        let entries: Vec<_> = fs::read_dir(&skill_backups)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(entries, vec!["overwrite".to_string()], "got {entries:?}");
     }
 
     #[test]
@@ -1065,7 +1096,6 @@ mod tests {
             &src,
             "skill",
             "../../etc/passwd",
-            5,
             BackupKind::Copy,
         )
         .unwrap();
@@ -1084,8 +1114,8 @@ mod tests {
         // The reason component itself carries no separators or `..`.
         let name = dest.file_name().unwrap().to_str().unwrap();
         assert!(!name.contains('/') && !name.contains('\\') && !name.contains(".."));
-        // "../../etc/passwd": 6 leading separators + join dash → 7 dashes.
-        assert_eq!(name, "5-------etc-passwd");
+        // "../../etc/passwd" → each of the 6 leading `.`/`/` chars becomes a dash.
+        assert_eq!(name, "------etc-passwd");
     }
 
     /// True if any component of `path` is a `..` parent-dir segment.
@@ -1150,7 +1180,6 @@ mod tests {
             &src,
             "../../evil",
             "overwrite",
-            5,
             BackupKind::Copy,
         )
         .unwrap();
@@ -1175,12 +1204,11 @@ mod tests {
             &src,
             "skill",
             "",
-            9,
             BackupKind::Copy,
         )
         .unwrap();
 
-        assert_eq!(dest.file_name().and_then(|n| n.to_str()), Some("9-unknown"));
+        assert_eq!(dest.file_name().and_then(|n| n.to_str()), Some("unknown"));
     }
 
     #[test]
@@ -1194,7 +1222,6 @@ mod tests {
             &missing,
             "skill",
             "overwrite",
-            1,
             BackupKind::Copy,
         );
         assert!(result.is_err(), "missing source must be a graceful Err");

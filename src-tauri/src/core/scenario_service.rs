@@ -305,7 +305,6 @@ pub fn sync_desired_targets(
                         match decision {
                             DeployGuardDecision::Deploy => {}
                             DeployGuardDecision::PreserveAndFlag => {
-                                let now_ms = chrono::Utc::now().timestamp_millis();
                                 let skill_dir_name = sync_engine::target_dir_name(
                                     &desired.source,
                                     &desired.skill_name,
@@ -317,7 +316,6 @@ pub fn sync_desired_targets(
                                     &desired.target,
                                     &skill_dir_name,
                                     "spoke-ahead",
-                                    now_ms,
                                     central_repo::BackupKind::Copy,
                                 ) {
                                     Ok(dest) => log::info!(

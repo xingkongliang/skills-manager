@@ -1760,7 +1760,6 @@ pub fn reimport_local_skill_internal(
                         central_path,
                         &dir_name,
                         "reimport-source-newer",
-                        chrono::Utc::now().timestamp_millis(),
                         central_repo::BackupKind::Copy,
                     )
                     .map_err(AppError::io)?;
