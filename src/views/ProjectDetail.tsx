@@ -513,33 +513,35 @@ export function ProjectDetail() {
     }
   };
 
-  // A variant carries local work when its own status is project_newer or
-  // diverged. Only these should ever be *pushed* to center; only the rest are
-  // safe to *overwrite* when realigning.
+  // A variant carries local work when its OWN status is project_newer or
+  // diverged — only such a variant should ever be *pushed* to center as winner.
   const isLocallyEdited = (v: ProjectSkill) =>
     v.sync_status === "project_newer" || v.sync_status === "diverged";
 
-  // Push the *edited* variant to center, then realign every other agent copy of
-  // the same skill that has NO local edits FROM the freshly-pushed center.
+  // A variant is safe to *overwrite* from center only when it is provably at or
+  // behind center (in_sync / center_newer), i.e. holds nothing the pull would
+  // discard. Everything else may carry unique local work: an edited copy
+  // (project_newer / diverged) OR a project_only copy that exists solely in the
+  // project and was never pushed to center. The frontend has no hash to prove
+  // such a copy is redundant, so it must NOT be auto-overwritten.
+  const isSafeToRealign = (v: ProjectSkill) =>
+    v.sync_status === "in_sync" || v.sync_status === "center_newer";
+
+  // Push the winner (a variant with local edits, else the group-status variant)
+  // to center, then realign only the siblings that are safe to overwrite. Any
+  // sibling that might hold unique local work — edited or project_only — is left
+  // flagged and reported via `skipped`, never silently clobbered. Because we
+  // only ever pull over copies already known to be at/behind center, this never
+  // depends on the pull-side "refuse a newer copy" guard (which can't fire once
+  // the just-pushed center is newest by mtime).
   //
-  // Winner selection: prefer a variant whose OWN status shows local edits, not
-  // the group's priority status. Variants are sorted alphabetically, so keying
-  // off the group status pushed whichever copy sorted first (e.g. `.claude`)
-  // even when a different copy (e.g. `.opencode`) was the one actually edited.
-  // The frontend has no mtime/hash, so when several variants were edited
-  // independently we cannot tell which is authoritative: we push one and
-  // deliberately leave the other edited copies flagged (reported via
-  // `skippedEdited`) rather than silently overwriting them.
-  //
-  // Realigning only the un-edited siblings lands a multi-agent group back
-  // in_sync (otherwise the row flips to "center_newer" off the stale siblings
-  // right after the user updated *to* center) without ever discarding local
-  // work — so this never relies on the pull-side "refuse a newer copy" guard,
-  // which cannot fire here anyway (the just-pushed center is newest by mtime).
+  // Realigning the safe siblings still lands a multi-agent group back in_sync
+  // (otherwise the row flips to "center_newer" off the stale-but-clean siblings
+  // right after the user updated *to* center).
   const pushSkillToCenterAndAlign = async (
     skill: ProjectSkillGroup
-  ): Promise<{ alignFailed: number; skippedEdited: number }> => {
-    if (!id) return { alignFailed: 0, skippedEdited: 0 };
+  ): Promise<{ alignFailed: number; skipped: number }> => {
+    if (!id) return { alignFailed: 0, skipped: 0 };
     const winner =
       skill.variants.find(isLocallyEdited) ??
       skill.variants.find((v) => v.sync_status === skill.status) ??
@@ -547,25 +549,25 @@ export function ProjectDetail() {
     await api.updateProjectSkillToCenter(id, winner.relative_path, winner.agent);
 
     const others = skill.variants.filter((v) => v !== winner);
-    const alignable = others.filter((v) => !isLocallyEdited(v));
-    const skippedEdited = others.length - alignable.length;
+    const alignable = others.filter(isSafeToRealign);
+    const skipped = others.length - alignable.length;
     const results = await Promise.allSettled(
       alignable.map((v) =>
         api.updateProjectSkillFromCenter(id, v.relative_path, v.agent)
       )
     );
     const alignFailed = results.filter((r) => r.status === "rejected").length;
-    return { alignFailed, skippedEdited };
+    return { alignFailed, skipped };
   };
 
   const handleUpdateCenter = async (skill: ProjectSkillGroup) => {
     if (!id) return;
     setUpdatingCenterSkill(getSkillKey(skill));
     try {
-      const { alignFailed, skippedEdited } = await pushSkillToCenterAndAlign(skill);
-      if (skippedEdited > 0) {
+      const { alignFailed, skipped } = await pushSkillToCenterAndAlign(skill);
+      if (skipped > 0) {
         toast.warning(
-          t("project.updateCenterSkippedEdited", { name: skill.name, count: skippedEdited })
+          t("project.updateCenterSkippedEdited", { name: skill.name, count: skipped })
         );
       } else if (alignFailed > 0) {
         toast.warning(
@@ -752,8 +754,8 @@ export function ProjectDetail() {
           skill.status === "diverged";
         if (!canUpdateCenter) continue;
         try {
-          const { alignFailed, skippedEdited } = await pushSkillToCenterAndAlign(skill);
-          skipped += skippedEdited;
+          const { alignFailed, skipped: skippedForSkill } = await pushSkillToCenterAndAlign(skill);
+          skipped += skippedForSkill;
           // The push landed but some sibling failed to realign → the group is
           // not fully in sync, so count it as failed rather than reporting a
           // clean success.
