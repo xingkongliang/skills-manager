@@ -1384,6 +1384,22 @@ pub async fn detach_local_skill_source(
     .await?
 }
 
+/// Map a raw `skill_targets.status` to the value the frontend consumes.
+///
+/// The deploy guard flags a spoke the user has edited as `target_ahead` so the
+/// next preset apply preserves it (see `scenario_service`). That marker is
+/// internal: the guard reads it back on the next apply to decide whether to
+/// re-protect, but the frontend has no badge for it and the target is not in an
+/// error state. Surface it as a normal `ok` target so it never renders as an
+/// unknown/blank status; the raw value stays in the DB for the guard's own use.
+fn dto_target_status(status: &str) -> String {
+    if status == "target_ahead" {
+        "ok".to_string()
+    } else {
+        status.to_string()
+    }
+}
+
 fn managed_skill_to_dto(
     store: &SkillStore,
     skill: SkillRecord,
@@ -1399,7 +1415,7 @@ fn managed_skill_to_dto(
             tool: target.tool.clone(),
             target_path: target.target_path.clone(),
             mode: target.mode.clone(),
-            status: target.status.clone(),
+            status: dto_target_status(&target.status),
             synced_at: target.synced_at,
         })
         .collect();
@@ -2486,6 +2502,16 @@ mod tests {
             last_checked_at: None,
             last_check_error: None,
         }
+    }
+
+    #[test]
+    fn dto_target_status_hides_internal_target_ahead_marker() {
+        // `target_ahead` is an internal guard marker with no frontend badge; it
+        // must reach the UI as a normal `ok` target, never verbatim.
+        assert_eq!(dto_target_status("target_ahead"), "ok");
+        // Every other status passes through unchanged.
+        assert_eq!(dto_target_status("ok"), "ok");
+        assert_eq!(dto_target_status("error"), "error");
     }
 
     #[test]
