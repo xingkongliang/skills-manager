@@ -6,6 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::commands::skills::{check_skill_update_internal, update_git_skill_internal};
+use crate::core::error::AppError;
 use crate::core::repo_lock::RepoLock;
 use crate::core::skill_store::SkillStore;
 
@@ -31,6 +32,15 @@ const POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// round. The pause must exceed the foreground poll cadence in `repo_lock`
 /// (50ms) so a foreground waiter reliably wins the lock during the gap.
 const FOREGROUND_YIELD: Duration = Duration::from_millis(200);
+
+/// Maximum number of retries for a single skill when a transient network error
+/// is detected (e.g. TCP Broken pipe, connection reset). The total number of
+/// attempts is `MAX_NETWORK_RETRIES + 1` (initial + retries).
+const MAX_NETWORK_RETRIES: usize = 3;
+
+/// Base back-off duration for the first retry. Subsequent retries double this
+/// (capped at 30 s) — 1 s, 2 s, 4 s, …
+const RETRY_BASE_SECS: u64 = 1;
 
 #[derive(Serialize, Clone)]
 struct AutoUpdatePayload {
@@ -166,22 +176,13 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
 
         // The check holds the repo lock; it must be released before applying,
         // because update_git_skill_internal acquires the lock itself.
-        let status = {
-            let _lock = match RepoLock::acquire("auto-update check") {
-                Ok(lock) => lock,
-                Err(_) => {
-                    failed += 1;
-                    log::info!("skill auto-updater: skipping {skill_id} (repo busy)");
-                    continue;
-                }
-            };
-            match check_skill_update_internal(store, &skill_id, true, proxy.as_deref()) {
-                Ok(dto) => dto.update_status,
-                Err(err) => {
-                    failed += 1;
-                    log::warn!("skill auto-updater: check failed for {skill_id}: {err}");
-                    continue;
-                }
+        // Transient network errors (Broken pipe, connection reset) are retried
+        // with exponential back-off; hard failures skip the skill immediately.
+        let status = match check_with_retry(store, &skill_id, proxy.as_deref()) {
+            Some(s) => s,
+            None => {
+                failed += 1;
+                continue;
             }
         };
 
@@ -191,15 +192,10 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         available += 1;
 
         if apply {
-            match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None) {
-                Ok(_) => updated += 1,
-                Err(err) => {
-                    failed += 1;
-                    log::warn!(
-                        "skill auto-updater: update failed for {skill_id}: {}",
-                        err.message
-                    );
-                }
+            if update_with_retry(store, &skill_id, proxy.as_deref()) {
+                updated += 1;
+            } else {
+                failed += 1;
             }
         }
     }
@@ -207,6 +203,112 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         "skill auto-updater: round done — checked={checked} available={available} updated={updated} failed={failed}"
     );
     Ok(())
+}
+
+/// Attempt `check_skill_update_internal` for one skill, retrying up to
+/// [`MAX_NETWORK_RETRIES`] times on transient network errors with exponential
+/// back-off. Returns the `update_status` string on success, or `None` on
+/// failure (caller should increment the `failed` counter).
+///
+/// The central-repo lock is acquired fresh on each attempt and released
+/// between attempts so foreground operations can interleave during the delay.
+fn check_with_retry(store: &SkillStore, skill_id: &str, proxy: Option<&str>) -> Option<String> {
+    for attempt in 0..=MAX_NETWORK_RETRIES {
+        if attempt > 0 {
+            let delay = retry_delay(attempt - 1);
+            log::info!(
+                "skill auto-updater: retrying check for {skill_id} \
+                 (attempt {attempt}/{MAX_NETWORK_RETRIES}, delay={}s)",
+                delay.as_secs()
+            );
+            std::thread::sleep(delay);
+        }
+
+        let _lock = match RepoLock::acquire("auto-update check") {
+            Ok(lock) => lock,
+            Err(_) => {
+                log::info!("skill auto-updater: skipping {skill_id} (repo busy)");
+                return None;
+            }
+        };
+
+        match check_skill_update_internal(store, skill_id, true, proxy) {
+            Ok(dto) => return Some(dto.update_status),
+            Err(ref err) if attempt < MAX_NETWORK_RETRIES && err.is_transient() => {
+                log::info!(
+                    "skill auto-updater: transient error checking {skill_id} \
+                     (attempt {}): {}",
+                    attempt + 1,
+                    err.message
+                );
+                // Lock is dropped here; the next iteration sleeps before re-acquiring.
+            }
+            Err(err) => {
+                log::warn!(
+                    "skill auto-updater: check failed for {skill_id}: {}",
+                    err.message
+                );
+                return None;
+            }
+        }
+    }
+    // All retries exhausted.
+    log::warn!("skill auto-updater: check exhausted {MAX_NETWORK_RETRIES} retries for {skill_id}");
+    None
+}
+
+/// Attempt `update_git_skill_internal` for one skill, retrying up to
+/// [`MAX_NETWORK_RETRIES`] times on transient network errors with exponential
+/// back-off. Returns `true` on success, `false` on failure (caller should
+/// increment the `failed` counter).
+fn update_with_retry(store: &SkillStore, skill_id: &str, proxy: Option<&str>) -> bool {
+    for attempt in 0..=MAX_NETWORK_RETRIES {
+        if attempt > 0 {
+            let delay = retry_delay(attempt - 1);
+            log::info!(
+                "skill auto-updater: retrying update for {skill_id} \
+                 (attempt {attempt}/{MAX_NETWORK_RETRIES}, delay={}s)",
+                delay.as_secs()
+            );
+            std::thread::sleep(delay);
+        }
+
+        match update_git_skill_internal(store, skill_id, proxy, None) {
+            Ok(_) => return true,
+            Err(ref err) if attempt < MAX_NETWORK_RETRIES && err.is_transient() => {
+                log::info!(
+                    "skill auto-updater: transient error updating {skill_id} \
+                     (attempt {}): {}",
+                    attempt + 1,
+                    err.message
+                );
+            }
+            Err(err) => {
+                log::warn!(
+                    "skill auto-updater: update failed for {skill_id}: {}",
+                    err.message
+                );
+                return false;
+            }
+        }
+    }
+    // All retries exhausted.
+    log::warn!(
+        "skill auto-updater: update exhausted {MAX_NETWORK_RETRIES} retries for {skill_id}"
+    );
+    false
+}
+
+/// Exponential back-off delay for retry `attempt` (0-indexed).
+/// Sequence: 1 s, 2 s, 4 s, … capped at 30 s.
+/// Uses a checked left-shift so that large `attempt` values saturate at the
+/// cap rather than overflowing.
+fn retry_delay(attempt: usize) -> Duration {
+    let secs = RETRY_BASE_SECS
+        .checked_shl(attempt as u32)
+        .unwrap_or(u64::MAX)
+        .min(30);
+    Duration::from_secs(secs)
 }
 
 #[cfg(test)]
@@ -250,5 +352,27 @@ mod tests {
         // every tick — the fallback should be "not due".
         let past = Utc::now() - chrono::Duration::hours(1);
         assert!(!is_due(Some(past), Duration::MAX));
+    }
+
+    // ── retry_delay ──
+
+    #[test]
+    fn retry_delay_attempt_0_is_base() {
+        assert_eq!(retry_delay(0), Duration::from_secs(RETRY_BASE_SECS));
+    }
+
+    #[test]
+    fn retry_delay_doubles_each_attempt() {
+        assert_eq!(retry_delay(1), Duration::from_secs(2));
+        assert_eq!(retry_delay(2), Duration::from_secs(4));
+        assert_eq!(retry_delay(3), Duration::from_secs(8));
+    }
+
+    #[test]
+    fn retry_delay_caps_at_30s() {
+        // At attempt 5 the uncapped value would be 32 s; must be capped at 30.
+        assert_eq!(retry_delay(5), Duration::from_secs(30));
+        // Large attempt numbers must not overflow.
+        assert_eq!(retry_delay(100), Duration::from_secs(30));
     }
 }

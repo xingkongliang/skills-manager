@@ -83,6 +83,10 @@ impl AppError {
             || lower.contains("failed to connect")
             || lower.contains("connection timed out")
             || lower.contains("network is unreachable")
+            || lower.contains("broken pipe")
+            || lower.contains("connection reset")
+            || lower.contains("error receiving data from socket")
+            || lower.contains("unexpected eof")
         {
             Self {
                 kind: ErrorKind::Network,
@@ -94,6 +98,23 @@ impl AppError {
                 message,
             }
         }
+    }
+
+    /// Whether this error represents a transient network glitch that is safe to
+    /// retry after a brief back-off (e.g. TCP Broken pipe, connection reset,
+    /// unexpected EOF). Hard failures (auth errors, repo not found, etc.) return
+    /// false. Cancellations are also never retried.
+    pub fn is_transient(&self) -> bool {
+        if matches!(self.kind, ErrorKind::Cancelled) {
+            return false;
+        }
+        let lower = self.message.to_ascii_lowercase();
+        lower.contains("broken pipe")
+            || lower.contains("connection reset")
+            || lower.contains("error receiving data from socket")
+            || lower.contains("unexpected eof")
+            || lower.contains("connection timed out")
+            || lower.contains("network is unreachable")
     }
 
     /// Convert an `anyhow::Error` originating from network operations.
@@ -234,5 +255,60 @@ mod tests {
         let app_err: AppError = io_err.into();
         assert!(matches!(app_err.kind, ErrorKind::Io));
         assert!(app_err.message.contains("file gone"));
+    }
+
+    #[test]
+    fn classify_git_error_detects_broken_pipe_as_network() {
+        // libgit2 surfaces TCP Broken pipe as "error receiving data from socket: Broken pipe; class=Net (12)"
+        let err = AppError::classify_git_error(
+            "error receiving data from socket: Broken pipe; class=Net (12)",
+        );
+        assert!(matches!(err.kind, ErrorKind::Network));
+    }
+
+    #[test]
+    fn classify_git_error_detects_connection_reset_as_network() {
+        let err = AppError::classify_git_error(
+            "failed to receive response: Connection reset by peer",
+        );
+        assert!(matches!(err.kind, ErrorKind::Network));
+    }
+
+    #[test]
+    fn classify_git_error_detects_unexpected_eof_as_network() {
+        let err = AppError::classify_git_error("unexpected EOF on transport");
+        assert!(matches!(err.kind, ErrorKind::Network));
+    }
+
+    #[test]
+    fn is_transient_true_for_broken_pipe() {
+        let err = AppError::git(
+            "error receiving data from socket: Broken pipe; class=Net (12)",
+        );
+        assert!(err.is_transient());
+    }
+
+    #[test]
+    fn is_transient_true_for_connection_reset() {
+        let err = AppError::git("Connection reset by peer");
+        assert!(err.is_transient());
+    }
+
+    #[test]
+    fn is_transient_false_for_hard_git_error() {
+        let err = AppError::git("remote: Repository not found.");
+        assert!(!err.is_transient());
+    }
+
+    #[test]
+    fn is_transient_false_for_cancelled() {
+        let err = AppError::cancelled("Installation cancelled");
+        assert!(!err.is_transient());
+    }
+
+    #[test]
+    fn is_transient_false_for_auth_error() {
+        let err = AppError::git("remote: Invalid username or password.");
+        assert!(!err.is_transient());
     }
 }
