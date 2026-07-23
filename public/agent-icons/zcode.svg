@@ -1,0 +1,4 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" fill-rule="evenodd" clip-rule="evenodd" stroke-linejoin="round" stroke-miterlimit="2">
+  <rect x="32" y="32" width="448" height="448" rx="96" ry="96" fill="#000000"/>
+  <path d="M360 160 L360 196 L204 352 L360 352 L360 392 L152 392 L152 356 L308 200 L152 200 L152 160 L360 160 Z" fill="#FFFFFF"/>
+</svg>

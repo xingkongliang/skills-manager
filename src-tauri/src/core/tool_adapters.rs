@@ -211,6 +211,20 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: None,
         },
         ToolAdapter {
+            // ZCode reads user-level skills from `~/.zcode/skills/` and
+            // project-level skills from `<repo>/.zcode/skills/`.
+            key: "zcode".into(),
+            display_name: "ZCode".into(),
+            relative_skills_dir: ".zcode/skills".into(),
+            relative_detect_dir: ".zcode".into(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: None,
+            category: ToolCategory::Coding,
+            is_custom: false,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        },
+        ToolAdapter {
             // Grok reads user-level skills from `~/.grok/skills/` and
             // project-level skills from `<repo>/.grok/skills/`.
             // See https://docs.x.ai/build/features/skills-plugins-marketplaces
