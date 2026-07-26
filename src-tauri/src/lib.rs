@@ -994,6 +994,9 @@ pub fn run() {
             // Browse
             commands::browse::fetch_leaderboard,
             commands::browse::search_skillssh,
+            commands::translation::get_ai_translation_settings,
+            commands::translation::save_ai_translation_settings,
+            commands::translation::translate_skill_document,
             // Settings
             commands::settings::get_settings,
             commands::settings::set_settings,

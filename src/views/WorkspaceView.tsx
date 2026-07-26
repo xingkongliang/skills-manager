@@ -6,6 +6,7 @@ import {
   FileText,
   Globe,
   LayoutGrid,
+  Languages,
   List,
   Loader2,
   Plus,
@@ -31,6 +32,7 @@ import { getErrorMessage } from "../lib/error";
 import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 import type { WorkspaceConfig } from "./workspaceConfigs";
+import { usePrefetchedTranslation } from "../hooks/usePrefetchedTranslation";
 
 function compactHomePath(path: string) {
   return path.replace(/^\/Users\/[^/]+/, "~");
@@ -568,6 +570,16 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     [currentTool]
   );
 
+  const activeLocalDocument = localContentTab === "center" ? localCenterDocContent : localDocContent;
+  const {
+    displayedDocument: displayedLocalDocument,
+    showingTranslation: showingTranslatedLocalDocument,
+    translationLoading: localTranslationLoading,
+    translationFailed: localTranslationFailed,
+    translationError: localTranslationError,
+    toggleTranslation: toggleLocalTranslation,
+  } = usePrefetchedTranslation(activeLocalDocument);
+
   const existsInGlobal = useCallback(
     (skill: ManagedSkill, agentK: string) =>
       skill.targets.some((target) => target.tool === agentK),
@@ -1000,30 +1012,69 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         }
         onClose={() => setLocalDetailSkill(null)}
       >
-        {localDetailSkill?.center_skill_id && (
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            {(["local", "diff", "center"] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setLocalContentTab(tab)}
-                className={cn(
-                  "rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
-                  localContentTab === tab
-                    ? "bg-accent text-white"
-                    : "bg-surface-hover text-muted hover:text-secondary"
-                )}
-                disabled={(tab === "diff" || tab === "center") && localCenterDocLoading}
-              >
-                {tab === "local"
-                  ? t("mySkills.docTabs.local")
-                  : tab === "diff"
-                    ? t("mySkills.docTabs.diff")
-                    : t("project.docTabs.center")}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {localDetailSkill?.center_skill_id && (
+            <>
+              {(["local", "diff", "center"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => {
+                    setLocalContentTab(tab);
+                  }}
+                  className={cn(
+                    "rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
+                    localContentTab === tab
+                      ? "bg-accent text-white"
+                      : "bg-surface-hover text-muted hover:text-secondary"
+                  )}
+                  disabled={(tab === "diff" || tab === "center") && localCenterDocLoading}
+                >
+                  {tab === "local"
+                    ? t("mySkills.docTabs.local")
+                    : tab === "diff"
+                      ? t("mySkills.docTabs.diff")
+                      : t("project.docTabs.center")}
+                </button>
+              ))}
+            </>
+          )}
+          {localContentTab !== "diff" && activeLocalDocument && (
+            <button
+              type="button"
+              onClick={toggleLocalTranslation}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
+                showingTranslatedLocalDocument
+                  ? "bg-accent text-white"
+                  : "bg-surface-hover text-muted hover:text-secondary",
+                localTranslationLoading && "cursor-wait"
+              )}
+              title={
+                localTranslationFailed
+                  ? localTranslationError ?? t("mySkills.translationFailed")
+                  : undefined
+              }
+            >
+              {localTranslationLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Languages className="h-3.5 w-3.5" />
+              )}
+              {showingTranslatedLocalDocument ? t("mySkills.showOriginal") : t("mySkills.translateToChinese")}
+            </button>
+          )}
+          {localTranslationLoading && (
+            <span className="animate-pulse whitespace-nowrap text-[12px] text-muted">
+              {t("mySkills.translationCacheHint")}
+            </span>
+          )}
+          {localTranslationFailed && (
+            <span className="text-[12px] text-danger">
+              {localTranslationError ?? t("mySkills.translationFailed")}
+            </span>
+          )}
+        </div>
 
         {localDocLoading ? (
           <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
@@ -1039,12 +1090,12 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           localCenterDocLoading ? (
             <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
           ) : localCenterDocContent ? (
-            <SkillMarkdown content={localCenterDocContent} />
+          <SkillMarkdown content={displayedLocalDocument ?? localCenterDocContent} />
           ) : (
             <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
           )
         ) : localDocContent ? (
-          <SkillMarkdown content={localDocContent} />
+          <SkillMarkdown content={displayedLocalDocument ?? localDocContent} />
         ) : (
           <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
         )}

@@ -45,6 +45,7 @@ tokio = { version = "1", features = ["full"] }
 regex = "1"
 hex = "0.4"
 urlencoding = "2"
+pulldown-cmark = "0.12"
 zip = "2"
 tempfile = "3.26.0"
 semver = "1"

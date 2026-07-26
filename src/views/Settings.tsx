@@ -29,6 +29,7 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
+  Sparkles,
 } from "lucide-react";
 import {
   DndContext,
@@ -194,6 +195,11 @@ export function Settings() {
   const [gitMergeEngineObject, setGitMergeEngineObject] = useState(true);
   const [proxyInput, setProxyInput] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
+  const [aiTranslationApiUrl, setAiTranslationApiUrl] = useState("https://api.openai.com/v1");
+  const [aiTranslationModel, setAiTranslationModel] = useState("gpt-5.6-luna");
+  const [aiTranslationApiKey, setAiTranslationApiKey] = useState("");
+  const [aiTranslationHasApiKey, setAiTranslationHasApiKey] = useState(false);
+  const [aiTranslationSaving, setAiTranslationSaving] = useState(false);
   const [textSize, setTextSize] = useState("default");
   const [autoUpdateInterval, setAutoUpdateInterval] = useState("off");
   const [autoUpdateApply, setAutoUpdateApply] = useState("off");
@@ -337,6 +343,11 @@ export function Settings() {
     api.getSettings("sync_mode").then((v) => { if (v) setSyncMode(v); });
     api.getSettings("default_scenario").then((v) => { if (v) setDefaultPreset(v); });
     api.getSettings("proxy_url").then((v) => { setProxyInput(v ?? ""); });
+    api.getAiTranslationSettings().then((settings) => {
+      setAiTranslationApiUrl(settings.apiUrl);
+      setAiTranslationModel(settings.model);
+      setAiTranslationHasApiKey(settings.hasApiKey);
+    }).catch(() => {});
     api.getSettings("close_action").then((v) => { setCloseAction(v ?? ""); });
     api.getSettings("show_tray_icon").then((v) => {
       const normalized = (v ?? "true").trim().toLowerCase();
@@ -738,6 +749,42 @@ export function Settings() {
       toast.error(t("common.error"));
     } finally {
       setProxySaving(false);
+    }
+  };
+
+  const handleSaveAiTranslation = async (clearApiKey = false) => {
+    const apiUrl = aiTranslationApiUrl.trim();
+    const model = aiTranslationModel.trim();
+    if (!/^https?:\/\//i.test(apiUrl)) {
+      toast.error(t("settings.aiTranslation.apiUrlInvalid"));
+      return;
+    }
+    if (!model) {
+      toast.error(t("settings.aiTranslation.modelRequired"));
+      return;
+    }
+
+    setAiTranslationSaving(true);
+    try {
+      const settings = await api.saveAiTranslationSettings({
+        apiUrl,
+        model,
+        apiKey: clearApiKey ? null : aiTranslationApiKey.trim() || null,
+        clearApiKey,
+      });
+      setAiTranslationApiUrl(settings.apiUrl);
+      setAiTranslationModel(settings.model);
+      setAiTranslationHasApiKey(settings.hasApiKey);
+      setAiTranslationApiKey("");
+      toast.success(
+        clearApiKey
+          ? t("settings.aiTranslation.apiKeyCleared")
+          : t("settings.aiTranslation.saved")
+      );
+    } catch (error) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      setAiTranslationSaving(false);
     }
   };
 
@@ -1536,6 +1583,94 @@ export function Settings() {
                   )}
                 >
                   {t("settings.trayIcon_off")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* AI translation */}
+        <section>
+          <h2 className="app-section-title mb-3 flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-accent" />
+            {t("settings.aiTranslation.title")}
+          </h2>
+          <div className="app-panel px-4 py-3">
+            <p className="mb-3 text-[13px] text-muted">
+              {t("settings.aiTranslation.desc")}
+            </p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="min-w-0">
+                <span className="mb-1 block text-[12px] font-medium text-secondary">
+                  {t("settings.aiTranslation.apiUrl")}
+                </span>
+                <input
+                  type="text"
+                  value={aiTranslationApiUrl}
+                  onChange={(event) => setAiTranslationApiUrl(event.target.value)}
+                  placeholder="https://api.openai.com/v1"
+                  className={`${fieldClass} w-full font-mono`}
+                />
+              </label>
+              <label className="min-w-0">
+                <span className="mb-1 block text-[12px] font-medium text-secondary">
+                  {t("settings.aiTranslation.model")}
+                </span>
+                <input
+                  type="text"
+                  value={aiTranslationModel}
+                  onChange={(event) => setAiTranslationModel(event.target.value)}
+                  placeholder="gpt-5.6-luna"
+                  className={`${fieldClass} w-full font-mono`}
+                />
+              </label>
+            </div>
+            <label className="mt-3 block min-w-0">
+              <span className="mb-1 block text-[12px] font-medium text-secondary">
+                {t("settings.aiTranslation.apiKey")}
+              </span>
+              <input
+                type="password"
+                value={aiTranslationApiKey}
+                onChange={(event) => setAiTranslationApiKey(event.target.value)}
+                placeholder={
+                  aiTranslationHasApiKey
+                    ? t("settings.aiTranslation.apiKeySavedPlaceholder")
+                    : t("settings.aiTranslation.apiKeyPlaceholder")
+                }
+                autoComplete="new-password"
+                className={`${fieldClass} w-full font-mono`}
+              />
+            </label>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[12px] text-muted">
+                {aiTranslationHasApiKey
+                  ? t("settings.aiTranslation.apiKeyStored")
+                  : t("settings.aiTranslation.apiKeyOptional")}
+              </span>
+              <div className="flex items-center gap-2">
+                {aiTranslationHasApiKey && (
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveAiTranslation(true)}
+                    disabled={aiTranslationSaving}
+                    className={`${actionButtonClass} border-border text-muted hover:bg-surface-hover hover:text-secondary`}
+                  >
+                    {t("settings.aiTranslation.clearApiKey")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleSaveAiTranslation(false)}
+                  disabled={aiTranslationSaving}
+                  className={`${actionButtonClass} border-accent bg-accent text-white hover:opacity-90`}
+                >
+                  {aiTranslationSaving ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3 w-3" />
+                  )}
+                  {t("common.save")}
                 </button>
               </div>
             </div>

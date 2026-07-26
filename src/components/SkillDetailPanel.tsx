@@ -6,6 +6,8 @@ import {
   Github,
   HardDrive,
   Globe,
+  Languages,
+  LoaderCircle,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../utils";
@@ -27,6 +29,7 @@ import { SkillMarkdown } from "./SkillMarkdown";
 import { AgentToggleSection, type AgentToggleItem } from "./AgentToggleSection";
 import { SkillProjectsSection } from "./SkillProjectsSection";
 import { SyncDots } from "./SyncDots";
+import { usePrefetchedTranslation } from "../hooks/usePrefetchedTranslation";
 
 interface Props {
   skill: ManagedSkill | null;
@@ -209,6 +212,15 @@ function SkillDetailPanelContent({
   const activeDoc = doc?.skill_id === skill.id ? doc : null;
   const activeSourceDoc = sourceDoc?.skill_id === skill.id ? sourceDoc : null;
   const activeSourceDiff = sourceDiff?.skill_id === skill.id ? sourceDiff : null;
+  const activeDocument = contentTab === "source" ? activeSourceDoc?.content : activeDoc?.content;
+  const {
+    displayedDocument,
+    showingTranslation: isTranslated,
+    translationLoading,
+    translationFailed,
+    translationError,
+    toggleTranslation,
+  } = usePrefetchedTranslation(activeDocument);
   const sourceDiffLoading =
     contentTab === "diff" && supportsSourceDiff && !activeSourceDiff && !sourceDiffFailed;
   const toggleItems: AgentToggleItem[] = (toolToggles ?? []).map((toggle) => ({
@@ -328,13 +340,16 @@ function SkillDetailPanelContent({
         />
       )}
 
-      {supportsSourceDiff && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          {(["local", "diff", "source"] as const).map((tab) => (
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {supportsSourceDiff && (
+          <>
+            {(["local", "diff", "source"] as const).map((tab) => (
             <button
               key={tab}
               type="button"
-              onClick={() => setContentTab(tab)}
+              onClick={() => {
+                setContentTab(tab);
+              }}
               className={cn(
                 "rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
                 contentTab === tab
@@ -349,14 +364,50 @@ function SkillDetailPanelContent({
                   ? t("mySkills.docTabs.diff")
                   : t("mySkills.docTabs.source")}
             </button>
-          ))}
+            ))}
           {activeSourceDoc && (
             <span className="rounded-full border border-border-subtle bg-surface px-2 py-1 text-[12px] text-muted">
               {activeSourceDoc.source_label} · {activeSourceDoc.revision.slice(0, 7)}
             </span>
           )}
-        </div>
-      )}
+          </>
+        )}
+        {contentTab !== "diff" && activeDocument && (
+          <button
+            type="button"
+            onClick={toggleTranslation}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
+              isTranslated
+                ? "bg-accent text-white"
+                : "bg-surface-hover text-muted hover:text-secondary",
+              translationLoading && "cursor-wait"
+            )}
+            title={
+              translationFailed
+                ? translationError ?? t("mySkills.translationFailed")
+                : undefined
+            }
+          >
+            {translationLoading ? (
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Languages className="h-3.5 w-3.5" />
+            )}
+            {isTranslated ? t("mySkills.showOriginal") : t("mySkills.translateToChinese")}
+          </button>
+        )}
+        {translationLoading && (
+          <span className="animate-pulse whitespace-nowrap text-[12px] text-muted">
+            {t("mySkills.translationCacheHint")}
+          </span>
+        )}
+        {translationFailed && (
+          <span className="text-[12px] text-danger">
+            {translationError ?? t("mySkills.translationFailed")}
+          </span>
+        )}
+      </div>
 
       {loading ? (
         <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
@@ -374,12 +425,12 @@ function SkillDetailPanelContent({
         sourceLoading ? (
           <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
         ) : activeSourceDoc ? (
-          <SkillMarkdown content={activeSourceDoc.content} />
+          <SkillMarkdown content={displayedDocument ?? activeSourceDoc.content} />
         ) : (
           <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
         )
       ) : activeDoc ? (
-        <SkillMarkdown content={activeDoc.content} />
+        <SkillMarkdown content={displayedDocument ?? activeDoc.content} />
       ) : (
         <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
       )}

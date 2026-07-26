@@ -322,6 +322,10 @@
       "source": "Source"
     },
     "sourceDiffUnavailable": "Source content is unavailable right now",
+    "translateToChinese": "AI Translate to Chinese",
+    "showOriginal": "Show original",
+    "translationCacheHint": "The first translation may take a moment while the cache is built.",
+    "translationFailed": "AI translation failed. Check the API URL, API Key, and model in Settings.",
     "sourceDiff": {
       "noChanges": "No changes — the source matches the central library",
       "status": {
@@ -649,6 +653,22 @@
     "proxyUrlPlaceholder": "http://127.0.0.1:7890",
     "proxyUrlSaved": "Proxy settings saved",
     "proxyUrlInvalid": "Proxy URL must start with http://, https://, or socks5://",
+    "aiTranslation": {
+      "title": "AI Translation",
+      "desc": "Translate an entire Skill in one OpenAI-compatible request while preserving Markdown and code. The API key is stored only in the operating system keychain.",
+      "apiUrl": "API URL",
+      "apiUrlInvalid": "API URL must start with http:// or https://",
+      "model": "Model",
+      "modelRequired": "Model name is required",
+      "apiKey": "API Key",
+      "apiKeyPlaceholder": "sk-... (optional for local services)",
+      "apiKeySavedPlaceholder": "Saved — leave blank to keep unchanged",
+      "apiKeyStored": "An API key is stored in the OS keychain.",
+      "apiKeyOptional": "An API key is required for OpenAI; local compatible services may leave it blank.",
+      "clearApiKey": "Clear Key",
+      "apiKeyCleared": "AI translation API key cleared",
+      "saved": "AI translation settings saved"
+    },
     "autoUpdate": {
       "title": "Skill Auto-Update",
       "intervalLabel": "Check Frequency",

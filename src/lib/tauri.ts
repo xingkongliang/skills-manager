@@ -245,6 +245,34 @@ export const getSkillsForPreset = (presetId: string) =>
 export const getSkillDocument = (skillId: string) =>
   invoke<SkillDocument>("get_skill_document", { skillId });
 
+export const translateSkillDocument = (content: string) =>
+  invoke<string>("translate_skill_document", { content });
+
+export interface AiTranslationSettings {
+  apiUrl: string;
+  model: string;
+  hasApiKey: boolean;
+}
+
+export interface SaveAiTranslationSettingsInput {
+  apiUrl: string;
+  model: string;
+  apiKey?: string | null;
+  clearApiKey?: boolean;
+}
+
+export const getAiTranslationSettings = () =>
+  invoke<AiTranslationSettings>("get_ai_translation_settings");
+
+export const saveAiTranslationSettings = (input: SaveAiTranslationSettingsInput) =>
+  invoke<AiTranslationSettings>("save_ai_translation_settings", {
+    input: {
+      ...input,
+      apiKey: input.apiKey ?? null,
+      clearApiKey: input.clearApiKey ?? false,
+    },
+  });
+
 export const getSourceSkillDocument = (skillId: string) =>
   invoke<SourceSkillDocument>("get_source_skill_document", { skillId });
 

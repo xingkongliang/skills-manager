@@ -1,3 +1,4 @@
+pub mod ai_credentials;
 pub mod app_state;
 pub mod audit_log;
 pub mod auto_backup;

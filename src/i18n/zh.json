@@ -322,6 +322,10 @@
       "source": "来源"
     },
     "sourceDiffUnavailable": "暂时无法读取来源版本内容",
+    "translateToChinese": "AI 翻译为中文",
+    "showOriginal": "显示原文",
+    "translationCacheHint": "初次翻译需等待片刻，完成后将自动缓存",
+    "translationFailed": "AI 翻译失败，请检查设置中的 API 地址、API Key 和模型",
     "sourceDiff": {
       "noChanges": "无差异 —— 来源与中心库内容一致",
       "status": {
@@ -649,6 +653,22 @@
     "proxyUrlPlaceholder": "http://127.0.0.1:7890",
     "proxyUrlSaved": "代理设置已保存",
     "proxyUrlInvalid": "代理地址必须以 http://、https:// 或 socks5:// 开头",
+    "aiTranslation": {
+      "title": "AI 翻译",
+      "desc": "通过一次 OpenAI 兼容请求翻译完整 Skill，并保持 Markdown 与代码不变。API Key 仅保存于操作系统凭据库。",
+      "apiUrl": "API 地址",
+      "apiUrlInvalid": "API 地址必须以 http:// 或 https:// 开头",
+      "model": "模型名称",
+      "modelRequired": "模型名称不能为空",
+      "apiKey": "API Key",
+      "apiKeyPlaceholder": "sk-...（本地服务可留空）",
+      "apiKeySavedPlaceholder": "已保存，留空则保持不变",
+      "apiKeyStored": "API Key 已保存在操作系统凭据库中。",
+      "apiKeyOptional": "OpenAI 需要 API Key；本地兼容服务可以留空。",
+      "clearApiKey": "清除 Key",
+      "apiKeyCleared": "AI 翻译 API Key 已清除",
+      "saved": "AI 翻译设置已保存"
+    },
     "autoUpdate": {
       "title": "Skill 自动更新",
       "intervalLabel": "检查频率",
