@@ -10,14 +10,6 @@ pub mod core;
 /// Shared flag: when true, CloseRequested should NOT be prevented.
 pub static QUITTING: AtomicBool = AtomicBool::new(false);
 
-/// Guards concurrent preset apply/remove from the tray so a quick double-click
-/// can't fire two batches at once. Intentionally separate from the
-/// `TRAY_CHECK_UPDATES_RUNNING` flag — update checks only touch
-/// `update_status` while preset apply touches `skill_targets`, so the two are
-/// orthogonal and shouldn't block each other. Sharing the lock would silently
-/// drop preset clicks during long-running update checks.
-static TRAY_PRESET_APPLY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// Tracks whether a manual "Check for skill updates" is currently running so the
 /// tray menu can render a disabled "Checking for updates..." label.
 static TRAY_CHECK_UPDATES_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -459,9 +451,9 @@ fn apply_preset_from_tray<R: tauri::Runtime>(
         //               frontend about state changes that didn't occur)
         //   Err(_)    — failure inside the batch
         let result = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
-            let _guard = match TRAY_PRESET_APPLY_LOCK.try_lock() {
-                Ok(guard) => guard,
-                Err(_) => {
+            let _guard = match core::scenario_service::try_lock_preset_apply() {
+                Some(guard) => guard,
+                None => {
                     log::debug!(
                         "Another preset apply in flight, ignoring tray click for {preset_id_for_task}"
                     );
@@ -540,7 +532,7 @@ fn check_updates_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
     tauri::async_runtime::spawn(async move {
         let store_for_task = store.clone();
-        // Note: this intentionally does NOT take TRAY_PRESET_APPLY_LOCK.
+        // Note: this intentionally does NOT take the preset apply lock.
         // Update checks only mutate `update_status` columns; preset apply
         // mutates `skill_targets`. They're orthogonal, and sharing a lock
         // would silently drop preset clicks made during a long-running check.
@@ -1067,6 +1059,7 @@ pub fn run() {
             commands::presets::switch_preset,
             commands::presets::apply_preset_to_default,
             commands::presets::apply_preset_to_coding_agents,
+            commands::presets::apply_preset_to_tools,
             commands::presets::add_skill_to_preset,
             commands::presets::remove_skill_from_preset,
             commands::presets::reorder_presets,

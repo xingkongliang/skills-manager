@@ -113,6 +113,9 @@ pub async fn create_preset(
 ) -> Result<PresetDto, AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        // 创建新 Preset 会撤销旧活动 Preset 的磁盘目标；必须与 UI、托盘
+        // 及其他 Agent 配置命令串行，避免只完成一半的切换。
+        let _guard = scenario_service::lock_preset_apply();
         let now = chrono::Utc::now().timestamp_millis();
         let id = uuid::Uuid::new_v4().to_string();
         let previous_active_id = store.get_active_scenario_id().map_err(AppError::db)?;
@@ -188,6 +191,9 @@ pub async fn delete_preset(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        // 删除活动 Preset 同时包含撤销旧目标和应用后继 Preset，两步必须
+        // 作为一个受锁保护的工作区变更完成。
+        let _guard = scenario_service::lock_preset_apply();
         let was_active = store
             .get_active_scenario_id()
             .map_err(AppError::db)?
@@ -256,6 +262,9 @@ async fn apply_preset_to_default_impl(
     store: Arc<SkillStore>,
 ) -> Result<(), AppError> {
     let result = tauri::async_runtime::spawn_blocking(move || {
+        // 旧的全局应用入口同样会改写 `skill_targets` 与磁盘目录，必须与
+        // PresetBar 和托盘共用互斥锁，不能留下可交错的兼容路径。
+        let _guard = scenario_service::lock_preset_apply();
         scenario_service::apply_scenario_to_default(&store, &id)
     })
     .await?;
@@ -416,6 +425,9 @@ pub async fn apply_preset_to_coding_agents(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        // 这个兼容命令虽然已不由新 PresetBar 调用，仍要与托盘和精确
+        // Agent 批处理串行，避免旧前端或 CLI 触发并发写入。
+        let _guard = scenario_service::lock_preset_apply();
         scenario_service::ensure_scenario_exists(&store, &preset_id)?;
         let skill_ids = store
             .get_skill_ids_for_scenario(&preset_id)
@@ -440,16 +452,59 @@ pub async fn apply_preset_to_coding_agents(
     result
 }
 
+/// 将一个 Preset 精确应用到调用方指定的 Agent，不扩展到其他 Coding Agent。
+/// 工具校验、去重和逐项容错由 scenario_service 的报告型批处理统一完成。
+#[tauri::command]
+pub async fn apply_preset_to_tools(
+    app: tauri::AppHandle,
+    preset_id: String,
+    tool_keys: Vec<String>,
+    mode: PresetApplyMode,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<scenario_service::BatchApplyReport, AppError> {
+    let store = store.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // UI 的 FIFO 只覆盖单个 WebView；此锁还需与托盘共用，避免两个入口
+        // 同时改写同一组目录和 `skill_targets`。
+        let _guard = scenario_service::lock_preset_apply();
+        apply_preset_to_tools_impl(&store, &preset_id, &tool_keys, mode)
+    })
+    .await?;
+    if result.is_ok() {
+        refresh_tray_menu_best_effort(&app);
+    }
+    result
+}
+
+fn apply_preset_to_tools_impl(
+    store: &SkillStore,
+    preset_id: &str,
+    tool_keys: &[String],
+    mode: PresetApplyMode,
+) -> Result<scenario_service::BatchApplyReport, AppError> {
+    scenario_service::ensure_scenario_exists(store, preset_id)?;
+    let skill_ids = store
+        .get_skill_ids_for_scenario(preset_id)
+        .map_err(AppError::db)?;
+    scenario_service::apply_skills_to_tools_with_report(
+        store,
+        &skill_ids,
+        tool_keys,
+        mode.into(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::core::scenario_service::{
         collect_scenario_sync_targets, sync_desired_targets, unsync_obsolete_scenario_targets,
     };
     use crate::core::skill_store::SkillRecord;
     use crate::core::tool_adapters::{self, CustomToolDef};
-    use std::path::PathBuf;
     use std::fs;
+    use std::path::PathBuf;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     use tempfile::tempdir;
@@ -467,7 +522,7 @@ mod tests {
             source_revision: None,
             remote_revision: None,
             central_path: central_path.to_string_lossy().to_string(),
-            content_hash: None,
+            content_hash: Some(format!("hash-{id}")),
             enabled: true,
             created_at: 1,
             updated_at: 1,
@@ -505,6 +560,38 @@ mod tests {
             project_relative_skills_dir: None,
             category: Default::default(),
         }];
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::to_string(&custom_tools).unwrap(),
+            )
+            .unwrap();
+        let disabled_builtin_tools: Vec<String> = tool_adapters::default_tool_adapters()
+            .into_iter()
+            .map(|adapter| adapter.key)
+            .collect();
+        store
+            .set_setting(
+                "disabled_tools",
+                &serde_json::to_string(&disabled_builtin_tools).unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn configure_custom_tools(
+        store: &SkillStore,
+        tools: &[(&str, &std::path::Path)],
+    ) {
+        let custom_tools: Vec<CustomToolDef> = tools
+            .iter()
+            .map(|(key, target_base)| CustomToolDef {
+                key: (*key).to_string(),
+                display_name: format!("Test {key}"),
+                skills_dir: target_base.to_string_lossy().to_string(),
+                project_relative_skills_dir: None,
+                category: Default::default(),
+            })
+            .collect();
         store
             .set_setting(
                 "custom_tools",
@@ -639,5 +726,525 @@ mod tests {
         assert!(targets.iter().any(|target| {
             target.skill_id == "second" && target.target_path.ends_with("skill123-2")
         }));
+    }
+
+    #[test]
+    fn exact_preset_apply_deduplicates_tools_and_reports_skips() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let source_base = tmp.path().join("central");
+        let first_target = tmp.path().join("agent-one");
+        let second_target = tmp.path().join("agent-two");
+        fs::create_dir_all(&source_base).unwrap();
+        configure_custom_tools(
+            &store,
+            &[
+                ("agent_one", first_target.as_path()),
+                ("agent_two", second_target.as_path()),
+            ],
+        );
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        store
+            .insert_scenario(&sample_scenario("preset", "Preset"))
+            .unwrap();
+        store
+            .insert_scenario(&sample_scenario("active", "Active"))
+            .unwrap();
+        store.set_active_scenario("active").unwrap();
+
+        for name in ["alpha", "beta"] {
+            let source = write_skill_dir(&source_base, name);
+            store
+                .insert_skill(&sample_skill(name, name, &source))
+                .unwrap();
+            store.add_skill_to_scenario("preset", name).unwrap();
+        }
+
+        let add = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &[
+                "agent_one".to_string(),
+                "agent_one".to_string(),
+            ],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        assert_eq!(add.applied, 2);
+        assert_eq!(add.skipped, 0);
+        assert!(add.failures.is_empty());
+        assert!(first_target.join("alpha/SKILL.md").exists());
+        assert!(first_target.join("beta/SKILL.md").exists());
+        assert!(!second_target.exists());
+        assert_eq!(
+            store.get_active_scenario_id().unwrap().as_deref(),
+            Some("active")
+        );
+        assert!(store
+            .get_all_targets()
+            .unwrap()
+            .iter()
+            .all(|target| target.tool == "agent_one"));
+
+        let duplicate_add = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        assert_eq!(duplicate_add.applied, 0);
+        assert_eq!(duplicate_add.skipped, 2);
+        assert!(duplicate_add.failures.is_empty());
+
+        let remove = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Remove,
+        )
+        .unwrap();
+        assert_eq!(remove.applied, 2);
+        assert_eq!(remove.skipped, 0);
+        assert!(remove.failures.is_empty());
+
+        let duplicate_remove = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Remove,
+        )
+        .unwrap();
+        assert_eq!(duplicate_remove.applied, 0);
+        assert_eq!(duplicate_remove.skipped, 2);
+        assert!(duplicate_remove.failures.is_empty());
+    }
+
+    #[test]
+    fn exact_preset_apply_rebuilds_missing_recorded_target() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let source_base = tmp.path().join("central");
+        let target_base = tmp.path().join("agent-one");
+        fs::create_dir_all(&source_base).unwrap();
+        configure_custom_tools(&store, &[("agent_one", target_base.as_path())]);
+        store.set_setting("sync_mode", "copy").unwrap();
+        store
+            .insert_scenario(&sample_scenario("preset", "Preset"))
+            .unwrap();
+        let source = write_skill_dir(&source_base, "alpha");
+        store
+            .insert_skill(&sample_skill("alpha", "alpha", &source))
+            .unwrap();
+        store.add_skill_to_scenario("preset", "alpha").unwrap();
+
+        let first = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        assert_eq!(first.applied, 1);
+        fs::remove_dir_all(target_base.join("alpha")).unwrap();
+
+        let repaired = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        assert_eq!(repaired.applied, 1);
+        assert_eq!(repaired.skipped, 0);
+        assert!(repaired.failures.is_empty());
+        assert!(target_base.join("alpha/SKILL.md").exists());
+        assert_eq!(store.get_targets_for_skill("alpha").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn exact_preset_apply_moves_stale_record_to_current_agent_path() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let source_base = tmp.path().join("central");
+        let old_target = tmp.path().join("agent-old");
+        let new_target = tmp.path().join("agent-new");
+        fs::create_dir_all(&source_base).unwrap();
+        configure_custom_tools(&store, &[("agent_one", old_target.as_path())]);
+        store.set_setting("sync_mode", "copy").unwrap();
+        store
+            .insert_scenario(&sample_scenario("preset", "Preset"))
+            .unwrap();
+        let source = write_skill_dir(&source_base, "alpha");
+        store
+            .insert_skill(&sample_skill("alpha", "alpha", &source))
+            .unwrap();
+        store.add_skill_to_scenario("preset", "alpha").unwrap();
+
+        apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        configure_custom_tools(&store, &[("agent_one", new_target.as_path())]);
+
+        let moved = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        assert_eq!(moved.applied, 1);
+        assert_eq!(moved.skipped, 0);
+        assert!(moved.failures.is_empty());
+        assert!(!old_target.join("alpha").exists());
+        assert!(new_target.join("alpha/SKILL.md").exists());
+        let rows = store.get_targets_for_skill("alpha").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(PathBuf::from(&rows[0].target_path), new_target.join("alpha"));
+    }
+
+    #[test]
+    fn exact_preset_apply_refreshes_stale_copy_hash() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let source_base = tmp.path().join("central");
+        let target_base = tmp.path().join("agent-one");
+        fs::create_dir_all(&source_base).unwrap();
+        configure_custom_tools(&store, &[("agent_one", target_base.as_path())]);
+        store.set_setting("sync_mode", "copy").unwrap();
+        store
+            .insert_scenario(&sample_scenario("preset", "Preset"))
+            .unwrap();
+        let source = write_skill_dir(&source_base, "alpha");
+        fs::write(source.join("version.txt"), "v1").unwrap();
+        let mut skill = sample_skill("alpha", "alpha", &source);
+        skill.content_hash = Some("h1".to_string());
+        store.insert_skill(&skill).unwrap();
+        store.add_skill_to_scenario("preset", "alpha").unwrap();
+
+        apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        fs::write(source.join("version.txt"), "v2").unwrap();
+        skill.content_hash = Some("h2".to_string());
+        store.upsert_skill(&skill).unwrap();
+
+        let refreshed = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        assert_eq!(refreshed.applied, 1);
+        assert_eq!(refreshed.skipped, 0);
+        assert!(refreshed.failures.is_empty());
+        assert_eq!(
+            fs::read_to_string(target_base.join("alpha/version.txt")).unwrap(),
+            "v2"
+        );
+        let rows = store.get_targets_for_skill("alpha").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source_hash.as_deref(), Some("h2"));
+    }
+
+    #[test]
+    fn exact_preset_apply_keeps_previous_copy_when_source_build_fails() {
+        let tmp = tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let store = SkillStore::new(&db_path).unwrap();
+        let source_base = tmp.path().join("central");
+        let target_base = tmp.path().join("agent-one");
+        fs::create_dir_all(&source_base).unwrap();
+        configure_custom_tools(&store, &[("agent_one", target_base.as_path())]);
+        store.set_setting("sync_mode", "copy").unwrap();
+        store
+            .insert_scenario(&sample_scenario("preset", "Preset"))
+            .unwrap();
+        let source = write_skill_dir(&source_base, "alpha");
+        fs::write(source.join("version.txt"), "v1").unwrap();
+        let mut skill = sample_skill("alpha", "alpha", &source);
+        skill.content_hash = Some("h1".to_string());
+        store.insert_skill(&skill).unwrap();
+        store.add_skill_to_scenario("preset", "alpha").unwrap();
+        apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+
+        fs::remove_dir_all(&source).unwrap();
+        skill.content_hash = Some("h2".to_string());
+        store.upsert_skill(&skill).unwrap();
+        let failed = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+
+        assert_eq!(failed.applied, 0);
+        assert_eq!(failed.failures.len(), 1);
+        assert_eq!(
+            fs::read_to_string(target_base.join("alpha/version.txt")).unwrap(),
+            "v1"
+        );
+        let rows = store.get_targets_for_skill("alpha").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source_hash.as_deref(), Some("h1"));
+    }
+
+    #[test]
+    fn exact_preset_apply_restores_previous_copy_when_database_commit_fails() {
+        let tmp = tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let store = SkillStore::new(&db_path).unwrap();
+        let source_base = tmp.path().join("central");
+        let target_base = tmp.path().join("agent-one");
+        fs::create_dir_all(&source_base).unwrap();
+        configure_custom_tools(&store, &[("agent_one", target_base.as_path())]);
+        store.set_setting("sync_mode", "copy").unwrap();
+        store
+            .insert_scenario(&sample_scenario("preset", "Preset"))
+            .unwrap();
+        let source = write_skill_dir(&source_base, "alpha");
+        fs::write(source.join("version.txt"), "v1").unwrap();
+        let mut skill = sample_skill("alpha", "alpha", &source);
+        skill.content_hash = Some("h1".to_string());
+        store.insert_skill(&skill).unwrap();
+        store.add_skill_to_scenario("preset", "alpha").unwrap();
+        apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+
+        fs::write(source.join("version.txt"), "v2").unwrap();
+        skill.content_hash = Some("h2".to_string());
+        store.upsert_skill(&skill).unwrap();
+        let trigger = rusqlite::Connection::open(&db_path).unwrap();
+        trigger
+            .execute_batch(
+                "CREATE TRIGGER fail_target_upsert BEFORE INSERT ON skill_targets
+                 BEGIN SELECT RAISE(ABORT, 'forced target write failure'); END;",
+            )
+            .unwrap();
+
+        let failed = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        assert_eq!(failed.applied, 0);
+        assert_eq!(failed.failures.len(), 1);
+        assert_eq!(
+            fs::read_to_string(target_base.join("alpha/version.txt")).unwrap(),
+            "v1"
+        );
+        let rows = store.get_targets_for_skill("alpha").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source_hash.as_deref(), Some("h1"));
+        assert!(!tmp.path().join(".skills-manager-staging").exists());
+    }
+
+    #[test]
+    fn exact_preset_remove_restores_target_when_database_commit_fails() {
+        let tmp = tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let store = SkillStore::new(&db_path).unwrap();
+        let source_base = tmp.path().join("central");
+        let target_base = tmp.path().join("agent-one");
+        fs::create_dir_all(&source_base).unwrap();
+        configure_custom_tools(&store, &[("agent_one", target_base.as_path())]);
+        store.set_setting("sync_mode", "copy").unwrap();
+        store
+            .insert_scenario(&sample_scenario("preset", "Preset"))
+            .unwrap();
+        let source = write_skill_dir(&source_base, "alpha");
+        store
+            .insert_skill(&sample_skill("alpha", "alpha", &source))
+            .unwrap();
+        store.add_skill_to_scenario("preset", "alpha").unwrap();
+        apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        let trigger = rusqlite::Connection::open(&db_path).unwrap();
+        trigger
+            .execute_batch(
+                "CREATE TRIGGER fail_target_delete BEFORE DELETE ON skill_targets
+                 BEGIN SELECT RAISE(ABORT, 'forced target delete failure'); END;",
+            )
+            .unwrap();
+
+        let failed = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Remove,
+        )
+        .unwrap();
+        assert_eq!(failed.applied, 0);
+        assert_eq!(failed.failures.len(), 1);
+        assert!(target_base.join("alpha/SKILL.md").exists());
+        assert_eq!(store.get_targets_for_skill("alpha").unwrap().len(), 1);
+        assert!(!tmp.path().join(".skills-manager-staging").exists());
+    }
+
+    #[test]
+    fn exact_preset_apply_preserves_shared_physical_agent_directory() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let source_base = tmp.path().join("central");
+        let shared_target = tmp.path().join("shared-agent-skills");
+        fs::create_dir_all(&source_base).unwrap();
+        fs::create_dir_all(&shared_target).unwrap();
+
+        // 第二个 Agent 故意使用带 `.` 的等价路径，验证分组和删除判定使用
+        // 规范化后的物理路径，而不是原始字符串。
+        let shared_target_alias = shared_target.join(".");
+        configure_custom_tools(
+            &store,
+            &[
+                ("agent_one", shared_target.as_path()),
+                ("agent_two", shared_target_alias.as_path()),
+            ],
+        );
+        store.set_setting("sync_mode", "copy").unwrap();
+        store
+            .insert_scenario(&sample_scenario("preset", "Preset"))
+            .unwrap();
+        let source = write_skill_dir(&source_base, "alpha");
+        store
+            .insert_skill(&sample_skill("alpha", "alpha", &source))
+            .unwrap();
+        store.add_skill_to_scenario("preset", "alpha").unwrap();
+
+        let add = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string(), "agent_two".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        assert_eq!(add.applied, 2);
+        assert!(add.failures.is_empty());
+        assert!(shared_target.join("alpha/SKILL.md").exists());
+        assert_eq!(store.get_all_targets().unwrap().len(), 2);
+
+        let remove_first = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Remove,
+        )
+        .unwrap();
+        assert_eq!(remove_first.applied, 1);
+        assert!(remove_first.failures.is_empty());
+        assert!(shared_target.join("alpha/SKILL.md").exists());
+        assert_eq!(store.get_all_targets().unwrap().len(), 1);
+
+        let remove_second = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_two".to_string()],
+            PresetApplyMode::Remove,
+        )
+        .unwrap();
+        assert_eq!(remove_second.applied, 1);
+        assert!(remove_second.failures.is_empty());
+        assert!(!shared_target.join("alpha").exists());
+        assert!(store.get_all_targets().unwrap().is_empty());
+    }
+
+    #[test]
+    fn exact_preset_apply_validates_all_tools_before_writing() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let source_base = tmp.path().join("central");
+        let target_base = tmp.path().join("agent-one");
+        fs::create_dir_all(&source_base).unwrap();
+        configure_custom_tools(&store, &[("agent_one", target_base.as_path())]);
+        store.set_setting("sync_mode", "copy").unwrap();
+        store
+            .insert_scenario(&sample_scenario("preset", "Preset"))
+            .unwrap();
+        let source = write_skill_dir(&source_base, "alpha");
+        store
+            .insert_skill(&sample_skill("alpha", "alpha", &source))
+            .unwrap();
+        store.add_skill_to_scenario("preset", "alpha").unwrap();
+
+        let error = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string(), "missing_agent".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.kind,
+            crate::core::error::ErrorKind::InvalidInput
+        ));
+        assert!(!target_base.exists());
+        assert!(store.get_all_targets().unwrap().is_empty());
+    }
+
+    #[test]
+    fn exact_preset_apply_continues_after_a_single_skill_failure() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let source_base = tmp.path().join("central");
+        let target_base = tmp.path().join("agent-one");
+        fs::create_dir_all(&source_base).unwrap();
+        configure_custom_tools(&store, &[("agent_one", target_base.as_path())]);
+        store.set_setting("sync_mode", "copy").unwrap();
+        store
+            .insert_scenario(&sample_scenario("preset", "Preset"))
+            .unwrap();
+
+        let valid_source = write_skill_dir(&source_base, "valid");
+        store
+            .insert_skill(&sample_skill("valid", "valid", &valid_source))
+            .unwrap();
+        let missing_source = source_base.join("missing");
+        store
+            .insert_skill(&sample_skill("missing", "missing", &missing_source))
+            .unwrap();
+        store.add_skill_to_scenario("preset", "valid").unwrap();
+        store.add_skill_to_scenario("preset", "missing").unwrap();
+
+        let report = apply_preset_to_tools_impl(
+            &store,
+            "preset",
+            &["agent_one".to_string()],
+            PresetApplyMode::Add,
+        )
+        .unwrap();
+        assert_eq!(report.applied, 1);
+        assert_eq!(report.skipped, 0);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].skill_id, "missing");
+        assert_eq!(report.failures[0].tool_key, "agent_one");
+        assert!(target_base.join("valid/SKILL.md").exists());
     }
 }

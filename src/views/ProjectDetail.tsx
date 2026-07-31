@@ -1,4 +1,11 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useMemo,
+  useRef,
+} from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   FolderOpen,
@@ -35,12 +42,30 @@ import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
 import { cn } from "../utils";
 import * as api from "../lib/tauri";
-import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
+import type {
+  ManagedSkill,
+  Preset,
+  PresetApplyMode,
+  PresetApplyReport,
+  ProjectAgentTarget,
+  ProjectSkill,
+} from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import {
+  applyProjectPresetOperation,
+  indexProjectPresetVariants,
+} from "../lib/projectPresetApply";
+import { LatestRequestGate } from "../lib/latestRequestGate";
+import {
+  getReadyProjectAgentScope,
+  type ProjectAgentScopeState,
+} from "../lib/projectAgentScope";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 
 const PROJECT_DEFAULT_EXPORT_AGENTS_KEY = "project_default_export_agents";
 const PROJECT_EXPORT_AGENT_PRIORITY = ["claude_code", "codex", "cursor", "gemini_cli", "github_copilot"];
+const EMPTY_PROJECT_AGENT_TARGETS: ProjectAgentTarget[] = [];
+const EMPTY_AGENT_KEYS: string[] = [];
 
 const projectLastUsedAgentsKey = (projectId: string) =>
   `project_last_used_export_agents:${projectId}`;
@@ -158,8 +183,13 @@ export function ProjectDetail() {
   const { t } = useTranslation();
   const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
-  const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
-  const [selectedExportAgents, setSelectedExportAgents] = useState<string[]>([]);
+  const [projectAgentScope, setProjectAgentScope] =
+    useState<ProjectAgentScopeState>({
+      projectId: null,
+      status: "idle",
+      targets: [],
+      selectedExportAgents: [],
+    });
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("all");
@@ -198,41 +228,108 @@ export function ProjectDetail() {
   };
 
   const project = projects.find((p) => p.id === id);
+  const readyProjectAgentScope = getReadyProjectAgentScope(
+    projectAgentScope,
+    id
+  );
+  const projectAgentTargetsReady = readyProjectAgentScope !== null;
+  const projectAgentTargets =
+    readyProjectAgentScope?.targets ?? EMPTY_PROJECT_AGENT_TARGETS;
+  const selectedExportAgents =
+    readyProjectAgentScope?.selectedExportAgents ?? EMPTY_AGENT_KEYS;
+  const skillsRequestGateRef = useRef(new LatestRequestGate());
+  const loadingProjectRef = useRef<string | null>(null);
   const getSkillKey = useCallback((skill: Pick<ProjectSkillGroup, "id">) => {
     return skill.id;
   }, []);
 
-  const loadSkills = useCallback(async () => {
+  const loadSkills = useCallback(async (options?: { silent?: boolean }) => {
     if (!id) return;
-    setLoading(true);
+    const projectId = id;
+    const requestGate = skillsRequestGateRef.current;
+    const requestToken = requestGate.begin(projectId);
+    // 路由切换后，旧项目事件处理器可能才进入刷新阶段；门禁拒绝后必须立即
+    // 返回，不能重新打开新项目的全页 loading。
+    if (!requestGate.isCurrent(requestToken)) return;
+    const silent = options?.silent ?? false;
+    if (!silent) {
+      loadingProjectRef.current = projectId;
+      setLoading(true);
+    }
     try {
-      const result = await api.getProjectSkills(id);
-      setSkills(result);
+      const result = await api.getProjectSkills(projectId);
+      if (requestGate.isCurrent(requestToken)) {
+        setSkills(result);
+      }
     } catch (e) {
-      console.error("Failed to load project skills:", e);
+      if (requestGate.isCurrent(requestToken)) {
+        console.error("Failed to load project skills:", e);
+      }
     } finally {
-      setLoading(false);
+      // 较新的静默刷新也可以完成较早前台读取开启的 loading；旧请求本身
+      // 无权关闭新项目或更新请求的加载状态。
+      if (
+        requestGate.isCurrent(requestToken) &&
+        loadingProjectRef.current === projectId
+      ) {
+        loadingProjectRef.current = null;
+        setLoading(false);
+      }
     }
   }, [id]);
 
+  useLayoutEffect(() => {
+    const requestGate = skillsRequestGateRef.current;
+    requestGate.setScope(id ?? null);
+    loadingProjectRef.current = null;
+    // 已提交到新项目路由后，在浏览器绘制前清空旧项目卡片。这样除了
+    // PresetBar 之外，普通 Skill 操作也不会在被动 effect 启动前短暂作用
+    // 到“新项目 ID + 旧项目目录”这一错误组合。
+    setSkills([]);
+    setLoading(Boolean(id));
+    return () => {
+      requestGate.invalidate();
+    };
+  }, [id]);
+
   useEffect(() => {
-    loadSkills();
+    void loadSkills();
   }, [loadSkills]);
 
   useEffect(() => {
     let cancelled = false;
     const loadProjectAgentTargets = async () => {
       if (!id) return;
+      const projectId = id;
+      setProjectAgentScope({
+        projectId,
+        status: "loading",
+        targets: [],
+        selectedExportAgents: [],
+      });
       try {
-        const result = await api.getProjectAgentTargets(id);
+        const result = await api.getProjectAgentTargets(projectId);
         if (!cancelled) {
-          setProjectAgentTargets(result);
+          setProjectAgentScope({
+            projectId,
+            status: "ready",
+            targets: result,
+            selectedExportAgents: [],
+          });
         }
       } catch (e) {
-        console.error("Failed to load project agent targets:", e);
+        if (!cancelled) {
+          setProjectAgentScope({
+            projectId,
+            status: "error",
+            targets: [],
+            selectedExportAgents: [],
+          });
+          console.error("Failed to load project agent targets:", e);
+        }
       }
     };
-    loadProjectAgentTargets();
+    void loadProjectAgentTargets();
     return () => {
       cancelled = true;
     };
@@ -337,9 +434,10 @@ export function ProjectDetail() {
   });
 
   const exportTargets = useMemo(() => {
+    if (!projectAgentTargetsReady) return [];
     if (projectAgentTargets.length > 0) return projectAgentTargets;
     return [{ key: "claude_code", display_name: "Claude Code", enabled: true, installed: true, is_custom: false }];
-  }, [projectAgentTargets]);
+  }, [projectAgentTargets, projectAgentTargetsReady]);
 
   const projectSkillDirNamesByAgent = useMemo(() => {
     const map: Record<string, string[]> = {};
@@ -364,14 +462,10 @@ export function ProjectDetail() {
     return map;
   }, [skills]);
 
-  const projectPresetVariants = useMemo(() => {
-    const map = new Map<string, ProjectSkill>();
-    for (const skill of skills) {
-      if (!skill.center_skill_id) continue;
-      map.set(`${skill.center_skill_id}::${skill.agent}`, skill);
-    }
-    return map;
-  }, [skills]);
+  const projectPresetVariants = useMemo(
+    () => indexProjectPresetVariants(skills),
+    [skills]
+  );
 
   const findProjectPresetVariant = useCallback(
     (skill: ManagedSkill, agentKey: string) =>
@@ -380,42 +474,68 @@ export function ProjectDetail() {
   );
 
   useEffect(() => {
+    if (!id || !projectAgentTargetsReady) return;
+    const projectId = id;
     let cancelled = false;
     const loadDefaultExportAgents = async () => {
       const savedValue = await api.getSettings(PROJECT_DEFAULT_EXPORT_AGENTS_KEY).catch(() => null);
       if (cancelled) return;
-      setSelectedExportAgents(getDefaultExportAgents(exportTargets, savedValue));
+      const nextSelectedAgents = getDefaultExportAgents(exportTargets, savedValue);
+      setProjectAgentScope((current) => {
+        if (current.projectId !== projectId || current.status !== "ready") {
+          return current;
+        }
+        return {
+          ...current,
+          selectedExportAgents: nextSelectedAgents,
+        };
+      });
     };
-    loadDefaultExportAgents();
+    void loadDefaultExportAgents();
     return () => {
       cancelled = true;
     };
-  }, [exportTargets]);
+  }, [exportTargets, id, projectAgentTargetsReady]);
 
-  const [lastUsedExportAgents, setLastUsedExportAgents] = useState<string[] | null>(null);
+  const [lastUsedExportAgentsState, setLastUsedExportAgentsState] = useState<{
+    projectId: string;
+    agents: string[] | null;
+  } | null>(null);
+  const lastUsedExportAgents =
+    lastUsedExportAgentsState?.projectId === id
+      ? lastUsedExportAgentsState?.agents ?? null
+      : null;
   useEffect(() => {
     if (!id) return;
+    const projectId = id;
     let cancelled = false;
-    api.getSettings(projectLastUsedAgentsKey(id))
+    api.getSettings(projectLastUsedAgentsKey(projectId))
       .then((raw) => {
         if (cancelled) return;
         if (!raw) {
-          setLastUsedExportAgents(null);
+          setLastUsedExportAgentsState({ projectId, agents: null });
           return;
         }
         try {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
-            setLastUsedExportAgents(parsed.filter((x): x is string => typeof x === "string"));
+            setLastUsedExportAgentsState({
+              projectId,
+              agents: parsed.filter(
+                (x): x is string => typeof x === "string"
+              ),
+            });
             return;
           }
         } catch {
           // fall through
         }
-        setLastUsedExportAgents(null);
+        setLastUsedExportAgentsState({ projectId, agents: null });
       })
       .catch(() => {
-        if (!cancelled) setLastUsedExportAgents(null);
+        if (!cancelled) {
+          setLastUsedExportAgentsState({ projectId, agents: null });
+        }
       });
     return () => {
       cancelled = true;
@@ -424,8 +544,8 @@ export function ProjectDetail() {
 
   const handlePersistLastUsedAgents = useCallback(
     (agents: string[]) => {
-      setLastUsedExportAgents(agents);
       if (id) {
+        setLastUsedExportAgentsState({ projectId: id, agents });
         void api.setSettings(projectLastUsedAgentsKey(id), JSON.stringify(agents)).catch(() => {});
       }
     },
@@ -445,6 +565,13 @@ export function ProjectDetail() {
     const availableKeys = new Set(enabledInstalledAgentKeys(exportTargets));
     return selectedExportAgents.filter((key) => availableKeys.has(key));
   }, [exportTargets, selectedExportAgents]);
+  const presetBarScopeKey = useMemo(
+    () =>
+      `project:${id ?? "missing"}:agents:${[...presetBarAgentKeys]
+        .sort()
+        .join("|")}`,
+    [id, presetBarAgentKeys]
+  );
 
   const enabledCount = groupedSkills.filter((s) => s.enabledCount > 0).length;
   const allTags = useMemo(() => {
@@ -792,26 +919,30 @@ export function ProjectDetail() {
     [findProjectPresetVariant]
   );
 
-  const handleAddPresetSkillToProject = useCallback(
-    async (skill: ManagedSkill, agentKey: string) => {
-      if (!id) return;
-      await api.exportSkillToProject(skill.id, id, [agentKey]);
-    },
-    [id]
-  );
+  const handleApplyPresetToProject = useCallback(
+    async (preset: Preset, mode: PresetApplyMode): Promise<PresetApplyReport> => {
+      if (!id) throw new Error(t("project.notFound"));
 
-  const handleRemovePresetSkillFromProject = useCallback(
-    async (skill: ManagedSkill, agentKey: string) => {
-      if (!id) return;
-      const projectVariant = findProjectPresetVariant(skill, agentKey);
-      if (!projectVariant) throw new Error(t("project.skillDirectoryNotFound"));
-      await api.deleteProjectSkill(id, projectVariant.relative_path, agentKey);
+      return applyProjectPresetOperation({
+        presetId: preset.id,
+        mode,
+        managedSkills,
+        agentKeys: presetBarAgentKeys,
+        // FIFO 只保证写操作串行；这里在每个队列项开始时读取真实目录，
+        // 才能正确识别前一个重叠 Preset 刚刚添加或删除的 Skill。
+        loadProjectSkills: () => api.getProjectSkills(id),
+        addSkill: (skillId, agentKey) =>
+          api.exportSkillToProject(skillId, id, [agentKey]),
+        removeSkill: (skillRelativePath, agentKey) =>
+          api.deleteProjectSkill(id, skillRelativePath, agentKey),
+        formatError: (error) => getErrorMessage(error, t("common.error")),
+      });
     },
-    [findProjectPresetVariant, id, t]
+    [id, managedSkills, presetBarAgentKeys, t]
   );
 
   const handlePresetActionComplete = useCallback(async () => {
-    await Promise.all([loadSkills(), refreshProjects()]);
+    await Promise.all([loadSkills({ silent: true }), refreshProjects()]);
   }, [loadSkills, refreshProjects]);
 
   if (!project) return null;
@@ -863,7 +994,7 @@ export function ProjectDetail() {
 
             <div className="app-segmented shrink-0">
               <button
-                onClick={loadSkills}
+                onClick={() => void loadSkills()}
                 className="rounded-md p-2 text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary"
                 title={t("common.refresh")}
               >
@@ -991,17 +1122,19 @@ export function ProjectDetail() {
         )}
 
         {/* Preset bar */}
-        {presets.length > 0 && presetBarAgentKeys.length > 0 && (
-          <PresetBar
-            presets={presets}
-            managedSkills={managedSkills}
-            agentKeys={presetBarAgentKeys}
-            existsInWorkspace={presetSkillExistsInProject}
-            onAddSkill={handleAddPresetSkillToProject}
-            onRemoveSkill={handleRemovePresetSkillFromProject}
-            onComplete={handlePresetActionComplete}
-          />
-        )}
+        {projectAgentTargetsReady &&
+          presets.length > 0 &&
+          presetBarAgentKeys.length > 0 && (
+            <PresetBar
+              presets={presets}
+              managedSkills={managedSkills}
+              agentKeys={presetBarAgentKeys}
+              scopeKey={presetBarScopeKey}
+              existsInWorkspace={presetSkillExistsInProject}
+              onApplyPreset={handleApplyPresetToProject}
+              onComplete={handlePresetActionComplete}
+            />
+          )}
       </div>
 
       {isMultiSelect && (

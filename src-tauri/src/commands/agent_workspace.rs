@@ -233,6 +233,9 @@ fn import_agent_local_skill_to_center(
     agent: &str,
     skill_relative_path: &str,
 ) -> Result<(), AppError> {
+    // 上传会同时改写中央记录、Agent 目录和 skill_targets，必须与 Preset
+    // 批量应用串行，避免失败恢复覆盖刚完成的卡片操作。
+    let _guard = scenario_service::lock_preset_apply();
     let adapter = adapter_for_agent(store, agent)?;
     let skill = find_agent_skill(&adapter, skill_relative_path)?;
 
@@ -422,6 +425,9 @@ fn stranded_candidate_signature(
 }
 
 pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
+    // 启动修复最终也会写入 Agent 目录和 skill_targets；即使它在后台运行，
+    // 也必须与用户触发的工作区写操作共用同一把锁。
+    let _guard = scenario_service::lock_preset_apply();
     let all_managed = store.get_all_skills().unwrap_or_default();
     let all_targets = store.get_all_targets().unwrap_or_default();
 
@@ -587,6 +593,7 @@ fn update_agent_local_skill_from_center(
     agent: &str,
     skill_relative_path: &str,
 ) -> Result<(), AppError> {
+    let _guard = scenario_service::lock_preset_apply();
     let adapter = adapter_for_agent(store, agent)?;
     let skill = find_agent_skill(&adapter, skill_relative_path)?;
     let all_managed = store.get_all_skills().unwrap_or_default();
@@ -629,6 +636,7 @@ fn delete_agent_local_skill(
     agent: &str,
     skill_relative_path: &str,
 ) -> Result<(), AppError> {
+    let _guard = scenario_service::lock_preset_apply();
     let adapter = adapter_for_agent(store, agent)?;
     let skill = find_agent_skill(&adapter, skill_relative_path)?;
 

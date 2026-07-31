@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
@@ -6,8 +5,7 @@ use crate::core::{
     error::AppError,
     scenario_service,
     skill_store::SkillStore,
-    sync_engine, sync_metadata, tool_adapters,
-    tool_service,
+    sync_metadata, tool_adapters, tool_service,
 };
 use serde::Serialize;
 
@@ -49,6 +47,7 @@ pub async fn sync_skill_to_tool(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = scenario_service::lock_preset_apply();
         let outcome = (|| -> Result<(), AppError> {
             sync_skill_to_tool_internal(&store, &skill_id, &tool)?;
 
@@ -92,19 +91,13 @@ pub async fn unsync_skill_from_tool(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = scenario_service::lock_preset_apply();
         let outcome = (|| -> Result<(), AppError> {
-            let targets = store
-                .get_targets_for_skill(&skill_id)
-                .map_err(AppError::db)?;
-
-            if let Some(target) = targets.iter().find(|t| t.tool == tool) {
-                let target_path = PathBuf::from(&target.target_path);
-                sync_engine::remove_target(&target_path).ok();
-            }
-
-            store
-                .delete_target(&skill_id, &tool)
-                .map_err(AppError::db)?;
+            scenario_service::remove_skill_target_preserving_shared_path(
+                &store,
+                &skill_id,
+                &tool,
+            )?;
 
             if let Ok(Some(active_id)) = store.get_active_scenario_id() {
                 let skill_ids = store
@@ -228,6 +221,7 @@ pub async fn set_skill_tool_toggle(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = scenario_service::lock_preset_apply();
         let skill_ids = store
             .get_skill_ids_for_scenario(&preset_id)
             .map_err(AppError::db)?;
@@ -270,16 +264,11 @@ pub async fn set_skill_tool_toggle(
             if enabled {
                 sync_skill_to_tool_internal(&store, &skill_id, &tool)?;
             } else {
-                let targets = store
-                    .get_targets_for_skill(&skill_id)
-                    .map_err(AppError::db)?;
-                if let Some(target) = targets.iter().find(|target| target.tool == tool) {
-                    // Safe because the app currently guarantees a single active scenario.
-                    sync_engine::remove_target(&PathBuf::from(&target.target_path)).ok();
-                }
-                store
-                    .delete_target(&skill_id, &tool)
-                    .map_err(AppError::db)?;
+                scenario_service::remove_skill_target_preserving_shared_path(
+                    &store,
+                    &skill_id,
+                    &tool,
+                )?;
             }
         }
 
@@ -298,6 +287,7 @@ mod tests {
     use crate::core::skill_store::SkillRecord;
     use crate::core::tool_adapters::CustomToolDef;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     fn sample_skill(id: &str, name: &str, central_path: &std::path::Path) -> SkillRecord {

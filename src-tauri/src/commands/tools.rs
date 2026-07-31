@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,7 +8,6 @@ use crate::core::error::AppError;
 use crate::core::scenario_service;
 use crate::core::scenario_service::sync_scenario_skills;
 use crate::core::skill_store::SkillStore;
-use crate::core::sync_engine;
 use crate::core::timing::should_log_first_or_slow;
 use crate::core::tool_adapters::{self, CustomToolDef, ToolCategory};
 use crate::core::tool_service::{
@@ -39,21 +37,21 @@ fn sync_active_scenario_to_tool(store: &SkillStore, tool_key: &str) {
 }
 
 /// Remove all synced skill files and target records for a given tool.
-fn unsync_all_for_tool(store: &SkillStore, tool_key: &str) {
-    let targets = store.get_all_targets().unwrap_or_default();
-    for target in targets.iter().filter(|t| t.tool == tool_key) {
-        sync_engine::remove_target(&PathBuf::from(&target.target_path)).ok();
-        store.delete_target(&target.skill_id, tool_key).ok();
-    }
+fn unsync_all_for_tool(store: &SkillStore, tool_key: &str) -> Result<(), AppError> {
+    scenario_service::remove_all_skill_targets_for_tool(store, tool_key)
 }
 
-fn reconcile_tool_sync_after_path_change(store: &SkillStore, tool_key: &str) {
+fn reconcile_tool_sync_after_path_change(
+    store: &SkillStore,
+    tool_key: &str,
+) -> Result<(), AppError> {
     // Remove existing synced artifacts/records (old path), then re-sync to current adapter path.
-    unsync_all_for_tool(store, tool_key);
+    unsync_all_for_tool(store, tool_key)?;
     let disabled = get_disabled_tools(store);
     if !disabled.contains(&tool_key.to_string()) {
         sync_active_scenario_to_tool(store, tool_key);
     }
+    Ok(())
 }
 
 static GET_TOOL_STATUS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
@@ -106,6 +104,8 @@ pub async fn set_tool_enabled(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        // Agent 启停会同步或移除同一批全局工作区目标，需与 Preset 应用共锁。
+        let _guard = scenario_service::lock_preset_apply();
         let mut disabled = get_disabled_tools(&store);
         if enabled {
             disabled.retain(|k| k != &key);
@@ -116,7 +116,7 @@ pub async fn set_tool_enabled(
             if !disabled.contains(&key) {
                 disabled.push(key.clone());
             }
-            unsync_all_for_tool(&store, &key);
+            unsync_all_for_tool(&store, &key)?;
             set_disabled_tools(&store, &disabled)
         }
     })
@@ -135,6 +135,7 @@ pub async fn set_all_tools_enabled(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = scenario_service::lock_preset_apply();
         if enabled {
             set_disabled_tools(&store, &[])?;
             // Re-sync active scenario skills to all (now-enabled) installed tools
@@ -146,7 +147,7 @@ pub async fn set_all_tools_enabled(
             let adapters = tool_adapters::all_tool_adapters(&store);
             let all_keys: Vec<String> = adapters.iter().map(|a| a.key.clone()).collect();
             for adapter in &adapters {
-                unsync_all_for_tool(&store, &adapter.key);
+                unsync_all_for_tool(&store, &adapter.key)?;
             }
             set_disabled_tools(&store, &all_keys)
         }
@@ -183,6 +184,8 @@ pub async fn set_custom_tool_path(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // 路径切换会先清理旧目录再写入新目录，必须避免与 Preset 批处理交错。
+        let _guard = scenario_service::lock_preset_apply();
         let key = key.trim().to_string();
         let path = normalize_skills_dir_input(&path)?;
         if key.is_empty() || path.is_empty() {
@@ -206,7 +209,7 @@ pub async fn set_custom_tool_path(
         let new_adapter = tool_adapters::find_adapter_with_store(&store, &key)
             .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
         if old_skills_dir != new_adapter.skills_dir() {
-            reconcile_tool_sync_after_path_change(&store, &key);
+            reconcile_tool_sync_after_path_change(&store, &key)?;
         }
         Ok(())
     })
@@ -220,6 +223,7 @@ pub async fn reset_custom_tool_path(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = scenario_service::lock_preset_apply();
         let old_adapter = tool_adapters::find_adapter_with_store(&store, &key)
             .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
         let old_skills_dir = old_adapter.skills_dir();
@@ -231,7 +235,7 @@ pub async fn reset_custom_tool_path(
         let new_adapter = tool_adapters::find_adapter_with_store(&store, &key)
             .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
         if old_skills_dir != new_adapter.skills_dir() {
-            reconcile_tool_sync_after_path_change(&store, &key);
+            reconcile_tool_sync_after_path_change(&store, &key)?;
         }
         Ok(())
     })
@@ -246,6 +250,7 @@ pub async fn set_custom_tool_project_path(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = scenario_service::lock_preset_apply();
         let key = key.trim().to_string();
         if key.is_empty() {
             return Err(AppError::invalid_input("Key is required"));
@@ -318,6 +323,7 @@ pub async fn add_custom_tool(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = scenario_service::lock_preset_apply();
         let key = key.trim().to_string();
         let display_name = display_name.trim().to_string();
         let skills_dir = normalize_skills_dir_input(&skills_dir)?;
@@ -346,7 +352,7 @@ pub async fn add_custom_tool(
             category: Default::default(),
         });
         set_custom_tools(&store, &customs)?;
-        reconcile_tool_sync_after_path_change(&store, &key);
+        reconcile_tool_sync_after_path_change(&store, &key)?;
         Ok(())
     })
     .await?
@@ -359,12 +365,10 @@ pub async fn remove_custom_tool(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Remove synced targets for this tool
-        let targets = store.get_all_targets().unwrap_or_default();
-        for target in targets.iter().filter(|t| t.tool == key) {
-            crate::core::sync_engine::remove_target(&PathBuf::from(&target.target_path)).ok();
-            store.delete_target(&target.skill_id, &key).ok();
-        }
+        // 删除自定义 Agent 会移除其全部磁盘目标和数据库记录，同样属于
+        // 全局工作区写操作。
+        let _guard = scenario_service::lock_preset_apply();
+        unsync_all_for_tool(&store, &key)?;
         // Remove from custom_tools list
         let mut customs = get_custom_tools(&store);
         customs.retain(|c| c.key != key);
@@ -390,6 +394,7 @@ mod tests {
     use super::*;
     use crate::core::skill_store::{ScenarioRecord, SkillRecord};
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     fn sample_skill(id: &str, name: &str, central_path: &std::path::Path) -> SkillRecord {
