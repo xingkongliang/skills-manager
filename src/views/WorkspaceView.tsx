@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useParams, useNavigate, Navigate } from "react-router-dom";
 import {
   ChevronRight,
@@ -26,8 +26,14 @@ import { DetailSheet } from "../components/DetailSheet";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import * as api from "../lib/tauri";
-import type { ManagedSkill, ProjectSkill } from "../lib/tauri";
+import type {
+  ManagedSkill,
+  Preset,
+  PresetApplyMode,
+  ProjectSkill,
+} from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { LatestRequestGate } from "../lib/latestRequestGate";
 import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 import type { WorkspaceConfig } from "./workspaceConfigs";
@@ -222,6 +228,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const [removingLocalSkillId, setRemovingLocalSkillId] = useState<string | null>(null);
   const [localSkills, setLocalSkills] = useState<ProjectSkill[]>([]);
   const [localSkillsLoading, setLocalSkillsLoading] = useState(false);
+  const [localSkillsRefreshing, setLocalSkillsRefreshing] = useState(false);
   const [localActionKey, setLocalActionKey] = useState<string | null>(null);
   const [localDetailSkill, setLocalDetailSkill] = useState<ProjectSkill | null>(null);
   const [localDocContent, setLocalDocContent] = useState<string | null>(null);
@@ -289,41 +296,68 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     [currentTool, installedTools]
   );
   const currentToolKey = currentTool?.key ?? null;
+  const presetBarScopeKey = useMemo(
+    () => currentToolKey
+      ? `${config.basePath}:agent:${currentToolKey}`
+      : `${config.basePath}:overview:${[...presetBarAgentKeys].sort().join("|")}`,
+    [config.basePath, currentToolKey, presetBarAgentKeys]
+  );
 
-  const localSkillsRequestRef = useRef(0);
-  const loadLocalSkills = useCallback(async () => {
-    const requestId = ++localSkillsRequestRef.current;
+  const localSkillsRequestGateRef = useRef(new LatestRequestGate());
+  const loadLocalSkills = useCallback(async (options?: { silent?: boolean }) => {
     if (!currentToolKey) {
       setLocalSkills([]);
+      setLocalSkillsLoading(false);
+      setLocalSkillsRefreshing(false);
       return;
     }
-    setLocalSkillsLoading(true);
+    const requestGate = localSkillsRequestGateRef.current;
+    const requestToken = requestGate.begin(currentToolKey);
+    // 已切换到其他 Agent 时，旧事件处理器可能仍在收尾；不再发起旧 Agent 的刷新。
+    if (!requestGate.isCurrent(requestToken)) return;
+    const silent = options?.silent ?? false;
+    if (!silent) setLocalSkillsLoading(true);
+    setLocalSkillsRefreshing(true);
     try {
       const skills = await api.getGlobalLocalSkills(currentToolKey);
-      if (localSkillsRequestRef.current === requestId) setLocalSkills(skills);
+      if (requestGate.isCurrent(requestToken)) setLocalSkills(skills);
     } catch (error: unknown) {
-      if (localSkillsRequestRef.current === requestId) {
+      if (requestGate.isCurrent(requestToken)) {
         toast.error(getErrorMessage(error, t("common.error")));
-        setLocalSkills([]);
+        // 后台刷新失败时保留当前卡片，避免一次 Preset 操作让整个页面闪空。
+        if (!silent) setLocalSkills([]);
       }
     } finally {
-      if (localSkillsRequestRef.current === requestId) setLocalSkillsLoading(false);
+      if (requestGate.isCurrent(requestToken)) {
+        // 最新请求无论前台还是后台都要收起可能由上一请求打开的首屏 loading；
+        // 否则初次扫描被一次 Preset 静默刷新取代时会永久停在“加载中”。
+        setLocalSkillsLoading(false);
+        setLocalSkillsRefreshing(false);
+      }
     }
   }, [currentToolKey, t]);
 
-  const loadedAgentKeyRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    localSkillsRequestGateRef.current.setScope(currentToolKey);
+    // Agent 路由变化后、浏览器绘制前清空旧卡片和旧确认框，避免“新 Agent +
+    // 旧 relative_path”的短暂危险组合。
+    setLocalSkills([]);
+    setLocalSkillsLoading(Boolean(currentToolKey));
+    setLocalSkillsRefreshing(false);
+    localDetailRequestRef.current += 1;
+    setLocalDetailSkill(null);
+    setUploadConfirmSkill(null);
+    setPullConfirmSkill(null);
+    setDeleteLocalConfirmSkill(null);
+    setTagFilters(new Set());
+  }, [currentToolKey]);
+
   useEffect(() => {
-    if (!currentToolKey) {
-      loadedAgentKeyRef.current = null;
-      setLocalSkills([]);
-      return;
-    }
-    if (loadedAgentKeyRef.current === currentToolKey) return;
-    loadedAgentKeyRef.current = currentToolKey;
+    if (!currentToolKey) return;
+    const requestGate = localSkillsRequestGateRef.current;
     void loadLocalSkills();
     return () => {
-      localSkillsRequestRef.current += 1;
-      loadedAgentKeyRef.current = null;
+      requestGate.invalidate();
     };
   }, [currentToolKey, loadLocalSkills]);
 
@@ -366,15 +400,6 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     // fresh array via refreshManagedSkills (the file watcher triggers it), so
     // the overview counts re-scan and stay accurate (#287).
   }, [currentToolKey, installedTools, managedSkills]);
-
-  useEffect(() => {
-    localDetailRequestRef.current += 1;
-    setLocalDetailSkill(null);
-    setUploadConfirmSkill(null);
-    setPullConfirmSkill(null);
-    setDeleteLocalConfirmSkill(null);
-    setTagFilters(new Set());
-  }, [currentTool?.key]);
 
   const agentSkills = useMemo(
     () =>
@@ -574,16 +599,18 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     []
   );
 
-  const handlePresetAdd = useCallback(async (skill: ManagedSkill, agentK: string) => {
-    await api.syncSkillToTool(skill.id, agentK);
-  }, []);
-
-  const handlePresetRemove = useCallback(async (skill: ManagedSkill, agentK: string) => {
-    await api.unsyncSkillFromTool(skill.id, agentK);
-  }, []);
+  const handleApplyPreset = useCallback(
+    async (preset: Preset, mode: PresetApplyMode) =>
+      api.applyPresetToTools(preset.id, presetBarAgentKeys, mode),
+    [presetBarAgentKeys]
+  );
 
   const handlePresetComplete = useCallback(async () => {
-    await Promise.all([refreshManagedSkills(), refreshTools(), loadLocalSkills()]);
+    await Promise.all([
+      refreshManagedSkills(),
+      refreshTools(),
+      loadLocalSkills({ silent: true }),
+    ]);
   }, [loadLocalSkills, refreshManagedSkills, refreshTools]);
 
   const renderLocalSkillActions = (skill: ProjectSkill, variant: "grid" | "list") => {
@@ -719,9 +746,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
               presets={presets}
               managedSkills={managedSkills}
               agentKeys={presetBarAgentKeys}
+              scopeKey={presetBarScopeKey}
               existsInWorkspace={existsInGlobal}
-              onAddSkill={handlePresetAdd}
-              onRemoveSkill={handlePresetRemove}
+              onApplyPreset={handleApplyPreset}
               onComplete={handlePresetComplete}
             />
           )}
@@ -798,11 +825,11 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             <div className="app-segmented shrink-0">
               <button
                 onClick={() => void loadLocalSkills()}
-                disabled={localSkillsLoading}
+                disabled={localSkillsRefreshing}
                 className="rounded-md p-2 text-muted transition-colors outline-none hover:text-tertiary disabled:opacity-50"
                 title={t("settings.refresh")}
               >
-                <RefreshCw className={cn("h-4 w-4", localSkillsLoading && "animate-spin")} />
+                <RefreshCw className={cn("h-4 w-4", localSkillsRefreshing && "animate-spin")} />
               </button>
               <button
                 onClick={() => setViewMode("grid")}
@@ -904,15 +931,15 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             presets={presets}
             managedSkills={managedSkills}
             agentKeys={presetBarAgentKeys}
+            scopeKey={presetBarScopeKey}
             existsInWorkspace={existsInGlobal}
-            onAddSkill={handlePresetAdd}
-            onRemoveSkill={handlePresetRemove}
+            onApplyPreset={handleApplyPreset}
             onComplete={handlePresetComplete}
           />
         )}
       </div>
 
-      {localSkillsLoading ? (
+      {localSkillsLoading && localSkills.length === 0 ? (
         <div className="flex items-center gap-2 py-4 text-[13px] text-muted">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           {t("common.loading")}

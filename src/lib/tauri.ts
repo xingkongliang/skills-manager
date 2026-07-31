@@ -707,6 +707,35 @@ export const switchPreset = (id: string) =>
 export const applyPresetToDefault = (id: string) =>
   invoke<void>("apply_preset_to_default", { id });
 
+export type PresetApplyMode = "add" | "remove";
+
+export interface PresetApplyFailure {
+  skillId: string;
+  toolKey: string;
+  message: string;
+}
+
+export interface PresetApplyReport {
+  applied: number;
+  skipped: number;
+  failures: PresetApplyFailure[];
+}
+
+/**
+ * 将 Preset 精确应用到传入的 Agent。后端会先统一校验目标，再逐项执行并
+ * 返回失败明细，避免前端为每个 Skill 发起一次 IPC。
+ */
+export const applyPresetToTools = (
+  presetId: string,
+  toolKeys: string[],
+  mode: PresetApplyMode
+) =>
+  invoke<PresetApplyReport>("apply_preset_to_tools", {
+    presetId,
+    toolKeys,
+    mode,
+  });
+
 export const addSkillToPreset = (skillId: string, presetId: string) =>
   invoke<void>("add_skill_to_preset", { skillId, presetId });
 
