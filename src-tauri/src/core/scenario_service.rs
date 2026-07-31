@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::Instant;
 
 use super::{
@@ -9,6 +10,124 @@ use super::{
     sync_engine, tool_adapters,
     tool_service,
 };
+
+/// UI 与托盘会同时修改 `skill_targets` 和对应磁盘目录，必须共用同一把进程内锁。
+///
+/// UI 调用会等待锁，保证连续点击的 Preset 完整执行；托盘调用使用
+/// `try_lock_preset_apply`，保留原有“已有任务时忽略重复点击”的交互语义。
+static PRESET_APPLY_LOCK: Mutex<()> = Mutex::new(());
+
+pub fn lock_preset_apply() -> MutexGuard<'static, ()> {
+    PRESET_APPLY_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+pub fn try_lock_preset_apply() -> Option<MutexGuard<'static, ()>> {
+    match PRESET_APPLY_LOCK.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::WouldBlock) => None,
+        Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+    }
+}
+
+/// 将路径中最近的已存在祖先解析为真实位置，再接回尚未创建的尾段。
+///
+/// Agent 根可能位于 junction/symlink 下，而中间目录尚未创建。只尝试解析立即
+/// 父目录会漏掉这种别名；逐级向上解析既保留同一物理根，也不会跟随目标 Skill
+/// 自身的链接（否则两个独立 Agent 的链接都会被折叠到中央 Library）。
+fn canonicalize_with_missing_tail(path: &Path) -> Option<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    let mut cursor = absolute.as_path();
+    let mut tail = Vec::new();
+
+    loop {
+        if let Ok(mut resolved) = std::fs::canonicalize(cursor) {
+            for component in tail.iter().rev() {
+                resolved.push(component);
+            }
+            return Some(resolved);
+        }
+        let name = cursor.file_name()?.to_os_string();
+        tail.push(name);
+        cursor = cursor.parent()?;
+    }
+}
+
+#[cfg(windows)]
+fn windows_path_key(path: &Path, fold_case: bool) -> String {
+    let raw = path.to_string_lossy().replace('/', "\\");
+    // `canonicalize` 返回 extended-length path，而词法回退通常没有该前缀；
+    // 统一去除后，同一物理路径不会因为 `\\?\` 表示法不同而被拆成两组。
+    let normalized = if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        raw
+    };
+    if fold_case {
+        normalized.to_lowercase()
+    } else {
+        normalized
+    }
+}
+
+/// 返回用于共享目标判定的稳定键。
+///
+/// 已解析路径保留文件系统返回的精确大小写，避免把启用 per-directory case
+/// sensitivity 的 NTFS 目录错误合并；只有完全无法解析祖先时才对 Windows 的
+/// 词法回退做大小写折叠。
+fn normalized_target_key(path: &Path) -> String {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(path)
+    };
+    let canonical_parent = absolute
+        .parent()
+        .and_then(canonicalize_with_missing_tail)
+        .and_then(|parent| absolute.file_name().map(|name| parent.join(name)))
+        .map(|path| lexical_normalize(&path));
+    #[cfg(windows)]
+    {
+        match canonical_parent {
+            Some(path) => windows_path_key(&path, false),
+            None => windows_path_key(&lexical_normalize(&absolute), true),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // Unix 允许反斜杠作为普通文件名字符，不能将它误当作分隔符，
+        // 否则 `a/b` 与 `a\b` 会错误共享同一个同步目标。
+        canonical_parent
+            .unwrap_or_else(|| lexical_normalize(&absolute))
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
 
 #[derive(Debug, Clone)]
 pub struct ScenarioSyncTarget {
@@ -573,6 +692,37 @@ pub enum BatchApplyMode {
     Remove,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchApplyFailure {
+    pub skill_id: String,
+    pub tool_key: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchApplyReport {
+    pub applied: usize,
+    pub skipped: usize,
+    pub failures: Vec<BatchApplyFailure>,
+}
+
+impl BatchApplyReport {
+    fn push_failure(
+        &mut self,
+        skill_id: impl Into<String>,
+        tool_key: impl Into<String>,
+        message: impl Into<String>,
+    ) {
+        self.failures.push(BatchApplyFailure {
+            skill_id: skill_id.into(),
+            tool_key: tool_key.into(),
+            message: message.into(),
+        });
+    }
+}
+
 /// Apply a batch of `(skill_id × tool_key)` pairs in either Add or Remove mode
 /// without touching `active_scenario_id` or `scenario_skill_tools` toggles.
 ///
@@ -596,165 +746,932 @@ pub fn apply_skills_to_tools(
         return Ok(());
     }
 
-    match mode {
-        BatchApplyMode::Add => apply_add(store, skill_ids, tool_keys),
-        BatchApplyMode::Remove => apply_remove(store, skill_ids, tool_keys),
+    let report = apply_skills_to_tools_with_report(store, skill_ids, tool_keys, mode)?;
+    for failure in &report.failures {
+        log::warn!(
+            "apply_skills_to_tools: skill {} / tool {} failed: {}",
+            failure.skill_id,
+            failure.tool_key,
+            failure.message
+        );
     }
+    Ok(())
 }
 
-fn apply_add(
+/// 精确批量应用并返回逐项结果。与托盘保留的兼容入口不同，这个入口会在
+/// 任何磁盘写入之前完整校验目标 Agent，避免混合有效/无效目标导致部分提交。
+pub fn apply_skills_to_tools_with_report(
     store: &SkillStore,
     skill_ids: &[String],
     tool_keys: &[String],
-) -> Result<(), AppError> {
-    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-    let disabled = tool_service::get_disabled_tools(store);
-
-    let mut adapters: HashMap<String, tool_adapters::ToolAdapter> = HashMap::new();
-    for key in tool_keys {
-        if disabled.contains(key) {
-            log::debug!("apply_skills_to_tools: skipping disabled tool {key}");
-            continue;
-        }
-        let Some(adapter) = tool_adapters::find_adapter_with_store(store, key) else {
-            log::warn!("apply_skills_to_tools: unknown tool {key}");
-            continue;
-        };
-        if !adapter.is_installed() {
-            log::debug!(
-                "apply_skills_to_tools: skipping uninstalled tool {} ({key})",
-                adapter.display_name
-            );
-            continue;
-        }
-        adapters.insert(key.clone(), adapter);
+    mode: BatchApplyMode,
+) -> Result<BatchApplyReport, AppError> {
+    let unique_skill_ids = deduplicate_strings(skill_ids);
+    if unique_skill_ids.is_empty() {
+        return Ok(BatchApplyReport::default());
     }
 
-    let mut synced = 0usize;
-    let mut failed = 0usize;
+    match mode {
+        BatchApplyMode::Add => {
+            let adapters = validate_batch_tools_for_add(store, tool_keys)?;
+            apply_add_with_report(store, &unique_skill_ids, &adapters)
+        }
+        BatchApplyMode::Remove => {
+            let unique_tool_keys = validate_batch_tools_for_remove(store, tool_keys)?;
+            apply_remove_with_report(store, &unique_skill_ids, &unique_tool_keys)
+        }
+    }
+}
+
+fn deduplicate_strings(values: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values
+        .iter()
+        .filter(|value| seen.insert((*value).clone()))
+        .cloned()
+        .collect()
+}
+
+fn validate_batch_tools_for_add(
+    store: &SkillStore,
+    tool_keys: &[String],
+) -> Result<Vec<tool_adapters::ToolAdapter>, AppError> {
+    let unique_keys = deduplicate_strings(tool_keys);
+    if unique_keys.is_empty() {
+        return Err(AppError::invalid_input(
+            "At least one target Agent is required",
+        ));
+    }
+
+    let disabled = tool_service::get_disabled_tools(store);
+    let mut adapters = Vec::with_capacity(unique_keys.len());
+    for key in unique_keys {
+        let adapter = tool_adapters::find_adapter_with_store(store, &key)
+            .ok_or_else(|| AppError::invalid_input(format!("Unknown Agent: {key}")))?;
+        if !adapter.is_installed() {
+            return Err(AppError::invalid_input(format!(
+                "{} is not installed",
+                adapter.display_name
+            )));
+        }
+        if disabled.contains(&key) {
+            return Err(AppError::invalid_input(format!(
+                "{} is disabled",
+                adapter.display_name
+            )));
+        }
+        adapters.push(adapter);
+    }
+    Ok(adapters)
+}
+
+/// Remove 依据数据库中的既有目标执行，不要求 Agent 仍被检测为已安装或启用。
+/// 这样用户禁用 Agent、卸载客户端或临时断开网络盘后，仍能清理其受管记录。
+fn validate_batch_tools_for_remove(
+    store: &SkillStore,
+    tool_keys: &[String],
+) -> Result<Vec<String>, AppError> {
+    let unique_keys = deduplicate_strings(tool_keys);
+    if unique_keys.is_empty() {
+        return Err(AppError::invalid_input(
+            "At least one target Agent is required",
+        ));
+    }
+    for key in &unique_keys {
+        if tool_adapters::find_adapter_with_store(store, key).is_none() {
+            return Err(AppError::invalid_input(format!("Unknown Agent: {key}")));
+        }
+    }
+    Ok(unique_keys)
+}
+
+#[derive(Debug)]
+struct StagedTarget {
+    original: PathBuf,
+    staged: PathBuf,
+}
+
+/// 在 Agent 的 Skills 扫描根之外创建同卷暂存位置。
+///
+/// 暂存项必须与目标同卷，才能用 `rename` 完成原子切换；同时不能放在
+/// `skills_dir` 内，否则清理失败后残留的 `SKILL.md` 仍可能被 Agent 发现。
+fn unique_staging_path(target: &Path, purpose: &str) -> Result<PathBuf, AppError> {
+    let skills_root = target
+        .parent()
+        .ok_or_else(|| AppError::invalid_input("Target path has no Skills root"))?;
+    // Agent 根可能是跨卷 junction/symlink。必须跟随根目录本身，确保暂存项
+    // 和真实目标位于同一卷；继续使用词法父目录会让 Windows rename 返回
+    // ERROR_NOT_SAME_DEVICE。
+    let absolute_root = if skills_root.is_absolute() {
+        skills_root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(skills_root)
+    };
+    let physical_root = canonicalize_with_missing_tail(&absolute_root)
+        .unwrap_or_else(|| lexical_normalize(&absolute_root));
+    let staging_parent = physical_root
+        .parent()
+        .ok_or_else(|| AppError::invalid_input("Skills root has no safe staging parent"))?;
+    let staging_root = staging_parent.join(".skills-manager-staging");
+    std::fs::create_dir_all(&staging_root).map_err(AppError::io)?;
+    Ok(staging_root.join(format!(
+        "{purpose}-{}",
+        uuid::Uuid::new_v4()
+    )))
+}
+
+fn path_exists_strict(path: &Path) -> Result<bool, AppError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(AppError::io(error)),
+    }
+}
+
+fn stage_existing_target(path: &Path, purpose: &str) -> Result<Option<StagedTarget>, AppError> {
+    if !path_exists_strict(path)? {
+        return Ok(None);
+    }
+    let staged = unique_staging_path(path, purpose)?;
+    std::fs::rename(path, &staged).map_err(AppError::io)?;
+    Ok(Some(StagedTarget {
+        original: path.to_path_buf(),
+        staged,
+    }))
+}
+
+fn remove_path_if_present(path: &Path) -> Result<(), AppError> {
+    if path_exists_strict(path)? {
+        sync_engine::remove_target(path).map_err(AppError::io)?;
+    }
+    Ok(())
+}
+
+fn cleanup_staging_parent(path: &Path) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::remove_dir(parent);
+    }
+}
+
+fn discard_staged_target(staged: StagedTarget) {
+    if let Err(error) = remove_path_if_present(&staged.staged) {
+        // 暂存位置不在任何 Agent 的扫描根内；清理失败不会重新启用 Skill，
+        // 但需要保留日志，便于用户手动处理权限或占用问题。
+        log::warn!(
+            "Failed to clean Preset staging path {}: {error}",
+            staged.staged.display()
+        );
+    }
+    cleanup_staging_parent(&staged.staged);
+}
+
+fn restore_staged_target(staged: &StagedTarget) -> Result<(), AppError> {
+    remove_path_if_present(&staged.original)?;
+    std::fs::rename(&staged.staged, &staged.original).map_err(AppError::io)?;
+    cleanup_staging_parent(&staged.staged);
+    Ok(())
+}
+
+fn restore_staged_targets(staged: &[StagedTarget]) -> Vec<String> {
+    staged
+        .iter()
+        .rev()
+        .filter_map(|entry| {
+            restore_staged_target(entry).err().map(|error| {
+                format!(
+                    "failed to restore {}: {error}",
+                    entry.original.display()
+                )
+            })
+        })
+        .collect()
+}
+
+fn target_record_is_current(
+    record: &SkillTargetRecord,
+    source: &Path,
+    desired_target: &Path,
+    desired_mode: sync_engine::SyncMode,
+    current_source_hash: Option<&str>,
+) -> bool {
+    record.status == "ok"
+        && normalized_target_key(Path::new(&record.target_path))
+            == normalized_target_key(desired_target)
+        && skip_check_mode(&record.mode, desired_mode).is_some_and(|check_mode| {
+            sync_engine::is_target_current(
+                source,
+                Path::new(&record.target_path),
+                check_mode,
+                record.source_hash.as_deref(),
+                current_source_hash,
+            )
+        })
+}
+
+fn push_group_failure(
+    report: &mut BatchApplyReport,
+    skill_id: &str,
+    members: &[(&tool_adapters::ToolAdapter, PathBuf)],
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    for (adapter, _) in members {
+        report.push_failure(skill_id, &adapter.key, &message);
+    }
+}
+
+fn restore_after_add_failure(
+    desired_backup: Option<&StagedTarget>,
+    old_backups: &[StagedTarget],
+    desired_target: &Path,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    if let Err(error) = remove_path_if_present(desired_target) {
+        failures.push(format!(
+            "failed to remove the uncommitted target {}: {error}",
+            desired_target.display()
+        ));
+    }
+    if let Some(backup) = desired_backup {
+        if let Err(error) = restore_staged_target(backup) {
+            failures.push(format!(
+                "failed to restore the previous target {}: {error}",
+                backup.original.display()
+            ));
+        }
+    }
+    failures.extend(restore_staged_targets(old_backups));
+    failures
+}
+
+fn apply_add_with_report(
+    store: &SkillStore,
+    skill_ids: &[String],
+    adapters: &[tool_adapters::ToolAdapter],
+) -> Result<BatchApplyReport, AppError> {
+    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+    let mut report = BatchApplyReport::default();
+
     for skill_id in skill_ids {
-        let Ok(Some(skill)) = store.get_skill_by_id(skill_id) else {
-            log::warn!("apply_skills_to_tools: skill {skill_id} not found");
-            continue;
+        let skill = match store.get_skill_by_id(skill_id).map_err(AppError::db)? {
+            Some(skill) => skill,
+            None => {
+                for adapter in adapters {
+                    report.push_failure(skill_id, &adapter.key, "Skill not found");
+                }
+                continue;
+            }
         };
+
         let source = PathBuf::from(&skill.central_path);
         let target_name = sync_engine::target_dir_name(&source, &skill.name);
-        for (tool_key, adapter) in &adapters {
+        let mut groups: Vec<(String, Vec<(&tool_adapters::ToolAdapter, PathBuf)>)> = Vec::new();
+        for adapter in adapters {
             let target = adapter.skills_dir().join(&target_name);
-            let mode = sync_engine::sync_mode_for_tool(tool_key, configured_mode.as_deref());
-            match sync_engine::sync_skill(&source, &target, mode) {
-                Ok(actual_mode) => {
-                    let now = chrono::Utc::now().timestamp_millis();
-                    let target_record = SkillTargetRecord {
-                        id: uuid::Uuid::new_v4().to_string(),
+            let target_key = normalized_target_key(&target);
+            if let Some((_, members)) = groups.iter_mut().find(|(key, _)| *key == target_key) {
+                members.push((adapter, target));
+            } else {
+                groups.push((target_key, vec![(adapter, target)]));
+            }
+        }
+
+        for (target_key, members) in groups {
+            let all_targets = store.get_all_targets().map_err(AppError::db)?;
+            let first_target = &members[0].1;
+            let first_mode = sync_engine::sync_mode_for_tool(
+                &members[0].0.key,
+                configured_mode.as_deref(),
+            );
+            if let Err(error) = sync_engine::ensure_dst_not_inside_src(&source, first_target) {
+                push_group_failure(
+                    &mut report,
+                    skill_id,
+                    &members,
+                    format!("Unsafe source/target layout: {error}"),
+                );
+                continue;
+            }
+
+            let physical_records: Vec<&SkillTargetRecord> = all_targets
+                .iter()
+                .filter(|record| {
+                    normalized_target_key(Path::new(&record.target_path)) == target_key
+                })
+                .collect();
+            if physical_records
+                .iter()
+                .any(|record| record.skill_id != *skill_id)
+            {
+                push_group_failure(
+                    &mut report,
+                    skill_id,
+                    &members,
+                    "Target path is already managed by another Skill",
+                );
+                continue;
+            }
+
+            let mut current_tools = HashSet::new();
+            for (adapter, target) in &members {
+                if all_targets.iter().any(|record| {
+                    record.skill_id == *skill_id
+                        && record.tool == adapter.key
+                        && target_record_is_current(
+                            record,
+                            &source,
+                            target,
+                            sync_engine::sync_mode_for_tool(
+                                &adapter.key,
+                                configured_mode.as_deref(),
+                            ),
+                            skill.content_hash.as_deref(),
+                        )
+                }) {
+                    current_tools.insert(adapter.key.clone());
+                }
+            }
+            report.skipped += current_tools.len();
+            let pending_members: Vec<(&tool_adapters::ToolAdapter, PathBuf)> = members
+                .iter()
+                .filter(|(adapter, _)| !current_tools.contains(&adapter.key))
+                .map(|(adapter, target)| (*adapter, target.clone()))
+                .collect();
+            if pending_members.is_empty() {
+                continue;
+            }
+
+            // 另一个共享同一路径的 Agent 已证明物理内容是当前版本时，只需补齐
+            // 本组记录，不应重复替换该目录。
+            let current_physical = physical_records.iter().find(|record| {
+                target_record_is_current(
+                    record,
+                    &source,
+                    first_target,
+                    first_mode,
+                    skill.content_hash.as_deref(),
+                )
+            });
+
+            let target_exists = match path_exists_strict(first_target) {
+                Ok(exists) => exists,
+                Err(error) => {
+                    push_group_failure(&mut report, skill_id, &pending_members, error.to_string());
+                    continue;
+                }
+            };
+            if current_physical.is_none() && target_exists && physical_records.is_empty() {
+                push_group_failure(
+                    &mut report,
+                    skill_id,
+                    &pending_members,
+                    "Target directory already exists but is not managed by Skills Manager",
+                );
+                continue;
+            }
+
+            // 路径迁移时先把不再被其他记录引用的旧目标移出扫描根；数据库提交
+            // 失败会按相反顺序恢复，避免“旧副本已删、新副本未登记”。
+            let pending_tool_keys: HashSet<&str> = pending_members
+                .iter()
+                .map(|(adapter, _)| adapter.key.as_str())
+                .collect();
+            let mut old_backups = Vec::new();
+            let mut staged_old_keys = HashSet::new();
+            let mut staging_error = None;
+            for record in all_targets.iter().filter(|record| {
+                record.skill_id == *skill_id && pending_tool_keys.contains(record.tool.as_str())
+            }) {
+                let old_path = PathBuf::from(&record.target_path);
+                let old_key = normalized_target_key(&old_path);
+                if old_key == target_key || !staged_old_keys.insert(old_key.clone()) {
+                    continue;
+                }
+                let referenced_elsewhere = all_targets.iter().any(|other| {
+                    other.id != record.id
+                        && normalized_target_key(Path::new(&other.target_path)) == old_key
+                        && !(other.skill_id == *skill_id
+                            && pending_tool_keys.contains(other.tool.as_str()))
+                });
+                if referenced_elsewhere {
+                    continue;
+                }
+                match stage_existing_target(&old_path, "old") {
+                    Ok(Some(staged)) => old_backups.push(staged),
+                    Ok(None) => {}
+                    Err(error) => {
+                        staging_error = Some(error);
+                        break;
+                    }
+                }
+            }
+            if let Some(error) = staging_error {
+                let restore_failures = restore_staged_targets(&old_backups);
+                let suffix = if restore_failures.is_empty() {
+                    String::new()
+                } else {
+                    format!("; {}", restore_failures.join("; "))
+                };
+                push_group_failure(
+                    &mut report,
+                    skill_id,
+                    &pending_members,
+                    format!("Failed to stage the previous target: {error}{suffix}"),
+                );
+                continue;
+            }
+
+            let mut desired_backup = None;
+            let mut incoming_path = None;
+            let mode_name = if let Some(existing) = current_physical {
+                existing.mode.clone()
+            } else {
+                let incoming = match unique_staging_path(first_target, "incoming") {
+                    Ok(path) => path,
+                    Err(error) => {
+                        let restore_failures = restore_staged_targets(&old_backups);
+                        push_group_failure(
+                            &mut report,
+                            skill_id,
+                            &pending_members,
+                            format!(
+                                "Failed to prepare the new target: {error}{}",
+                                if restore_failures.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("; {}", restore_failures.join("; "))
+                                }
+                            ),
+                        );
+                        continue;
+                    }
+                };
+                let actual_mode = match sync_engine::sync_skill(&source, &incoming, first_mode) {
+                    Ok(mode) => mode,
+                    Err(error) => {
+                        let _ = remove_path_if_present(&incoming);
+                        cleanup_staging_parent(&incoming);
+                        let restore_failures = restore_staged_targets(&old_backups);
+                        push_group_failure(
+                            &mut report,
+                            skill_id,
+                            &pending_members,
+                            format!(
+                                "Failed to build the new target: {error}{}",
+                                if restore_failures.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("; {}", restore_failures.join("; "))
+                                }
+                            ),
+                        );
+                        continue;
+                    }
+                };
+
+                if let Some(parent) = first_target.parent() {
+                    if let Err(error) = std::fs::create_dir_all(parent) {
+                        let _ = remove_path_if_present(&incoming);
+                        cleanup_staging_parent(&incoming);
+                        let restore_failures = restore_staged_targets(&old_backups);
+                        push_group_failure(
+                            &mut report,
+                            skill_id,
+                            &pending_members,
+                            format!(
+                                "Failed to create the Agent Skills directory: {error}{}",
+                                if restore_failures.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("; {}", restore_failures.join("; "))
+                                }
+                            ),
+                        );
+                        continue;
+                    }
+                }
+
+                desired_backup = match stage_existing_target(first_target, "replaced") {
+                    Ok(staged) => staged,
+                    Err(error) => {
+                        let _ = remove_path_if_present(&incoming);
+                        cleanup_staging_parent(&incoming);
+                        let restore_failures = restore_staged_targets(&old_backups);
+                        push_group_failure(
+                            &mut report,
+                            skill_id,
+                            &pending_members,
+                            format!(
+                                "Failed to stage the current target: {error}{}",
+                                if restore_failures.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("; {}", restore_failures.join("; "))
+                                }
+                            ),
+                        );
+                        continue;
+                    }
+                };
+                if let Err(error) = std::fs::rename(&incoming, first_target) {
+                    let mut restore_failures = Vec::new();
+                    if let Some(backup) = desired_backup.as_ref() {
+                        if let Err(restore_error) = restore_staged_target(backup) {
+                            restore_failures.push(restore_error.to_string());
+                        }
+                    }
+                    restore_failures.extend(restore_staged_targets(&old_backups));
+                    let _ = remove_path_if_present(&incoming);
+                    cleanup_staging_parent(&incoming);
+                    push_group_failure(
+                        &mut report,
+                        skill_id,
+                        &pending_members,
+                        format!(
+                            "Failed to activate the new target: {error}{}",
+                            if restore_failures.is_empty() {
+                                String::new()
+                            } else {
+                                format!("; restore failed: {}", restore_failures.join("; "))
+                            }
+                        ),
+                    );
+                    continue;
+                }
+                incoming_path = Some(incoming);
+                actual_mode.as_str().to_string()
+            };
+
+            let now = chrono::Utc::now().timestamp_millis();
+            let expected_records: Vec<SkillTargetRecord> = all_targets
+                .iter()
+                .filter(|record| {
+                    record.skill_id == *skill_id
+                        && pending_tool_keys.contains(record.tool.as_str())
+                })
+                .cloned()
+                .collect();
+            let records: Vec<SkillTargetRecord> = pending_members
+                .iter()
+                .map(|(adapter, target)| {
+                    let existing = all_targets.iter().find(|record| {
+                        record.skill_id == *skill_id && record.tool == adapter.key
+                    });
+                    SkillTargetRecord {
+                        id: existing
+                            .map(|record| record.id.clone())
+                            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                         skill_id: skill_id.clone(),
-                        tool: tool_key.clone(),
+                        tool: adapter.key.clone(),
                         target_path: target.to_string_lossy().to_string(),
-                        mode: actual_mode.as_str().to_string(),
+                        mode: mode_name.clone(),
                         status: "ok".to_string(),
                         synced_at: Some(now),
                         last_error: None,
                         source_hash: skill.content_hash.clone(),
-                    };
-                    if let Err(e) = store.insert_target(&target_record) {
-                        log::warn!(
-                            "apply_skills_to_tools: failed to insert target for skill {skill_id} / {tool_key}: {e}"
-                        );
-                        failed += 1;
-                    } else {
-                        synced += 1;
                     }
+                })
+                .collect();
+
+            if let Err(error) =
+                store.upsert_targets_if_unchanged(&records, &expected_records)
+            {
+                let restore_failures = if current_physical.is_some() {
+                    restore_staged_targets(&old_backups)
+                } else {
+                    restore_after_add_failure(
+                        desired_backup.as_ref(),
+                        &old_backups,
+                        first_target,
+                    )
+                };
+                if let Some(incoming) = incoming_path.as_ref() {
+                    cleanup_staging_parent(incoming);
                 }
-                Err(e) => {
-                    failed += 1;
-                    log::warn!(
-                        "apply_skills_to_tools: failed to sync skill {skill_id} ({}) to {}: {e}",
-                        skill.name,
-                        target.display()
-                    );
-                }
+                push_group_failure(
+                    &mut report,
+                    skill_id,
+                    &pending_members,
+                    format!(
+                        "Failed to record target: {error}{}",
+                        if restore_failures.is_empty() {
+                            String::new()
+                        } else {
+                            format!("; restore failed: {}", restore_failures.join("; "))
+                        }
+                    ),
+                );
+                continue;
             }
+
+            if let Some(backup) = desired_backup {
+                discard_staged_target(backup);
+            }
+            for backup in old_backups {
+                discard_staged_target(backup);
+            }
+            if let Some(incoming) = incoming_path.as_ref() {
+                cleanup_staging_parent(incoming);
+            }
+            report.applied += records.len();
         }
     }
 
     log::info!(
-        "apply_skills_to_tools(Add): skills={} tools={} synced={synced} failed={failed}",
+        "apply_skills_to_tools_with_report(Add): skills={} tools={} applied={} skipped={} failed={}",
         skill_ids.len(),
         adapters.len(),
+        report.applied,
+        report.skipped,
+        report.failures.len(),
     );
-    Ok(())
+    Ok(report)
 }
 
-fn apply_remove(
+fn apply_remove_with_report(
     store: &SkillStore,
     skill_ids: &[String],
     tool_keys: &[String],
-) -> Result<(), AppError> {
-    let tool_set: HashSet<&String> = tool_keys.iter().collect();
-
-    let mut to_delete: Vec<(String, String, PathBuf)> = Vec::new();
-    for skill_id in skill_ids {
-        let targets = store.get_targets_for_skill(skill_id).unwrap_or_default();
-        for target in targets {
-            if tool_set.contains(&target.tool) {
-                to_delete.push((
-                    skill_id.clone(),
-                    target.tool.clone(),
-                    PathBuf::from(&target.target_path),
-                ));
-            }
-        }
-    }
-
-    if to_delete.is_empty() {
-        return Ok(());
-    }
-
-    // Phase 1: drop the DB rows first so the post-delete recount below sees
-    // the new ground truth when deciding which filesystem paths to keep.
-    for (skill_id, tool, _) in &to_delete {
-        if let Err(e) = store.delete_target(skill_id, tool) {
-            log::warn!(
-                "apply_skills_to_tools(Remove): failed to delete target record for skill {skill_id} / {tool}: {e}"
-            );
-        }
-    }
-
-    // Phase 2: gather the paths the batch wanted to remove, then keep any path
-    // a remaining (skill_id, tool) row still points at. This prevents wiping a
-    // directory another adapter is sharing.
-    let candidate_paths: HashSet<PathBuf> = to_delete.iter().map(|(_, _, p)| p.clone()).collect();
-    let still_referenced: HashSet<PathBuf> = store
-        .get_all_targets()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| PathBuf::from(&t.target_path))
+) -> Result<BatchApplyReport, AppError> {
+    let mut report = BatchApplyReport::default();
+    let all_targets = store.get_all_targets().map_err(AppError::db)?;
+    let requested_pairs: HashSet<(String, String)> = skill_ids
+        .iter()
+        .flat_map(|skill_id| {
+            tool_keys
+                .iter()
+                .map(move |tool_key| (skill_id.clone(), tool_key.clone()))
+        })
         .collect();
+    let selected: Vec<SkillTargetRecord> = all_targets
+        .iter()
+        .filter(|record| {
+            requested_pairs.contains(&(record.skill_id.clone(), record.tool.clone()))
+        })
+        .cloned()
+        .collect();
+    report.skipped = requested_pairs.len().saturating_sub(selected.len());
 
-    let mut removed = 0usize;
-    for path in candidate_paths {
-        if still_referenced.contains(&path) {
-            log::debug!(
-                "apply_skills_to_tools(Remove): keeping {} (still referenced by another target)",
-                path.display()
-            );
+    let selected_ids: HashSet<String> = selected.iter().map(|record| record.id.clone()).collect();
+    let mut groups: Vec<(String, Vec<SkillTargetRecord>)> = Vec::new();
+    for record in selected {
+        let key = normalized_target_key(Path::new(&record.target_path));
+        if let Some((_, records)) = groups.iter_mut().find(|(existing, _)| *existing == key) {
+            records.push(record);
+        } else {
+            groups.push((key, vec![record]));
+        }
+    }
+
+    for (path_key, records) in groups {
+        let physical_path = PathBuf::from(&records[0].target_path);
+        let referenced_elsewhere = all_targets.iter().any(|record| {
+            !selected_ids.contains(&record.id)
+                && normalized_target_key(Path::new(&record.target_path)) == path_key
+        });
+        let staged = if referenced_elsewhere {
+            None
+        } else {
+            match stage_existing_target(&physical_path, "removed") {
+                Ok(staged) => staged,
+                Err(error) => {
+                    for record in &records {
+                        report.push_failure(&record.skill_id, &record.tool, error.to_string());
+                    }
+                    continue;
+                }
+            }
+        };
+
+        if let Err(error) = store.delete_targets_exact_atomic(&records) {
+            let restore_note = staged
+                .as_ref()
+                .and_then(|entry| restore_staged_target(entry).err())
+                .map(|restore| format!("; restore failed: {restore}"))
+                .unwrap_or_default();
+            for record in &records {
+                report.push_failure(
+                    &record.skill_id,
+                    &record.tool,
+                    format!("Failed to delete target record: {error}{restore_note}"),
+                );
+            }
             continue;
         }
-        if let Err(e) = sync_engine::remove_target(&path) {
-            log::warn!(
-                "apply_skills_to_tools(Remove): failed to remove {}: {e}",
-                path.display()
-            );
-        } else {
-            removed += 1;
+
+        if let Some(staged) = staged {
+            // 数据库提交后再检查一次，若有新的共享引用出现，则把物理目标恢复；
+            // 读取失败时恢复原记录和目录，破坏性操作必须 fail closed。
+            match store.get_all_targets() {
+                Ok(remaining) => {
+                    let newly_referenced = remaining.iter().any(|record| {
+                        normalized_target_key(Path::new(&record.target_path)) == path_key
+                    });
+                    if newly_referenced {
+                        match path_exists_strict(&physical_path) {
+                            Ok(false) => {
+                                if let Err(error) = restore_staged_target(&staged) {
+                                    let row_restore = store
+                                        .upsert_targets_if_unchanged(&records, &[])
+                                        .err();
+                                    for record in &records {
+                                        report.push_failure(
+                                            &record.skill_id,
+                                            &record.tool,
+                                            format!(
+                                                "Failed to restore a newly referenced shared target: {error}{}",
+                                                row_restore
+                                                    .as_ref()
+                                                    .map(|restore| format!(
+                                                        "; record restore failed: {restore}"
+                                                    ))
+                                                    .unwrap_or_default()
+                                            ),
+                                        );
+                                    }
+                                    continue;
+                                }
+                            }
+                            Ok(true) => discard_staged_target(staged),
+                            Err(error) => {
+                                let row_restore = store
+                                    .upsert_targets_if_unchanged(&records, &[])
+                                    .err();
+                                let path_restore = restore_staged_target(&staged).err();
+                                let mut suffix = Vec::new();
+                                if let Some(restore) = row_restore {
+                                    suffix.push(format!("record restore failed: {restore}"));
+                                }
+                                if let Some(restore) = path_restore {
+                                    suffix.push(format!("path restore failed: {restore}"));
+                                }
+                                for record in &records {
+                                    report.push_failure(
+                                        &record.skill_id,
+                                        &record.tool,
+                                        format!(
+                                            "Failed to verify a newly referenced shared target: {error}{}",
+                                            if suffix.is_empty() {
+                                                String::new()
+                                            } else {
+                                                format!("; {}", suffix.join("; "))
+                                            }
+                                        ),
+                                    );
+                                }
+                                continue;
+                            }
+                        }
+                    } else {
+                        discard_staged_target(staged);
+                    }
+                }
+                Err(error) => {
+                    let row_restore = store
+                        .upsert_targets_if_unchanged(&records, &[])
+                        .err();
+                    let path_restore = restore_staged_target(&staged).err();
+                    let mut suffix = Vec::new();
+                    if let Some(restore) = row_restore {
+                        suffix.push(format!("record restore failed: {restore}"));
+                    }
+                    if let Some(restore) = path_restore {
+                        suffix.push(format!("path restore failed: {restore}"));
+                    }
+                    for record in &records {
+                        report.push_failure(
+                            &record.skill_id,
+                            &record.tool,
+                            format!(
+                                "Failed to verify shared target after removal: {error}{}",
+                                if suffix.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("; {}", suffix.join("; "))
+                                }
+                            ),
+                        );
+                    }
+                    continue;
+                }
+            }
         }
+        report.applied += records.len();
     }
 
     log::info!(
-        "apply_skills_to_tools(Remove): pairs={} fs_removed={removed}",
-        to_delete.len(),
+        "apply_skills_to_tools_with_report(Remove): skills={} tools={} applied={} skipped={} failed={}",
+        skill_ids.len(),
+        tool_keys.len(),
+        report.applied,
+        report.skipped,
+        report.failures.len(),
     );
-    Ok(())
+    Ok(report)
+}
+
+fn ensure_remove_report_succeeded(report: BatchApplyReport) -> Result<BatchApplyReport, AppError> {
+    if report.failures.is_empty() {
+        return Ok(report);
+    }
+    Err(AppError::io(
+        report
+            .failures
+            .iter()
+            .map(|failure| {
+                format!(
+                    "{}/{}: {}",
+                    failure.skill_id, failure.tool_key, failure.message
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+    ))
+}
+
+/// 从单个 Agent 移除一个受管 Skill，并保留仍被其他 Agent 引用的共享目录。
+/// 调用方必须持有 [`lock_preset_apply`]，以便与批量 Preset 写入串行。
+pub fn remove_skill_target_preserving_shared_path(
+    store: &SkillStore,
+    skill_id: &str,
+    tool_key: &str,
+) -> Result<bool, AppError> {
+    let report = apply_remove_with_report(
+        store,
+        &[skill_id.to_string()],
+        &[tool_key.to_string()],
+    )?;
+    let report = ensure_remove_report_succeeded(report)?;
+    Ok(report.applied == 1)
+}
+
+/// 安全移除一个 Agent 的全部受管目标；共享物理目录只删除该 Agent 的记录。
+/// 调用方必须持有 [`lock_preset_apply`]。
+pub fn remove_all_skill_targets_for_tool(
+    store: &SkillStore,
+    tool_key: &str,
+) -> Result<(), AppError> {
+    let skill_ids = store
+        .get_all_targets()
+        .map_err(AppError::db)?
+        .into_iter()
+        .filter(|target| target.tool == tool_key)
+        .map(|target| target.skill_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if skill_ids.is_empty() {
+        return Ok(());
+    }
+    let report = apply_remove_with_report(store, &skill_ids, &[tool_key.to_string()])?;
+    ensure_remove_report_succeeded(report).map(|_| ())
+}
+
+#[cfg(test)]
+mod preset_apply_lock_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn preset_apply_lock_serializes_waiting_callers() {
+        let first_guard = lock_preset_apply();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+
+        let waiter = thread::spawn(move || {
+            let _second_guard = lock_preset_apply();
+            acquired_tx.send(()).unwrap();
+        });
+
+        // 第二个调用方必须在首个批处理释放锁之前保持等待，避免目录和
+        // skill_targets 被两个桌面命令交错改写。
+        assert!(acquired_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        drop(first_guard);
+        acquired_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("waiting preset apply did not acquire the released lock");
+        waiter.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalized_target_key_preserves_backslash_filename_on_unix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested_parent = tmp.path().join("agent");
+        std::fs::create_dir_all(&nested_parent).unwrap();
+
+        let slash_path = nested_parent.join("skill");
+        let backslash_path = tmp.path().join(r"agent\skill");
+
+        assert_ne!(
+            normalized_target_key(&slash_path),
+            normalized_target_key(&backslash_path),
+            "Unix backslashes are filename characters, not separators"
+        );
+    }
 }
 
 #[cfg(test)]

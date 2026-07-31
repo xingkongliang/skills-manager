@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -464,6 +464,121 @@ impl SkillStore {
         Ok(())
     }
 
+    /// 仅在 `(skill_id, tool)` 记录仍与调用方快照一致时原子更新整组目标。
+    ///
+    /// UI 队列和进程内锁覆盖正常桌面操作；这里的 compare-and-swap 校验还能
+    /// 阻止另一个写入方在文件准备期间替换记录后又被本次提交静默覆盖。
+    pub fn upsert_targets_if_unchanged(
+        &self,
+        targets: &[SkillTargetRecord],
+        expected: &[SkillTargetRecord],
+    ) -> Result<()> {
+        if targets.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        for target in targets {
+            let current = tx
+                .query_row(
+                    "SELECT id, target_path, mode, status, source_hash
+                     FROM skill_targets WHERE skill_id = ?1 AND tool = ?2",
+                    params![target.skill_id, target.tool],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let snapshot = expected.iter().find(|record| {
+                record.skill_id == target.skill_id && record.tool == target.tool
+            });
+            let unchanged = match (current.as_ref(), snapshot) {
+                (None, None) => true,
+                (Some((id, path, mode, status, source_hash)), Some(record)) => {
+                    id == &record.id
+                        && path == &record.target_path
+                        && mode == &record.mode
+                        && status == &record.status
+                        && source_hash == &record.source_hash
+                }
+                _ => false,
+            };
+            if !unchanged {
+                return Err(anyhow::anyhow!(
+                    "target record changed while the Preset operation was running: {}/{}",
+                    target.skill_id,
+                    target.tool
+                ));
+            }
+        }
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO skill_targets (id, skill_id, tool, target_path, mode, status, synced_at, last_error, source_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )?;
+            for target in targets {
+                stmt.execute(params![
+                    target.id,
+                    target.skill_id,
+                    target.tool,
+                    target.target_path,
+                    target.mode,
+                    target.status,
+                    target.synced_at,
+                    target.last_error,
+                    target.source_hash,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 只删除调用方刚刚读取到的精确记录，并在任一记录已变化时整体回滚。
+    ///
+    /// 与按 `(skill_id, tool)` 无条件删除相比，快照 ID 和路径校验可避免并发写入
+    /// 被本次 Preset 移除误删。进程内写锁负责正常桌面调用的串行化，此校验则
+    /// 为数据库层再提供一道失败即停止的保护。
+    pub fn delete_targets_exact_atomic(&self, targets: &[SkillTargetRecord]) -> Result<()> {
+        if targets.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "DELETE FROM skill_targets
+                 WHERE id = ?1 AND skill_id = ?2 AND tool = ?3 AND target_path = ?4",
+            )?;
+            for target in targets {
+                let changed = stmt.execute(params![
+                    target.id,
+                    target.skill_id,
+                    target.tool,
+                    target.target_path,
+                ])?;
+                if changed != 1 {
+                    return Err(anyhow::anyhow!(
+                        "target record changed while the Preset operation was running: {}/{}",
+                        target.skill_id,
+                        target.tool
+                    ));
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn get_targets_for_skill(&self, skill_id: &str) -> Result<Vec<SkillTargetRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -482,7 +597,7 @@ impl SkillStore {
                 source_hash: row.get(8)?,
             })
         })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn get_all_targets(&self) -> Result<Vec<SkillTargetRecord>> {
@@ -503,7 +618,7 @@ impl SkillStore {
                 source_hash: row.get(8)?,
             })
         })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn delete_target(&self, skill_id: &str, tool: &str) -> Result<()> {
