@@ -24,6 +24,9 @@ jobs:
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: Linux-x64
+          - platform: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            label: Linux-arm64
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             label: Windows-x64
@@ -60,7 +63,7 @@ jobs:
           save-if: false
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu-')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -109,7 +112,7 @@ jobs:
             echo ""
             echo "### 当前校验状态"
             echo ""
-            echo "- ✅ 跨平台构建通过（macOS Intel / macOS ARM / Windows x64 / Linux x64）"
+            echo "- ✅ 跨平台构建通过（macOS Intel / macOS ARM / Windows x64 / Linux x64 / Linux ARM64）"
             echo "- ✅ TypeScript typecheck 通过"
             echo ""
             echo "---"
@@ -123,7 +126,7 @@ jobs:
             echo ""
             echo "### Current Verification"
             echo ""
-            echo "- ✅ Cross-platform build passed (macOS Intel / macOS ARM / Windows x64 / Linux x64)"
+            echo "- ✅ Cross-platform build passed (macOS Intel / macOS ARM / Windows x64 / Linux x64 / Linux ARM64)"
             echo "- ✅ TypeScript typecheck passed"
             echo ""
             echo "</details>"
