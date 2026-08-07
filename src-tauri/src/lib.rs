@@ -206,8 +206,16 @@ fn collect_tray_menu_data(store: &core::skill_store::SkillStore) -> TrayMenuData
 }
 
 fn format_status_line(data: &TrayMenuData) -> String {
-    let skill_label = if data.total_skills == 1 { "skill" } else { "skills" };
-    let agent_label = if data.coding_agent_count == 1 { "agent" } else { "agents" };
+    let skill_label = if data.total_skills == 1 {
+        "skill"
+    } else {
+        "skills"
+    };
+    let agent_label = if data.coding_agent_count == 1 {
+        "agent"
+    } else {
+        "agents"
+    };
     format!(
         "{} {} · {} {} connected",
         data.total_skills, skill_label, data.coding_agent_count, agent_label
@@ -241,7 +249,11 @@ fn preset_menu_item_id(preset: &TrayPresetEntry) -> (String, &'static str) {
 }
 
 fn preset_menu_label(preset: &TrayPresetEntry) -> String {
-    let unit = if preset.skill_count == 1 { "skill" } else { "skills" };
+    let unit = if preset.skill_count == 1 {
+        "skill"
+    } else {
+        "skills"
+    };
     match preset.status() {
         TrayPresetStatus::Active => format!("✓ {} ({} {unit})", preset.name, preset.skill_count),
         TrayPresetStatus::Partial => format!(
@@ -569,7 +581,9 @@ fn check_updates_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 {
                     Ok(lock) => lock,
                     Err(err) => {
-                        log::warn!("Tray update check: failed to acquire repo lock for {skill_id}: {err}");
+                        log::warn!(
+                            "Tray update check: failed to acquire repo lock for {skill_id}: {err}"
+                        );
                         continue;
                     }
                 };
@@ -632,7 +646,8 @@ fn open_skills_folder_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
         let status = cmd.arg(&repo_path).status();
         match status {
-            Ok(_status) => {
+            Ok(_status) =>
+            {
                 #[cfg(not(target_os = "windows"))]
                 if !_status.success() {
                     log::warn!(
@@ -1103,6 +1118,7 @@ pub fn run() {
             commands::presets::apply_preset_to_coding_agents,
             commands::presets::add_skill_to_preset,
             commands::presets::remove_skill_from_preset,
+            commands::presets::batch_toggle_preset_skills,
             commands::presets::reorder_presets,
             commands::projects::reorder_projects,
             commands::presets::get_preset_skill_order,

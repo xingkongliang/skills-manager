@@ -846,6 +846,45 @@ impl SkillStore {
         Ok(())
     }
 
+    pub fn batch_add_skills_to_scenario(
+        &self,
+        scenario_id: &str,
+        skill_ids: &[String],
+    ) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let tx = conn.unchecked_transaction()?;
+        let mut count = 0usize;
+        for skill_id in skill_ids {
+            let rows = tx.execute(
+                "INSERT OR IGNORE INTO scenario_skills (scenario_id, skill_id, added_at) VALUES (?1, ?2, ?3)",
+                params![scenario_id, skill_id, now],
+            )?;
+            count += rows;
+        }
+        tx.commit()?;
+        Ok(count)
+    }
+
+    pub fn batch_remove_skills_from_scenario(
+        &self,
+        scenario_id: &str,
+        skill_ids: &[String],
+    ) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let mut count = 0usize;
+        for skill_id in skill_ids {
+            let rows = tx.execute(
+                "DELETE FROM scenario_skills WHERE scenario_id = ?1 AND skill_id = ?2",
+                params![scenario_id, skill_id],
+            )?;
+            count += rows;
+        }
+        tx.commit()?;
+        Ok(count)
+    }
+
     pub fn reorder_scenario_skills(&self, scenario_id: &str, skill_ids: &[String]) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
@@ -1472,22 +1511,23 @@ mod scenario_membership_tests {
         let tmp = tempdir().unwrap();
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
 
-        store.insert_scenario(&ScenarioRecord {
-            id: "s1".to_string(),
-            name: "S1".to_string(),
-            description: None,
-            icon: None,
-            sort_order: 0,
-            created_at: 1,
-            updated_at: 1,
-        })
-        .unwrap();
+        store
+            .insert_scenario(&ScenarioRecord {
+                id: "s1".to_string(),
+                name: "S1".to_string(),
+                description: None,
+                icon: None,
+                sort_order: 0,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
         store.upsert_skill(&sample_skill("k1")).unwrap();
 
         let memberships = vec![
-            membership("s1", "k1"),       // valid
-            membership("s1", "ghost"),    // skill missing
-            membership("ghost-s", "k1"),  // scenario missing
+            membership("s1", "k1"),      // valid
+            membership("s1", "ghost"),   // skill missing
+            membership("ghost-s", "k1"), // scenario missing
         ];
 
         // Must not panic with a FOREIGN KEY constraint failure.
@@ -1497,7 +1537,9 @@ mod scenario_membership_tests {
 
         assert_eq!(store.get_skill_ids_for_scenario("s1").unwrap(), vec!["k1"]);
         assert_eq!(
-            store.get_enabled_tools_for_scenario_skill("s1", "k1").unwrap(),
+            store
+                .get_enabled_tools_for_scenario_skill("s1", "k1")
+                .unwrap(),
             vec!["ToolA"]
         );
         assert!(store

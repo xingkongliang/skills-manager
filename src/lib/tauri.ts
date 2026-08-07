@@ -719,6 +719,12 @@ export const addSkillToPreset = (skillId: string, presetId: string) =>
 export const removeSkillFromPreset = (skillId: string, presetId: string) =>
   invoke<void>("remove_skill_from_preset", { skillId, presetId });
 
+export const batchTogglePresetSkills = (
+  presetId: string,
+  skillIds: string[],
+  enable: boolean
+) => invoke<number>("batch_toggle_preset_skills", { presetId, skillIds, enable });
+
 export const reorderPresets = (ids: string[]) =>
   invoke<void>("reorder_presets", { ids });
 

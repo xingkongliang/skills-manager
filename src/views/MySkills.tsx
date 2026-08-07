@@ -610,32 +610,25 @@ export function MySkills() {
     if (!viewedPreset) return;
     const selectedSkillsList = skills.filter((s) => selectedIds.has(s.id));
     const enabling = anyDisabled;
-    let count = 0;
-    let failed = 0;
-    for (const skill of selectedSkillsList) {
-      try {
+    const toggledSkillIds = selectedSkillsList
+      .filter((skill) => {
         const enabledInPreset = skill.preset_ids.includes(viewedPreset.id);
-        if (enabling && !enabledInPreset) {
-          await api.addSkillToPreset(skill.id, viewedPreset.id);
-          count++;
-        } else if (!enabling && enabledInPreset) {
-          await api.removeSkillFromPreset(skill.id, viewedPreset.id);
-          count++;
-        }
-      } catch {
-        failed++;
-        // continue with remaining
-      }
+        return enabling ? !enabledInPreset : enabledInPreset;
+      })
+      .map((skill) => skill.id);
+    if (toggledSkillIds.length === 0) {
+      toast.info(enabling ? t("presetActions.nothingToAdd") : t("presetActions.nothingToRemove"));
+      return;
     }
-    if (count > 0) {
+    try {
+      const count = await api.batchTogglePresetSkills(viewedPreset.id, toggledSkillIds, enabling);
       toast.success(enabling
         ? t("mySkills.batchEnabled", { count })
         : t("mySkills.batchDisabled", { count }));
+      await Promise.all([refreshManagedSkills(), refreshPresets()]);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
     }
-    if (failed > 0) {
-      toast.error(t("mySkills.batchToggleFailed", { count: failed }));
-    }
-    await Promise.all([refreshManagedSkills(), refreshPresets()]);
   };
 
   const handleBatchRefresh = async () => {

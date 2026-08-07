@@ -43,9 +43,7 @@ pub struct PresetDto {
 static GET_PRESETS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
 
 #[tauri::command]
-pub async fn get_presets(
-    store: State<'_, Arc<SkillStore>>,
-) -> Result<Vec<PresetDto>, AppError> {
+pub async fn get_presets(store: State<'_, Arc<SkillStore>>) -> Result<Vec<PresetDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let start = Instant::now();
@@ -293,6 +291,37 @@ pub async fn add_skill_to_preset(
     result
 }
 
+/// Batch add/remove skills from a preset in a single metadata write + single tray refresh.
+/// Eliminates the O(N) sequential IPC + O(N) metadata rewrite overhead of calling
+/// `add_skill_to_preset` / `remove_skill_from_preset` N times individually.
+#[tauri::command]
+pub async fn batch_toggle_preset_skills(
+    app: tauri::AppHandle,
+    preset_id: String,
+    skill_ids: Vec<String>,
+    enable: bool,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<usize, AppError> {
+    let store = store.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        sync_metadata::with_repo_lock("batch toggle scenario skills", || {
+            let count = if enable {
+                store.batch_add_skills_to_scenario(&preset_id, &skill_ids)?
+            } else {
+                store.batch_remove_skills_from_scenario(&preset_id, &skill_ids)?
+            };
+            sync_metadata::write_all_from_db_unlocked(&store)?;
+            Ok(count)
+        })
+        .map_err(AppError::db)
+    })
+    .await?;
+    if result.is_ok() {
+        refresh_tray_menu_best_effort(&app);
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn remove_skill_from_preset(
     app: tauri::AppHandle,
@@ -448,10 +477,10 @@ mod tests {
     };
     use crate::core::skill_store::SkillRecord;
     use crate::core::tool_adapters::{self, CustomToolDef};
-    use std::path::PathBuf;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     fn sample_skill(id: &str, name: &str, central_path: &std::path::Path) -> SkillRecord {
