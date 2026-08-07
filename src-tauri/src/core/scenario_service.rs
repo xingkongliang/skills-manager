@@ -6,7 +6,7 @@ use std::time::Instant;
 use super::{
     error::AppError,
     skill_store::{ScenarioRecord, SkillStore, SkillTargetRecord},
-    sync_engine, tool_adapters,
+    sync_engine, sync_metadata, tool_adapters,
     tool_service,
 };
 
@@ -44,6 +44,75 @@ pub fn ensure_scenario_exists(store: &SkillStore, scenario_id: &str) -> Result<(
         return Err(AppError::not_found("Scenario not found"));
     }
     Ok(())
+}
+
+/// Persist a preset without changing active or sync state.
+/// GUI callers activate it immediately; CLI callers can populate it before `apply`.
+pub fn create_preset(
+    store: &SkillStore,
+    name: &str,
+    description: Option<&str>,
+    icon: Option<&str>,
+) -> Result<ScenarioRecord, AppError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::invalid_input("Preset name is required"));
+    }
+    let now = chrono::Utc::now().timestamp_millis();
+    let record = ScenarioRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        description: description.map(String::from),
+        icon: icon.map(String::from),
+        sort_order: 999,
+        created_at: now,
+        updated_at: now,
+    };
+
+    sync_metadata::with_repo_lock("create scenario", || {
+        store.insert_scenario(&record)?;
+        sync_metadata::write_all_from_db_unlocked(store)
+    })
+    .map_err(AppError::db)?;
+
+    Ok(record)
+}
+
+/// Delete a preset and, when it was active, activate the first remaining preset.
+pub fn delete_preset(store: &SkillStore, id: &str) -> Result<bool, AppError> {
+    ensure_scenario_exists(store, id)?;
+    let was_active = store
+        .get_active_scenario_id()
+        .map_err(AppError::db)?
+        .as_deref()
+        == Some(id);
+
+    if was_active {
+        unsync_scenario_skills(store, id)?;
+    }
+
+    sync_metadata::with_repo_lock("delete scenario", || {
+        store.delete_scenario(id)?;
+        sync_metadata::write_all_from_db_unlocked(store)
+    })
+    .map_err(AppError::db)?;
+
+    if was_active {
+        if let Some(first) = store
+            .get_all_scenarios()
+            .map_err(AppError::db)?
+            .first()
+        {
+            store
+                .set_active_scenario(&first.id)
+                .map_err(AppError::db)?;
+            sync_scenario_skills(store, &first.id)?;
+        } else {
+            store.clear_active_scenario().map_err(AppError::db)?;
+        }
+    }
+
+    Ok(was_active)
 }
 
 pub fn enabled_installed_adapters_for_scenario_skill(
@@ -450,6 +519,9 @@ pub fn ensure_default_startup_scenario(store: &SkillStore) -> Result<(), AppErro
 
 pub fn ensure_cli_scenario_state(store: &SkillStore) -> Result<(), AppError> {
     let mut scenarios = store.get_all_scenarios().map_err(AppError::db)?;
+    if scenarios.is_empty() && sync_metadata::metadata_has_complete_scenario_snapshot() {
+        return Ok(());
+    }
     if scenarios.is_empty() {
         let now = chrono::Utc::now().timestamp_millis();
         let default_scenario = ScenarioRecord {
@@ -967,5 +1039,142 @@ mod skip_check_mode_tests {
     fn unknown_existing_mode_is_incompatible() {
         assert!(skip_check_mode("garbage", SyncMode::Symlink).is_none());
         assert!(skip_check_mode("", SyncMode::Copy).is_none());
+    }
+}
+
+#[cfg(test)]
+mod preset_crud_tests {
+    use super::{create_preset, delete_preset, ensure_cli_scenario_state};
+    use crate::core::{
+        central_repo,
+        skill_store::{ScenarioRecord, SkillStore},
+        sync_metadata,
+    };
+    use std::sync::MutexGuard;
+    use tempfile::{tempdir, TempDir};
+
+    struct TestRepo {
+        _lock: MutexGuard<'static, ()>,
+        _tmp: TempDir,
+        store: SkillStore,
+    }
+
+    impl Drop for TestRepo {
+        fn drop(&mut self) {
+            central_repo::set_test_base_dir_override(None);
+        }
+    }
+
+    fn test_repo() -> TestRepo {
+        let lock = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("repo");
+        central_repo::set_test_base_dir_override(Some(base.clone()));
+        std::fs::create_dir_all(central_repo::skills_dir()).unwrap();
+        let store = SkillStore::new(&base.join("test.db")).unwrap();
+        TestRepo {
+            _lock: lock,
+            _tmp: tmp,
+            store,
+        }
+    }
+
+    fn preset(id: &str, sort_order: i32, created_at: i64) -> ScenarioRecord {
+        ScenarioRecord {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            icon: None,
+            sort_order,
+            created_at,
+            updated_at: created_at,
+        }
+    }
+
+    #[test]
+    fn create_preset_persists_without_changing_active() {
+        let repo = test_repo();
+        repo.store.insert_scenario(&preset("active", 0, 1)).unwrap();
+        repo.store.set_active_scenario("active").unwrap();
+
+        let created = create_preset(&repo.store, "  New  ", Some("Description"), Some("box"))
+            .expect("create succeeds");
+
+        assert_eq!(created.name, "New");
+        assert_eq!(created.description.as_deref(), Some("Description"));
+        assert_eq!(created.icon.as_deref(), Some("box"));
+        assert_eq!(created.sort_order, 999);
+        assert_eq!(
+            repo.store.get_active_scenario_id().unwrap().as_deref(),
+            Some("active")
+        );
+        assert!(repo
+            .store
+            .get_all_scenarios()
+            .unwrap()
+            .iter()
+            .any(|scenario| scenario.id == created.id));
+    }
+
+    #[test]
+    fn create_preset_rejects_blank_name() {
+        let repo = test_repo();
+        assert!(create_preset(&repo.store, "  \t", None, None).is_err());
+    }
+
+    #[test]
+    fn delete_inactive_preset_keeps_current_active() {
+        let repo = test_repo();
+        repo.store.insert_scenario(&preset("active", 0, 1)).unwrap();
+        repo.store.insert_scenario(&preset("inactive", 1, 2)).unwrap();
+        repo.store.set_active_scenario("active").unwrap();
+
+        let was_active = delete_preset(&repo.store, "inactive").expect("delete succeeds");
+
+        assert!(!was_active);
+        assert_eq!(
+            repo.store.get_active_scenario_id().unwrap().as_deref(),
+            Some("active")
+        );
+    }
+
+    #[test]
+    fn delete_active_preset_activates_first_remaining_preset() {
+        let repo = test_repo();
+        repo.store.insert_scenario(&preset("active", 0, 1)).unwrap();
+        repo.store.insert_scenario(&preset("later", 20, 2)).unwrap();
+        repo.store.insert_scenario(&preset("first", 10, 3)).unwrap();
+        repo.store.set_active_scenario("active").unwrap();
+
+        let was_active = delete_preset(&repo.store, "active").expect("delete succeeds");
+
+        assert!(was_active);
+        assert_eq!(
+            repo.store.get_active_scenario_id().unwrap().as_deref(),
+            Some("first")
+        );
+    }
+
+    #[test]
+    fn delete_unknown_preset_errors() {
+        let repo = test_repo();
+        assert!(delete_preset(&repo.store, "missing").is_err());
+    }
+
+    #[test]
+    fn cli_state_preserves_intentionally_empty_preset_list() {
+        let repo = test_repo();
+        ensure_cli_scenario_state(&repo.store).unwrap();
+        let default_id = repo.store.get_active_scenario_id().unwrap().unwrap();
+
+        delete_preset(&repo.store, &default_id).unwrap();
+        assert!(sync_metadata::metadata_has_complete_scenario_snapshot());
+
+        let reopened = SkillStore::new(&central_repo::base_dir().join("test.db")).unwrap();
+        sync_metadata::reindex_from_metadata(&reopened).unwrap();
+        ensure_cli_scenario_state(&reopened).unwrap();
+
+        assert!(reopened.get_all_scenarios().unwrap().is_empty());
+        assert!(reopened.get_active_scenario_id().unwrap().is_none());
     }
 }

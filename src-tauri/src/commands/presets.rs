@@ -7,7 +7,7 @@ use tauri::State;
 use crate::core::{
     error::AppError,
     scenario_service::{self, BatchApplyMode},
-    skill_store::{ScenarioRecord, SkillStore},
+    skill_store::SkillStore,
     sync_metadata, tool_adapters,
     timing::should_log_first_or_slow,
 };
@@ -113,40 +113,30 @@ pub async fn create_preset(
 ) -> Result<PresetDto, AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let now = chrono::Utc::now().timestamp_millis();
-        let id = uuid::Uuid::new_v4().to_string();
         let previous_active_id = store.get_active_scenario_id().map_err(AppError::db)?;
-
-        let record = ScenarioRecord {
-            id: id.clone(),
-            name: name.clone(),
-            description: description.clone(),
-            icon: icon.clone(),
-            sort_order: 999,
-            created_at: now,
-            updated_at: now,
-        };
-
-        sync_metadata::with_repo_lock("create scenario", || {
-            store.insert_scenario(&record)?;
-            sync_metadata::write_all_from_db_unlocked(&store)
-        })
-        .map_err(AppError::db)?;
+        let record = scenario_service::create_preset(
+            &store,
+            &name,
+            description.as_deref(),
+            icon.as_deref(),
+        )?;
 
         if let Some(previous_id) = previous_active_id.as_deref() {
             unsync_scenario_skills(&store, previous_id)?;
         }
-        store.set_active_scenario(&id).map_err(AppError::db)?;
+        store
+            .set_active_scenario(&record.id)
+            .map_err(AppError::db)?;
 
         Ok(PresetDto {
-            id,
-            name,
-            description,
-            icon,
-            sort_order: 999,
+            id: record.id,
+            name: record.name,
+            description: record.description,
+            icon: record.icon,
+            sort_order: record.sort_order,
             skill_count: 0,
-            created_at: now,
-            updated_at: now,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
         })
     })
     .await?;
@@ -188,33 +178,7 @@ pub async fn delete_preset(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let was_active = store
-            .get_active_scenario_id()
-            .map_err(AppError::db)?
-            .as_deref()
-            == Some(id.as_str());
-
-        if was_active {
-            unsync_scenario_skills(&store, &id)?;
-        }
-
-        sync_metadata::with_repo_lock("delete scenario", || {
-            store.delete_scenario(&id)?;
-            sync_metadata::write_all_from_db_unlocked(&store)
-        })
-        .map_err(AppError::db)?;
-
-        if was_active {
-            let remaining = store.get_all_scenarios().map_err(AppError::db)?;
-            if let Some(first) = remaining.first() {
-                store.set_active_scenario(&first.id).map_err(AppError::db)?;
-                sync_scenario_skills(&store, &first.id)?;
-            } else {
-                store.clear_active_scenario().map_err(AppError::db)?;
-            }
-        }
-
-        Ok(())
+        scenario_service::delete_preset(&store, &id).map(|_| ())
     })
     .await?;
     if result.is_ok() {
@@ -374,6 +338,7 @@ pub async fn reorder_preset_skills(
 
 // ── Internal helpers ──
 
+#[cfg(test)]
 pub(crate) fn sync_scenario_skills(store: &SkillStore, scenario_id: &str) -> Result<(), AppError> {
     scenario_service::sync_scenario_skills(store, scenario_id)
 }
@@ -446,7 +411,7 @@ mod tests {
     use crate::core::scenario_service::{
         collect_scenario_sync_targets, sync_desired_targets, unsync_obsolete_scenario_targets,
     };
-    use crate::core::skill_store::SkillRecord;
+    use crate::core::skill_store::{ScenarioRecord, SkillRecord};
     use crate::core::tool_adapters::{self, CustomToolDef};
     use std::path::PathBuf;
     use std::fs;

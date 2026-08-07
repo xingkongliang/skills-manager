@@ -273,7 +273,7 @@ fn ensure_metadata_dirs() -> Result<()> {
     Ok(())
 }
 
-fn metadata_has_complete_scenario_snapshot() -> bool {
+pub(crate) fn metadata_has_complete_scenario_snapshot() -> bool {
     metadata_dir().join("schema.json").is_file()
         && metadata_dir().join("scenarios").is_dir()
         && metadata_dir().join("scenario-skills").is_dir()

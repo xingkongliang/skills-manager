@@ -184,6 +184,17 @@ struct PresetArgs {
 enum PresetCommand {
     List,
     Current,
+    /// Create a preset without activating it; use `presets apply <reference>` when ready.
+    Create {
+        name: String,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        icon: Option<String>,
+    },
+    Delete {
+        reference: String,
+    },
     Preview {
         reference: String,
     },
@@ -347,6 +358,16 @@ struct PresetDeactivateReport {
     preset_id: String,
     preset_name: String,
     removed_target_count: usize,
+    active_preset_id: Option<String>,
+    active_preset_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PresetDeleteReport {
+    ok: bool,
+    deleted_id: String,
+    deleted_name: String,
+    was_active: bool,
     active_preset_id: Option<String>,
     active_preset_name: Option<String>,
 }
@@ -1552,6 +1573,48 @@ fn run_presets(args: PresetArgs, store: &SkillStore, json: bool) -> anyhow::Resu
     match args.command {
         PresetCommand::List => print_json(&list_presets(store)?, json),
         PresetCommand::Current => print_json(&current_preset(store)?, json),
+        PresetCommand::Create {
+            name,
+            description,
+            icon,
+        } => {
+            let record = scenario_service::create_preset(
+                store,
+                &name,
+                description.as_deref(),
+                icon.as_deref(),
+            )
+            .map_err(map_app_err)?;
+            print_json(
+                &PresetInfo {
+                    id: record.id,
+                    name: record.name,
+                    description: record.description,
+                    icon: record.icon,
+                    sort_order: record.sort_order,
+                    skill_count: 0,
+                    active: false,
+                },
+                json,
+            );
+        }
+        PresetCommand::Delete { reference } => {
+            let preset = resolve_scenario(store, &reference)?;
+            let was_active =
+                scenario_service::delete_preset(store, &preset.id).map_err(map_app_err)?;
+            let active = current_preset(store)?;
+            print_json(
+                &PresetDeleteReport {
+                    ok: true,
+                    deleted_id: preset.id,
+                    deleted_name: preset.name,
+                    was_active,
+                    active_preset_id: active.as_ref().map(|preset| preset.id.clone()),
+                    active_preset_name: active.map(|preset| preset.name),
+                },
+                json,
+            );
+        }
         PresetCommand::Preview { reference } => {
             let preset = resolve_scenario(store, &reference)?;
             let preview = scenario_service::preview_scenario_sync(store, &preset.id)
@@ -1818,4 +1881,73 @@ fn print_json<T: Serialize>(value: &T, json: bool) {
         serde_json::to_string_pretty(value).unwrap()
     };
     println!("{rendered}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn parses_preset_create_options() {
+        let cli = Cli::try_parse_from([
+            "skills-manager-cli",
+            "presets",
+            "create",
+            "Automation",
+            "--description",
+            "Headless preset",
+            "--icon",
+            "terminal",
+        ])
+        .unwrap();
+
+        let Commands::Presets(PresetArgs {
+            command:
+                PresetCommand::Create {
+                    name,
+                    description,
+                    icon,
+                },
+        }) = cli.command
+        else {
+            panic!("expected presets create");
+        };
+        assert_eq!(name, "Automation");
+        assert_eq!(description.as_deref(), Some("Headless preset"));
+        assert_eq!(icon.as_deref(), Some("terminal"));
+    }
+
+    #[test]
+    fn parses_preset_delete_reference() {
+        let cli = Cli::try_parse_from([
+            "skills-manager-cli",
+            "presets",
+            "delete",
+            "Automation",
+        ])
+        .unwrap();
+
+        let Commands::Presets(PresetArgs {
+            command: PresetCommand::Delete { reference },
+        }) = cli.command
+        else {
+            panic!("expected presets delete");
+        };
+        assert_eq!(reference, "Automation");
+    }
+
+    #[test]
+    fn preset_create_help_explains_activation_behavior() {
+        let mut command = Cli::command();
+        let create = command
+            .find_subcommand_mut("presets")
+            .unwrap()
+            .find_subcommand_mut("create")
+            .unwrap();
+        let help = create.render_long_help().to_string();
+
+        assert!(help.contains("without activating"));
+        assert!(help.contains("presets apply"));
+    }
 }
