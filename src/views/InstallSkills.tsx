@@ -44,7 +44,14 @@ const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
 
 export function InstallSkills() {
   const { t } = useTranslation();
-  const { refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById } = useApp();
+  const {
+    refreshPresets,
+    refreshManagedSkills,
+    managedSkills,
+    openSkillDetailById,
+    workspaceContext,
+    isRemoteWorkspace,
+  } = useApp();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<"market" | "local" | "git">("market");
@@ -97,6 +104,7 @@ export function InstallSkills() {
 
   const managedSkillsRef = useRef(managedSkills);
   managedSkillsRef.current = managedSkills;
+  const remoteMachineId = workspaceContext.kind === "remote" ? workspaceContext.machine.id : null;
 
   const goToSkill = useCallback((skillName: string) => {
     // Use ref to get the latest managedSkills after refresh
@@ -288,16 +296,20 @@ export function InstallSkills() {
   }, [activeTab, debouncedMarketQuery, marketReloadKey, marketSearchLimit, marketTab, pruneMarketSearchCache, t]);
 
   useEffect(() => {
-    if (activeTab === "local" && !scanResult && !scanLoading) {
+    if (!isRemoteWorkspace && activeTab === "local" && !scanResult && !scanLoading) {
       runScan();
     }
-  }, [activeTab, scanLoading, scanResult, runScan]);
+  }, [activeTab, isRemoteWorkspace, scanLoading, scanResult, runScan]);
 
   const installLocalSource = async (sourcePath: string) => {
     const name = sourcePath.split("/").pop() || sourcePath;
     const toastId = toast.loading(t("install.toast.installing", { name }));
     try {
-      await api.installLocal(sourcePath);
+      if (remoteMachineId) {
+        await api.installLocalToRemote(remoteMachineId, sourcePath);
+      } else {
+        await api.installLocal(sourcePath);
+      }
     } catch (e) {
       const message = getErrorMessage(e, t("common.error"));
       setLocalError(message);
@@ -307,9 +319,9 @@ export function InstallSkills() {
     // Install succeeded — post-install refresh is best-effort and must not
     // surface as an install failure.
     const results = await Promise.allSettled([
-      refreshPresets(),
+      ...(remoteMachineId ? [] : [refreshPresets()]),
       refreshManagedSkills(),
-      runScanSilent(),
+      ...(remoteMachineId ? [] : [runScanSilent()]),
     ]);
     warnRejected(results, "post-install refresh");
     toast.success(t("install.toast.success", { name }), {
@@ -352,6 +364,7 @@ export function InstallSkills() {
   };
 
   const handleBatchImportFolder = async () => {
+    if (isRemoteWorkspace) return;
     let unlisten: (() => void) | null = null;
     try {
       const selected = await open({
@@ -435,8 +448,13 @@ export function InstallSkills() {
           }
         }
       );
-      await api.installFromSkillssh(skill.source, skill.skill_id);
-      await Promise.all([refreshPresets(), refreshManagedSkills()]);
+      if (remoteMachineId) {
+        await api.installSkillsshToRemote(remoteMachineId, skill.source, skill.skill_id);
+        await refreshManagedSkills();
+      } else {
+        await api.installFromSkillssh(skill.source, skill.skill_id);
+        await Promise.all([refreshPresets(), refreshManagedSkills()]);
+      }
       toast.success(t("install.toast.success", { name: displayName }), {
         id: toastId,
         action: {
@@ -464,6 +482,22 @@ export function InstallSkills() {
 
   const handleGitPreview = async () => {
     if (!gitUrl.trim()) return;
+    if (remoteMachineId) {
+      setGitLoading(true);
+      const url = gitUrl.trim();
+      const toastId = toast.loading(t("install.toast.cloning"));
+      try {
+        await api.installGitToRemote(remoteMachineId, url);
+        await refreshManagedSkills();
+        toast.success(t("install.toast.success", { name: url }), { id: toastId });
+        setGitUrl("");
+      } catch (error: unknown) {
+        toast.error(getErrorMessage(error, t("common.error")), { id: toastId });
+      } finally {
+        setGitLoading(false);
+      }
+      return;
+    }
     setGitLoading(true);
     const url = gitUrl.trim();
     setGitCancelKey(url);
@@ -1229,14 +1263,16 @@ export function InstallSkills() {
                     <UploadCloud className="h-4 w-4" />
                     {t("install.local.selectArchive")}
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleBatchImportFolder}
-                    className="app-button-secondary bg-background"
-                  >
-                    <FolderInput className="h-4 w-4" />
-                    {t("install.local.batchImport")}
-                  </button>
+                  {!isRemoteWorkspace && (
+                    <button
+                      type="button"
+                      onClick={handleBatchImportFolder}
+                      className="app-button-secondary bg-background"
+                    >
+                      <FolderInput className="h-4 w-4" />
+                      {t("install.local.batchImport")}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -1254,6 +1290,7 @@ export function InstallSkills() {
             />
           ) : null}
 
+          {!isRemoteWorkspace && (
           <section className="app-panel overflow-hidden">
             <div className="flex items-center justify-between gap-4 border-b border-border-subtle px-4 py-3.5">
               <div>
@@ -1442,6 +1479,7 @@ export function InstallSkills() {
               )}
             </div>
           </section>
+          )}
         </div>
       )}
 
@@ -1469,7 +1507,7 @@ export function InstallSkills() {
                   className="app-input w-full bg-background"
                 />
               </div>
-              {gitUrl.trim() && findInstalledByGitUrl(gitUrl) && (
+              {!isRemoteWorkspace && gitUrl.trim() && findInstalledByGitUrl(gitUrl) && (
                 <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-400">
                   <Check className="h-3.5 w-3.5 shrink-0" />
                   <span>
@@ -1493,13 +1531,15 @@ export function InstallSkills() {
                     disabled={!gitUrl.trim()}
                     className={cn(
                       "flex w-full",
-                      gitUrl.trim() && findInstalledByGitUrl(gitUrl)
+                      !isRemoteWorkspace && gitUrl.trim() && findInstalledByGitUrl(gitUrl)
                         ? "app-button-secondary bg-background"
                         : "app-button-primary"
                     )}
                   >
                     <DownloadCloud className="h-3.5 w-3.5" />
-                    {gitUrl.trim() && findInstalledByGitUrl(gitUrl)
+                    {isRemoteWorkspace
+                      ? t("install.remote.installGit")
+                      : gitUrl.trim() && findInstalledByGitUrl(gitUrl)
                       ? t("install.gitReinstall")
                       : t("install.installClone")}
                   </button>

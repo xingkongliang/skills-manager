@@ -48,8 +48,7 @@ fn other_rules() -> &'static [(Regex, &'static str)] {
             rules.push((re, "git@"));
         }
         // Generic bearer / token-like long hex/base64 strings (>=32)
-        if let Ok(re) = Regex::new(r"\b(?:gh[ps]_|sk-|xox[abprs]-|ghu_|ghr_)[A-Za-z0-9_\-]{16,}")
-        {
+        if let Ok(re) = Regex::new(r"\b(?:gh[ps]_|sk-|xox[abprs]-|ghu_|ghr_)[A-Za-z0-9_\-]{16,}") {
             rules.push((re, "<token>"));
         }
         // Email addresses

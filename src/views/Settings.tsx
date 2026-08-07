@@ -18,6 +18,7 @@ import {
   Bug,
   Download,
   FileArchive,
+  Server,
   Type,
   Pencil,
   RotateCcw,
@@ -157,7 +158,7 @@ function AgentGroupDnd({ items, sensors, dragLabel, onDragEnd, renderAgentCard }
 export function Settings() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { tools, refreshTools, openHelp, appUpdate, refreshAppUpdate } = useApp();
+  const { tools, refreshTools, openHelp, appUpdate, refreshAppUpdate, refreshRemoteMachines } = useApp();
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const { theme, setTheme } = useThemeContext();
   const [syncMode, setSyncMode] = useState("symlink");
@@ -202,6 +203,14 @@ export function Settings() {
   const [customProjectPath, setCustomProjectPath] = useState("");
   const [addingCustom, setAddingCustom] = useState(false);
   const [showMoreAgents, setShowMoreAgents] = useState(false);
+  const [remoteMachines, setRemoteMachines] = useState<api.RemoteMachine[]>([]);
+  const [remoteForm, setRemoteForm] = useState<api.RemoteMachine>({
+    id: "",
+    name: "",
+    ssh_target: "",
+    skills_dir: "",
+  });
+  const [remoteBusyKey, setRemoteBusyKey] = useState<string | null>(null);
 
   const GITHUB_URL = "https://github.com/xingkongliang/skills-manager";
 
@@ -316,6 +325,70 @@ export function Settings() {
       toast.success(t("settings.customAgentRemoved"));
     } catch {
       toast.error(t("common.error"));
+    }
+  };
+
+  const loadRemoteMachines = useCallback(async () => {
+    try {
+      const machines = await api.getRemoteMachines();
+      setRemoteMachines(machines);
+    } catch (e) {
+      toast.error(getErrorMessage(e, t("common.error")));
+    }
+  }, [t]);
+
+  useEffect(() => {
+    loadRemoteMachines();
+  }, [loadRemoteMachines]);
+
+  const resetRemoteForm = () => {
+    setRemoteForm({ id: "", name: "", ssh_target: "", skills_dir: "" });
+  };
+
+  const handleSaveRemoteMachine = async () => {
+    if (!remoteForm.name.trim() || !remoteForm.ssh_target.trim() || !remoteForm.skills_dir.trim()) {
+      toast.error(t("settings.remoteRequired"));
+      return;
+    }
+    setRemoteBusyKey("save");
+    try {
+      const saved = await api.upsertRemoteMachine(remoteForm);
+      await loadRemoteMachines();
+      await refreshRemoteMachines();
+      resetRemoteForm();
+      toast.success(t("settings.remoteSaved", { name: saved.name }));
+    } catch (e) {
+      toast.error(getErrorMessage(e, t("common.error")));
+    } finally {
+      setRemoteBusyKey(null);
+    }
+  };
+
+  const handleTestRemoteMachine = async (machine: api.RemoteMachine) => {
+    setRemoteBusyKey(`test:${machine.id || "form"}`);
+    try {
+      await api.testRemoteMachine(machine);
+      toast.success(t("settings.remoteConnected"));
+    } catch (e) {
+      toast.error(getErrorMessage(e, t("settings.remoteConnectFailed")));
+    } finally {
+      setRemoteBusyKey(null);
+    }
+  };
+
+  const handleDeleteRemoteMachine = async (machine: api.RemoteMachine) => {
+    const shouldRemove = await dialogConfirm(t("settings.remoteRemoveConfirm", { name: machine.name }));
+    if (!shouldRemove) return;
+    setRemoteBusyKey(`delete:${machine.id}`);
+    try {
+      await api.deleteRemoteMachine(machine.id);
+      await loadRemoteMachines();
+      await refreshRemoteMachines();
+      toast.success(t("settings.remoteRemoved"));
+    } catch (e) {
+      toast.error(getErrorMessage(e, t("common.error")));
+    } finally {
+      setRemoteBusyKey(null);
     }
   };
 
@@ -1221,6 +1294,140 @@ export function Settings() {
                   renderAgentCard={renderAgentCard}
                 />
               </div>
+            )}
+          </div>
+        </section>
+
+        {/* Remote machines */}
+        <section>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="app-section-title flex items-center gap-2">
+                <Server className="h-4 w-4 text-accent" />
+                {t("settings.remoteMachines")}
+              </h2>
+              <p className="mt-1 text-[12px] text-muted">{t("settings.remoteMachinesDesc")}</p>
+            </div>
+            <span className="rounded-full bg-surface-hover px-2 py-0.5 text-[12px] text-muted">
+              {t("settings.remoteMachineCount", { count: remoteMachines.length })}
+            </span>
+          </div>
+
+          <div className="app-panel mb-3 p-4">
+            <div className="grid grid-cols-1 gap-2.5 md:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-[12px] text-muted">{t("settings.remoteName")}</label>
+                <input
+                  value={remoteForm.name}
+                  onChange={(e) => setRemoteForm((current) => ({ ...current, name: e.target.value }))}
+                  placeholder={t("settings.remoteNamePlaceholder")}
+                  className={`${fieldClass} w-full`}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[12px] text-muted">{t("settings.remoteSshTarget")}</label>
+                <input
+                  value={remoteForm.ssh_target}
+                  onChange={(e) => setRemoteForm((current) => ({ ...current, ssh_target: e.target.value }))}
+                  placeholder={t("settings.remoteSshTargetPlaceholder")}
+                  className={`${fieldClass} w-full font-mono`}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[12px] text-muted">{t("settings.remoteSkillsPath")}</label>
+                <input
+                  value={remoteForm.skills_dir}
+                  onChange={(e) => setRemoteForm((current) => ({ ...current, skills_dir: e.target.value }))}
+                  placeholder={t("settings.remoteSkillsPathPlaceholder")}
+                  className={`${fieldClass} w-full font-mono`}
+                />
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[12px] text-muted">{t("settings.remoteAuthHint")}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => handleTestRemoteMachine(remoteForm)}
+                  disabled={remoteBusyKey === "test:form" || !remoteForm.ssh_target.trim() || !remoteForm.skills_dir.trim()}
+                  className={`${actionButtonClass} border-border bg-surface-hover text-tertiary hover:bg-surface-active disabled:opacity-50`}
+                >
+                  {remoteBusyKey === "test:form" ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                  {t("settings.remoteTest")}
+                </button>
+                {remoteForm.id && (
+                  <button
+                    onClick={resetRemoteForm}
+                    className={`${actionButtonClass} border-border bg-surface-hover text-tertiary hover:bg-surface-active`}
+                  >
+                    <X className="h-3 w-3" />
+                    {t("common.cancel")}
+                  </button>
+                )}
+                <button
+                  onClick={handleSaveRemoteMachine}
+                  disabled={remoteBusyKey === "save" || !remoteForm.name.trim() || !remoteForm.ssh_target.trim() || !remoteForm.skills_dir.trim()}
+                  className={`${actionButtonClass} border-accent bg-accent text-white hover:opacity-90 disabled:opacity-50`}
+                >
+                  {remoteBusyKey === "save" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                  {remoteForm.id ? t("settings.remoteUpdate") : t("settings.remoteAdd")}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {remoteMachines.length === 0 ? (
+              <div className="app-panel px-4 py-5 text-[13px] text-muted">
+                {t("settings.remoteEmpty")}
+              </div>
+            ) : (
+              remoteMachines.map((machine) => {
+                return (
+                  <div key={machine.id} className="app-panel overflow-hidden">
+                    <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-[14px] font-semibold text-primary">{machine.name}</h3>
+                          <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-300">
+                            SSH
+                          </span>
+                        </div>
+                        <p className="mt-1 truncate font-mono text-[12px] text-muted" title={machine.ssh_target}>
+                          {machine.ssh_target}
+                        </p>
+                        <p className="mt-0.5 truncate font-mono text-[12px] text-faint" title={machine.skills_dir}>
+                          {machine.skills_dir}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => setRemoteForm(machine)}
+                          className={`${actionButtonClass} border-border bg-surface-hover text-tertiary hover:bg-surface-active`}
+                        >
+                          <Pencil className="h-3 w-3" />
+                          {t("settings.editPath")}
+                        </button>
+                        <button
+                          onClick={() => handleTestRemoteMachine(machine)}
+                          disabled={remoteBusyKey === `test:${machine.id}`}
+                          className={`${actionButtonClass} border-border bg-surface-hover text-tertiary hover:bg-surface-active disabled:opacity-50`}
+                        >
+                          {remoteBusyKey === `test:${machine.id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                          {t("settings.remoteTest")}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteRemoteMachine(machine)}
+                          disabled={remoteBusyKey === `delete:${machine.id}`}
+                          className={`${actionButtonClass} border-border bg-surface-hover text-red-500 hover:bg-red-500/10 disabled:opacity-50`}
+                        >
+                          {remoteBusyKey === `delete:${machine.id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                          {t("settings.remoteRemove")}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
         </section>

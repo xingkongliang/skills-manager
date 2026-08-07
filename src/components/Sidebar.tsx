@@ -14,6 +14,8 @@ import {
   FolderOpen,
   GripVertical,
   Link2,
+  Server,
+  Monitor,
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
@@ -48,7 +50,22 @@ export function Sidebar() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
-  const { presets, viewedPreset, setViewedPresetId, refreshPresets, refreshManagedSkills, projects, refreshProjects, tools, managedSkills, appUpdate } = useApp();
+  const {
+    presets,
+    viewedPreset,
+    setViewedPresetId,
+    refreshPresets,
+    refreshManagedSkills,
+    projects,
+    refreshProjects,
+    tools,
+    managedSkills,
+    appUpdate,
+    remoteMachines,
+    workspaceContext,
+    setLocalWorkspace,
+    setRemoteWorkspace,
+  } = useApp();
   const [showCreate, setShowCreate] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; icon?: string | null } | null>(null);
@@ -73,6 +90,7 @@ export function Sidebar() {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [globalWorkspaceOpen, setGlobalWorkspaceOpen] = useState(true);
   const [lobsterWorkspaceOpen, setLobsterWorkspaceOpen] = useState(true);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   const globalSkillsByAgent = useMemo(() => {
     const map: Record<string, number> = {};
@@ -389,6 +407,83 @@ export function Sidebar() {
           <span className="text-[16px] font-semibold text-secondary tracking-tight truncate leading-[22px]">
             {t("app.name")}
           </span>
+        </div>
+
+        <div className="mx-2.5 mb-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-2">
+          <button
+            type="button"
+            onClick={() => setWorkspaceOpen((open) => !open)}
+            className="flex w-full items-center gap-2 text-left outline-none"
+          >
+            {workspaceContext.kind === "remote" ? (
+              <Server className="h-3.5 w-3.5 shrink-0 text-accent" />
+            ) : (
+              <Monitor className="h-3.5 w-3.5 shrink-0 text-muted" />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[12px] font-medium text-secondary">
+                {workspaceContext.kind === "remote" ? workspaceContext.machine.name : t("sidebar.localWorkspace")}
+              </div>
+              <div className="truncate text-[10px] text-faint">
+                {workspaceContext.kind === "remote" ? workspaceContext.machine.ssh_target : t("sidebar.localWorkspaceDesc")}
+              </div>
+            </div>
+            {workspaceOpen ? (
+              <ChevronDown className="h-3 w-3 shrink-0 text-faint" />
+            ) : (
+              <ChevronRight className="h-3 w-3 shrink-0 text-faint" />
+            )}
+          </button>
+          {workspaceOpen && (
+            <div className="mt-2 space-y-1 border-t border-border-faint pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setLocalWorkspace();
+                  setWorkspaceOpen(false);
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] outline-none",
+                  workspaceContext.kind === "local"
+                    ? "bg-accent-bg text-accent"
+                    : "text-muted hover:bg-surface-hover hover:text-secondary"
+                )}
+              >
+                <Monitor className="h-3.5 w-3.5" />
+                {t("sidebar.localWorkspace")}
+              </button>
+              {remoteMachines.map((machine) => (
+                <button
+                  key={machine.id}
+                  type="button"
+                  onClick={() => {
+                    setRemoteWorkspace(machine.id);
+                    setWorkspaceOpen(false);
+                    if (location.pathname !== "/my-skills") {
+                      navigate("/my-skills");
+                    }
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] outline-none",
+                    workspaceContext.kind === "remote" && workspaceContext.machine.id === machine.id
+                      ? "bg-accent-bg text-accent"
+                      : "text-muted hover:bg-surface-hover hover:text-secondary"
+                  )}
+                >
+                  <Server className="h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{machine.name}</span>
+                </button>
+              ))}
+              {remoteMachines.length === 0 && (
+                <Link
+                  to="/settings"
+                  className="block rounded-md px-2 py-1.5 text-[12px] text-muted hover:bg-surface-hover hover:text-secondary"
+                >
+                  {t("sidebar.addRemoteWorkspace")}
+                </Link>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Nav */}

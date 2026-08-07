@@ -206,8 +206,16 @@ fn collect_tray_menu_data(store: &core::skill_store::SkillStore) -> TrayMenuData
 }
 
 fn format_status_line(data: &TrayMenuData) -> String {
-    let skill_label = if data.total_skills == 1 { "skill" } else { "skills" };
-    let agent_label = if data.coding_agent_count == 1 { "agent" } else { "agents" };
+    let skill_label = if data.total_skills == 1 {
+        "skill"
+    } else {
+        "skills"
+    };
+    let agent_label = if data.coding_agent_count == 1 {
+        "agent"
+    } else {
+        "agents"
+    };
     format!(
         "{} {} · {} {} connected",
         data.total_skills, skill_label, data.coding_agent_count, agent_label
@@ -241,7 +249,11 @@ fn preset_menu_item_id(preset: &TrayPresetEntry) -> (String, &'static str) {
 }
 
 fn preset_menu_label(preset: &TrayPresetEntry) -> String {
-    let unit = if preset.skill_count == 1 { "skill" } else { "skills" };
+    let unit = if preset.skill_count == 1 {
+        "skill"
+    } else {
+        "skills"
+    };
     match preset.status() {
         TrayPresetStatus::Active => format!("✓ {} ({} {unit})", preset.name, preset.skill_count),
         TrayPresetStatus::Partial => format!(
@@ -569,7 +581,9 @@ fn check_updates_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 {
                     Ok(lock) => lock,
                     Err(err) => {
-                        log::warn!("Tray update check: failed to acquire repo lock for {skill_id}: {err}");
+                        log::warn!(
+                            "Tray update check: failed to acquire repo lock for {skill_id}: {err}"
+                        );
                         continue;
                     }
                 };
@@ -632,7 +646,8 @@ fn open_skills_folder_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
         let status = cmd.arg(&repo_path).status();
         match status {
-            Ok(_status) => {
+            Ok(_status) =>
+            {
                 #[cfg(not(target_os = "windows"))]
                 if !_status.success() {
                     log::warn!(
@@ -1070,6 +1085,21 @@ pub fn run() {
             commands::git_backup::git_backup_pending_conflicts,
             commands::git_backup::git_backup_resolve_conflict,
             commands::git_backup::git_backup_sync,
+            // Remote machines
+            commands::remote::get_remote_machines,
+            commands::remote::upsert_remote_machine,
+            commands::remote::delete_remote_machine,
+            commands::remote::test_remote_machine,
+            commands::remote::list_remote_skills,
+            commands::remote::get_remote_skill_document,
+            commands::remote::install_local_to_remote,
+            commands::remote::install_git_to_remote,
+            commands::remote::delete_remote_skill,
+            commands::remote::get_remote_agent_skills,
+            commands::remote::get_remote_agent_skill_document,
+            commands::remote::add_remote_skill_to_agent,
+            commands::remote::remove_remote_agent_skill,
+            commands::remote::install_skillssh_to_remote,
             // Projects
             commands::projects::get_projects,
             commands::projects::add_project,

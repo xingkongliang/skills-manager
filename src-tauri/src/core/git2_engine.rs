@@ -135,7 +135,10 @@ pub fn fetch(repo_dir: &Path, branch: Option<&str>, url: &str) -> Result<()> {
     remote
         .fetch(&refs, Some(&mut fetch_options(url)), None)
         .map_err(|e| normalize_err(e, "fetch"))?;
-    log::info!("git2 fetch: done ({})", branch.unwrap_or("configured refspecs"));
+    log::info!(
+        "git2 fetch: done ({})",
+        branch.unwrap_or("configured refspecs")
+    );
     Ok(())
 }
 
@@ -230,12 +233,7 @@ mod tests {
         let out = Command::new("git")
             .arg("-C")
             .arg(dir)
-            .args([
-                "-c",
-                "user.email=test@example.com",
-                "-c",
-                "user.name=Test",
-            ])
+            .args(["-c", "user.email=test@example.com", "-c", "user.name=Test"])
             .args(args)
             .output()
             .unwrap();
@@ -286,8 +284,7 @@ mod tests {
             &work,
             &[
                 "refs/heads/main:refs/heads/main".to_string(),
-                "refs/tags/sm-v-20260101-000000-abc:refs/tags/sm-v-20260101-000000-abc"
-                    .to_string(),
+                "refs/tags/sm-v-20260101-000000-abc:refs/tags/sm-v-20260101-000000-abc".to_string(),
             ],
             &url,
         )
@@ -318,7 +315,12 @@ mod tests {
         std::fs::write(other.join("b.txt"), "from other").unwrap();
         git(&other, &["add", "-A"]);
         git(&other, &["commit", "-m", "v2"]);
-        push_refs(&other, &["refs/heads/main:refs/heads/main".to_string()], &url).unwrap();
+        push_refs(
+            &other,
+            &["refs/heads/main:refs/heads/main".to_string()],
+            &url,
+        )
+        .unwrap();
 
         fetch(&work, Some("main"), &url).unwrap();
         let out = Command::new("git")
@@ -366,8 +368,8 @@ mod tests {
         std::fs::write(b.join("f.txt"), "from b").unwrap();
         git(&b, &["commit", "-am", "b2"]);
 
-        let err = push_refs(&b, &["refs/heads/main:refs/heads/main".to_string()], &url)
-            .unwrap_err();
+        let err =
+            push_refs(&b, &["refs/heads/main:refs/heads/main".to_string()], &url).unwrap_err();
         let msg = format!("{err:#}").to_ascii_lowercase();
         assert!(
             msg.contains("non-fast-forward") || msg.contains("fast-forward"),

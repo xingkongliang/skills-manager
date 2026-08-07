@@ -183,6 +183,19 @@ export interface ProjectSkillDocument {
   content: string;
 }
 
+export interface RemoteMachine {
+  id: string;
+  name: string;
+  ssh_target: string;
+  skills_dir: string;
+}
+
+export interface RemoteSkill {
+  name: string;
+  path: string;
+  description: string | null;
+}
+
 // ── Tools ──
 
 export const getToolStatus = () => invoke<ToolInfo[]>("get_tool_status");
@@ -231,6 +244,39 @@ export const addCustomTool = (
 
 export const removeCustomTool = (key: string) =>
   invoke<void>("remove_custom_tool", { key });
+
+// ── Remote Machines ──
+
+export const getRemoteMachines = () =>
+  invoke<RemoteMachine[]>("get_remote_machines");
+
+export const upsertRemoteMachine = (machine: RemoteMachine) =>
+  invoke<RemoteMachine>("upsert_remote_machine", { machine });
+
+export const deleteRemoteMachine = (id: string) =>
+  invoke<void>("delete_remote_machine", { id });
+
+export const testRemoteMachine = (machine: RemoteMachine) =>
+  invoke<void>("test_remote_machine", { machine });
+
+export const listRemoteSkills = (id: string) =>
+  invoke<RemoteSkill[]>("list_remote_skills", { id });
+
+export const getRemoteSkillDocument = (id: string, skillName: string) =>
+  invoke<SkillDocument>("get_remote_skill_document", { id, skillName });
+
+export const installLocalToRemote = (id: string, sourcePath: string, name?: string) =>
+  invoke<void>("install_local_to_remote", {
+    id,
+    sourcePath,
+    name: name || null,
+  });
+
+export const installGitToRemote = (id: string, repoUrl: string) =>
+  invoke<void>("install_git_to_remote", { id, repoUrl });
+
+export const deleteRemoteSkill = (id: string, skillName: string) =>
+  invoke<void>("delete_remote_skill", { id, skillName });
 
 // ── Skills ──
 
@@ -296,6 +342,9 @@ export const cancelGitPreview = (tempDir: string) =>
 
 export const installFromSkillssh = (source: string, skillId: string) =>
   invoke<void>("install_from_skillssh", { source, skillId });
+
+export const installSkillsshToRemote = (id: string, source: string, skillId: string) =>
+  invoke<void>("install_skillssh_to_remote", { id, source, skillId });
 
 export const cancelInstall = (key: string) =>
   invoke<boolean>("cancel_install", { key });
@@ -786,8 +835,14 @@ export const slugifySkillNames = (names: string[]) =>
 export const getGlobalLocalSkills = (agent: string) =>
   invoke<ProjectSkill[]>("get_global_local_skills", { agent });
 
+export const getRemoteAgentSkills = (id: string, agent: string) =>
+  invoke<ProjectSkill[]>("get_remote_agent_skills", { id, agent });
+
 export const getGlobalLocalSkillDocument = (agent: string, skillRelativePath: string) =>
   invoke<ProjectSkillDocument>("get_global_local_skill_document", { agent, skillRelativePath });
+
+export const getRemoteAgentSkillDocument = (id: string, agent: string, skillRelativePath: string) =>
+  invoke<ProjectSkillDocument>("get_remote_agent_skill_document", { id, agent, skillRelativePath });
 
 export const importGlobalLocalSkillToCenter = (agent: string, skillRelativePath: string) =>
   invoke<void>("import_global_local_skill_to_center", { agent, skillRelativePath });
@@ -797,3 +852,9 @@ export const updateGlobalLocalSkillFromCenter = (agent: string, skillRelativePat
 
 export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string) =>
   invoke<void>("delete_global_local_skill", { agent, skillRelativePath });
+
+export const addRemoteSkillToAgent = (id: string, skillName: string, agent: string) =>
+  invoke<void>("add_remote_skill_to_agent", { id, skillName, agent });
+
+export const removeRemoteAgentSkill = (id: string, agent: string, skillRelativePath: string) =>
+  invoke<void>("remove_remote_agent_skill", { id, agent, skillRelativePath });

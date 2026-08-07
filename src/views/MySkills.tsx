@@ -143,6 +143,8 @@ export function MySkills() {
     closeSkillDetail,
     projects,
     refreshProjects,
+    workspaceContext,
+    isRemoteWorkspace,
   } = useApp();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
@@ -177,6 +179,7 @@ export function MySkills() {
   const [presetSkillOrder, setPresetSkillOrder] = useState<string[]>([]);
 
   const viewedPresetName = viewedPreset?.name || t("mySkills.currentPresetFallback");
+  const remoteMachineId = workspaceContext.kind === "remote" ? workspaceContext.machine.id : null;
 
   // Fetch sort order whenever active preset changes
   useEffect(() => {
@@ -293,7 +296,7 @@ export function MySkills() {
         if (!matchUntagged && !matchTag) return false;
       }
 
-      if (!viewedPreset) return true;
+      if (isRemoteWorkspace || !viewedPreset) return true;
 
       const enabledInPreset = skill.preset_ids.includes(viewedPreset.id);
       if (filterMode === "enabled") return enabledInPreset;
@@ -318,7 +321,7 @@ export function MySkills() {
     }
 
     return result;
-  }, [skills, skillDisplayNames, search, sourceFilters, tagFilters, filterMode, viewedPreset, presetSkillOrder]);
+  }, [skills, skillDisplayNames, search, sourceFilters, tagFilters, filterMode, viewedPreset, presetSkillOrder, isRemoteWorkspace]);
 
   const {
     isMultiSelect, setIsMultiSelect,
@@ -373,7 +376,7 @@ export function MySkills() {
     [filtered, viewedPreset]
   );
 
-  const canDrag = !!viewedPreset;
+  const canDrag = !!viewedPreset && !isRemoteWorkspace;
 
   const refreshGitStatus = useCallback(async () => {
     try {
@@ -533,7 +536,11 @@ export function MySkills() {
       });
       void (async () => {
         try {
-          await api.deleteManagedSkill(skill.id);
+          if (remoteMachineId) {
+            await api.deleteRemoteSkill(remoteMachineId, skill.id);
+          } else {
+            await api.deleteManagedSkill(skill.id);
+          }
           if (selectedSkill?.id === skill.id) closeSkillDetail();
           toast.success(`${skill.name} ${t("mySkills.deleted")}`);
         } catch (error: unknown) {
@@ -549,7 +556,7 @@ export function MySkills() {
         }
       })();
     },
-    [selectedSkill, closeSkillDetail, t, scheduleRefreshAfterDelete]
+    [remoteMachineId, selectedSkill, closeSkillDetail, t, scheduleRefreshAfterDelete]
   );
 
   const handleBatchDelete = async () => {
@@ -1036,7 +1043,7 @@ export function MySkills() {
         </div>
 
         <div className="app-segmented">
-          {(() => {
+          {!isRemoteWorkspace && (() => {
             const mode = getGitToolbarMode();
             const meta = getGitStatusMeta(mode);
             const Icon = meta.icon;
@@ -1055,22 +1062,26 @@ export function MySkills() {
               </button>
             );
           })()}
-          <button
-            onClick={handleCheckAllUpdates}
-            disabled={checkingAll}
-            className="ml-2 mr-2 inline-flex items-center gap-1 rounded-md border-l border-border-subtle pl-4 pr-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", checkingAll && "animate-spin")} />
-            {t("mySkills.updateActions.checkAll")}
-          </button>
-          <button
-            onClick={handleUpdateAvailableSkills}
-            disabled={batchUpdating || availableUpdateCount === 0}
-            className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-accent-light transition-colors hover:bg-accent-bg disabled:opacity-50"
-          >
-            <RotateCcw className={cn("h-3.5 w-3.5", batchUpdating && "animate-spin")} />
-            {t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
-          </button>
+          {!isRemoteWorkspace && (
+            <>
+              <button
+                onClick={handleCheckAllUpdates}
+                disabled={checkingAll}
+                className="ml-2 mr-2 inline-flex items-center gap-1 rounded-md border-l border-border-subtle pl-4 pr-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", checkingAll && "animate-spin")} />
+                {t("mySkills.updateActions.checkAll")}
+              </button>
+              <button
+                onClick={handleUpdateAvailableSkills}
+                disabled={batchUpdating || availableUpdateCount === 0}
+                className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-accent-light transition-colors hover:bg-accent-bg disabled:opacity-50"
+              >
+                <RotateCcw className={cn("h-3.5 w-3.5", batchUpdating && "animate-spin")} />
+                {t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
+              </button>
+            </>
+          )}
           <button
             onClick={() => setViewMode("grid")}
             className={cn(
@@ -1089,21 +1100,23 @@ export function MySkills() {
           >
             <List className="h-4 w-4" />
           </button>
-          <button
-            onClick={() => isMultiSelect ? exitMultiSelect() : setIsMultiSelect(true)}
-            className={cn(
-              "rounded-md p-2 transition-colors outline-none",
-              isMultiSelect ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
-            )}
-            title={isMultiSelect ? t("mySkills.cancelSelect") : t("mySkills.selectMode")}
-          >
-            <SquareCheck className="h-4 w-4" />
-          </button>
+          {!isRemoteWorkspace && (
+            <button
+              onClick={() => isMultiSelect ? exitMultiSelect() : setIsMultiSelect(true)}
+              className={cn(
+                "rounded-md p-2 transition-colors outline-none",
+                isMultiSelect ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+              )}
+              title={isMultiSelect ? t("mySkills.cancelSelect") : t("mySkills.selectMode")}
+            >
+              <SquareCheck className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-1 px-1 -mt-2 -mb-3">
-        {(["local", "import", "git", "skillssh"] as const).map((src) => (
+        {(["local", "import", "git", "skillssh", "remote"] as const).map((src) => (
           <button
             key={src}
             onClick={() => setSourceFilters(toggleFilter(sourceFilters, src))}
@@ -1117,7 +1130,7 @@ export function MySkills() {
             {t(`mySkills.sourceFilter.${src}`)}
           </button>
         ))}
-        {allTags.length > 0 && (
+        {!isRemoteWorkspace && allTags.length > 0 && (
           <>
             <span className="mx-0.5 h-3 w-px bg-border-subtle" />
             {skills.some((s) => s.tags.length === 0) && (() => {
@@ -1166,7 +1179,7 @@ export function MySkills() {
         )}
       </div>
 
-      {isMultiSelect && (
+      {!isRemoteWorkspace && isMultiSelect && (
         <MultiSelectToolbar
           selectedCount={selectedIds.size}
           isAllSelected={isAllSelected}
@@ -1319,14 +1332,16 @@ export function MySkills() {
                               : "opacity-0 group-hover:opacity-100"
                           )}
                           actions={[
-                            {
-                              key: "check",
-                              label: t("mySkills.updateActions.check"),
-                              icon: <RefreshCw className={cn("h-3.5 w-3.5", checkingSkillId === skill.id && "animate-spin")} />,
-                              disabled: checkingSkillId === skill.id,
-                              onSelect: () => handleCheckUpdate(skill),
-                            },
-                            ...(canRefresh(skill)
+                            ...(!isRemoteWorkspace
+                              ? [{
+                                  key: "check",
+                                  label: t("mySkills.updateActions.check"),
+                                  icon: <RefreshCw className={cn("h-3.5 w-3.5", checkingSkillId === skill.id && "animate-spin")} />,
+                                  disabled: checkingSkillId === skill.id,
+                                  onSelect: () => handleCheckUpdate(skill),
+                                }]
+                              : []),
+                            ...(!isRemoteWorkspace && canRefresh(skill)
                               ? [{
                                   key: "refresh",
                                   label: refreshLabel(skill),
@@ -1344,12 +1359,14 @@ export function MySkills() {
                             },
                           ]}
                         />
-                        <ToggleSwitch
-                          checked={enabledInPreset}
-                          disabled={!viewedPreset}
-                          onChange={() => handleTogglePreset(skill)}
-                          title={enabledInPreset ? t("mySkills.enabledButton") : t("mySkills.enable")}
-                        />
+                        {!isRemoteWorkspace && (
+                          <ToggleSwitch
+                            checked={enabledInPreset}
+                            disabled={!viewedPreset}
+                            onChange={() => handleTogglePreset(skill)}
+                            title={enabledInPreset ? t("mySkills.enabledButton") : t("mySkills.enable")}
+                          />
+                        )}
                       </>
                     )}
                   </div>
@@ -1399,6 +1416,7 @@ export function MySkills() {
                         )}
                       </div>
                     )}
+                    {!isRemoteWorkspace && (
                     <div className="mt-2 flex flex-wrap items-center gap-1">
                       {skill.tags.map((tag) => (
                         <span
@@ -1467,6 +1485,7 @@ export function MySkills() {
                         </button>
                       )}
                     </div>
+                    )}
                   </div>
 
                   <div className="mt-auto flex items-center justify-between gap-2 border-t border-border-faint px-3.5 py-2.5">
@@ -1484,18 +1503,20 @@ export function MySkills() {
                         </>
                       )}
                     </div>
-                    <SyncDots
-                      className="shrink-0"
-                      skill={skill}
-                      tools={tools}
-                      limit={6}
-                      onToggle={
-                        isMultiSelect
-                          ? undefined
-                          : (tool, enabled) => handleToggleSkillTarget(skill, tool, enabled)
-                      }
-                      pendingKey={togglingTarget?.skillId === skill.id ? togglingTarget.tool : null}
-                    />
+                    {!isRemoteWorkspace && (
+                      <SyncDots
+                        className="shrink-0"
+                        skill={skill}
+                        tools={tools}
+                        limit={6}
+                        onToggle={
+                          isMultiSelect
+                            ? undefined
+                            : (tool, enabled) => handleToggleSkillTarget(skill, tool, enabled)
+                        }
+                        pendingKey={togglingTarget?.skillId === skill.id ? togglingTarget.tool : null}
+                      />
+                    )}
                   </div>
                 </div>
                 )}
@@ -1605,18 +1626,20 @@ export function MySkills() {
                       {badge.label}
                     </span>
                   )}
-                  <SyncDots
-                    skill={skill}
-                    tools={tools}
-                    limit={6}
-                    size="sm"
-                    onToggle={
-                      isMultiSelect
-                        ? undefined
-                        : (tool, enabled) => handleToggleSkillTarget(skill, tool, enabled)
-                    }
-                    pendingKey={togglingTarget?.skillId === skill.id ? togglingTarget.tool : null}
-                  />
+                  {!isRemoteWorkspace && (
+                    <SyncDots
+                      skill={skill}
+                      tools={tools}
+                      limit={6}
+                      size="sm"
+                      onToggle={
+                        isMultiSelect
+                          ? undefined
+                          : (tool, enabled) => handleToggleSkillTarget(skill, tool, enabled)
+                      }
+                      pendingKey={togglingTarget?.skillId === skill.id ? togglingTarget.tool : null}
+                    />
+                  )}
                   <span className="inline-flex items-center gap-1 text-[13px] text-muted">
                     {sourceIcon(skill.source_type)}
                     {sourceTypeLabel(skill)}
@@ -1659,14 +1682,16 @@ export function MySkills() {
                           : "opacity-0 group-hover:opacity-100"
                       )}
                       actions={[
-                        {
-                          key: "check",
-                          label: t("mySkills.updateActions.check"),
-                          icon: <RefreshCw className={cn("h-3.5 w-3.5", checkingSkillId === skill.id && "animate-spin")} />,
-                          disabled: checkingSkillId === skill.id,
-                          onSelect: () => handleCheckUpdate(skill),
-                        },
-                        ...(canRefresh(skill)
+                        ...(!isRemoteWorkspace
+                          ? [{
+                              key: "check",
+                              label: t("mySkills.updateActions.check"),
+                              icon: <RefreshCw className={cn("h-3.5 w-3.5", checkingSkillId === skill.id && "animate-spin")} />,
+                              disabled: checkingSkillId === skill.id,
+                              onSelect: () => handleCheckUpdate(skill),
+                            }]
+                          : []),
+                        ...(!isRemoteWorkspace && canRefresh(skill)
                           ? [{
                               key: "refresh",
                               label: refreshLabel(skill),
@@ -1684,12 +1709,14 @@ export function MySkills() {
                         },
                       ]}
                     />
-                    <ToggleSwitch
-                      checked={enabledInPreset}
-                      disabled={!viewedPreset}
-                      onChange={() => handleTogglePreset(skill)}
-                      title={enabledInPreset ? t("mySkills.enabledButton") : t("mySkills.enable")}
-                    />
+                    {!isRemoteWorkspace && (
+                      <ToggleSwitch
+                        checked={enabledInPreset}
+                        disabled={!viewedPreset}
+                        onChange={() => handleTogglePreset(skill)}
+                        title={enabledInPreset ? t("mySkills.enabledButton") : t("mySkills.enable")}
+                      />
+                    )}
                   </div>
                 )}
               </div>
@@ -1712,6 +1739,7 @@ export function MySkills() {
         onToggleTool={handleToggleSkillTool}
         projects={projects}
         onProjectsChanged={refreshProjects}
+        remoteMachineId={remoteMachineId}
       />
 
       <ConfirmDialog

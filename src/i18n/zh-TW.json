@@ -13,7 +13,10 @@
     "newPreset": "新增 Preset",
     "projects": "專案工作區",
     "addProject": "關聯專案",
-    "settings": "設定"
+    "settings": "設定",
+    "localWorkspace": "本機",
+    "localWorkspaceDesc": "目前 Mac",
+    "addRemoteWorkspace": "新增遠端開發機"
   },
   "help": {
     "eyebrow": "操作指南",
@@ -357,7 +360,8 @@
       "local": "本機",
       "import": "匯入",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "remote": "遠端"
     },
     "tags": {
       "filter": "標籤",
@@ -466,6 +470,9 @@
     "onlyThisContributor": "僅看該貢獻者",
     "gitReinstall": "重新安裝並更新",
     "installClone": "安裝並複製",
+    "remote": {
+      "installGit": "安裝到遠端"
+    },
     "scan": {
       "title": "掃描本機 Skills 並匯入",
       "initial": "掃描當前電腦上各 Agent 已安裝的 Skills。",

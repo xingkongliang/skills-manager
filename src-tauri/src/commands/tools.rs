@@ -13,10 +13,10 @@ use crate::core::sync_engine;
 use crate::core::timing::should_log_first_or_slow;
 use crate::core::tool_adapters::{self, CustomToolDef, ToolCategory};
 use crate::core::tool_service::{
-    self, ToolInfo, get_custom_tool_paths, get_custom_tool_project_paths, get_custom_tools,
+    self, get_custom_tool_paths, get_custom_tool_project_paths, get_custom_tools,
     get_disabled_tools, get_tool_order, normalize_project_relative_skills_dir_input,
     normalize_skills_dir_input, set_custom_tool_paths, set_custom_tool_project_paths,
-    set_custom_tools, set_disabled_tools, set_tool_order,
+    set_custom_tools, set_disabled_tools, set_tool_order, ToolInfo,
 };
 
 #[derive(Debug, Serialize)]

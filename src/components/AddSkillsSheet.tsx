@@ -37,6 +37,7 @@ export interface GlobalSheetTarget {
   agentKey: string;
   agentDisplayName: string;
   installedSkillIds: Set<string>;
+  remoteMachineId?: string | null;
 }
 
 export interface ProjectSheetTarget {
@@ -335,7 +336,13 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
       if (target.kind === "global") {
         for (const id of selectableSelected) {
           try {
-            await api.syncSkillToTool(id, target.agentKey);
+            const skill = managedSkills.find((s) => s.id === id);
+            if (!skill) continue;
+            if (target.remoteMachineId) {
+              await api.addRemoteSkillToAgent(target.remoteMachineId, skill.name, target.agentKey);
+            } else {
+              await api.syncSkillToTool(id, target.agentKey);
+            }
             ok++;
           } catch {
             failed++;

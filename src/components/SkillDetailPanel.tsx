@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../utils";
 import {
   getSkillDocument,
+  getRemoteSkillDocument,
   getSourceSkillDocument,
   getSkillSourceDiff,
   type ManagedSkill,
@@ -37,6 +38,7 @@ interface Props {
   onToggleTool?: (tool: string, enabled: boolean) => void;
   projects?: Project[];
   onProjectsChanged?: () => void;
+  remoteMachineId?: string | null;
 }
 
 export function SkillDetailPanel({
@@ -48,6 +50,7 @@ export function SkillDetailPanel({
   onToggleTool,
   projects,
   onProjectsChanged,
+  remoteMachineId,
 }: Props) {
   if (!skill) return null;
 
@@ -71,6 +74,7 @@ export function SkillDetailPanel({
       onToggleTool={onToggleTool}
       projects={projects}
       onProjectsChanged={onProjectsChanged}
+      remoteMachineId={remoteMachineId}
     />
   );
 }
@@ -84,6 +88,7 @@ function SkillDetailPanelContent({
   onToggleTool,
   projects,
   onProjectsChanged,
+  remoteMachineId,
 }: {
   skill: ManagedSkill;
   onClose: () => void;
@@ -93,6 +98,7 @@ function SkillDetailPanelContent({
   onToggleTool?: (tool: string, enabled: boolean) => void;
   projects?: Project[];
   onProjectsChanged?: () => void;
+  remoteMachineId?: string | null;
 }) {
   const { t } = useTranslation();
   const [doc, setDoc] = useState<SkillDocument | null>(null);
@@ -124,8 +130,13 @@ function SkillDetailPanelContent({
   useEffect(() => {
     localRequestIdRef.current += 1;
     const requestId = localRequestIdRef.current;
+    setLoading(true);
 
-    getSkillDocument(skillId)
+    const request = remoteMachineId
+      ? getRemoteSkillDocument(remoteMachineId, skillId)
+      : getSkillDocument(skillId);
+
+    request
       .then((nextDoc) => {
         if (requestId === localRequestIdRef.current) {
           setDoc(nextDoc);
@@ -141,15 +152,29 @@ function SkillDetailPanelContent({
           setLoading(false);
         }
       });
-  }, [skillId, localDocVersion]);
+  }, [skillId, localDocVersion, remoteMachineId]);
+
+  useEffect(() => {
+    if (remoteMachineId && contentTab !== "local") {
+      setContentTab("local");
+    }
+  }, [contentTab, remoteMachineId]);
 
   useEffect(() => {
     if (!supportsSourceDiff) {
+      setSourceDoc(null);
+      setSourceLoading(false);
       return;
     }
 
     sourceRequestIdRef.current += 1;
     const requestId = sourceRequestIdRef.current;
+
+    if (remoteMachineId) {
+      setSourceDoc(null);
+      setSourceLoading(false);
+      return;
+    }
 
     getSourceSkillDocument(skillId)
       .then((nextDoc) => {
@@ -167,20 +192,20 @@ function SkillDetailPanelContent({
           setSourceLoading(false);
         }
       });
-  }, [skillId, supportsSourceDiff, sourceDocVersion]);
+  }, [skillId, supportsSourceDiff, sourceDocVersion, remoteMachineId]);
 
   // Lazily load the whole-directory diff only when the user opens the Diff
   // tab. For git/skills.sh skills this clones the repo, so we avoid paying
   // that cost (and a second clone alongside the source doc) up front.
   useEffect(() => {
-    if (contentTab !== "diff" || !supportsSourceDiff) return;
+    if (remoteMachineId || contentTab !== "diff" || !supportsSourceDiff) return;
     if (diffRequestedRef.current) return;
     diffRequestedRef.current = true;
 
     getSkillSourceDiff(skillId)
       .then((diff) => setSourceDiff(diff))
       .catch(() => setSourceDiffFailed(true));
-  }, [contentTab, supportsSourceDiff, skillId]);
+  }, [contentTab, remoteMachineId, supportsSourceDiff, skillId]);
 
   const sourceIcon = (type: string) => {
     switch (type) {
@@ -311,7 +336,7 @@ function SkillDetailPanelContent({
       meta={meta}
       onClose={onClose}
     >
-      {toolToggles && onToggleTool && (
+      {!remoteMachineId && toolToggles && onToggleTool && (
         <AgentToggleSection
           items={toggleItems}
           togglingKey={togglingTool}
@@ -320,7 +345,7 @@ function SkillDetailPanelContent({
         />
       )}
 
-      {projects && projects.length > 0 && (
+      {!remoteMachineId && projects && projects.length > 0 && (
         <SkillProjectsSection
           skill={skill}
           projects={projects}
@@ -328,7 +353,7 @@ function SkillDetailPanelContent({
         />
       )}
 
-      {supportsSourceDiff && (
+      {!remoteMachineId && supportsSourceDiff && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           {(["local", "diff", "source"] as const).map((tab) => (
             <button

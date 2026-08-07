@@ -137,7 +137,7 @@ function WorkspaceSkillCard({
   return (
     <div
       className={cn(
-        "app-panel group relative flex h-full cursor-pointer flex-col overflow-hidden shadow-card transition-all hover:-translate-y-px hover:border-border hover:shadow-card-hover"
+        "app-panel group relative flex h-full min-h-[104px] cursor-pointer flex-col overflow-hidden shadow-card transition-all hover:-translate-y-px hover:border-border hover:shadow-card-hover"
       )}
       onClick={onClick}
     >
@@ -229,7 +229,8 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const { agentKey } = useParams<{ agentKey?: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { tools, managedSkills, presets, refreshManagedSkills, refreshTools } = useApp();
+  const { tools, managedSkills, presets, refreshManagedSkills, refreshTools, workspaceContext } = useApp();
+  const remoteMachineId = workspaceContext.kind === "remote" ? workspaceContext.machine.id : null;
 
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [search, setSearch] = useState("");
@@ -306,6 +307,12 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   );
   const currentToolKey = currentTool?.key ?? null;
 
+  useEffect(() => {
+    if (remoteMachineId && currentToolKey) {
+      setViewMode("list");
+    }
+  }, [currentToolKey, remoteMachineId]);
+
   const localSkillsRequestRef = useRef(0);
   const loadLocalSkills = useCallback(async () => {
     const requestId = ++localSkillsRequestRef.current;
@@ -315,7 +322,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     }
     setLocalSkillsLoading(true);
     try {
-      const skills = await api.getGlobalLocalSkills(currentToolKey);
+      const skills = remoteMachineId
+        ? await api.getRemoteAgentSkills(remoteMachineId, currentToolKey)
+        : await api.getGlobalLocalSkills(currentToolKey);
       if (localSkillsRequestRef.current === requestId) setLocalSkills(skills);
     } catch (error: unknown) {
       if (localSkillsRequestRef.current === requestId) {
@@ -325,7 +334,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     } finally {
       if (localSkillsRequestRef.current === requestId) setLocalSkillsLoading(false);
     }
-  }, [currentToolKey, t]);
+  }, [currentToolKey, remoteMachineId, t]);
 
   const loadedAgentKeyRef = useRef<string | null>(null);
   useEffect(() => {
@@ -357,7 +366,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       const entries = await Promise.all(
         installedTools.map(async (tool) => {
           try {
-            const skills = await api.getGlobalLocalSkills(tool.key);
+            const skills = remoteMachineId
+              ? await api.getRemoteAgentSkills(remoteMachineId, tool.key)
+              : await api.getGlobalLocalSkills(tool.key);
             return [tool.key, skills.length] as const;
           } catch {
             // Keep the managed-count fallback for an agent that fails to scan.
@@ -381,7 +392,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     // on-disk presence without changing the managed count, but still produces a
     // fresh array via refreshManagedSkills (the file watcher triggers it), so
     // the overview counts re-scan and stay accurate (#287).
-  }, [currentToolKey, installedTools, managedSkills]);
+  }, [currentToolKey, installedTools, managedSkills, remoteMachineId]);
 
   useEffect(() => {
     localDetailRequestRef.current += 1;
@@ -393,13 +404,17 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   }, [currentTool?.key]);
 
   const agentSkills = useMemo(
-    () =>
-      agentKey
-        ? managedSkills.filter((skill) =>
-            skill.targets.some((target) => target.tool === agentKey)
-          )
-        : [],
-    [agentKey, managedSkills]
+    () => {
+      if (!agentKey) return [];
+      if (remoteMachineId) {
+        const installedNames = new Set(localSkills.map((skill) => skill.name));
+        return managedSkills.filter((skill) => installedNames.has(skill.name));
+      }
+      return managedSkills.filter((skill) =>
+        skill.targets.some((target) => target.tool === agentKey)
+      );
+    },
+    [agentKey, localSkills, managedSkills, remoteMachineId]
   );
 
   const allLocalTags = useMemo(() => {
@@ -479,10 +494,15 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   );
 
   const handleRemoveLocalManagedSkill = async (skill: ProjectSkill) => {
-    if (!agentKey || !skill.center_skill_id || !managedLocalIds.has(skill.center_skill_id)) return;
+    if (!agentKey) return;
+    if (!remoteMachineId && (!skill.center_skill_id || !managedLocalIds.has(skill.center_skill_id))) return;
     setRemovingLocalSkillId(skill.relative_path);
     try {
-      await api.unsyncSkillFromTool(skill.center_skill_id, agentKey);
+      if (remoteMachineId) {
+        await api.removeRemoteAgentSkill(remoteMachineId, agentKey, skill.relative_path);
+      } else {
+        await api.unsyncSkillFromTool(skill.center_skill_id!, agentKey);
+      }
       await Promise.all([refreshManagedSkills(), refreshTools(), loadLocalSkills()]);
       toast.success(t("globalWorkspace.removedToast", { name: skill.name }));
     } catch (e) {
@@ -521,7 +541,11 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       const key = `delete:${skill.relative_path}`;
       setLocalActionKey(key);
       try {
-        await api.deleteGlobalLocalSkill(currentTool.key, skill.relative_path);
+        if (remoteMachineId) {
+          await api.removeRemoteAgentSkill(remoteMachineId, currentTool.key, skill.relative_path);
+        } else {
+          await api.deleteGlobalLocalSkill(currentTool.key, skill.relative_path);
+        }
         toast.success(t("globalWorkspace.localSkills.deletedLocalToast", { name: skill.name, agent: currentTool.display_name }));
         await loadLocalSkills();
       } catch (error: unknown) {
@@ -531,7 +555,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         setDeleteLocalConfirmSkill(null);
       }
     },
-    [currentTool, loadLocalSkills, t]
+    [currentTool, loadLocalSkills, remoteMachineId, t]
   );
 
   const handlePullLocalSkill = useCallback(
@@ -565,8 +589,11 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       setLocalDocLoading(true);
       setLocalCenterDocLoading(!!skill.center_skill_id);
 
-      api
-        .getGlobalLocalSkillDocument(currentTool.key, skill.relative_path)
+      const documentRequest = remoteMachineId
+        ? api.getRemoteAgentSkillDocument(remoteMachineId, currentTool.key, skill.relative_path)
+        : api.getGlobalLocalSkillDocument(currentTool.key, skill.relative_path);
+
+      documentRequest
         .then((doc) => {
           if (localDetailRequestRef.current === requestId) setLocalDocContent(doc.content);
         })
@@ -591,22 +618,35 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           });
       }
     },
-    [currentTool]
+    [currentTool, remoteMachineId]
   );
 
   const existsInGlobal = useCallback(
     (skill: ManagedSkill, agentK: string) =>
-      skill.targets.some((target) => target.tool === agentK),
-    []
+      remoteMachineId
+        ? localSkills.some((localSkill) => localSkill.agent === agentK && localSkill.name === skill.name)
+        : skill.targets.some((target) => target.tool === agentK),
+    [localSkills, remoteMachineId]
   );
 
   const handlePresetAdd = useCallback(async (skill: ManagedSkill, agentK: string) => {
-    await api.syncSkillToTool(skill.id, agentK);
-  }, []);
+    if (remoteMachineId) {
+      await api.addRemoteSkillToAgent(remoteMachineId, skill.name, agentK);
+    } else {
+      await api.syncSkillToTool(skill.id, agentK);
+    }
+  }, [remoteMachineId]);
 
   const handlePresetRemove = useCallback(async (skill: ManagedSkill, agentK: string) => {
-    await api.unsyncSkillFromTool(skill.id, agentK);
-  }, []);
+    if (remoteMachineId) {
+      const localSkill = localSkills.find((item) => item.agent === agentK && item.name === skill.name);
+      if (localSkill) {
+        await api.removeRemoteAgentSkill(remoteMachineId, agentK, localSkill.relative_path);
+      }
+    } else {
+      await api.unsyncSkillFromTool(skill.id, agentK);
+    }
+  }, [localSkills, remoteMachineId]);
 
   const handlePresetComplete = useCallback(async () => {
     await Promise.all([refreshManagedSkills(), refreshTools(), loadLocalSkills()]);
@@ -618,12 +658,34 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     const deleteKey = `delete:${skill.relative_path}`;
     const canPull = skill.sync_status === "center_newer" || skill.sync_status === "diverged";
     const isInSync = skill.sync_status === "in_sync";
-    const isManaged = !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id);
+    const isManaged = remoteMachineId
+      ? managedSkills.some((managed) => managed.name === skill.name)
+      : !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id);
     const canDeleteLocal = !isManaged && skill.sync_status === "project_only";
     const removing = removingLocalSkillId === skill.relative_path;
     const buttonClassName = variant === "grid"
       ? "rounded px-2 py-1 text-[13px] font-medium text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
       : "rounded p-0.5 text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50";
+
+    if (remoteMachineId) {
+      return (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setDeleteLocalConfirmSkill(skill);
+          }}
+          disabled={localActionKey === deleteKey}
+          title={t("globalWorkspace.localSkills.deleteLocal")}
+          className={cn(buttonClassName, "hover:bg-red-500/10 hover:text-red-500")}
+        >
+          {localActionKey === deleteKey ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="h-3.5 w-3.5" />
+          )}
+        </button>
+      );
+    }
 
     if (isInSync && !isManaged) return null;
 
@@ -1002,6 +1064,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             agentKey: currentTool.key,
             agentDisplayName: currentTool.display_name,
             installedSkillIds: installedIds,
+            remoteMachineId,
           }}
           managedSkills={managedSkills}
           onInstalled={handleSheetInstalled}

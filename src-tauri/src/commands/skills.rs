@@ -348,9 +348,12 @@ fn classify_diff_bytes(bytes: Option<Vec<u8>>) -> (&'static str, Option<String>)
 /// Diff the whole content scope of two skill directories. `original_dir` is
 /// the central copy (old), `updated_dir` is the source (new). Uses the same
 /// file enumeration as the hash so it reports exactly what flips the badge.
-fn build_source_diff_entries(original_dir: &Path, updated_dir: &Path) -> Vec<SkillSourceDiffEntryDto> {
-    use std::collections::BTreeMap;
+fn build_source_diff_entries(
+    original_dir: &Path,
+    updated_dir: &Path,
+) -> Vec<SkillSourceDiffEntryDto> {
     use crate::core::content_hash::{self, ContentEntry};
+    use std::collections::BTreeMap;
 
     let index = |dir: &Path| -> BTreeMap<String, ContentEntry> {
         content_hash::list_content_files(dir)
@@ -721,14 +724,14 @@ pub async fn install_local(
                 remote_revision: None,
                 update_status: "local_only".to_string(),
             };
-            let _lock = RepoLock::acquire_foreground("install local skill").map_err(AppError::db)?;
+            let _lock =
+                RepoLock::acquire_foreground("install local skill").map_err(AppError::db)?;
             let result =
                 installer::install_from_local(&path, name.as_deref()).map_err(AppError::io)?;
             let skill_name = result.name.clone();
             // Install only adds the skill to the central library; preset
             // membership is an explicit action (see issue #213).
-            let skill_id =
-                store_installed_skill_unlocked(&store, &result, &metadata, None)?;
+            let skill_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
             Ok((skill_id, skill_name))
         })();
         log_install_outcome(&store, "local", outcome.as_ref());
@@ -795,7 +798,8 @@ pub async fn install_git(
 
             emit_progress("installing");
             let install_result = (|| -> Result<(String, String), AppError> {
-                let _lock = RepoLock::acquire_foreground("install git skill").map_err(AppError::db)?;
+                let _lock =
+                    RepoLock::acquire_foreground("install git skill").map_err(AppError::db)?;
                 let skill_dir = resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)?;
                 let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
                 let result = installer::install_from_git_dir(&skill_dir, name.as_deref())
@@ -811,12 +815,7 @@ pub async fn install_git(
                     update_status: "up_to_date".to_string(),
                 };
                 let skill_name = result.name.clone();
-                let skill_id = store_installed_skill_unlocked(
-                    &store,
-                    &result,
-                    &metadata,
-                    None,
-                )?;
+                let skill_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
                 Ok((skill_id, skill_name))
             })();
 
@@ -891,7 +890,8 @@ pub async fn install_from_skillssh(
 
             emit_progress("installing");
             let install_result = (|| -> Result<(String, String), AppError> {
-                let _lock = RepoLock::acquire_foreground("install skillssh skill").map_err(AppError::db)?;
+                let _lock =
+                    RepoLock::acquire_foreground("install skillssh skill").map_err(AppError::db)?;
                 let skill_dir = resolve_skill_dir(&temp_dir, None, Some(&skill_id))?;
                 let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
                 let source_ref = format!("{}/{}", source, skill_id);
@@ -914,12 +914,7 @@ pub async fn install_from_skillssh(
                     update_status: "up_to_date".to_string(),
                 };
                 let skill_name = result.name.clone();
-                let new_id = store_installed_skill_unlocked(
-                    &store,
-                    &result,
-                    &metadata,
-                    None,
-                )?;
+                let new_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
                 Ok((new_id, skill_name))
             })();
 
@@ -1048,8 +1043,8 @@ pub async fn confirm_git_install(
             let skill_dir = resolve_skill_dir(&temp_path, parsed.subpath.as_deref(), None)?;
             let all_dirs = collect_git_skill_dirs(&skill_dir);
             let revision = git_fetcher::get_head_revision(&temp_path).map_err(AppError::git)?;
-            let _lock = RepoLock::acquire_foreground("confirm git install")
-                .map_err(AppError::db)?;
+            let _lock =
+                RepoLock::acquire_foreground("confirm git install").map_err(AppError::db)?;
 
             for dir in &all_dirs {
                 let rel_key = skill_rel_key(&skill_dir, dir);
@@ -1152,7 +1147,8 @@ pub async fn check_all_skill_updates(
                 // skill and collects any real failure per-skill, as before.
                 Err(err) => log::warn!(
                     "check all: skip-decision for {} failed, checking anyway: {}",
-                    skill.id, err.message
+                    skill.id,
+                    err.message
                 ),
             }
             if let Ok(source) = git_source_from_skill(skill) {
@@ -1474,8 +1470,7 @@ pub async fn relink_local_skill_source(
             .map_err(AppError::db)?;
 
         let result = (|| -> Result<(), AppError> {
-            let _lock = RepoLock::acquire_foreground("relink local skill")
-                .map_err(AppError::db)?;
+            let _lock = RepoLock::acquire_foreground("relink local skill").map_err(AppError::db)?;
             let staged_path = staged_path_for(&skill.central_path);
             let install_result = installer::install_from_local_to_destination(
                 &path,
@@ -1535,8 +1530,7 @@ pub async fn detach_local_skill_source(
         }
 
         {
-            let _lock = RepoLock::acquire_foreground("detach local skill")
-                .map_err(AppError::db)?;
+            let _lock = RepoLock::acquire_foreground("detach local skill").map_err(AppError::db)?;
             store
                 .update_skill_after_reinstall(
                     &skill.id,
@@ -1618,7 +1612,10 @@ fn managed_skill_to_dto(
     }
 }
 
-pub fn managed_skill_by_id(store: &SkillStore, skill_id: &str) -> Result<ManagedSkillDto, AppError> {
+pub fn managed_skill_by_id(
+    store: &SkillStore,
+    skill_id: &str,
+) -> Result<ManagedSkillDto, AppError> {
     let skill = store
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?
@@ -1686,8 +1683,7 @@ pub fn update_git_skill_internal(
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
         let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
         let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
-        let _lock = RepoLock::acquire_foreground("update installed skill")
-            .map_err(AppError::db)?;
+        let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
 
         if content_changed {
             let staged_path = staged_path_for(&skill.central_path);
@@ -1795,8 +1791,7 @@ pub fn reimport_local_skill_internal(
         .map_err(AppError::db)?;
 
     let result = (|| -> Result<(), AppError> {
-        let _lock = RepoLock::acquire_foreground("reimport local skill")
-            .map_err(AppError::db)?;
+        let _lock = RepoLock::acquire_foreground("reimport local skill").map_err(AppError::db)?;
         let staged_path = staged_path_for(&skill.central_path);
         let install_result =
             installer::install_from_local_to_destination(&path, Some(&skill.name), &staged_path)
@@ -2470,8 +2465,8 @@ pub async fn batch_import_folder(
             }
 
             let install_result = (|| -> Result<String, AppError> {
-                let _lock = RepoLock::acquire_foreground("batch import skill")
-                    .map_err(AppError::db)?;
+                let _lock =
+                    RepoLock::acquire_foreground("batch import skill").map_err(AppError::db)?;
                 let result =
                     installer::install_from_local(dir, Some(&name)).map_err(AppError::io)?;
                 let metadata = InstallSourceMetadata {
@@ -2636,7 +2631,11 @@ mod tests {
         let dir = root.join(rel);
         fs::create_dir_all(&dir).unwrap();
         let basename = dir.file_name().unwrap().to_string_lossy().to_string();
-        fs::write(dir.join("SKILL.md"), format!("---\nname: {basename}\n---\n")).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {basename}\n---\n"),
+        )
+        .unwrap();
         dir
     }
 
@@ -2730,7 +2729,11 @@ mod tests {
             source("https://github.com/mattpocock/skills.git", None, None),
             source("https://github.com/vercel/ai.git", None, None),
             // Same repo, different branch → must NOT collapse with the None-branch group.
-            source("https://github.com/mattpocock/skills.git", Some("next"), None),
+            source(
+                "https://github.com/mattpocock/skills.git",
+                Some("next"),
+                None,
+            ),
         ];
         for s in skills {
             *per_remote.entry(RemoteKey::from(s)).or_insert(0) += 1;
@@ -2768,8 +2771,9 @@ mod tests {
     #[test]
     fn resolve_concurrent_resolves_every_remote_exactly_once() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let remotes: Vec<RemoteKey> =
-            (0..20).map(|i| remote(&format!("https://example.test/r{i}"), None)).collect();
+        let remotes: Vec<RemoteKey> = (0..20)
+            .map(|i| remote(&format!("https://example.test/r{i}"), None))
+            .collect();
         let calls = AtomicUsize::new(0);
 
         let out = resolve_concurrent(remotes.clone(), |key| {
@@ -2777,7 +2781,11 @@ mod tests {
             Ok(format!("rev:{}", key.clone_url))
         });
 
-        assert_eq!(calls.load(Ordering::Relaxed), remotes.len(), "each remote resolved exactly once");
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            remotes.len(),
+            "each remote resolved exactly once"
+        );
         assert_eq!(out.len(), remotes.len());
         for key in &remotes {
             assert!(matches!(out.get(key), Some(Ok(v)) if *v == format!("rev:{}", key.clone_url)));
@@ -2811,8 +2819,7 @@ mod tests {
     #[test]
     fn resolve_concurrent_runs_remotes_in_parallel() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let remotes: Vec<RemoteKey> =
-            (0..8).map(|i| remote(&format!("r{i}"), None)).collect();
+        let remotes: Vec<RemoteKey> = (0..8).map(|i| remote(&format!("r{i}"), None)).collect();
         let in_flight = AtomicUsize::new(0);
         let peak = AtomicUsize::new(0);
 
@@ -2889,9 +2896,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(dto.update_status, "unknown", "status left for the next round");
+        assert_eq!(
+            dto.update_status, "unknown",
+            "status left for the next round"
+        );
         let stored = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
-        assert_eq!(stored.remote_revision, None, "no revision from a stale remote");
+        assert_eq!(
+            stored.remote_revision, None,
+            "no revision from a stale remote"
+        );
         assert_eq!(stored.last_checked_at, None, "the check did not complete");
     }
 

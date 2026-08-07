@@ -1,11 +1,15 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { AppUpdateInfo, ManagedSkill, Project, Preset, ToolInfo } from "../lib/tauri";
 import * as api from "../lib/tauri";
 import i18n from "../i18n";
 import { applyTextSize } from "../lib/textScale";
 import { toast } from "sonner";
+
+export type WorkspaceContext =
+  | { kind: "local" }
+  | { kind: "remote"; machine: api.RemoteMachine };
 
 interface AppState {
   presets: Preset[];
@@ -15,6 +19,9 @@ interface AppState {
   viewedPreset: Preset | null;
   tools: ToolInfo[];
   managedSkills: ManagedSkill[];
+  remoteMachines: api.RemoteMachine[];
+  workspaceContext: WorkspaceContext;
+  isRemoteWorkspace: boolean;
   projects: Project[];
   loading: boolean;
   appError: string | null;
@@ -28,7 +35,10 @@ interface AppState {
   refreshPresets: () => Promise<void>;
   refreshTools: () => Promise<void>;
   refreshManagedSkills: () => Promise<void>;
+  refreshRemoteMachines: () => Promise<void>;
   refreshProjects: () => Promise<void>;
+  setLocalWorkspace: () => void;
+  setRemoteWorkspace: (id: string) => void;
   setViewedPresetId: (id: string) => void;
   applyPresetToDefault: (id: string) => Promise<void>;
   clearAppError: () => void;
@@ -40,8 +50,48 @@ interface AppState {
 
 const VIEWED_PRESET_LS_KEY = "skills-manager.viewedPresetId";
 const LEGACY_VIEWED_PRESET_LS_KEY = "skills-manager.viewedScenarioId";
+const WORKSPACE_CONTEXT_LS_KEY = "skills-manager.workspaceContext";
 
 const AppContext = createContext<AppState | null>(null);
+
+function remoteSkillsToManagedSkills(skills: api.RemoteSkill[]): ManagedSkill[] {
+  const now = Date.now();
+  return skills.map((skill) => ({
+    id: skill.name,
+    name: skill.name,
+    description: skill.description,
+    source_type: "remote",
+    source_ref: skill.path,
+    source_ref_resolved: null,
+    source_subpath: null,
+    source_branch: null,
+    source_revision: null,
+    remote_revision: null,
+    update_status: "up_to_date",
+    last_checked_at: null,
+    last_check_error: null,
+    central_path: skill.path,
+    enabled: true,
+    created_at: now,
+    updated_at: now,
+    status: "ok",
+    targets: [],
+    preset_ids: [],
+    tags: [],
+  }));
+}
+
+function sameRemoteMachines(a: api.RemoteMachine[], b: api.RemoteMachine[]) {
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => {
+    const next = b[index];
+    return next
+      && item.id === next.id
+      && item.name === next.name
+      && item.ssh_target === next.ssh_target
+      && item.skills_dir === next.skills_dir;
+  });
+}
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const SKILL_UPDATE_TOAST_ID = "skill-update-available";
@@ -57,6 +107,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [managedSkills, setManagedSkills] = useState<ManagedSkill[]>([]);
+  const [remoteMachines, setRemoteMachines] = useState<api.RemoteMachine[]>([]);
+  const [remoteMachineId, setRemoteMachineId] = useState<string | null>(() => {
+    try {
+      const raw = localStorage.getItem(WORKSPACE_CONTEXT_LS_KEY);
+      if (!raw || raw === "local") return null;
+      return raw.startsWith("remote:") ? raw.slice("remote:".length) : null;
+    } catch {
+      return null;
+    }
+  });
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [appError, setAppError] = useState<string | null>(null);
@@ -67,6 +127,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const appUpdateCheckedRef = useRef(false);
   const lastUpdateNotificationRef = useRef<string | null>(null);
   const lastActivePresetIdRef = useRef<string | null>(null);
+
+  const workspaceContext: WorkspaceContext = useMemo(() => {
+    if (remoteMachineId) {
+      const machine = remoteMachines.find((item) => item.id === remoteMachineId);
+      if (machine) return { kind: "remote", machine };
+    }
+    return { kind: "local" };
+  }, [remoteMachineId, remoteMachines]);
+  const isRemoteWorkspace = workspaceContext.kind === "remote";
+  const activeRemoteMachine = workspaceContext.kind === "remote" ? workspaceContext.machine : null;
 
   const setTranslatedError = useCallback((key: string) => {
     setAppError(i18n.t("common.loadFailed", { item: i18n.t(key) }));
@@ -119,6 +189,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [setTranslatedError]);
 
+  const refreshRemoteMachines = useCallback(async () => {
+    try {
+      const machines = await api.getRemoteMachines();
+      setRemoteMachines((current) => sameRemoteMachines(current, machines) ? current : machines);
+      setRemoteMachineId((current) => {
+        if (!current || machines.some((machine) => machine.id === current)) {
+          return current;
+        }
+        try {
+          localStorage.setItem(WORKSPACE_CONTEXT_LS_KEY, "local");
+        } catch {
+          // ignore
+        }
+        return null;
+      });
+    } catch (e) {
+      console.error("Failed to load remote machines:", e);
+    }
+  }, []);
+
   const refreshProjects = useCallback(async () => {
     try {
       const p = await api.getProjects();
@@ -130,7 +220,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshManagedSkills = useCallback(async () => {
     try {
-      const skills = await api.getManagedSkills();
+      const skills = activeRemoteMachine
+        ? remoteSkillsToManagedSkills(await api.listRemoteSkills(activeRemoteMachine.id))
+        : await api.getManagedSkills();
       setManagedSkills(skills);
       setAppError(null);
     } catch (e) {
@@ -138,14 +230,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setTranslatedError("common.skills");
     }
     // Managed skill changes affect project sync health badges
-    refreshProjects();
-  }, [setTranslatedError, refreshProjects]);
+    if (!activeRemoteMachine) {
+      refreshProjects();
+    }
+  }, [activeRemoteMachine, setTranslatedError, refreshProjects]);
 
   const refreshAppData = useCallback(async () => {
     setLoading(true);
-    await Promise.all([refreshPresets(), refreshTools(), refreshManagedSkills(), refreshProjects()]);
+    await Promise.all([refreshRemoteMachines(), refreshPresets(), refreshTools(), refreshManagedSkills(), refreshProjects()]);
     setLoading(false);
-  }, [refreshManagedSkills, refreshProjects, refreshPresets, refreshTools]);
+  }, [refreshManagedSkills, refreshProjects, refreshPresets, refreshRemoteMachines, refreshTools]);
+
+  const setLocalWorkspace = useCallback(() => {
+    setRemoteMachineId(null);
+    try {
+      localStorage.setItem(WORKSPACE_CONTEXT_LS_KEY, "local");
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const setRemoteWorkspace = useCallback((id: string) => {
+    setRemoteMachineId(id);
+    try {
+      localStorage.setItem(WORKSPACE_CONTEXT_LS_KEY, `remote:${id}`);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const setViewedPresetId = useCallback((id: string) => {
     setViewedPresetIdState(id);
@@ -188,6 +300,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [viewedPreset, viewedPresetId]);
 
   useEffect(() => {
+    refreshManagedSkills().catch((error) => {
+      console.error("Failed to refresh after workspace switch:", error);
+    });
+  }, [remoteMachineId, refreshManagedSkills]);
+
+  useEffect(() => {
     async function init() {
       // Both events log performance.now() (ms since timeOrigin) so the
       // reader can compute duration as done - start. Keeping the unit
@@ -203,7 +321,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     }
     init();
-  }, [refreshAppData]);
+  // Initial load must run once. `refreshAppData` changes when workspace changes,
+  // and depending on it causes full-page reload flicker after selecting remote.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const unlistenPromise = listen("tray-open-updates", () => {
@@ -345,6 +466,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // opted in via the Settings toggle, also apply any available updates.
   useEffect(() => {
     if (loading || managedSkills.length === 0) return;
+    if (isRemoteWorkspace) return;
     const hasGitSkills = managedSkills.some(
       (s) => s.source_type === "git" || s.source_type === "skillssh"
     );
@@ -434,6 +556,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         viewedPreset,
         tools,
         managedSkills,
+        remoteMachines,
+        workspaceContext,
+        isRemoteWorkspace,
         projects,
         loading,
         appError,
@@ -445,7 +570,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshPresets,
         refreshTools,
         refreshManagedSkills,
+        refreshRemoteMachines,
         refreshProjects,
+        setLocalWorkspace,
+        setRemoteWorkspace,
         setViewedPresetId,
         applyPresetToDefault: handleApplyPresetToDefault,
         clearAppError: () => setAppError(null),
