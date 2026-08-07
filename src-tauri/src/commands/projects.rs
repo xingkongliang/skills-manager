@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
@@ -495,26 +495,65 @@ pub(crate) fn classify_sync_status(
 
 static GET_PROJECTS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
 
+pub fn get_projects_internal(store: &SkillStore) -> Result<Vec<ProjectDto>, AppError> {
+    let start = Instant::now();
+    let records = store.get_all_projects().map_err(AppError::db)?;
+    let all_managed = store.get_all_skills().map_err(AppError::db)?;
+    let configs = agent_skill_configs(store);
+    let count = records.len();
+    let dtos: Vec<ProjectDto> = records
+        .iter()
+        .map(|r| project_to_dto(r, &all_managed, &configs))
+        .collect();
+    let elapsed_ms = start.elapsed().as_millis();
+    if should_log_first_or_slow(&GET_PROJECTS_FIRST_CALL, elapsed_ms, 100) {
+        log::info!("get_projects: {count} projects in {elapsed_ms} ms");
+    }
+    Ok(dtos)
+}
+
 #[tauri::command]
 pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<ProjectDto>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let start = Instant::now();
-        let records = store.get_all_projects().map_err(AppError::db)?;
-        let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        let configs = agent_skill_configs(&store);
-        let count = records.len();
-        let dtos: Vec<ProjectDto> = records
-            .iter()
-            .map(|r| project_to_dto(r, &all_managed, &configs))
-            .collect();
-        let elapsed_ms = start.elapsed().as_millis();
-        if should_log_first_or_slow(&GET_PROJECTS_FIRST_CALL, elapsed_ms, 100) {
-            log::info!("get_projects: {count} projects in {elapsed_ms} ms");
-        }
-        Ok(dtos)
-    })
-    .await?
+    tauri::async_runtime::spawn_blocking(move || get_projects_internal(&store)).await?
+}
+
+pub fn add_project_internal(store: &SkillStore, path: String) -> Result<ProjectDto, AppError> {
+    let project_path = Path::new(&path);
+    if !project_path.is_dir() {
+        return Err(AppError::invalid_input("Directory does not exist"));
+    }
+    let claude_dir = project_path.join(".claude");
+    let skills_dir = claude_dir.join("skills");
+    let disabled_dir = claude_dir.join("skills-disabled");
+
+    // Support initializing an empty project directory as a managed project.
+    std::fs::create_dir_all(&skills_dir)?;
+    std::fs::create_dir_all(&disabled_dir)?;
+
+    let name = project_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let record = ProjectRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        name,
+        path: path.clone(),
+        workspace_type: "project".to_string(),
+        linked_agent_key: None,
+        linked_agent_name: None,
+        disabled_path: None,
+        sort_order: 0,
+        created_at: now,
+        updated_at: now,
+    };
+
+    store.insert_project(&record).map_err(AppError::db)?;
+    let all_managed = store.get_all_skills().map_err(AppError::db)?;
+    let configs = agent_skill_configs(store);
+    Ok(project_to_dto(&record, &all_managed, &configs))
 }
 
 #[tauri::command]
@@ -523,44 +562,7 @@ pub async fn add_project(
     path: String,
 ) -> Result<ProjectDto, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let project_path = Path::new(&path);
-        if !project_path.is_dir() {
-            return Err(AppError::invalid_input("Directory does not exist"));
-        }
-        let claude_dir = project_path.join(".claude");
-        let skills_dir = claude_dir.join("skills");
-        let disabled_dir = claude_dir.join("skills-disabled");
-
-        // Support initializing an empty project directory as a managed project.
-        std::fs::create_dir_all(&skills_dir)?;
-        std::fs::create_dir_all(&disabled_dir)?;
-
-        let name = project_path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let now = chrono::Utc::now().timestamp_millis();
-        let record = ProjectRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            name,
-            path: path.clone(),
-            workspace_type: "project".to_string(),
-            linked_agent_key: None,
-            linked_agent_name: None,
-            disabled_path: None,
-            sort_order: 0,
-            created_at: now,
-            updated_at: now,
-        };
-
-        store.insert_project(&record).map_err(AppError::db)?;
-        let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        let configs = agent_skill_configs(&store);
-        Ok(project_to_dto(&record, &all_managed, &configs))
-    })
-    .await?
+    tauri::async_runtime::spawn_blocking(move || add_project_internal(&store, path)).await?
 }
 
 #[tauri::command]
@@ -662,17 +664,29 @@ pub async fn scan_projects(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Vec<String>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let root_path = Path::new(&root);
-        if !root_path.is_dir() {
-            return Err(AppError::invalid_input("Directory does not exist"));
-        }
-        let configs = agent_skill_configs(&store);
-        Ok(project_scanner::scan_projects_in_dir(
-            root_path, 4, &configs,
-        ))
-    })
-    .await?
+    tauri::async_runtime::spawn_blocking(move || scan_projects_internal(&store, &root)).await?
+}
+
+pub fn scan_projects_internal(store: &SkillStore, root: &str) -> Result<Vec<String>, AppError> {
+    let root_path = Path::new(root);
+    if !root_path.is_dir() {
+        return Err(AppError::invalid_input("Directory does not exist"));
+    }
+    let configs = agent_skill_configs(store);
+    Ok(project_scanner::scan_projects_in_dir(
+        root_path, 4, &configs,
+    ))
+}
+
+pub fn project_agent_targets_internal(
+    store: &SkillStore,
+    project_id: &str,
+) -> Result<Vec<ProjectAgentTargetDto>, AppError> {
+    let record = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+    Ok(project_agent_targets_for_record(store, &record))
 }
 
 #[tauri::command]
@@ -682,13 +696,38 @@ pub async fn get_project_agent_targets(
 ) -> Result<Vec<ProjectAgentTargetDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-        Ok(project_agent_targets_for_record(&store, &record))
+        project_agent_targets_internal(&store, &project_id)
     })
     .await?
+}
+
+pub fn get_project_skills_internal(
+    store: &SkillStore,
+    project_id: &str,
+) -> Result<Vec<project_scanner::ProjectSkillInfo>, AppError> {
+    let record = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let configs = agent_skill_configs(store);
+    let mut skills = read_workspace_skills(&record, &configs);
+
+    let all_managed = store.get_all_skills().unwrap_or_default();
+    let tags_map = store.get_tags_map().unwrap_or_default();
+    for skill in &mut skills {
+        let matched = find_best_center_match(skill, &all_managed);
+        skill.in_center = matched.is_some();
+        skill.center_skill_id = matched.map(|m| m.id.clone());
+        skill.tags = skill
+            .center_skill_id
+            .as_ref()
+            .and_then(|skill_id| tags_map.get(skill_id).cloned())
+            .unwrap_or_default();
+        skill.sync_status = classify_sync_status(skill, matched);
+    }
+
+    Ok(skills)
 }
 
 #[tauri::command]
@@ -697,32 +736,8 @@ pub async fn get_project_skills(
     project_id: String,
 ) -> Result<Vec<project_scanner::ProjectSkillInfo>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let configs = agent_skill_configs(&store);
-        let mut skills = read_workspace_skills(&record, &configs);
-
-        let all_managed = store.get_all_skills().unwrap_or_default();
-        let tags_map = store.get_tags_map().unwrap_or_default();
-        for skill in &mut skills {
-            let matched = find_best_center_match(skill, &all_managed);
-            skill.in_center = matched.is_some();
-            skill.center_skill_id = matched.map(|m| m.id.clone());
-            skill.tags = skill
-                .center_skill_id
-                .as_ref()
-                .and_then(|skill_id| tags_map.get(skill_id).cloned())
-                .unwrap_or_default();
-            skill.sync_status = classify_sync_status(skill, matched);
-        }
-
-        Ok(skills)
-    })
-    .await?
+    tauri::async_runtime::spawn_blocking(move || get_project_skills_internal(&store, &project_id))
+        .await?
 }
 
 #[tauri::command]
@@ -922,6 +937,128 @@ pub fn slugify_skill_names(names: Vec<String>) -> Vec<String> {
     names.iter().map(|n| slugify_skill_dir_name(n)).collect()
 }
 
+pub fn export_skill_to_project_internal(
+    store: &SkillStore,
+    skill_id: &str,
+    project_id: &str,
+    agents: Option<Vec<String>>,
+) -> Result<(), AppError> {
+    let project = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+
+    let dir_name = slugify_skill_dir_name(&skill.name);
+    ensure_safe_skill_relative_path(&dir_name)?;
+
+    let source = PathBuf::from(&skill.central_path);
+    let requested_agent_keys = agents.filter(|items| !items.is_empty()).unwrap_or_else(|| {
+        if project.workspace_type == "linked" {
+            vec![linked_workspace_agent_key(&project)]
+        } else {
+            vec!["claude_code".to_string()]
+        }
+    });
+    let agent_keys = if project.workspace_type == "linked" {
+        requested_agent_keys
+    } else {
+        let available_targets: std::collections::HashSet<String> =
+            project_agent_targets_for_record(store, &project)
+                .into_iter()
+                .filter(|target| target.installed && target.enabled)
+                .map(|target| target.key)
+                .collect();
+        let filtered = requested_agent_keys
+            .into_iter()
+            .filter(|key| available_targets.contains(key))
+            .collect::<Vec<_>>();
+        if filtered.is_empty() {
+            return Err(AppError::invalid_input(
+                "No enabled installed agents selected for this project",
+            ));
+        }
+        filtered
+    };
+
+    for agent_key in &agent_keys {
+        let (skills_root, disabled_root) =
+            resolve_agent_skills_roots(store, &project, agent_key)
+                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
+        let target_dir = skills_root.join(&dir_name);
+
+        if target_dir.strip_prefix(&skills_root).is_err() {
+            return Err(AppError::invalid_input("Invalid skill directory path"));
+        }
+
+        if target_dir.exists()
+            || disabled_root
+                .as_ref()
+                .map(|path| path.join(&dir_name).exists())
+                .unwrap_or(false)
+        {
+            return Err(AppError::invalid_input(format!(
+                "Skill \"{}\" already exists in this workspace for agent {}",
+                skill.name, agent_key
+            )));
+        }
+    }
+
+    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+    for agent_key in &agent_keys {
+        let (skills_root, _) = resolve_agent_skills_roots(store, &project, agent_key)
+            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
+        let target_dir = skills_root.join(&dir_name);
+        std::fs::create_dir_all(&skills_root)?;
+        let mode = sync_engine::sync_mode_for_tool(agent_key, configured_mode.as_deref());
+        sync_engine::sync_skill(&source, &target_dir, mode).map_err(AppError::io)?;
+    }
+
+    Ok(())
+}
+
+/// Return the on-disk directory that would collide with exporting a skill named
+/// `skill_name` to `agent` in `project_id`, or `None` when the export path is
+/// clear. This mirrors the "already exists" guard in
+/// [`export_skill_to_project_internal`] so a dry run can flag the case a real
+/// run would reject: a directory of the same slug already exists but isn't a
+/// matched central skill.
+pub fn project_export_conflict_path(
+    store: &SkillStore,
+    project_id: &str,
+    agent: &str,
+    skill_name: &str,
+) -> Result<Option<String>, AppError> {
+    let project = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let dir_name = slugify_skill_dir_name(skill_name);
+    ensure_safe_skill_relative_path(&dir_name)?;
+
+    let Some((skills_root, disabled_root)) = resolve_agent_skills_roots(store, &project, agent)
+    else {
+        return Ok(None);
+    };
+
+    let enabled_dir = skills_root.join(&dir_name);
+    if enabled_dir.exists() {
+        return Ok(Some(enabled_dir.to_string_lossy().to_string()));
+    }
+    if let Some(disabled_root) = disabled_root {
+        let disabled_dir = disabled_root.join(&dir_name);
+        if disabled_dir.exists() {
+            return Ok(Some(disabled_dir.to_string_lossy().to_string()));
+        }
+    }
+    Ok(None)
+}
+
 #[tauri::command]
 pub async fn export_skill_to_project(
     store: State<'_, Arc<SkillStore>>,
@@ -931,82 +1068,7 @@ pub async fn export_skill_to_project(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let project = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let skill = store
-            .get_skill_by_id(&skill_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Skill not found"))?;
-
-        let dir_name = slugify_skill_dir_name(&skill.name);
-        ensure_safe_skill_relative_path(&dir_name)?;
-
-        let source = PathBuf::from(&skill.central_path);
-        let requested_agent_keys = agents.filter(|items| !items.is_empty()).unwrap_or_else(|| {
-            if project.workspace_type == "linked" {
-                vec![linked_workspace_agent_key(&project)]
-            } else {
-                vec!["claude_code".to_string()]
-            }
-        });
-        let agent_keys = if project.workspace_type == "linked" {
-            requested_agent_keys
-        } else {
-            let available_targets: std::collections::HashSet<String> =
-                project_agent_targets_for_record(&store, &project)
-                    .into_iter()
-                    .filter(|target| target.installed && target.enabled)
-                    .map(|target| target.key)
-                    .collect();
-            let filtered = requested_agent_keys
-                .into_iter()
-                .filter(|key| available_targets.contains(key))
-                .collect::<Vec<_>>();
-            if filtered.is_empty() {
-                return Err(AppError::invalid_input(
-                    "No enabled installed agents selected for this project",
-                ));
-            }
-            filtered
-        };
-
-        for agent_key in &agent_keys {
-            let (skills_root, disabled_root) =
-                resolve_agent_skills_roots(&store, &project, agent_key)
-                    .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
-            let target_dir = skills_root.join(&dir_name);
-
-            if target_dir.strip_prefix(&skills_root).is_err() {
-                return Err(AppError::invalid_input("Invalid skill directory path"));
-            }
-
-            if target_dir.exists()
-                || disabled_root
-                    .as_ref()
-                    .map(|path| path.join(&dir_name).exists())
-                    .unwrap_or(false)
-            {
-                return Err(AppError::invalid_input(format!(
-                    "Skill \"{}\" already exists in this workspace for agent {}",
-                    skill.name, agent_key
-                )));
-            }
-        }
-
-        let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-        for agent_key in &agent_keys {
-            let (skills_root, _) = resolve_agent_skills_roots(&store, &project, agent_key)
-                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
-            let target_dir = skills_root.join(&dir_name);
-            std::fs::create_dir_all(&skills_root)?;
-            let mode = sync_engine::sync_mode_for_tool(agent_key, configured_mode.as_deref());
-            sync_engine::sync_skill(&source, &target_dir, mode).map_err(AppError::io)?;
-        }
-
-        Ok(())
+        export_skill_to_project_internal(&store, &skill_id, &project_id, agents)
     })
     .await?
 }
@@ -1108,36 +1170,45 @@ pub async fn delete_project_skill(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
-
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
-            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
-        let skills_dir = skills_root.join(&skill_relative_path);
-        let disabled_dir = disabled_root
-            .as_ref()
-            .map(|root| root.join(&skill_relative_path));
-
-        let (target, target_root) = if skills_dir.is_dir() {
-            (skills_dir, skills_root)
-        } else if let Some(disabled_dir) = disabled_dir.filter(|path| path.is_dir()) {
-            (
-                disabled_dir,
-                disabled_root.expect("present when disabled_dir exists"),
-            )
-        } else {
-            return Err(AppError::not_found("Skill directory not found"));
-        };
-
-        ensure_dir_within_root(&target, &target_root)?;
-        remove_workspace_skill_target(&target)?;
-        Ok(())
+        delete_project_skill_internal(&store, &project_id, &skill_relative_path, &agent)
     })
     .await?
+}
+
+pub fn delete_project_skill_internal(
+    store: &SkillStore,
+    project_id: &str,
+    skill_relative_path: &str,
+    agent: &str,
+) -> Result<(), AppError> {
+    ensure_safe_skill_relative_path(skill_relative_path)?;
+
+    let record = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let (skills_root, disabled_root) = resolve_agent_skills_roots(store, &record, agent)
+        .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
+    let skills_dir = skills_root.join(skill_relative_path);
+    let disabled_dir = disabled_root
+        .as_ref()
+        .map(|root| root.join(skill_relative_path));
+
+    let (target, target_root) = if skills_dir.is_dir() {
+        (skills_dir, skills_root)
+    } else if let Some(disabled_dir) = disabled_dir.filter(|path| path.is_dir()) {
+        (
+            disabled_dir,
+            disabled_root.expect("present when disabled_dir exists"),
+        )
+    } else {
+        return Err(AppError::not_found("Skill directory not found"));
+    };
+
+    ensure_dir_within_root(&target, &target_root)?;
+    remove_workspace_skill_target(&target)?;
+    Ok(())
 }
 
 #[cfg(test)]
