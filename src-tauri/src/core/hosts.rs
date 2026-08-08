@@ -397,6 +397,7 @@ fn shell_double_quote_escape(value: &str) -> String {
 }
 
 fn run_ssh(target: &str, remote_script: &str) -> Result<String> {
+    let remote_command = format!("sh -lc {}", shell_quote(remote_script));
     let output = Command::new("ssh")
         .args([
             "-o",
@@ -404,9 +405,7 @@ fn run_ssh(target: &str, remote_script: &str) -> Result<String> {
             "-o",
             "ConnectTimeout=5",
             target,
-            "sh",
-            "-lc",
-            remote_script,
+            &remote_command,
         ])
         .output()
         .with_context(|| format!("Failed to execute ssh for target {target}"))?;
@@ -463,6 +462,12 @@ Host dev02
     #[test]
     fn shell_quote_escapes_single_quotes() {
         assert_eq!(shell_quote("ab'cd"), "'ab'\\''cd'");
+    }
+
+    #[test]
+    fn shell_quote_keeps_script_as_single_sh_c_argument() {
+        let command = format!("sh -lc {}", shell_quote("printf connected"));
+        assert_eq!(command, "sh -lc 'printf connected'");
     }
 
     #[test]
