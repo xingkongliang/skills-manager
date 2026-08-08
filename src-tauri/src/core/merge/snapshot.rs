@@ -2,7 +2,7 @@
 //! (design §1/§2): skills (metadata + content-tree fingerprint), scenarios,
 //! memberships, residual files, and the schema/protocol markers.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use git2::{ObjectType, Oid, Repository, Tree};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -78,9 +78,9 @@ pub fn read_snapshot(repo: &Repository, tree: &Tree) -> Result<Snapshot> {
                             record_residual(&mut snap, format!("{METADATA_DIR}/skills/{file}"), &e);
                             continue;
                         };
-                        let blob = repo.find_blob(e.id()).with_context(|| {
-                            format!("skill metadata {file} is not a blob")
-                        })?;
+                        let blob = repo
+                            .find_blob(e.id())
+                            .with_context(|| format!("skill metadata {file} is not a blob"))?;
                         let meta: SkillMetaFile = serde_json::from_slice(blob.content())
                             .with_context(|| format!("invalid skill metadata {file}"))?;
                         if meta.skill_id != stem {
@@ -98,7 +98,10 @@ pub fn read_snapshot(repo: &Repository, tree: &Tree) -> Result<Snapshot> {
                             stem.to_string(),
                             SkillObj {
                                 meta,
-                                meta_entry: FileEntry { oid: e.id(), mode: e.filemode() },
+                                meta_entry: FileEntry {
+                                    oid: e.id(),
+                                    mode: e.filemode(),
+                                },
                                 content,
                             },
                         );
@@ -112,7 +115,10 @@ pub fn read_snapshot(repo: &Repository, tree: &Tree) -> Result<Snapshot> {
                             Some(stem) if e.kind() == Some(ObjectType::Blob) => {
                                 snap.scenarios.insert(
                                     stem.to_string(),
-                                    FileEntry { oid: e.id(), mode: e.filemode() },
+                                    FileEntry {
+                                        oid: e.id(),
+                                        mode: e.filemode(),
+                                    },
                                 );
                             }
                             _ => record_residual(
@@ -142,7 +148,10 @@ pub fn read_snapshot(repo: &Repository, tree: &Tree) -> Result<Snapshot> {
                                 Some(stem) if e.kind() == Some(ObjectType::Blob) => {
                                     snap.memberships.insert(
                                         (sid.clone(), stem.to_string()),
-                                        FileEntry { oid: e.id(), mode: e.filemode() },
+                                        FileEntry {
+                                            oid: e.id(),
+                                            mode: e.filemode(),
+                                        },
                                     );
                                 }
                                 _ => record_residual(
@@ -161,16 +170,22 @@ pub fn read_snapshot(repo: &Repository, tree: &Tree) -> Result<Snapshot> {
                         .and_then(|v| v.get("schema_version").and_then(|n| n.as_u64()))
                         .unwrap_or(0);
                     snap.schema = Some((
-                        FileEntry { oid: entry.id(), mode: entry.filemode() },
+                        FileEntry {
+                            oid: entry.id(),
+                            mode: entry.filemode(),
+                        },
                         version,
                     ));
                 }
                 ("protocol.json", Some(ObjectType::Blob)) => {
                     let blob = repo.find_blob(entry.id())?;
-                    let parsed: ProtocolFile = serde_json::from_slice(blob.content())
-                        .context("invalid protocol.json")?;
+                    let parsed: ProtocolFile =
+                        serde_json::from_slice(blob.content()).context("invalid protocol.json")?;
                     snap.protocol = Some((
-                        FileEntry { oid: entry.id(), mode: entry.filemode() },
+                        FileEntry {
+                            oid: entry.id(),
+                            mode: entry.filemode(),
+                        },
                         parsed,
                     ));
                 }
@@ -182,8 +197,7 @@ pub fn read_snapshot(repo: &Repository, tree: &Tree) -> Result<Snapshot> {
     }
 
     // ── residual walk: everything outside claimed content dirs ──
-    let claimed: BTreeSet<String> =
-        snap.skills.values().map(|s| s.meta.path.clone()).collect();
+    let claimed: BTreeSet<String> = snap.skills.values().map(|s| s.meta.path.clone()).collect();
     collect_residual(repo, tree, "", &claimed, &mut snap.residual)?;
 
     Ok(snap)
@@ -194,8 +208,13 @@ pub fn read_snapshot(repo: &Repository, tree: &Tree) -> Result<Snapshot> {
 /// flattened to their files.
 fn record_residual(snap: &mut Snapshot, path: String, entry: &git2::TreeEntry) {
     if entry.kind() == Some(ObjectType::Blob) {
-        snap.residual
-            .insert(path, FileEntry { oid: entry.id(), mode: entry.filemode() });
+        snap.residual.insert(
+            path,
+            FileEntry {
+                oid: entry.id(),
+                mode: entry.filemode(),
+            },
+        );
     }
     // Unknown subtrees under .skills-manager are intentionally not descended:
     // nothing writes them today, and treating them as opaque would need
@@ -228,7 +247,13 @@ fn collect_residual(
                 collect_residual(repo, &sub, &path, claimed, out)?;
             }
             Some(ObjectType::Blob) => {
-                out.insert(path, FileEntry { oid: entry.id(), mode: entry.filemode() });
+                out.insert(
+                    path,
+                    FileEntry {
+                        oid: entry.id(),
+                        mode: entry.filemode(),
+                    },
+                );
             }
             _ => {} // commits (submodules) etc. — not supported, ignored
         }

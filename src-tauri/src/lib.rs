@@ -206,8 +206,16 @@ fn collect_tray_menu_data(store: &core::skill_store::SkillStore) -> TrayMenuData
 }
 
 fn format_status_line(data: &TrayMenuData) -> String {
-    let skill_label = if data.total_skills == 1 { "skill" } else { "skills" };
-    let agent_label = if data.coding_agent_count == 1 { "agent" } else { "agents" };
+    let skill_label = if data.total_skills == 1 {
+        "skill"
+    } else {
+        "skills"
+    };
+    let agent_label = if data.coding_agent_count == 1 {
+        "agent"
+    } else {
+        "agents"
+    };
     format!(
         "{} {} · {} {} connected",
         data.total_skills, skill_label, data.coding_agent_count, agent_label
@@ -241,7 +249,11 @@ fn preset_menu_item_id(preset: &TrayPresetEntry) -> (String, &'static str) {
 }
 
 fn preset_menu_label(preset: &TrayPresetEntry) -> String {
-    let unit = if preset.skill_count == 1 { "skill" } else { "skills" };
+    let unit = if preset.skill_count == 1 {
+        "skill"
+    } else {
+        "skills"
+    };
     match preset.status() {
         TrayPresetStatus::Active => format!("✓ {} ({} {unit})", preset.name, preset.skill_count),
         TrayPresetStatus::Partial => format!(
@@ -569,7 +581,9 @@ fn check_updates_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 {
                     Ok(lock) => lock,
                     Err(err) => {
-                        log::warn!("Tray update check: failed to acquire repo lock for {skill_id}: {err}");
+                        log::warn!(
+                            "Tray update check: failed to acquire repo lock for {skill_id}: {err}"
+                        );
                         continue;
                     }
                 };
@@ -632,7 +646,8 @@ fn open_skills_folder_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
         let status = cmd.arg(&repo_path).status();
         match status {
-            Ok(_status) => {
+            Ok(_status) =>
+            {
                 #[cfg(not(target_os = "windows"))]
                 if !_status.success() {
                     log::warn!(
@@ -1026,6 +1041,19 @@ pub fn run() {
             // Browse
             commands::browse::fetch_leaderboard,
             commands::browse::search_skillssh,
+            // Hosts
+            commands::hosts::list_hosts,
+            commands::hosts::list_importable_ssh_hosts_cmd,
+            commands::hosts::test_ssh_host_connection,
+            commands::hosts::add_ssh_host,
+            commands::hosts::refresh_host,
+            commands::hosts::delete_host,
+            commands::hosts::list_host_skills,
+            commands::hosts::list_remote_workspace_skills,
+            commands::hosts::install_skill_to_remote_host,
+            commands::hosts::remove_skill_from_remote_host,
+            commands::hosts::adopt_remote_skill_to_library,
+            commands::hosts::apply_preset_to_remote_host,
             // Settings
             commands::settings::get_settings,
             commands::settings::set_settings,

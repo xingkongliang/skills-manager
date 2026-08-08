@@ -106,9 +106,11 @@ pub fn store_credential(host: &str, cred: &RemoteCredential) -> Result<()> {
 
 pub fn load_credential(host: &str) -> Result<Option<RemoteCredential>> {
     match keyring_entry(host)?.get_password() {
-        Ok(payload) => Ok(Some(serde_json::from_str(&payload).with_context(|| {
-            format!("Corrupted keychain entry for {host}")
-        })?)),
+        Ok(payload) => {
+            Ok(Some(serde_json::from_str(&payload).with_context(|| {
+                format!("Corrupted keychain entry for {host}")
+            })?))
+        }
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(e).with_context(|| format!("Failed to read git credential for {host}")),
     }

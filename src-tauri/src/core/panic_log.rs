@@ -39,9 +39,8 @@ pub fn install_panic_hook(app: AppHandle) {
             "<non-string panic payload>".to_string()
         };
 
-        let body = format!(
-            "[{timestamp}] PANIC at {location}\n{payload}\n\nBacktrace:\n{backtrace}\n"
-        );
+        let body =
+            format!("[{timestamp}] PANIC at {location}\n{payload}\n\nBacktrace:\n{backtrace}\n");
 
         log::error!("panic: {payload} at {location}");
 

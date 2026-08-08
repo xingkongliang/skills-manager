@@ -86,9 +86,10 @@ pub fn app_commit_message(message: &str) -> String {
 
 /// Whether a commit message carries the protocol trailer.
 pub fn has_protocol_trailer(message: &str) -> bool {
-    message
-        .lines()
-        .any(|line| line.trim_start().starts_with(&format!("{TRAILER_PROTOCOL}:")))
+    message.lines().any(|line| {
+        line.trim_start()
+            .starts_with(&format!("{TRAILER_PROTOCOL}:"))
+    })
 }
 
 /// Parse the comma-separated skill ids of a `key: id1, id2` trailer line.

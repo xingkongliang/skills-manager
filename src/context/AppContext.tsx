@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { AppUpdateInfo, ManagedSkill, Project, Preset, ToolInfo } from "../lib/tauri";
+import type { AppUpdateInfo, Host, ManagedSkill, Project, Preset, ToolInfo } from "../lib/tauri";
 import * as api from "../lib/tauri";
 import i18n from "../i18n";
 import { applyTextSize } from "../lib/textScale";
@@ -14,6 +14,7 @@ interface AppState {
   /** Frontend-only "currently being viewed/edited" preset. Persisted to localStorage. UI selection. */
   viewedPreset: Preset | null;
   tools: ToolInfo[];
+  hosts: Host[];
   managedSkills: ManagedSkill[];
   projects: Project[];
   loading: boolean;
@@ -29,6 +30,7 @@ interface AppState {
   refreshTools: () => Promise<void>;
   refreshManagedSkills: () => Promise<void>;
   refreshProjects: () => Promise<void>;
+  refreshHosts: () => Promise<void>;
   setViewedPresetId: (id: string) => void;
   applyPresetToDefault: (id: string) => Promise<void>;
   clearAppError: () => void;
@@ -56,6 +58,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   });
   const [tools, setTools] = useState<ToolInfo[]>([]);
+  const [hosts, setHosts] = useState<Host[]>([]);
   const [managedSkills, setManagedSkills] = useState<ManagedSkill[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -128,6 +131,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const refreshHosts = useCallback(async () => {
+    try {
+      const nextHosts = await api.listHosts();
+      setHosts(nextHosts);
+    } catch (e) {
+      console.error("Failed to load hosts:", e);
+      setTranslatedError("common.hosts");
+    }
+  }, [setTranslatedError]);
+
   const refreshManagedSkills = useCallback(async () => {
     try {
       const skills = await api.getManagedSkills();
@@ -143,9 +156,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshAppData = useCallback(async () => {
     setLoading(true);
-    await Promise.all([refreshPresets(), refreshTools(), refreshManagedSkills(), refreshProjects()]);
+    await Promise.all([refreshPresets(), refreshTools(), refreshHosts(), refreshManagedSkills(), refreshProjects()]);
     setLoading(false);
-  }, [refreshManagedSkills, refreshProjects, refreshPresets, refreshTools]);
+  }, [refreshHosts, refreshManagedSkills, refreshProjects, refreshPresets, refreshTools]);
 
   const setViewedPresetId = useCallback((id: string) => {
     setViewedPresetIdState(id);
@@ -433,6 +446,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         activePreset,
         viewedPreset,
         tools,
+        hosts,
         managedSkills,
         projects,
         loading,
@@ -446,6 +460,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshTools,
         refreshManagedSkills,
         refreshProjects,
+        refreshHosts,
         setViewedPresetId,
         applyPresetToDefault: handleApplyPresetToDefault,
         clearAppError: () => setAppError(null),

@@ -8,8 +8,9 @@ use crate::core::{
     error::AppError,
     scenario_service::{self, BatchApplyMode},
     skill_store::{ScenarioRecord, SkillStore},
-    sync_metadata, tool_adapters,
+    sync_metadata,
     timing::should_log_first_or_slow,
+    tool_adapters,
 };
 
 fn refresh_tray_menu_best_effort(app: &tauri::AppHandle) {
@@ -43,9 +44,7 @@ pub struct PresetDto {
 static GET_PRESETS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
 
 #[tauri::command]
-pub async fn get_presets(
-    store: State<'_, Arc<SkillStore>>,
-) -> Result<Vec<PresetDto>, AppError> {
+pub async fn get_presets(store: State<'_, Arc<SkillStore>>) -> Result<Vec<PresetDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let start = Instant::now();
@@ -448,10 +447,10 @@ mod tests {
     };
     use crate::core::skill_store::SkillRecord;
     use crate::core::tool_adapters::{self, CustomToolDef};
-    use std::path::PathBuf;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     fn sample_skill(id: &str, name: &str, central_path: &std::path::Path) -> SkillRecord {

@@ -7,6 +7,7 @@ import {
   Globe,
   Download,
   CloudUpload,
+  Server,
   Settings,
   Plus,
   Pencil,
@@ -168,6 +169,7 @@ export function Sidebar() {
     { name: t("sidebar.dashboard"), path: "/", icon: LayoutDashboard },
     { name: t("sidebar.mySkills"), path: "/my-skills", icon: Layers },
     { name: t("sidebar.installSkills"), path: "/install", icon: Download },
+    { name: t("sidebar.hosts"), path: "/hosts", icon: Server },
     { name: t("sidebar.backup"), path: "/backup", icon: CloudUpload },
   ];
 

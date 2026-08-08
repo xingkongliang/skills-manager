@@ -183,6 +183,59 @@ export interface ProjectSkillDocument {
   content: string;
 }
 
+export interface HostAgent {
+  agent_type: string;
+  display_name: string;
+  skill_path: string;
+  status: string;
+  skill_count: number;
+}
+
+export interface Host {
+  id: string;
+  name: string;
+  host_type: string;
+  status: string;
+  platform: string;
+  user: string | null;
+  connection_label: string;
+  agent_count: number;
+  skill_count: number;
+  updated_at: number;
+  agents: HostAgent[];
+}
+
+export interface HostSkill {
+  name: string;
+  relative_path: string;
+  path: string;
+}
+
+export interface RemoteWorkspaceSkill {
+  key: string;
+  name: string;
+  relative_path: string;
+  remote_path: string | null;
+  library_skill_id: string | null;
+  library_version: string | null;
+  remote_hash: string | null;
+  library_hash: string | null;
+  status: "synced" | "conflict" | "missing" | "remote_only";
+}
+
+export interface RemoteOperationSummary {
+  changed: number;
+  skipped: number;
+}
+
+export interface SshImportCandidate {
+  alias: string;
+  host_name: string | null;
+  user: string | null;
+  port: number | null;
+  identity_file: string | null;
+}
+
 // ── Tools ──
 
 export const getToolStatus = () => invoke<ToolInfo[]>("get_tool_status");
@@ -397,6 +450,43 @@ export const searchSkillssh = (query: string, limit?: number) =>
     query,
     limit: limit ?? null,
   });
+
+// ── Hosts ──
+
+export const listHosts = () => invoke<Host[]>("list_hosts");
+
+export const listImportableSshHosts = () =>
+  invoke<SshImportCandidate[]>("list_importable_ssh_hosts_cmd");
+
+export const testSshHostConnection = (sshTarget: string) =>
+  invoke<Host>("test_ssh_host_connection", { sshTarget });
+
+export const addSshHost = (name: string, sshTarget: string) =>
+  invoke<Host>("add_ssh_host", { name, sshTarget });
+
+export const refreshHost = (hostId: string) =>
+  invoke<Host>("refresh_host", { hostId });
+
+export const deleteHost = (hostId: string) =>
+  invoke<void>("delete_host", { hostId });
+
+export const listHostSkills = (hostId: string, agentType: string) =>
+  invoke<HostSkill[]>("list_host_skills", { hostId, agentType });
+
+export const listRemoteWorkspaceSkills = (hostId: string, agentType: string) =>
+  invoke<RemoteWorkspaceSkill[]>("list_remote_workspace_skills", { hostId, agentType });
+
+export const installSkillToRemoteHost = (hostId: string, agentType: string, skillId: string) =>
+  invoke<RemoteWorkspaceSkill>("install_skill_to_remote_host", { hostId, agentType, skillId });
+
+export const removeSkillFromRemoteHost = (hostId: string, agentType: string, relativePath: string) =>
+  invoke<void>("remove_skill_from_remote_host", { hostId, agentType, relativePath });
+
+export const adoptRemoteSkillToLibrary = (hostId: string, agentType: string, relativePath: string) =>
+  invoke<string>("adopt_remote_skill_to_library", { hostId, agentType, relativePath });
+
+export const applyPresetToRemoteHost = (hostId: string, agentType: string, presetId: string) =>
+  invoke<RemoteOperationSummary>("apply_preset_to_remote_host", { hostId, agentType, presetId });
 
 // ── Settings ──
 

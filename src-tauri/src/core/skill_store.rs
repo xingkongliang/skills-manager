@@ -101,6 +101,27 @@ pub struct ProjectRecord {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct HostRecord {
+    pub id: String,
+    pub name: String,
+    pub host_type: String,
+    pub config_json: String,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HostAgentRecord {
+    pub id: String,
+    pub host_id: String,
+    pub agent_type: String,
+    pub skill_path: String,
+    pub status: String,
+    pub metadata_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ScenarioSkillToolToggleRecord {
     pub scenario_id: String,
     pub skill_id: String,
@@ -595,7 +616,12 @@ impl SkillStore {
                 "INSERT OR REPLACE INTO pending_conflicts
                  (skill_id, theirs_commit, theirs_path, detected_at)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![row.skill_id, row.theirs_commit, row.theirs_path, row.detected_at],
+                params![
+                    row.skill_id,
+                    row.theirs_commit,
+                    row.theirs_path,
+                    row.detected_at
+                ],
             )?;
         }
         tx.commit()?;
@@ -1223,6 +1249,127 @@ impl SkillStore {
         Ok(())
     }
 
+    // ── Hosts ──
+
+    pub fn insert_host(&self, host: &HostRecord) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO hosts (
+                id, name, host_type, config_json, status, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                host.id,
+                host.name,
+                host.host_type,
+                host.config_json,
+                host.status,
+                host.created_at,
+                host.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_host(&self, host: &HostRecord) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO hosts (
+                id, name, host_type, config_json, status, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                host_type = excluded.host_type,
+                config_json = excluded.config_json,
+                status = excluded.status,
+                updated_at = excluded.updated_at",
+            params![
+                host.id,
+                host.name,
+                host.host_type,
+                host.config_json,
+                host.status,
+                host.created_at,
+                host.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_all_hosts(&self) -> Result<Vec<HostRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, host_type, config_json, status, created_at, updated_at
+             FROM hosts
+             ORDER BY created_at, name",
+        )?;
+        let rows = stmt.query_map([], map_host_row)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn get_host_by_id(&self, id: &str) -> Result<Option<HostRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, host_type, config_json, status, created_at, updated_at
+             FROM hosts
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], map_host_row)?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    pub fn delete_host(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM hosts WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn replace_host_agents(&self, host_id: &str, agents: &[HostAgentRecord]) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM host_agents WHERE host_id = ?1",
+            params![host_id],
+        )?;
+        for agent in agents {
+            tx.execute(
+                "INSERT INTO host_agents (
+                    id, host_id, agent_type, skill_path, status, metadata_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    agent.id,
+                    agent.host_id,
+                    agent.agent_type,
+                    agent.skill_path,
+                    agent.status,
+                    agent.metadata_json,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_host_agents(&self, host_id: &str) -> Result<Vec<HostAgentRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, host_id, agent_type, skill_path, status, metadata_json
+             FROM host_agents
+             WHERE host_id = ?1
+             ORDER BY agent_type",
+        )?;
+        let rows = stmt.query_map(params![host_id], |row| {
+            Ok(HostAgentRecord {
+                id: row.get(0)?,
+                host_id: row.get(1)?,
+                agent_type: row.get(2)?,
+                skill_path: row.get(3)?,
+                status: row.get(4)?,
+                metadata_json: row.get(5)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     // ── Skill Tags ──
 
     pub fn get_all_tags(&self) -> Result<Vec<String>> {
@@ -1472,22 +1619,23 @@ mod scenario_membership_tests {
         let tmp = tempdir().unwrap();
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
 
-        store.insert_scenario(&ScenarioRecord {
-            id: "s1".to_string(),
-            name: "S1".to_string(),
-            description: None,
-            icon: None,
-            sort_order: 0,
-            created_at: 1,
-            updated_at: 1,
-        })
-        .unwrap();
+        store
+            .insert_scenario(&ScenarioRecord {
+                id: "s1".to_string(),
+                name: "S1".to_string(),
+                description: None,
+                icon: None,
+                sort_order: 0,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
         store.upsert_skill(&sample_skill("k1")).unwrap();
 
         let memberships = vec![
-            membership("s1", "k1"),       // valid
-            membership("s1", "ghost"),    // skill missing
-            membership("ghost-s", "k1"),  // scenario missing
+            membership("s1", "k1"),      // valid
+            membership("s1", "ghost"),   // skill missing
+            membership("ghost-s", "k1"), // scenario missing
         ];
 
         // Must not panic with a FOREIGN KEY constraint failure.
@@ -1497,7 +1645,9 @@ mod scenario_membership_tests {
 
         assert_eq!(store.get_skill_ids_for_scenario("s1").unwrap(), vec!["k1"]);
         assert_eq!(
-            store.get_enabled_tools_for_scenario_skill("s1", "k1").unwrap(),
+            store
+                .get_enabled_tools_for_scenario_skill("s1", "k1")
+                .unwrap(),
             vec!["ToolA"]
         );
         assert!(store
@@ -1528,6 +1678,18 @@ fn map_skill_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SkillRecord> {
         update_status: row.get(16)?,
         last_checked_at: row.get(17)?,
         last_check_error: row.get(18)?,
+    })
+}
+
+fn map_host_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HostRecord> {
+    Ok(HostRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        host_type: row.get(2)?,
+        config_json: row.get(3)?,
+        status: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
     })
 }
 

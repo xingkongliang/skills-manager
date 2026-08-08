@@ -82,9 +82,14 @@ pub fn connect_backup_repo(
     let client = build_http_client(proxy_url, 20);
 
     // Who owns this token? Also serves as token validation.
-    let resp = request(&client, reqwest::Method::GET, &format!("{API_BASE}/user"), token)
-        .send()
-        .context("GITHUB_NETWORK: could not reach api.github.com")?;
+    let resp = request(
+        &client,
+        reqwest::Method::GET,
+        &format!("{API_BASE}/user"),
+        token,
+    )
+    .send()
+    .context("GITHUB_NETWORK: could not reach api.github.com")?;
     let login = match resp.status().as_u16() {
         200 => resp.json::<UserResp>().context("Unexpected /user response")?.login,
         401 => bail!("GITHUB_TOKEN_INVALID: GitHub rejected the token (401)"),
@@ -168,7 +173,9 @@ pub enum DevicePollOutcome {
     Pending,
     /// Polled too fast — caller must add 5 seconds to its interval.
     SlowDown,
-    Authorized { token: String },
+    Authorized {
+        token: String,
+    },
 }
 
 /// Request a device + user code pair to start the flow.
@@ -181,7 +188,10 @@ pub fn device_flow_start(proxy_url: Option<&str>) -> Result<DeviceFlowStart> {
         .send()
         .context("GITHUB_NETWORK: could not reach github.com")?;
     if !resp.status().is_success() {
-        bail!("GitHub device-code endpoint returned HTTP {}", resp.status());
+        bail!(
+            "GitHub device-code endpoint returned HTTP {}",
+            resp.status()
+        );
     }
     let v: serde_json::Value = resp.json().context("Unexpected device-code response")?;
     let field = |k: &str| {

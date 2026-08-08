@@ -2,18 +2,18 @@
 //! pipeline: preconditions, old-client detection (§6), fast-forward guard,
 //! crash-safe ref choreography and the startup recovery protocol.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use git2::{Oid, Repository, Sort};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::decision::{self, DecisionInput, MergePlan, Side, Touch};
 use super::pending::{
-    self, PendingOutcome, REF_APPLYING, REF_PRE_MERGE, TrailerState, conflict_ref,
+    self, conflict_ref, PendingOutcome, TrailerState, REF_APPLYING, REF_PRE_MERGE,
 };
 use super::protocol::{self, ProtocolFile};
-use super::snapshot::{self, FileEntry, METADATA_DIR, Snapshot, skill_identical};
-use super::treebuild::{TreeEdit, apply_tree_edits};
+use super::snapshot::{self, skill_identical, FileEntry, Snapshot, METADATA_DIR};
+use super::treebuild::{apply_tree_edits, TreeEdit};
 use super::validate::{self, validate_merged_tree};
 use crate::core::skill_store::{PendingConflictRow, SkillStore};
 use crate::core::sync_metadata;
@@ -116,12 +116,12 @@ pub fn object_merge_pull_unlocked(store: &SkillStore, skills_dir: &Path) -> Resu
 
     let base_tree = repo.find_commit(base)?.tree()?;
     let ours_tree = repo.find_commit(ours)?.tree()?;
-    let base_snap = snapshot::read_snapshot(&repo, &base_tree)
-        .context("failed to read base snapshot")?;
-    let ours_snap = snapshot::read_snapshot(&repo, &ours_tree)
-        .context("failed to read local snapshot")?;
-    let theirs_snap = snapshot::read_snapshot(&repo, &theirs_tree)
-        .context("failed to read remote snapshot")?;
+    let base_snap =
+        snapshot::read_snapshot(&repo, &base_tree).context("failed to read base snapshot")?;
+    let ours_snap =
+        snapshot::read_snapshot(&repo, &ours_tree).context("failed to read local snapshot")?;
+    let theirs_snap =
+        snapshot::read_snapshot(&repo, &theirs_tree).context("failed to read remote snapshot")?;
 
     // §4/§11-4: declared-pending set from trailers.
     let pinned = match pending::effective_pending(
@@ -203,8 +203,11 @@ pub fn object_merge_pull_unlocked(store: &SkillStore, skills_dir: &Path) -> Resu
     }
 
     // Trailer cap (§4): overflow blocks the automatic path.
-    let conflict_ids: Vec<String> =
-        plan.new_conflicts.iter().map(|c| c.skill_id.clone()).collect();
+    let conflict_ids: Vec<String> = plan
+        .new_conflicts
+        .iter()
+        .map(|c| c.skill_id.clone())
+        .collect();
     let trailer = protocol::format_conflicts_trailer(&conflict_ids);
     if let Some((_, overflowed)) = &trailer {
         if *overflowed {
@@ -253,7 +256,14 @@ pub fn object_merge_pull_unlocked(store: &SkillStore, skills_dir: &Path) -> Resu
     )?;
 
     // §5 steps 7'–11: applying marker, branch CAS, checkout, promote.
-    finish_apply(&repo, &branch, ours, merge_commit, &merged_tree, &attempt_id)?;
+    finish_apply(
+        &repo,
+        &branch,
+        ours,
+        merge_commit,
+        &merged_tree,
+        &attempt_id,
+    )?;
 
     // §4 钉住: the local machine only advances the theirs pointer of
     // still-active pendings; freshly staged conflicts were just promoted to
@@ -263,7 +273,13 @@ pub fn object_merge_pull_unlocked(store: &SkillStore, skills_dir: &Path) -> Resu
     }
 
     let pending_total = rebuild_pending_projection(&repo, store)?;
-    let summary = build_summary(&plan, &theirs_snap, &theirs_touch, pending_total, old_client_warning);
+    let summary = build_summary(
+        &plan,
+        &theirs_snap,
+        &theirs_touch,
+        pending_total,
+        old_client_warning,
+    );
     log::info!(
         "object merge: done ({} updated, {} kept local, {} new conflicts, {} pending)",
         summary.updated.len(),
@@ -492,7 +508,9 @@ fn scan_old_client(repo: &Repository, base: Oid, tip: Oid) -> Result<Vec<Violati
     for oid in walk {
         let commit = repo.find_commit(oid?)?;
         let tree = commit.tree()?;
-        let has_marker = tree.get_path(Path::new(protocol::PROTOCOL_FILE_REL)).is_ok();
+        let has_marker = tree
+            .get_path(Path::new(protocol::PROTOCOL_FILE_REL))
+            .is_ok();
         let has_trailer = protocol::has_protocol_trailer(commit.message().unwrap_or_default());
         if has_marker && !has_trailer {
             out.push(Violation {
@@ -511,16 +529,16 @@ fn scan_old_client(repo: &Repository, base: Oid, tip: Oid) -> Result<Vec<Violati
 fn scan_conflict_markers(repo: &Repository, snap: &Snapshot) -> Result<Vec<String>> {
     let mut hits = Vec::new();
     for skill in snap.skills.values() {
-        let Some(content) = skill.content else { continue };
+        let Some(content) = skill.content else {
+            continue;
+        };
         let tree = repo.find_tree(content)?;
         for marker in snapshot::SKILL_DIR_MARKERS {
             if let Some(entry) = tree.get_name(marker) {
                 if let Ok(blob) = repo.find_blob(entry.id()) {
                     let content = blob.content();
                     if content.starts_with(b"<<<<<<< ")
-                        || content
-                            .windows(9)
-                            .any(|w| w == b"\n<<<<<<< ")
+                        || content.windows(9).any(|w| w == b"\n<<<<<<< ")
                     {
                         hits.push(format!("{}/{}", skill.meta.path, marker));
                     }
@@ -549,7 +567,9 @@ fn touch_info_map(repo: &Repository, tip: Oid, hide: Oid) -> Result<BTreeMap<Str
         let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
         for delta in diff.deltas() {
             for file in [delta.new_file(), delta.old_file()] {
-                let Some(path) = file.path().and_then(|p| p.to_str()) else { continue };
+                let Some(path) = file.path().and_then(|p| p.to_str()) else {
+                    continue;
+                };
                 out.entry(path.to_string()).or_insert_with(|| TouchInfo {
                     time: commit.time().seconds(),
                     commit: commit.id().to_string(),
@@ -596,7 +616,9 @@ fn plan_to_edits(
     // Removals first; puts inserted afterwards overwrite same-path removes.
     for (id, ours_skill) in &ours.skills {
         let keep = plan.skills.get(id);
-        let path_kept = keep.map(|p| p.meta.path == ours_skill.meta.path).unwrap_or(false);
+        let path_kept = keep
+            .map(|p| p.meta.path == ours_skill.meta.path)
+            .unwrap_or(false);
         if !path_kept {
             edits.insert(ours_skill.meta.path.clone(), TreeEdit::Remove);
         }
@@ -613,25 +635,30 @@ fn plan_to_edits(
             .map(|o| o.meta.path == planned.meta.path && o.content == Some(content))
             .unwrap_or(false);
         if !same_content_in_place {
-            edits.insert(planned.meta.path.clone(), TreeEdit::PutTree { oid: content });
+            edits.insert(
+                planned.meta.path.clone(),
+                TreeEdit::PutTree { oid: content },
+            );
         }
         let bytes = sync_metadata::canonical_json_bytes(&planned.meta)?;
         let blob = repo.blob(&bytes)?;
-        let unchanged = ours_skill.map(|o| o.meta_entry.oid == blob).unwrap_or(false);
+        let unchanged = ours_skill
+            .map(|o| o.meta_entry.oid == blob)
+            .unwrap_or(false);
         if !unchanged {
             edits.insert(
                 skill_meta_path(id),
-                TreeEdit::PutBlob { oid: blob, mode: 0o100644 },
+                TreeEdit::PutBlob {
+                    oid: blob,
+                    mode: 0o100644,
+                },
             );
         }
     }
 
-    diff_file_maps(
-        &mut edits,
-        &ours.scenarios,
-        &plan.scenarios,
-        |id| format!("{METADATA_DIR}/scenarios/{id}.json"),
-    );
+    diff_file_maps(&mut edits, &ours.scenarios, &plan.scenarios, |id| {
+        format!("{METADATA_DIR}/scenarios/{id}.json")
+    });
     diff_file_maps(
         &mut edits,
         &ours.memberships,
@@ -643,15 +670,23 @@ fn plan_to_edits(
     // protocol.json: larger merge_protocol wins; ties resolve to the smaller
     // blob OID so both devices pick the same bytes (§3).
     let protocol_pick = pick_versioned(
-        ours.protocol.as_ref().map(|(e, p)| (*e, u64::from(p.merge_protocol))),
-        theirs.protocol.as_ref().map(|(e, p)| (*e, u64::from(p.merge_protocol))),
+        ours.protocol
+            .as_ref()
+            .map(|(e, p)| (*e, u64::from(p.merge_protocol))),
+        theirs
+            .protocol
+            .as_ref()
+            .map(|(e, p)| (*e, u64::from(p.merge_protocol))),
     );
     match protocol_pick {
         Some(entry) => {
             if ours.protocol.as_ref().map(|(e, _)| *e) != Some(entry) {
                 edits.insert(
                     protocol::PROTOCOL_FILE_REL.to_string(),
-                    TreeEdit::PutBlob { oid: entry.oid, mode: entry.mode },
+                    TreeEdit::PutBlob {
+                        oid: entry.oid,
+                        mode: entry.mode,
+                    },
                 );
             }
         }
@@ -660,7 +695,10 @@ fn plan_to_edits(
             let blob = repo.blob(&bytes)?;
             edits.insert(
                 protocol::PROTOCOL_FILE_REL.to_string(),
-                TreeEdit::PutBlob { oid: blob, mode: 0o100644 },
+                TreeEdit::PutBlob {
+                    oid: blob,
+                    mode: 0o100644,
+                },
             );
         }
     }
@@ -669,7 +707,10 @@ fn plan_to_edits(
         if ours.schema.map(|(e, _)| e) != Some(entry) {
             edits.insert(
                 format!("{METADATA_DIR}/schema.json"),
-                TreeEdit::PutBlob { oid: entry.oid, mode: entry.mode },
+                TreeEdit::PutBlob {
+                    oid: entry.oid,
+                    mode: entry.mode,
+                },
             );
         }
     }
@@ -694,7 +735,13 @@ fn diff_file_maps<K: Ord>(
     }
     for (key, entry) in planned {
         if ours.get(key) != Some(entry) {
-            edits.insert(to_path(key), TreeEdit::PutBlob { oid: entry.oid, mode: entry.mode });
+            edits.insert(
+                to_path(key),
+                TreeEdit::PutBlob {
+                    oid: entry.oid,
+                    mode: entry.mode,
+                },
+            );
         }
     }
 }
@@ -738,7 +785,9 @@ fn blocking_workdir_paths(
         if delta.status() != git2::Delta::Added {
             continue;
         }
-        let Some(path) = delta.new_file().path() else { continue };
+        let Some(path) = delta.new_file().path() else {
+            continue;
+        };
         if skills_dir.join(path).exists() {
             blockers.push(path.to_string_lossy().to_string());
         }
@@ -833,7 +882,10 @@ pub fn remote_touches_pending(store: &SkillStore, skills_dir: &Path) -> Result<b
         }
     };
     Ok(pending.iter().any(|row| {
-        match (head_snap.skills.get(&row.skill_id), theirs_snap.skills.get(&row.skill_id)) {
+        match (
+            head_snap.skills.get(&row.skill_id),
+            theirs_snap.skills.get(&row.skill_id),
+        ) {
             (Some(o), Some(t)) => !skill_identical(o, t),
             (None, None) => false,
             _ => true,
@@ -844,9 +896,7 @@ pub fn remote_touches_pending(store: &SkillStore, skills_dir: &Path) -> Result<b
 /// The skill's path inside a pinned theirs commit, for display.
 pub(crate) fn theirs_skill_path(repo: &Repository, commit: Oid, skill_id: &str) -> Option<String> {
     let tree = repo.find_commit(commit).ok()?.tree().ok()?;
-    let entry = tree
-        .get_path(Path::new(&skill_meta_path(skill_id)))
-        .ok()?;
+    let entry = tree.get_path(Path::new(&skill_meta_path(skill_id))).ok()?;
     let blob = repo.find_blob(entry.id()).ok()?;
     let meta: crate::core::sync_metadata::SkillMetaFile =
         serde_json::from_slice(blob.content()).ok()?;
@@ -882,7 +932,11 @@ fn build_summary(
         engine: "object".to_string(),
         updated,
         kept_local: plan.kept_local.clone(),
-        new_conflicts: plan.new_conflicts.iter().map(|c| c.skill_id.clone()).collect(),
+        new_conflicts: plan
+            .new_conflicts
+            .iter()
+            .map(|c| c.skill_id.clone())
+            .collect(),
         pending_total,
         old_client_warning,
         ..Default::default()
@@ -950,8 +1004,7 @@ fn recover_locked(store: &SkillStore, skills_dir: &Path) -> Result<()> {
         pending::heal_conflict_refs(&repo, head)?;
         if let Some(pre) = pending::ref_target(&repo, REF_PRE_MERGE) {
             if let Ok(commit) = repo.find_commit(pre) {
-                let age_days =
-                    (chrono::Utc::now().timestamp() - commit.time().seconds()) / 86_400;
+                let age_days = (chrono::Utc::now().timestamp() - commit.time().seconds()) / 86_400;
                 if age_days > pending::PRE_MERGE_RETENTION_DAYS {
                     pending::delete_ref(&repo, REF_PRE_MERGE);
                 }

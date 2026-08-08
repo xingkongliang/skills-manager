@@ -10,8 +10,8 @@ use git2::{Oid, Repository, Sort};
 use std::collections::BTreeMap;
 
 use super::decision::Side;
-use super::protocol::{TRAILER_CONFLICTS, TRAILER_RESOLVED, parse_trailer_ids};
-use super::snapshot::{Snapshot, skill_identical};
+use super::protocol::{parse_trailer_ids, TRAILER_CONFLICTS, TRAILER_RESOLVED};
+use super::snapshot::{skill_identical, Snapshot};
 
 pub const REF_PRE_MERGE: &str = "refs/skills-manager/pre-merge";
 pub const REF_APPLYING: &str = "refs/skills-manager/applying";
@@ -176,8 +176,12 @@ pub fn list_staging_refs(repo: &Repository) -> Vec<(String, String, Oid)> {
     if let Ok(refs) = repo.references_glob(&format!("{STAGING_REF_PREFIX}*")) {
         for r in refs.flatten() {
             let Some(name) = r.name() else { continue };
-            let Some(rest) = name.strip_prefix(STAGING_REF_PREFIX) else { continue };
-            let Some((attempt, skill_id)) = rest.split_once('/') else { continue };
+            let Some(rest) = name.strip_prefix(STAGING_REF_PREFIX) else {
+                continue;
+            };
+            let Some((attempt, skill_id)) = rest.split_once('/') else {
+                continue;
+            };
             if let Some(target) = r.target() {
                 out.push((attempt.to_string(), skill_id.to_string(), target));
             }
@@ -192,7 +196,9 @@ pub fn list_conflict_refs(repo: &Repository) -> Vec<(String, Oid)> {
     if let Ok(refs) = repo.references_glob(&format!("{CONFLICT_REF_PREFIX}*")) {
         for r in refs.flatten() {
             let Some(name) = r.name() else { continue };
-            let Some(skill_id) = name.strip_prefix(CONFLICT_REF_PREFIX) else { continue };
+            let Some(skill_id) = name.strip_prefix(CONFLICT_REF_PREFIX) else {
+                continue;
+            };
             if let Some(target) = r.target() {
                 out.push((skill_id.to_string(), target));
             }
@@ -207,7 +213,12 @@ pub fn list_conflict_refs(repo: &Repository) -> Vec<(String, Oid)> {
 pub fn promote_staging(repo: &Repository, attempt_id: &str) -> Result<()> {
     for (attempt, skill_id, target) in list_staging_refs(repo) {
         if attempt == attempt_id {
-            write_ref(repo, &conflict_ref(&skill_id), target, "promote conflict ref")?;
+            write_ref(
+                repo,
+                &conflict_ref(&skill_id),
+                target,
+                "promote conflict ref",
+            )?;
         }
         delete_ref(repo, &staging_ref(&attempt, &skill_id));
     }

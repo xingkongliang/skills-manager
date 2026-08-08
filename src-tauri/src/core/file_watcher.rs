@@ -333,10 +333,7 @@ pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Ar
             }
 
             // Flush a deferred emit once the mute window has closed.
-            if pending_emit
-                && !self_write_muted()
-                && last_emit.elapsed() >= WATCH_EMIT_DEBOUNCE
-            {
+            if pending_emit && !self_write_muted() && last_emit.elapsed() >= WATCH_EMIT_DEBOUNCE {
                 pending_emit = false;
                 emit_now(&mut last_emit);
             }

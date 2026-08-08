@@ -16,7 +16,7 @@ pub mod treebuild;
 pub mod validate;
 
 pub use apply::{
-    MergeSummary, object_merge_pull_unlocked, recover_on_startup, remote_touches_pending,
+    object_merge_pull_unlocked, recover_on_startup, remote_touches_pending, MergeSummary,
 };
 
 /// Settings key of the engine switch (§9). Since 3d-β the object merge is
@@ -60,8 +60,7 @@ mod gate_tests {
     #[test]
     fn object_merge_is_default_and_system_is_the_escape_hatch() {
         let tmp = tempfile::tempdir().unwrap();
-        let store =
-            crate::core::skill_store::SkillStore::new(&tmp.path().join("t.db")).unwrap();
+        let store = crate::core::skill_store::SkillStore::new(&tmp.path().join("t.db")).unwrap();
         // 3d-β: on by default (no setting saved).
         assert!(object_merge_enabled(&store));
         // Users who opted in during 3d-α stay on.
