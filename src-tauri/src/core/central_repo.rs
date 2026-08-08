@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -267,7 +267,11 @@ pub fn external_base_dir(skills_root: &Path) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(canonical.to_string_lossy().as_bytes());
     let digest = hasher.finalize();
-    let short_hash: String = digest.iter().take(5).map(|b| format!("{:02x}", b)).collect();
+    let short_hash: String = digest
+        .iter()
+        .take(5)
+        .map(|b| format!("{:02x}", b))
+        .collect();
     default_base_dir()
         .join("external")
         .join(format!("{}-{}", sanitize_dir_name(name), short_hash))
@@ -657,8 +661,14 @@ mod tests {
             }
             _ => panic!("expected UseSource for a non-empty target"),
         }
-        assert!(config.pending_migration_from.is_some(), "marker kept for retry");
-        assert_eq!(fs::read(dst.path().join("existing.txt")).unwrap(), b"dst-data");
+        assert!(
+            config.pending_migration_from.is_some(),
+            "marker kept for retry"
+        );
+        assert_eq!(
+            fs::read(dst.path().join("existing.txt")).unwrap(),
+            b"dst-data"
+        );
         assert_eq!(fs::read(src.path().join("a.txt")).unwrap(), b"src");
     }
 
@@ -679,7 +689,10 @@ mod tests {
         let outcome = migrate_repo_if_needed(&mut config, &link);
 
         assert!(matches!(outcome, MigrationOutcome::Proceed));
-        assert_eq!(config.pending_migration_from, None, "same-dir move clears marker");
+        assert_eq!(
+            config.pending_migration_from, None,
+            "same-dir move clears marker"
+        );
         // The real library is untouched.
         assert!(real.path().join("skills").exists());
     }
@@ -739,8 +752,11 @@ mod tests {
     fn config_state_valid_json_is_valid() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("repo-config.json");
-        fs::write(&path, r#"{ "repo_path": "/tmp/lib", "pending_migration_from": null }"#)
-            .unwrap();
+        fs::write(
+            &path,
+            r#"{ "repo_path": "/tmp/lib", "pending_migration_from": null }"#,
+        )
+        .unwrap();
         match load_config_state_from(&path) {
             ConfigState::Valid(config) => {
                 assert_eq!(config.repo_path.as_deref(), Some("/tmp/lib"));

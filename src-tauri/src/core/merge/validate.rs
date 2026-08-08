@@ -3,13 +3,13 @@
 //! whole merge with zero changes. Self-healing corrections (orphan drops)
 //! happen earlier, as tree-build inputs — never here.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use git2::{ObjectType, Repository, Tree};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::protocol::ProtocolFile;
-use super::snapshot::{MAX_SKILL_DEPTH, METADATA_DIR, tree_is_valid_skill_dir};
-use crate::core::sync_metadata::{SkillMetaFile, path_key};
+use super::snapshot::{tree_is_valid_skill_dir, MAX_SKILL_DEPTH, METADATA_DIR};
+use crate::core::sync_metadata::{path_key, SkillMetaFile};
 
 /// Skill directories in `tree` that no metadata claims. Used to grandfather
 /// legacy dirt: dirs that were already unclaimed in a merge INPUT (committed
@@ -24,8 +24,7 @@ pub fn unclaimed_skill_dirs(repo: &Repository, tree: &Tree) -> Result<BTreeSet<S
             if let Ok(skills_tree) = subtree(repo, &meta_tree, "skills") {
                 for entry in skills_tree.iter() {
                     if let Ok(blob) = repo.find_blob(entry.id()) {
-                        if let Ok(meta) = serde_json::from_slice::<SkillMetaFile>(blob.content())
-                        {
+                        if let Ok(meta) = serde_json::from_slice::<SkillMetaFile>(blob.content()) {
                             claimed.insert(meta.path);
                         }
                     }
@@ -112,8 +111,7 @@ fn validate_tree(
                     meta.path
                 );
             }
-            if let Some(previous) = seen_keys.insert(meta.path_key.clone(), meta.skill_id.clone())
-            {
+            if let Some(previous) = seen_keys.insert(meta.path_key.clone(), meta.skill_id.clone()) {
                 bail!(
                     "merged tree validation: folded path collision between {} and {}",
                     previous,

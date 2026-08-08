@@ -62,9 +62,8 @@ impl RepoLock {
                 // needs it most.
                 Err(err) => {
                     if start.elapsed() >= timeout {
-                        return Err(err).with_context(|| {
-                            format!("skills repository is busy: {operation}")
-                        });
+                        return Err(err)
+                            .with_context(|| format!("skills repository is busy: {operation}"));
                     }
                     std::thread::sleep(POLL_INTERVAL);
                 }

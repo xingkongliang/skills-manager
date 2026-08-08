@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;

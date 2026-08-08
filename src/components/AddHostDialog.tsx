@@ -9,7 +9,7 @@ import { cn } from "../utils";
 interface Props {
   open: boolean;
   onClose: () => void;
-  onAdded: () => Promise<void>;
+  onAdded: (host: Host) => Promise<void>;
 }
 
 export function AddHostDialog({ open, onClose, onAdded }: Props) {
@@ -64,8 +64,8 @@ export function AddHostDialog({ open, onClose, onAdded }: Props) {
     if (!name.trim() || !sshTarget.trim()) return;
     setAdding(true);
     try {
-      await api.addSshHost(name.trim(), sshTarget.trim());
-      await onAdded();
+      const host = await api.addSshHost(name.trim(), sshTarget.trim());
+      await onAdded(host);
       toast.success(t("hosts.added"));
       onClose();
     } catch (error) {

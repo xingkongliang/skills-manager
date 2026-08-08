@@ -7,11 +7,11 @@
 //! access — so both devices merging the same pair of commits compute the
 //! same plan (§10 convergence).
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::snapshot::{FileEntry, SkillObj, Snapshot, attrs_eq, skill_identical};
-use crate::core::sync_metadata::{SkillMetaFile, path_key};
+use super::snapshot::{attrs_eq, skill_identical, FileEntry, SkillObj, Snapshot};
+use crate::core::sync_metadata::{path_key, SkillMetaFile};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -227,7 +227,8 @@ pub fn decide(input: &DecisionInput) -> Result<MergePlan> {
     // cleanup ran. The app only ever writes `.json` files there, so any
     // other residual is junk; merging it forward would trip the strict
     // validator on every device forever.
-    plan.residual.retain(|path, _| !is_metadata_namespace_junk(path));
+    plan.residual
+        .retain(|path, _| !is_metadata_namespace_junk(path));
 
     resolve_path_collisions(&mut plan, input)?;
     Ok(plan)
@@ -243,7 +244,10 @@ fn planned(obj: &SkillObj, from_theirs: bool) -> PlannedSkill {
 }
 
 enum ComponentOutcome {
-    Merged { skill: PlannedSkill, from_theirs: bool },
+    Merged {
+        skill: PlannedSkill,
+        from_theirs: bool,
+    },
     Conflict,
 }
 
@@ -324,7 +328,11 @@ fn merge_whole_files<K: Ord + Clone>(
     to_path: impl Fn(&K) -> String,
     input: &DecisionInput,
 ) -> BTreeMap<K, FileEntry> {
-    let keys: BTreeSet<&K> = base.keys().chain(ours.keys()).chain(theirs.keys()).collect();
+    let keys: BTreeSet<&K> = base
+        .keys()
+        .chain(ours.keys())
+        .chain(theirs.keys())
+        .collect();
     let mut out = BTreeMap::new();
     for key in keys {
         let b = base.get(key);
@@ -384,7 +392,11 @@ fn newest_wins<K>(
         // diverged path): keep ours for safety.
         (None, None) => false,
     };
-    if take_theirs { theirs } else { ours }
+    if take_theirs {
+        theirs
+    } else {
+        ours
+    }
 }
 
 /// Path-collision pass (§3): group the FINAL skill set by folded path key;
@@ -497,7 +509,10 @@ mod tests {
 
     fn skill(id: &str, path: &str, content: u8, enabled: bool, tags: &[&str]) -> SkillObj {
         SkillObj {
-            meta_entry: FileEntry { oid: oid(0), mode: 0o100644 },
+            meta_entry: FileEntry {
+                oid: oid(0),
+                mode: 0o100644,
+            },
             meta: SkillMetaFile {
                 schema_version: 1,
                 skill_id: id.to_string(),
@@ -592,8 +607,11 @@ mod tests {
         assert!(!plan.skills.contains_key("del-vs-edit"));
         // edit-vs-del: ours edit kept, conflict declared
         assert_eq!(plan.skills["edit-vs-del"].content, Some(oid(4)));
-        let mut conflicted: Vec<&str> =
-            plan.new_conflicts.iter().map(|c| c.skill_id.as_str()).collect();
+        let mut conflicted: Vec<&str> = plan
+            .new_conflicts
+            .iter()
+            .map(|c| c.skill_id.as_str())
+            .collect();
         conflicted.sort();
         assert_eq!(conflicted, vec!["del-vs-edit", "edit-vs-del"]);
     }
@@ -676,7 +694,10 @@ mod tests {
 
     #[test]
     fn whole_file_double_edit_newest_wins() {
-        let entry = |n: u8| FileEntry { oid: oid(n), mode: 0o100644 };
+        let entry = |n: u8| FileEntry {
+            oid: oid(n),
+            mode: 0o100644,
+        };
         let mut base = Snapshot::default();
         let mut ours = Snapshot::default();
         let mut theirs = Snapshot::default();
@@ -718,7 +739,10 @@ mod tests {
 
     #[test]
     fn membership_orphans_are_dropped() {
-        let entry = FileEntry { oid: oid(9), mode: 0o100644 };
+        let entry = FileEntry {
+            oid: oid(9),
+            mode: 0o100644,
+        };
         let mut theirs = Snapshot::default();
         theirs
             .memberships
@@ -744,10 +768,7 @@ mod tests {
         assert_eq!(plan.skills["z-holder"].meta.path, "spot");
         assert_eq!(plan.skills["a-migrant"].meta.path, "Spot (2)");
         assert!(plan.skills["a-migrant"].renamed_for_collision);
-        assert_eq!(
-            plan.skills["a-migrant"].meta.path_key,
-            path_key("Spot (2)")
-        );
+        assert_eq!(plan.skills["a-migrant"].meta.path_key, path_key("Spot (2)"));
     }
 
     #[test]
@@ -811,7 +832,7 @@ mod tests {
     fn collision_rename_chain_finds_free_slot() {
         let base = snap(vec![skill("keeper", "n", 1, true, &[])]);
         let ours = snap(vec![
-        	skill("keeper", "n", 1, true, &[]),
+            skill("keeper", "n", 1, true, &[]),
             skill("aaa", "n (2)", 2, true, &[]),
         ]);
         let theirs = snap(vec![

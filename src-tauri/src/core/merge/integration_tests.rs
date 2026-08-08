@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::core::merge::apply::{self, object_merge_pull_unlocked, recover_on_startup};
-use crate::core::merge::pending::{self, REF_APPLYING, REF_PRE_MERGE, conflict_ref};
+use crate::core::merge::pending::{self, conflict_ref, REF_APPLYING, REF_PRE_MERGE};
 use crate::core::merge::protocol;
-use crate::core::merge::resolve::{ResolveAction, resolve_conflict_unlocked};
+use crate::core::merge::resolve::{resolve_conflict_unlocked, ResolveAction};
 use crate::core::skill_store::SkillStore;
 use crate::core::sync_metadata::{self, SkillMetaFile, SourceMeta};
 use crate::core::{central_repo, git_backup};
@@ -41,7 +41,12 @@ fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
-        .args(["-c", "user.email=test@example.com", "-c", "user.name=Raw Git"])
+        .args([
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Raw Git",
+        ])
         .args(args)
         .output()
         .unwrap();
@@ -64,7 +69,11 @@ fn setup() -> Env {
         .unwrap()
         .status
         .success());
-    Env { _guard: guard, _tmp: tmp, remote }
+    Env {
+        _guard: guard,
+        _tmp: tmp,
+        remote,
+    }
 }
 
 impl Env {
@@ -74,11 +83,19 @@ impl Env {
         let skills = base.join("skills");
         std::fs::create_dir_all(&skills).unwrap();
         let store = SkillStore::new(&base.join("db.sqlite")).unwrap();
-        let dev = Device { base, skills, store, name: "Device A" };
+        let dev = Device {
+            base,
+            skills,
+            store,
+            name: "Device A",
+        };
         dev.activate();
         git(&dev.skills, &["init", "-b", "main"]);
         git_backup::configure_device_identity(&dev.skills, dev.name).unwrap();
-        git(&dev.skills, &["remote", "add", "origin", self.remote.to_str().unwrap()]);
+        git(
+            &dev.skills,
+            &["remote", "add", "origin", self.remote.to_str().unwrap()],
+        );
         dev
     }
 
@@ -96,7 +113,12 @@ impl Env {
             .status
             .success());
         let store = SkillStore::new(&base.join("db.sqlite")).unwrap();
-        let dev = Device { base, skills, store, name: "Device B" };
+        let dev = Device {
+            base,
+            skills,
+            store,
+            name: "Device B",
+        };
         dev.activate();
         git_backup::configure_device_identity(&dev.skills, dev.name).unwrap();
         dev.reindex();
@@ -150,7 +172,9 @@ impl Device {
         if dir.exists() {
             std::fs::remove_dir_all(dir).unwrap();
         }
-        let meta = self.skills.join(format!(".skills-manager/skills/{id}.json"));
+        let meta = self
+            .skills
+            .join(format!(".skills-manager/skills/{id}.json"));
         if meta.exists() {
             std::fs::remove_file(meta).unwrap();
         }
@@ -200,7 +224,8 @@ impl Device {
 
     fn meta_of(&self, id: &str) -> Option<SkillMetaFile> {
         let raw = std::fs::read_to_string(
-            self.skills.join(format!(".skills-manager/skills/{id}.json")),
+            self.skills
+                .join(format!(".skills-manager/skills/{id}.json")),
         )
         .ok()?;
         serde_json::from_str(&raw).ok()
@@ -250,7 +275,10 @@ fn content_edit_plus_rename_compose_and_both_directions_converge() {
 
     // Expose A's pre-merge tip as the remote main so B merges the exact
     // mirrored pair (ours = rename, theirs = content edit).
-    git(&a.skills, &["push", "-f", "origin", &format!("{x_sha}:refs/heads/main")]);
+    git(
+        &a.skills,
+        &["push", "-f", "origin", &format!("{x_sha}:refs/heads/main")],
+    );
     let summary_b = b.pull();
     assert!(summary_b.new_conflicts.is_empty(), "{summary_b:?}");
     assert_eq!(b.skill_md("beta"), "edited on A");
@@ -283,7 +311,10 @@ fn true_conflict_keeps_ours_declares_trailer_and_pins_theirs() {
     assert_eq!(summary.kept_local, vec!["skill-1"]);
     assert_eq!(summary.pending_total, 1);
     let head_msg = a.head_message();
-    assert!(head_msg.contains("Skills-Manager-Conflicts: skill-1"), "{head_msg}");
+    assert!(
+        head_msg.contains("Skills-Manager-Conflicts: skill-1"),
+        "{head_msg}"
+    );
     assert!(protocol::has_protocol_trailer(&head_msg));
 
     // The theirs version is pinned via the durable ref and the projection.
@@ -329,11 +360,14 @@ fn resolve_keep_local_closes_pending_across_devices() {
     a.pull();
 
     a.activate();
-    let safety = resolve_conflict_unlocked(&a.store, &a.skills, "skill-1", ResolveAction::KeepLocal)
-        .unwrap();
+    let safety =
+        resolve_conflict_unlocked(&a.store, &a.skills, "skill-1", ResolveAction::KeepLocal)
+            .unwrap();
     assert!(safety.starts_with("sm-v-"));
     assert_eq!(a.skill_md("alpha"), "edited on A");
-    assert!(a.head_message().contains("Skills-Manager-Resolved: skill-1"));
+    assert!(a
+        .head_message()
+        .contains("Skills-Manager-Resolved: skill-1"));
     assert!(a.store.list_pending_conflicts().unwrap().is_empty());
     let repo = git2::Repository::open(&a.skills).unwrap();
     assert!(pending::ref_target(&repo, &conflict_ref("skill-1")).is_none());
@@ -633,17 +667,21 @@ fn legacy_dirt_does_not_brick_the_merge() {
     // temp files before committing and would defeat the scenario.
     b.activate();
     std::fs::write(
-        b.skills.join(".skills-manager/skills/skill-1.json.tmp.0000-dead-beef"),
+        b.skills
+            .join(".skills-manager/skills/skill-1.json.tmp.0000-dead-beef"),
         "partial write leftover",
     )
     .unwrap();
     std::fs::write(b.skills.join("alpha/SKILL.md"), "edited on B").unwrap();
     git(&b.skills, &["add", "-A"]);
-    git(&b.skills, &[
-        "commit",
-        "-m",
-        "backup: edit + leaked tmp file\n\nSkills-Manager-Protocol: 2",
-    ]);
+    git(
+        &b.skills,
+        &[
+            "commit",
+            "-m",
+            "backup: edit + leaked tmp file\n\nSkills-Manager-Protocol: 2",
+        ],
+    );
     b.reindex();
     b.push();
     // Preconditions: the junk really is in the remote history.
@@ -678,7 +716,8 @@ fn commit_never_picks_up_tmp_metadata_leftovers() {
     let a = env.device_a();
     a.write_skill("skill-1", "alpha", "base");
     std::fs::write(
-        a.skills.join(".skills-manager/skills/skill-1.json.tmp.0000-dead-beef"),
+        a.skills
+            .join(".skills-manager/skills/skill-1.json.tmp.0000-dead-beef"),
         "leftover",
     )
     .unwrap();
@@ -709,7 +748,10 @@ fn crash_between_ref_move_and_checkout(dev: &Device) -> (git2::Oid, git2::Oid) {
     let mut edits = std::collections::BTreeMap::new();
     edits.insert(
         "incoming/SKILL.md".to_string(),
-        super::treebuild::TreeEdit::PutBlob { oid: blob, mode: 0o100644 },
+        super::treebuild::TreeEdit::PutBlob {
+            oid: blob,
+            mode: 0o100644,
+        },
     );
     let tree_oid =
         super::treebuild::apply_tree_edits(&repo, Some(&old_commit.tree().unwrap()), &edits)
@@ -721,7 +763,9 @@ fn crash_between_ref_move_and_checkout(dev: &Device) -> (git2::Oid, git2::Oid) {
             None,
             &sig,
             &sig,
-            &protocol::app_commit_message("sync: merge remote skill changes (1 updated, 0 kept local, 0 conflicts)"),
+            &protocol::app_commit_message(
+                "sync: merge remote skill changes (1 updated, 0 kept local, 0 conflicts)",
+            ),
             &tree,
             &[&old_commit],
         )
@@ -729,7 +773,8 @@ fn crash_between_ref_move_and_checkout(dev: &Device) -> (git2::Oid, git2::Oid) {
 
     pending::write_ref(&repo, REF_PRE_MERGE, old_head, "test").unwrap();
     pending::write_ref(&repo, REF_APPLYING, merge_commit, "test").unwrap();
-    repo.reference("refs/heads/main", merge_commit, true, "test").unwrap();
+    repo.reference("refs/heads/main", merge_commit, true, "test")
+        .unwrap();
     (old_head, merge_commit)
 }
 
@@ -835,21 +880,40 @@ fn heal_rewrites_stale_conflict_ref_after_re_declaration() {
         sha
     };
     let p1 = mk_side("side1", "theirs v1");
-    git(&a.skills, &[
-        "merge", "--no-ff", "-s", "ours",
-        "-m", "sync: merge\n\nSkills-Manager-Protocol: 2\nSkills-Manager-Conflicts: skill-1",
-        "side1",
-    ]);
-    git(&a.skills, &[
-        "commit", "--allow-empty",
-        "-m", "resolve\n\nSkills-Manager-Protocol: 2\nSkills-Manager-Resolved: skill-1",
-    ]);
+    git(
+        &a.skills,
+        &[
+            "merge",
+            "--no-ff",
+            "-s",
+            "ours",
+            "-m",
+            "sync: merge\n\nSkills-Manager-Protocol: 2\nSkills-Manager-Conflicts: skill-1",
+            "side1",
+        ],
+    );
+    git(
+        &a.skills,
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "resolve\n\nSkills-Manager-Protocol: 2\nSkills-Manager-Resolved: skill-1",
+        ],
+    );
     let p2 = mk_side("side2", "theirs v2");
-    git(&a.skills, &[
-        "merge", "--no-ff", "-s", "ours",
-        "-m", "sync: merge\n\nSkills-Manager-Protocol: 2\nSkills-Manager-Conflicts: skill-1",
-        "side2",
-    ]);
+    git(
+        &a.skills,
+        &[
+            "merge",
+            "--no-ff",
+            "-s",
+            "ours",
+            "-m",
+            "sync: merge\n\nSkills-Manager-Protocol: 2\nSkills-Manager-Conflicts: skill-1",
+            "side2",
+        ],
+    );
 
     let repo = git2::Repository::open(&a.skills).unwrap();
     let head = repo.head().unwrap().target().unwrap();
@@ -865,7 +929,11 @@ fn heal_rewrites_stale_conflict_ref_after_re_declaration() {
     let healed = pending::heal_conflict_refs(&repo, head).unwrap();
     assert_eq!(healed.len(), 1);
     let target = pending::ref_target(&repo, &conflict_ref("skill-1")).unwrap();
-    assert_eq!(target.to_string(), p2, "ref must point at the current declaration's theirs side");
+    assert_eq!(
+        target.to_string(),
+        p2,
+        "ref must point at the current declaration's theirs side"
+    );
 
     // A legitimately advanced pointer (descendant of P2) is left alone.
     let healed_again = pending::heal_conflict_refs(&repo, head).unwrap();
@@ -919,7 +987,10 @@ fn old_client_line_merge_blocks_object_merge() {
     std::fs::write(b.skills.join("alpha/extra.md"), "main edit").unwrap();
     git(&b.skills, &["add", "-A"]);
     git(&b.skills, &["commit", "-m", "main edit"]);
-    git(&b.skills, &["merge", "--no-ff", "-m", "old client merge", "side"]);
+    git(
+        &b.skills,
+        &["merge", "--no-ff", "-m", "old client merge", "side"],
+    );
     git(&b.skills, &["push", "origin", "main"]);
 
     a.activate();
@@ -943,7 +1014,8 @@ fn old_client_plain_write_passes_with_warning() {
     b.activate();
     std::fs::write(b.skills.join("alpha/SKILL.md"), "raw git edit").unwrap();
     std::fs::write(
-        b.skills.join(".skills-manager/skills/skill-1.json.tmp.0000-dead-beef"),
+        b.skills
+            .join(".skills-manager/skills/skill-1.json.tmp.0000-dead-beef"),
         "leftover",
     )
     .unwrap();
@@ -1020,7 +1092,10 @@ fn legacy_remote_without_protocol_falls_back_to_system_merge() {
     let head_msg = a.head_message();
     assert!(protocol::has_protocol_trailer(&head_msg), "{head_msg}");
     assert!(
-        git(&a.skills, &["rev-list", "--parents", "-1", "HEAD"]).split_whitespace().count() >= 3,
+        git(&a.skills, &["rev-list", "--parents", "-1", "HEAD"])
+            .split_whitespace()
+            .count()
+            >= 3,
         "fallback should have produced a merge commit"
     );
 }

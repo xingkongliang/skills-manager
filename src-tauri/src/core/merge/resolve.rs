@@ -4,7 +4,7 @@
 //! trailer (the cross-device close signal), then drops the pinned ref and
 //! projection row.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use git2::{ObjectType, Oid, Repository};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -14,7 +14,7 @@ use super::pending::{self, conflict_ref};
 use super::protocol::{self, TRAILER_RESOLVED};
 use super::snapshot;
 use crate::core::skill_store::SkillStore;
-use crate::core::sync_metadata::{self, SkillMetaFile, path_key};
+use crate::core::sync_metadata::{self, path_key, SkillMetaFile};
 use crate::core::{git_backup, skill_metadata};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,26 +55,25 @@ pub fn resolve_conflict_unlocked(
     let safety_tag = git_backup::create_snapshot_tag_unlocked(skills_dir)?;
 
     let repo = Repository::open(skills_dir).context("failed to open skills repository")?;
-    let theirs_commit = pending::ref_target(&repo, &conflict_ref(skill_id))
-        .or_else(|| {
-            store
-                .list_pending_conflicts()
-                .ok()?
-                .into_iter()
-                .find(|r| r.skill_id == skill_id)
-                .and_then(|r| Oid::from_str(&r.theirs_commit).ok())
-        });
+    let theirs_commit = pending::ref_target(&repo, &conflict_ref(skill_id)).or_else(|| {
+        store
+            .list_pending_conflicts()
+            .ok()?
+            .into_iter()
+            .find(|r| r.skill_id == skill_id)
+            .and_then(|r| Oid::from_str(&r.theirs_commit).ok())
+    });
 
     match action {
         ResolveAction::KeepLocal => {}
         ResolveAction::UseRemote => {
-            let theirs_commit = theirs_commit
-                .context("remote version of this conflict is no longer available")?;
+            let theirs_commit =
+                theirs_commit.context("remote version of this conflict is no longer available")?;
             apply_use_remote(&repo, skills_dir, skill_id, theirs_commit)?;
         }
         ResolveAction::KeepBoth => {
-            let theirs_commit = theirs_commit
-                .context("remote version of this conflict is no longer available")?;
+            let theirs_commit =
+                theirs_commit.context("remote version of this conflict is no longer available")?;
             apply_keep_both(&repo, skills_dir, skill_id, theirs_commit)?;
         }
     }
@@ -209,8 +208,8 @@ fn apply_keep_both(
         .content
         .context("pinned remote version has no content directory")?;
 
-    let suffix = skill_metadata::sanitize_skill_name(&device)
-        .unwrap_or_else(|| "remote".to_string());
+    let suffix =
+        skill_metadata::sanitize_skill_name(&device).unwrap_or_else(|| "remote".to_string());
     let base_name = format!("{} ({})", theirs_skill.meta.path, suffix);
     let new_id = uuid::Uuid::new_v4().to_string();
     let target_path = free_path_for(skills_dir, &base_name, &new_id)?;
@@ -271,7 +270,11 @@ fn free_path_for(skills_dir: &Path, wanted: &str, own_id: &str) -> Result<String
             if path.extension().map(|e| e == "json").unwrap_or(false) {
                 if let Ok(raw) = std::fs::read_to_string(&path) {
                     if let Ok(meta) = serde_json::from_str::<SkillMetaFile>(&raw) {
-                        if path.file_stem().map(|s| s.to_string_lossy() == own_id).unwrap_or(false) {
+                        if path
+                            .file_stem()
+                            .map(|s| s.to_string_lossy() == own_id)
+                            .unwrap_or(false)
+                        {
                             own_path = Some(meta.path);
                             continue;
                         }
@@ -330,8 +333,10 @@ fn place_staged(staged: &Path, skills_dir: &Path, target_rel: &str) -> Result<()
     }
     if let Err(e) = std::fs::rename(staged, &target) {
         let _ = std::fs::remove_dir_all(staged);
-        return Err(anyhow::Error::from(e)
-            .context(format!("failed to move resolved skill into {}", target.display())));
+        return Err(anyhow::Error::from(e).context(format!(
+            "failed to move resolved skill into {}",
+            target.display()
+        )));
     }
     Ok(())
 }

@@ -3,11 +3,8 @@ use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 use crate::core::{
-    error::AppError,
-    scenario_service,
-    skill_store::SkillStore,
-    sync_engine, sync_metadata, tool_adapters,
-    tool_service,
+    error::AppError, scenario_service, skill_store::SkillStore, sync_engine, sync_metadata,
+    tool_adapters, tool_service,
 };
 use serde::Serialize;
 

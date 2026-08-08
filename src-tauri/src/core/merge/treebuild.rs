@@ -10,7 +10,7 @@
 //! below a removed path builds that directory from scratch (the removed
 //! subtree's former siblings do not leak through).
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use git2::{ObjectType, Oid, Repository, Tree};
 use std::collections::BTreeMap;
 
@@ -82,12 +82,18 @@ fn insert_edit(level: &mut BTreeMap<String, Node>, path: &str, edit: TreeEdit) -
         },
         Some(rest) => {
             let node = level.entry(head.to_string()).or_insert_with(|| {
-                Node::Dir(DirNode { fresh: false, children: BTreeMap::new() })
+                Node::Dir(DirNode {
+                    fresh: false,
+                    children: BTreeMap::new(),
+                })
             });
             if let Node::Leaf(TreeEdit::Remove) = node {
                 // The whole old entry goes away; nested edits build the new
                 // directory from scratch.
-                *node = Node::Dir(DirNode { fresh: true, children: BTreeMap::new() });
+                *node = Node::Dir(DirNode {
+                    fresh: true,
+                    children: BTreeMap::new(),
+                });
             }
             match node {
                 Node::Dir(dir) => insert_edit(&mut dir.children, rest, edit),
@@ -190,7 +196,13 @@ mod tests {
         let b = blob(&repo, "hello");
         let root = tree_of(
             &repo,
-            &[("a/b/c.txt", TreeEdit::PutBlob { oid: b, mode: 0o100644 })],
+            &[(
+                "a/b/c.txt",
+                TreeEdit::PutBlob {
+                    oid: b,
+                    mode: 0o100644,
+                },
+            )],
         );
         assert_eq!(entry_kind(&repo, root, "a/b/c.txt"), Some(ObjectType::Blob));
 
@@ -209,10 +221,16 @@ mod tests {
             &repo,
             &[(
                 "SKILL.md",
-                TreeEdit::PutBlob { oid: blob(&repo, "skill"), mode: 0o100644 },
+                TreeEdit::PutBlob {
+                    oid: blob(&repo, "skill"),
+                    mode: 0o100644,
+                },
             )],
         );
-        let root = tree_of(&repo, &[("group/my-skill", TreeEdit::PutTree { oid: inner })]);
+        let root = tree_of(
+            &repo,
+            &[("group/my-skill", TreeEdit::PutTree { oid: inner })],
+        );
         assert_eq!(
             entry_kind(&repo, root, "group/my-skill/SKILL.md"),
             Some(ObjectType::Blob)
@@ -223,25 +241,43 @@ mod tests {
     fn blob_to_tree_and_tree_to_blob_type_changes() {
         let (_tmp, repo) = test_repo();
         let file = blob(&repo, "was a file");
-        let root = tree_of(&repo, &[("thing", TreeEdit::PutBlob { oid: file, mode: 0o100644 })]);
+        let root = tree_of(
+            &repo,
+            &[(
+                "thing",
+                TreeEdit::PutBlob {
+                    oid: file,
+                    mode: 0o100644,
+                },
+            )],
+        );
         let base = repo.find_tree(root).unwrap();
 
         // blob → tree via a nested edit below the old blob path
         let mut edits = BTreeMap::new();
         edits.insert(
             "thing/SKILL.md".to_string(),
-            TreeEdit::PutBlob { oid: blob(&repo, "now a dir"), mode: 0o100644 },
+            TreeEdit::PutBlob {
+                oid: blob(&repo, "now a dir"),
+                mode: 0o100644,
+            },
         );
         let root2 = apply_tree_edits(&repo, Some(&base), &edits).unwrap();
         assert_eq!(entry_kind(&repo, root2, "thing"), Some(ObjectType::Tree));
-        assert_eq!(entry_kind(&repo, root2, "thing/SKILL.md"), Some(ObjectType::Blob));
+        assert_eq!(
+            entry_kind(&repo, root2, "thing/SKILL.md"),
+            Some(ObjectType::Blob)
+        );
 
         // tree → blob via PutBlob at the old dir path
         let base2 = repo.find_tree(root2).unwrap();
         let mut edits = BTreeMap::new();
         edits.insert(
             "thing".to_string(),
-            TreeEdit::PutBlob { oid: blob(&repo, "file again"), mode: 0o100644 },
+            TreeEdit::PutBlob {
+                oid: blob(&repo, "file again"),
+                mode: 0o100644,
+            },
         );
         let root3 = apply_tree_edits(&repo, Some(&base2), &edits).unwrap();
         assert_eq!(entry_kind(&repo, root3, "thing"), Some(ObjectType::Blob));
@@ -254,8 +290,20 @@ mod tests {
         let root = tree_of(
             &repo,
             &[
-                ("spot/SKILL.md", TreeEdit::PutBlob { oid: blob(&repo, "old"), mode: 0o100644 }),
-                ("spot/extra.md", TreeEdit::PutBlob { oid: blob(&repo, "extra"), mode: 0o100644 }),
+                (
+                    "spot/SKILL.md",
+                    TreeEdit::PutBlob {
+                        oid: blob(&repo, "old"),
+                        mode: 0o100644,
+                    },
+                ),
+                (
+                    "spot/extra.md",
+                    TreeEdit::PutBlob {
+                        oid: blob(&repo, "extra"),
+                        mode: 0o100644,
+                    },
+                ),
             ],
         );
         let base = repo.find_tree(root).unwrap();
@@ -266,12 +314,18 @@ mod tests {
         edits.insert("spot".to_string(), TreeEdit::Remove);
         edits.insert(
             "spot/readme.txt".to_string(),
-            TreeEdit::PutBlob { oid: blob(&repo, "note"), mode: 0o100644 },
+            TreeEdit::PutBlob {
+                oid: blob(&repo, "note"),
+                mode: 0o100644,
+            },
         );
         // Both key orders through insert_edit are covered because the flat
         // map sorts "spot" before "spot/readme.txt".
         let new_root = apply_tree_edits(&repo, Some(&base), &edits).unwrap();
-        assert_eq!(entry_kind(&repo, new_root, "spot/readme.txt"), Some(ObjectType::Blob));
+        assert_eq!(
+            entry_kind(&repo, new_root, "spot/readme.txt"),
+            Some(ObjectType::Blob)
+        );
         assert_eq!(entry_kind(&repo, new_root, "spot/SKILL.md"), None);
         assert_eq!(entry_kind(&repo, new_root, "spot/extra.md"), None);
     }
@@ -283,14 +337,20 @@ mod tests {
             &repo,
             &[(
                 "spot/SKILL.md",
-                TreeEdit::PutBlob { oid: blob(&repo, "old"), mode: 0o100644 },
+                TreeEdit::PutBlob {
+                    oid: blob(&repo, "old"),
+                    mode: 0o100644,
+                },
             )],
         );
         let incoming = tree_of(
             &repo,
             &[(
                 "SKILL.md",
-                TreeEdit::PutBlob { oid: blob(&repo, "new"), mode: 0o100644 },
+                TreeEdit::PutBlob {
+                    oid: blob(&repo, "new"),
+                    mode: 0o100644,
+                },
             )],
         );
         let base = repo.find_tree(old).unwrap();
@@ -300,7 +360,9 @@ mod tests {
         flat.insert("spot".to_string(), TreeEdit::PutTree { oid: incoming });
         let root = apply_tree_edits(&repo, Some(&base), &flat).unwrap();
         let tree = repo.find_tree(root).unwrap();
-        let entry = tree.get_path(std::path::Path::new("spot/SKILL.md")).unwrap();
+        let entry = tree
+            .get_path(std::path::Path::new("spot/SKILL.md"))
+            .unwrap();
         assert_eq!(repo.find_blob(entry.id()).unwrap().content(), b"new");
     }
 
@@ -310,17 +372,41 @@ mod tests {
         let root = tree_of(
             &repo,
             &[
-                ("keep.txt", TreeEdit::PutBlob { oid: blob(&repo, "keep"), mode: 0o100644 }),
-                ("dir/a.txt", TreeEdit::PutBlob { oid: blob(&repo, "a"), mode: 0o100644 }),
-                ("dir/b.txt", TreeEdit::PutBlob { oid: blob(&repo, "b"), mode: 0o100644 }),
+                (
+                    "keep.txt",
+                    TreeEdit::PutBlob {
+                        oid: blob(&repo, "keep"),
+                        mode: 0o100644,
+                    },
+                ),
+                (
+                    "dir/a.txt",
+                    TreeEdit::PutBlob {
+                        oid: blob(&repo, "a"),
+                        mode: 0o100644,
+                    },
+                ),
+                (
+                    "dir/b.txt",
+                    TreeEdit::PutBlob {
+                        oid: blob(&repo, "b"),
+                        mode: 0o100644,
+                    },
+                ),
             ],
         );
         let base = repo.find_tree(root).unwrap();
         let mut edits = BTreeMap::new();
         edits.insert("dir/a.txt".to_string(), TreeEdit::Remove);
         let new_root = apply_tree_edits(&repo, Some(&base), &edits).unwrap();
-        assert_eq!(entry_kind(&repo, new_root, "keep.txt"), Some(ObjectType::Blob));
-        assert_eq!(entry_kind(&repo, new_root, "dir/b.txt"), Some(ObjectType::Blob));
+        assert_eq!(
+            entry_kind(&repo, new_root, "keep.txt"),
+            Some(ObjectType::Blob)
+        );
+        assert_eq!(
+            entry_kind(&repo, new_root, "dir/b.txt"),
+            Some(ObjectType::Blob)
+        );
         assert_eq!(entry_kind(&repo, new_root, "dir/a.txt"), None);
     }
 }

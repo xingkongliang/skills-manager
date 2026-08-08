@@ -215,8 +215,7 @@ fn connect_with_token(
         .set_setting("github_auth_method", method)
         .map_err(AppError::db)?;
 
-    let remote_has_content =
-        git_backup::remote_has_heads(&info.url).map_err(classify_git_chain)?;
+    let remote_has_content = git_backup::remote_has_heads(&info.url).map_err(classify_git_chain)?;
 
     Ok(GithubBackupConnectResult {
         url: info.url,
@@ -288,8 +287,7 @@ pub async fn github_device_flow_poll(
 #[tauri::command]
 pub async fn git_backup_sanitize_remote_url(url: String) -> Result<String, AppError> {
     git_fetcher::validate_git_url(&url).map_err(AppError::git)?;
-    tokio::task::spawn_blocking(move || Ok(sanitize_url_to_keychain(url.trim())))
-        .await?
+    tokio::task::spawn_blocking(move || Ok(sanitize_url_to_keychain(url.trim()))).await?
 }
 
 #[tauri::command]
@@ -436,8 +434,10 @@ pub async fn git_backup_sync(
     sync_engine_pref(&store);
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
-        git_backup::with_repo_lock("git sync", || run_sync_blocking(&store, &skills_dir, &message))
-            .map_err(classify_git_chain)
+        git_backup::with_repo_lock("git sync", || {
+            run_sync_blocking(&store, &skills_dir, &message)
+        })
+        .map_err(classify_git_chain)
     })
     .await?
 }
@@ -487,8 +487,7 @@ fn run_sync_blocking(
         }
 
         let status = git_backup::get_status(skills_dir)?;
-        let needs_push =
-            committed || status.ahead > 0 || status.upstream_health == "no_upstream";
+        let needs_push = committed || status.ahead > 0 || status.upstream_health == "no_upstream";
         if !needs_push {
             break;
         }
@@ -508,7 +507,10 @@ fn run_sync_blocking(
                 if !rejected || attempt + 1 == SYNC_PUSH_ATTEMPTS {
                     return Err(e);
                 }
-                log::info!("git sync: push rejected (attempt {}), refetching", attempt + 1);
+                log::info!(
+                    "git sync: push rejected (attempt {}), refetching",
+                    attempt + 1
+                );
                 git_backup::fetch_branch(skills_dir, &branch)?;
             }
         }
@@ -528,7 +530,12 @@ fn run_sync_blocking(
             ))
             .ok(),
     );
-    Ok(SyncOutcome { committed, merge: merge_summary, pushed, snapshot_tag })
+    Ok(SyncOutcome {
+        committed,
+        merge: merge_summary,
+        pushed,
+        snapshot_tag,
+    })
 }
 
 /// Pending "needs attention" conflicts (merge-engine design §4) for the
@@ -559,9 +566,8 @@ pub async fn git_backup_resolve_conflict(
     tokio::task::spawn_blocking(move || {
         git_backup::with_repo_lock("resolve conflict", || {
             apply_device_identity(&store, &skills_dir);
-            let safety_tag = merge::resolve::resolve_conflict_unlocked(
-                &store, &skills_dir, &skill_id, action,
-            )?;
+            let safety_tag =
+                merge::resolve::resolve_conflict_unlocked(&store, &skills_dir, &skill_id, action)?;
             reconcile_skills_index_unlocked(&store)?;
             store.log_audit(
                 crate::core::audit_log::AuditDraft::new("resolve_conflict")
@@ -867,7 +873,10 @@ mod tests {
         let name = effective_device_name(&env.store);
         assert!(!name.is_empty());
         assert_eq!(
-            env.store.get_setting("backup_device_name").unwrap().as_deref(),
+            env.store
+                .get_setting("backup_device_name")
+                .unwrap()
+                .as_deref(),
             Some(name.as_str())
         );
 
@@ -968,16 +977,23 @@ mod tests {
         git(&env.skills_dir, &["init", "-b", "main"]);
         git(
             &env.skills_dir,
-            &["remote", "add", "origin", "https://github.com/acme/repo.git"],
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/repo.git",
+            ],
         );
         env.store
             .set_setting("git_backup_remote_url", "https://github.com/acme/repo.git")
             .unwrap();
 
-        let result =
-            migrate_embedded_credentials_unlocked(&env.store, &env.skills_dir).unwrap();
+        let result = migrate_embedded_credentials_unlocked(&env.store, &env.skills_dir).unwrap();
         assert_eq!(result, None);
-        assert_eq!(origin_url(&env.skills_dir), "https://github.com/acme/repo.git");
+        assert_eq!(
+            origin_url(&env.skills_dir),
+            "https://github.com/acme/repo.git"
+        );
     }
 
     #[test]
@@ -989,7 +1005,12 @@ mod tests {
         git(&env.skills_dir, &["init", "-b", "main"]);
         git(
             &env.skills_dir,
-            &["remote", "add", "origin", "https://github.com/acme/repo.git"],
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/repo.git",
+            ],
         );
         env.store
             .set_setting("git_backup_remote_url", "https://github.com/acme/repo.git")
@@ -998,7 +1019,10 @@ mod tests {
         disconnect_local(&env.store, &env.skills_dir).unwrap();
         assert_eq!(origin_url(&env.skills_dir), "");
         assert_eq!(
-            env.store.get_setting("git_backup_remote_url").unwrap().as_deref(),
+            env.store
+                .get_setting("git_backup_remote_url")
+                .unwrap()
+                .as_deref(),
             Some("")
         );
 
@@ -1019,11 +1043,13 @@ mod tests {
             )
             .unwrap();
 
-        let result =
-            migrate_embedded_credentials_unlocked(&env.store, &env.skills_dir).unwrap();
+        let result = migrate_embedded_credentials_unlocked(&env.store, &env.skills_dir).unwrap();
         assert_eq!(result.as_deref(), Some("https://github.com/acme/repo.git"));
         assert_eq!(
-            env.store.get_setting("git_backup_remote_url").unwrap().as_deref(),
+            env.store
+                .get_setting("git_backup_remote_url")
+                .unwrap()
+                .as_deref(),
             Some("https://github.com/acme/repo.git")
         );
     }
@@ -1053,7 +1079,10 @@ mod tests {
         );
         assert_eq!(origin_url(&env.skills_dir), token_url);
         assert_eq!(
-            env.store.get_setting("git_backup_remote_url").unwrap().as_deref(),
+            env.store
+                .get_setting("git_backup_remote_url")
+                .unwrap()
+                .as_deref(),
             Some(token_url)
         );
     }

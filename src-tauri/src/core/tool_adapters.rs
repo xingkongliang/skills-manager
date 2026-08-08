@@ -924,8 +924,8 @@ pub fn enabled_installed_adapters(
 #[cfg(test)]
 mod tests {
     use super::{
-        CustomToolDef, ToolCategory, all_tool_adapters, default_tool_adapters,
-        find_adapter_with_store,
+        all_tool_adapters, default_tool_adapters, find_adapter_with_store, CustomToolDef,
+        ToolCategory,
     };
     use crate::core::skill_store::SkillStore;
 
@@ -982,7 +982,11 @@ mod tests {
             CustomToolDef {
                 key: "omp_agent".to_string(),
                 display_name: "Legacy Custom OMP".to_string(),
-                skills_dir: tmp.path().join("legacy-skills").to_string_lossy().into_owned(),
+                skills_dir: tmp
+                    .path()
+                    .join("legacy-skills")
+                    .to_string_lossy()
+                    .into_owned(),
                 project_relative_skills_dir: Some(".legacy/skills".to_string()),
                 category: ToolCategory::Lobster,
             },
@@ -995,7 +999,10 @@ mod tests {
             },
         ];
         store
-            .set_setting("custom_tools", &serde_json::to_string(&custom_tools).unwrap())
+            .set_setting(
+                "custom_tools",
+                &serde_json::to_string(&custom_tools).unwrap(),
+            )
             .unwrap();
 
         let adapters = all_tool_adapters(&store);
@@ -1021,7 +1028,10 @@ mod tests {
         assert!(custom_adapter.is_custom);
         assert_eq!(custom_adapter.category, ToolCategory::Lobster);
         assert_eq!(custom_adapter.skills_dir(), custom_skills);
-        assert_eq!(custom_adapter.project_relative_skills_dir(), custom_project_path);
+        assert_eq!(
+            custom_adapter.project_relative_skills_dir(),
+            custom_project_path
+        );
 
         let found = find_adapter_with_store(&store, "omp_agent").unwrap();
         assert_eq!(found.display_name, "OMP Agent");

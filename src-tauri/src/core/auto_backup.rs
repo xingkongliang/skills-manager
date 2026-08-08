@@ -163,26 +163,42 @@ fn handle_outcome<R: Runtime>(app: &AppHandle<R>, store: &SkillStore, outcome: O
             CONSECUTIVE_FAILURES.store(0, Ordering::Release);
             // Only worth telling the UI if a stale failure card should clear.
             if clear_error(store) {
-                emit(AutoBackupPayload { ok: true, pending: false, error: None });
+                emit(AutoBackupPayload {
+                    ok: true,
+                    pending: false,
+                    error: None,
+                });
             }
         }
         Outcome::BackedUp => {
             CONSECUTIVE_FAILURES.store(0, Ordering::Release);
             clear_error(store);
             log::info!("auto backup: committed/pushed");
-            emit(AutoBackupPayload { ok: true, pending: false, error: None });
+            emit(AutoBackupPayload {
+                ok: true,
+                pending: false,
+                error: None,
+            });
         }
         Outcome::RemoteAhead => {
             CONSECUTIVE_FAILURES.store(0, Ordering::Release);
             log::info!("auto backup: remote is ahead, waiting for the next round or manual sync");
-            emit(AutoBackupPayload { ok: false, pending: true, error: None });
+            emit(AutoBackupPayload {
+                ok: false,
+                pending: true,
+                error: None,
+            });
         }
         Outcome::PausedOnConflict => {
             CONSECUTIVE_FAILURES.store(0, Ordering::Release);
             log::info!(
                 "auto backup: remote touches a pending conflict — paused until it is resolved (§4)"
             );
-            emit(AutoBackupPayload { ok: false, pending: true, error: None });
+            emit(AutoBackupPayload {
+                ok: false,
+                pending: true,
+                error: None,
+            });
         }
         Outcome::Failed(msg) => {
             CONSECUTIVE_FAILURES.fetch_add(1, Ordering::AcqRel);
@@ -192,7 +208,11 @@ fn handle_outcome<R: Runtime>(app: &AppHandle<R>, store: &SkillStore, outcome: O
             }
             // Re-arm so the round retries after the (backed-off) quiet period.
             notify_central_change();
-            emit(AutoBackupPayload { ok: false, pending: false, error: Some(msg) });
+            emit(AutoBackupPayload {
+                ok: false,
+                pending: false,
+                error: Some(msg),
+            });
         }
     }
 }
@@ -508,10 +528,7 @@ mod tests {
             git_out(&env.remote, &["log", "-1", "--format=%s", "main"]),
             "from B"
         );
-        assert_eq!(
-            env.store.get_setting(SETTING_LAST_ERROR).unwrap(),
-            None
-        );
+        assert_eq!(env.store.get_setting(SETTING_LAST_ERROR).unwrap(), None);
     }
 
     #[test]

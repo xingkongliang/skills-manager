@@ -616,7 +616,12 @@ impl SkillStore {
                 "INSERT OR REPLACE INTO pending_conflicts
                  (skill_id, theirs_commit, theirs_path, detected_at)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![row.skill_id, row.theirs_commit, row.theirs_path, row.detected_at],
+                params![
+                    row.skill_id,
+                    row.theirs_commit,
+                    row.theirs_path,
+                    row.detected_at
+                ],
             )?;
         }
         tx.commit()?;
@@ -1321,7 +1326,10 @@ impl SkillStore {
     pub fn replace_host_agents(&self, host_id: &str, agents: &[HostAgentRecord]) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM host_agents WHERE host_id = ?1", params![host_id])?;
+        tx.execute(
+            "DELETE FROM host_agents WHERE host_id = ?1",
+            params![host_id],
+        )?;
         for agent in agents {
             tx.execute(
                 "INSERT INTO host_agents (
@@ -1611,22 +1619,23 @@ mod scenario_membership_tests {
         let tmp = tempdir().unwrap();
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
 
-        store.insert_scenario(&ScenarioRecord {
-            id: "s1".to_string(),
-            name: "S1".to_string(),
-            description: None,
-            icon: None,
-            sort_order: 0,
-            created_at: 1,
-            updated_at: 1,
-        })
-        .unwrap();
+        store
+            .insert_scenario(&ScenarioRecord {
+                id: "s1".to_string(),
+                name: "S1".to_string(),
+                description: None,
+                icon: None,
+                sort_order: 0,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
         store.upsert_skill(&sample_skill("k1")).unwrap();
 
         let memberships = vec![
-            membership("s1", "k1"),       // valid
-            membership("s1", "ghost"),    // skill missing
-            membership("ghost-s", "k1"),  // scenario missing
+            membership("s1", "k1"),      // valid
+            membership("s1", "ghost"),   // skill missing
+            membership("ghost-s", "k1"), // scenario missing
         ];
 
         // Must not panic with a FOREIGN KEY constraint failure.
@@ -1636,7 +1645,9 @@ mod scenario_membership_tests {
 
         assert_eq!(store.get_skill_ids_for_scenario("s1").unwrap(), vec!["k1"]);
         assert_eq!(
-            store.get_enabled_tools_for_scenario_skill("s1", "k1").unwrap(),
+            store
+                .get_enabled_tools_for_scenario_skill("s1", "k1")
+                .unwrap(),
             vec!["ToolA"]
         );
         assert!(store
