@@ -11,6 +11,7 @@ pub mod git_backup;
 pub mod git_credentials;
 pub mod git_fetcher;
 pub mod github_api;
+pub mod hosts;
 pub mod install_cancel;
 pub mod installer;
 pub mod log_sanitize;

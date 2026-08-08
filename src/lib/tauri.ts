@@ -183,6 +183,42 @@ export interface ProjectSkillDocument {
   content: string;
 }
 
+export interface HostAgent {
+  agent_type: string;
+  display_name: string;
+  skill_path: string;
+  status: string;
+  skill_count: number;
+}
+
+export interface Host {
+  id: string;
+  name: string;
+  host_type: string;
+  status: string;
+  platform: string;
+  user: string | null;
+  connection_label: string;
+  agent_count: number;
+  skill_count: number;
+  updated_at: number;
+  agents: HostAgent[];
+}
+
+export interface HostSkill {
+  name: string;
+  relative_path: string;
+  path: string;
+}
+
+export interface SshImportCandidate {
+  alias: string;
+  host_name: string | null;
+  user: string | null;
+  port: number | null;
+  identity_file: string | null;
+}
+
 // ── Tools ──
 
 export const getToolStatus = () => invoke<ToolInfo[]>("get_tool_status");
@@ -397,6 +433,28 @@ export const searchSkillssh = (query: string, limit?: number) =>
     query,
     limit: limit ?? null,
   });
+
+// ── Hosts ──
+
+export const listHosts = () => invoke<Host[]>("list_hosts");
+
+export const listImportableSshHosts = () =>
+  invoke<SshImportCandidate[]>("list_importable_ssh_hosts_cmd");
+
+export const testSshHostConnection = (sshTarget: string) =>
+  invoke<Host>("test_ssh_host_connection", { sshTarget });
+
+export const addSshHost = (name: string, sshTarget: string) =>
+  invoke<Host>("add_ssh_host", { name, sshTarget });
+
+export const refreshHost = (hostId: string) =>
+  invoke<Host>("refresh_host", { hostId });
+
+export const deleteHost = (hostId: string) =>
+  invoke<void>("delete_host", { hostId });
+
+export const listHostSkills = (hostId: string, agentType: string) =>
+  invoke<HostSkill[]>("list_host_skills", { hostId, agentType });
 
 // ── Settings ──
 

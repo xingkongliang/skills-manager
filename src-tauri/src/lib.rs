@@ -1026,6 +1026,14 @@ pub fn run() {
             // Browse
             commands::browse::fetch_leaderboard,
             commands::browse::search_skillssh,
+            // Hosts
+            commands::hosts::list_hosts,
+            commands::hosts::list_importable_ssh_hosts_cmd,
+            commands::hosts::test_ssh_host_connection,
+            commands::hosts::add_ssh_host,
+            commands::hosts::refresh_host,
+            commands::hosts::delete_host,
+            commands::hosts::list_host_skills,
             // Settings
             commands::settings::get_settings,
             commands::settings::set_settings,

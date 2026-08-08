@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 7;
+const LATEST_VERSION: u32 = 8;
 
 /// Run all pending migrations on the database.
 ///
@@ -54,6 +54,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         4 => migrate_v4_to_v5(conn),
         5 => migrate_v5_to_v6(conn),
         6 => migrate_v6_to_v7(conn),
+        7 => migrate_v7_to_v8(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -294,6 +295,36 @@ fn migrate_v6_to_v7(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v7 → v8: add host management tables for local/remote environments.
+fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS hosts (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            host_type TEXT NOT NULL,
+            config_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unknown',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_name ON hosts(name);
+
+        CREATE TABLE IF NOT EXISTS host_agents (
+            id TEXT PRIMARY KEY,
+            host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+            agent_type TEXT NOT NULL,
+            skill_path TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'available',
+            metadata_json TEXT,
+            UNIQUE(host_id, agent_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_host_agents_host_id ON host_agents(host_id);
+        ",
+    )?;
+    Ok(())
+}
+
 // ── Helpers ──
 
 fn add_column_if_missing(
@@ -362,6 +393,8 @@ mod tests {
         assert!(tables.contains(&"skill_tags".to_string()));
         assert!(tables.contains(&"scenario_skill_tools".to_string()));
         assert!(tables.contains(&"audit_log".to_string()));
+        assert!(tables.contains(&"hosts".to_string()));
+        assert!(tables.contains(&"host_agents".to_string()));
     }
 
     #[test]
