@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 7;
+const LATEST_VERSION: u32 = 8;
 
 /// Run all pending migrations on the database.
 ///
@@ -54,6 +54,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         4 => migrate_v4_to_v5(conn),
         5 => migrate_v5_to_v6(conn),
         6 => migrate_v6_to_v7(conn),
+        7 => migrate_v7_to_v8(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -294,6 +295,92 @@ fn migrate_v6_to_v7(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v7 → v8: package inventory and scope-aware host bindings.
+///
+/// Package sources stay in the managed cache. Bindings describe desired and
+/// observed host state; project-shared bindings are mirrored to the project's
+/// `.skillapse/project.json` manifest by the package service.
+fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS packages (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            source_url TEXT NOT NULL UNIQUE,
+            requested_revision TEXT,
+            resolved_revision TEXT NOT NULL,
+            cache_path TEXT NOT NULL UNIQUE,
+            manifest_kind TEXT NOT NULL DEFAULT 'none',
+            status TEXT NOT NULL DEFAULT 'ready'
+                CHECK(status IN ('ready', 'invalid', 'update_available')),
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS package_components (
+            id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL
+                CHECK(kind IN ('skill', 'rule', 'agent', 'command', 'hook', 'mcp')),
+            name TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            host_hint TEXT,
+            required INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(package_id, kind, relative_path)
+        );
+
+        CREATE TABLE IF NOT EXISTS package_surfaces (
+            id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+            tool TEXT NOT NULL,
+            kind TEXT NOT NULL
+                CHECK(kind IN ('native_plugin', 'host_bundle', 'portable_skills', 'setup_script')),
+            root_path TEXT NOT NULL,
+            manifest_path TEXT,
+            priority INTEGER NOT NULL DEFAULT 0,
+            coverage_json TEXT NOT NULL DEFAULT '[]',
+            install_command_json TEXT,
+            UNIQUE(package_id, tool, kind, root_path)
+        );
+
+        CREATE TABLE IF NOT EXISTS package_bindings (
+            id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+            tool TEXT NOT NULL,
+            scope TEXT NOT NULL
+                CHECK(scope IN ('user', 'project_shared', 'project_local', 'managed')),
+            project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+            surface_policy TEXT NOT NULL DEFAULT 'auto'
+                CHECK(surface_policy IN ('auto', 'native', 'portable', 'setup')),
+            requested_components_json TEXT NOT NULL DEFAULT '[]',
+            desired_enabled INTEGER NOT NULL DEFAULT 1,
+            resolved_surface_id TEXT REFERENCES package_surfaces(id) ON DELETE SET NULL,
+            compatibility TEXT NOT NULL DEFAULT 'unsupported'
+                CHECK(compatibility IN ('full', 'partial', 'unsupported')),
+            state TEXT NOT NULL DEFAULT 'not_applied'
+                CHECK(state IN ('not_applied', 'planned', 'installed', 'partial', 'drifted', 'failed')),
+            target_ref TEXT,
+            applied_revision TEXT,
+            approved_plan_hash TEXT,
+            last_error TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            CHECK(
+                (scope IN ('user', 'managed') AND project_id IS NULL)
+                OR (scope IN ('project_shared', 'project_local') AND project_id IS NOT NULL)
+            )
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_package_bindings_identity
+            ON package_bindings(package_id, tool, scope, IFNULL(project_id, ''));
+        CREATE INDEX IF NOT EXISTS idx_package_components_package
+            ON package_components(package_id);
+        CREATE INDEX IF NOT EXISTS idx_package_surfaces_package_tool
+            ON package_surfaces(package_id, tool);
+        ",
+    )?;
+    Ok(())
+}
+
 // ── Helpers ──
 
 fn add_column_if_missing(
@@ -362,6 +449,10 @@ mod tests {
         assert!(tables.contains(&"skill_tags".to_string()));
         assert!(tables.contains(&"scenario_skill_tools".to_string()));
         assert!(tables.contains(&"audit_log".to_string()));
+        assert!(tables.contains(&"packages".to_string()));
+        assert!(tables.contains(&"package_components".to_string()));
+        assert!(tables.contains(&"package_surfaces".to_string()));
+        assert!(tables.contains(&"package_bindings".to_string()));
     }
 
     #[test]

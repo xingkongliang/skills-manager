@@ -319,6 +319,10 @@ pub fn scenarios_dir() -> PathBuf {
     base_dir().join("scenarios")
 }
 
+pub fn packages_dir() -> PathBuf {
+    base_dir().join("packages")
+}
+
 pub fn cache_dir() -> PathBuf {
     base_dir().join("cache")
 }
@@ -602,7 +606,7 @@ pub fn ensure_central_repo() -> Result<()> {
         }
     }
 
-    let dirs = [skills_dir(), scenarios_dir(), cache_dir(), logs_dir()];
+    let dirs = [skills_dir(), scenarios_dir(), packages_dir(), cache_dir(), logs_dir()];
     for d in &dirs {
         fs::create_dir_all(d)?;
     }

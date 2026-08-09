@@ -659,6 +659,33 @@ pub fn checkout_revision(repo_dir: &Path, revision: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn fetch_and_checkout_revision(
+    repo_dir: &Path,
+    revision: &str,
+    proxy_url: Option<&str>,
+) -> Result<()> {
+    if checkout_revision(repo_dir, revision).is_ok() {
+        return Ok(());
+    }
+
+    let mut command = git_command();
+    command.arg("-C").arg(repo_dir);
+    if let Some(proxy) = proxy_url.filter(|value| !value.is_empty()) {
+        command.arg("-c").arg(format!("http.proxy={proxy}"));
+        command.arg("-c").arg(format!("https.proxy={proxy}"));
+    }
+    let output = command
+        .args(["fetch", "--depth", "1", "origin", revision])
+        .output()
+        .context("Failed to fetch pinned package revision")?;
+    if !output.status.success() {
+        let detail =
+            crate::core::log_sanitize::sanitize(&String::from_utf8_lossy(&output.stderr));
+        bail!("Pinned package revision is unavailable: {}", detail.trim());
+    }
+    checkout_revision(repo_dir, revision)
+}
+
 pub fn relative_subpath(repo_dir: &Path, skill_dir: &Path) -> Option<String> {
     let relative = skill_dir.strip_prefix(repo_dir).ok()?;
     if relative.as_os_str().is_empty() {
@@ -1332,6 +1359,63 @@ mod tests {
             canonicalize_clone_url("https://github.com/acme/skills"),
             canonicalize_clone_url("git@github.com:acme/skills")
         );
+    }
+
+    #[test]
+    fn fetch_and_checkout_revision_recovers_commit_missing_from_shallow_clone() {
+        let tmp = tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        let checkout = tmp.path().join("checkout");
+        assert!(git_command()
+            .args(["init", "--initial-branch", "main"])
+            .arg(&origin)
+            .status()
+            .unwrap()
+            .success());
+        for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com")] {
+            assert!(git_command()
+                .arg("-C")
+                .arg(&origin)
+                .args(["config", key, value])
+                .status()
+                .unwrap()
+                .success());
+        }
+        fs::write(origin.join("value.txt"), "old").unwrap();
+        assert!(git_command()
+            .arg("-C")
+            .arg(&origin)
+            .args(["add", "."])
+            .status()
+            .unwrap()
+            .success());
+        assert!(git_command()
+            .arg("-C")
+            .arg(&origin)
+            .args(["commit", "-m", "old"])
+            .status()
+            .unwrap()
+            .success());
+        let old_revision = get_head_revision(&origin).unwrap();
+        fs::write(origin.join("value.txt"), "new").unwrap();
+        assert!(git_command()
+            .arg("-C")
+            .arg(&origin)
+            .args(["commit", "-am", "new"])
+            .status()
+            .unwrap()
+            .success());
+        assert!(git_command()
+            .args(["clone", "--depth", "1", "--no-local"])
+            .arg(&origin)
+            .arg(&checkout)
+            .status()
+            .unwrap()
+            .success());
+
+        fetch_and_checkout_revision(&checkout, &old_revision, None).unwrap();
+        assert_eq!(get_head_revision(&checkout).unwrap(), old_revision);
+        assert_eq!(fs::read_to_string(checkout.join("value.txt")).unwrap(), "old");
     }
 
     // ── cleanup_temp ──
