@@ -186,6 +186,29 @@ enum SkillsCommand {
         #[arg(long)]
         limit: Option<usize>,
     },
+    /// Re-point an installed skill at a git source in place, keeping its id,
+    /// tags, preset membership and deployments.
+    SetSource {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+        /// Git URL or owner/repo, optionally a GitHub tree URL encoding branch and subpath
+        #[arg(long = "git-url")]
+        git_url: String,
+        /// Subpath inside the repo. Pass "" if the skill is at the repo root.
+        /// Overrides a subpath encoded in the URL.
+        #[arg(long)]
+        subpath: Option<String>,
+        /// Branch to track. Overrides a branch encoded in the URL.
+        #[arg(long)]
+        branch: Option<String>,
+        /// Overwrite the central copy when the new source's content differs.
+        /// Without this, a content difference is refused.
+        #[arg(long)]
+        force: bool,
+        /// Resolve and compare without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     Adopt {
         /// Agent skill dirs to scan (e.g. ~/.claude/skills), or a single skill dir
         paths: Vec<PathBuf>,
@@ -887,6 +910,28 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
         SkillsCommand::Search { query, limit } => {
             let hits = run_search(store, &query, limit)?;
             print_json(&hits, json);
+        }
+        SkillsCommand::SetSource {
+            reference,
+            git_url,
+            subpath,
+            branch,
+            force,
+            dry_run,
+        } => {
+            let skill = resolve_skill(store, &reference)?;
+            let report = cmd::set_git_source_internal(
+                store,
+                &skill.id,
+                &git_url,
+                subpath.as_deref(),
+                branch.as_deref(),
+                store.proxy_url().as_deref(),
+                force,
+                dry_run,
+            )
+            .map_err(map_app_err)?;
+            print_json(&report, json);
         }
         SkillsCommand::Adopt {
             paths,
