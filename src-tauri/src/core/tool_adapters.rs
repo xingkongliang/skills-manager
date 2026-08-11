@@ -713,6 +713,18 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: None,
         },
         ToolAdapter {
+            key: "zcode".into(),
+            display_name: "ZCode".into(),
+            relative_skills_dir: ".zcode/skills".into(),
+            relative_detect_dir: ".zcode".into(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: None,
+            category: ToolCategory::Coding,
+            is_custom: false,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        },
+        ToolAdapter {
             key: "adal".into(),
             display_name: "AdaL".into(),
             relative_skills_dir: ".adal/skills".into(),
@@ -1043,5 +1055,22 @@ mod tests {
         assert_eq!(adapter.relative_skills_dir, ".config/opencode/skills");
         // Project path under workspace: .opencode/skills
         assert_eq!(adapter.project_relative_skills_dir(), ".opencode/skills");
+    }
+
+    #[test]
+    fn zcode_uses_expected_default_paths() {
+        let adapter = default_tool_adapters()
+            .into_iter()
+            .find(|adapter| adapter.key == "zcode")
+            .expect("zcode adapter should exist");
+
+        assert_eq!(adapter.display_name, "ZCode");
+        assert_eq!(adapter.relative_skills_dir, ".zcode/skills");
+        assert_eq!(adapter.relative_detect_dir, ".zcode");
+        assert_eq!(adapter.project_relative_skills_dir(), ".zcode/skills");
+        assert_eq!(adapter.category, ToolCategory::Coding);
+        assert!(!adapter.is_custom);
+        assert!(!adapter.recursive_scan);
+        assert!(adapter.additional_scan_dirs.is_empty());
     }
 }
