@@ -1873,6 +1873,7 @@ pub fn set_git_source_internal(
     // the network phase leaves no state to unwind — in particular the skill is
     // never left stuck in `updating`.
     let marked_updating = std::cell::Cell::new(false);
+    let source_committed = std::cell::Cell::new(false);
     let outcome = (|| -> Result<(String, bool), AppError> {
         git_fetcher::checkout_revision(&temp_dir, &remote_revision).map_err(AppError::git)?;
         let skill_dir = resolve_repoint_skill_dir(&temp_dir, subpath.as_deref())?;
@@ -1952,6 +1953,7 @@ pub fn set_git_source_internal(
                 "up_to_date",
             )
             .map_err(AppError::db)?;
+        source_committed.set(true);
         resync_copy_targets(store, &skill.id)?;
         sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
         Ok((resolved_subpath.unwrap_or_default(), content_changed))
@@ -1975,14 +1977,24 @@ pub fn set_git_source_internal(
         Err(e) => {
             // Only clear `updating` if this call actually set it. A refusal
             // (bad subpath, content differs without --force) touched nothing,
-            // so marking the skill as errored would be a lie. Keep the revision
-            // just resolved rather than passing None, which would blank the
-            // column and lose the skill's known upstream position until the
-            // next check.
+            // so marking the skill as errored would be a lie.
+            //
+            // `update_skill_check_state` always writes the revision column, so
+            // it has to be given the one that matches whichever source the row
+            // now describes: the new source's revision once the re-point
+            // committed, otherwise the revision the old source already had.
+            // Passing the newly resolved revision unconditionally would file a
+            // commit from the new repo under a skill still pointing at the old
+            // one; passing None would blank a revision that is still valid.
             if marked_updating.get() {
+                let revision = if source_committed.get() {
+                    Some(remote_revision.as_str())
+                } else {
+                    skill.remote_revision.as_deref()
+                };
                 let _ = store.update_skill_check_state(
                     skill_id,
-                    Some(&remote_revision),
+                    revision,
                     "error",
                     Some(&e.message),
                 );

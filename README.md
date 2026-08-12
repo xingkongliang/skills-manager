@@ -175,6 +175,11 @@ npm run cli -- skills deploy <ref> --agent claude_code --agent codex  # deploy t
 npm run cli -- skills update --all
 npm run cli -- skills check --all
 
+# Re-point an installed skill at a git source, keeping its id, tags, presets
+# and deployments (e.g. a local skill you have since published)
+npm run cli -- skills set-source <ref> --git-url https://github.com/you/skills/tree/main/my-skill --dry-run
+npm run cli -- skills set-source <ref> --git-url you/skills --subpath my-skill --force
+
 # Search the skills.sh marketplace (no API key needed)
 npm run cli -- skills search react --limit 5
 

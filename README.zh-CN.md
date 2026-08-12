@@ -162,6 +162,11 @@ npm run cli -- skills show db
 npm run cli -- skills deploy db --agent claude_code --agent codex
 npm run cli -- skills status db
 
+# 把已安装的技能改指向 git 源，技能 id、标签、Preset 归属和已有部署都保留
+# （典型场景：本地写的技能后来发布到了 GitHub）
+npm run cli -- skills set-source db --git-url https://github.com/you/skills/tree/main/db --dry-run
+npm run cli -- skills set-source db --git-url you/skills --subpath db --force
+
 # 管理和部署 Preset（CRUD/成员调整只整理数据，deploy 才修改 Agent 文件）
 npm run cli -- presets create "Web Dev" --description "前端开发"
 npm run cli -- presets add-skill "Web Dev" db
