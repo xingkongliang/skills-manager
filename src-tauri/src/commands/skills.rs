@@ -1765,8 +1765,11 @@ pub struct SetSourceResult {
     pub subpath: Option<String>,
     pub branch: Option<String>,
     pub revision: String,
-    /// Whether the new source's content differs from the current central copy.
-    /// False means the re-point is metadata-only — the library files are identical.
+    /// Whether the new source's content differs from the hash recorded for the
+    /// library copy. False means the re-point is metadata-only — no file is
+    /// rewritten. Compared against the recorded hash, not a fresh hash of the
+    /// central directory, so hand-edits made after install do not count as a
+    /// difference (and are left in place, since no file work runs).
     pub content_changed: bool,
     pub dry_run: bool,
 }
@@ -1842,8 +1845,11 @@ pub fn set_git_source_internal(
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Skill not found"))?;
 
+    // Validate before parsing: resolving a GitHub tree URL runs `ls-remote`, so
+    // an unvalidated URL would reach the network first. `install` validates its
+    // raw input the same way.
+    git_fetcher::validate_git_url(git_url).map_err(AppError::git)?;
     let parsed = git_fetcher::parse_git_source_resolved(git_url, proxy_url);
-    git_fetcher::validate_git_url(&parsed.clone_url).map_err(AppError::git)?;
 
     // An explicit flag wins over whatever the URL encodes. `--subpath ""` is the
     // caller saying "the skill is at the repo root", which is distinct from
@@ -1969,9 +1975,17 @@ pub fn set_git_source_internal(
         Err(e) => {
             // Only clear `updating` if this call actually set it. A refusal
             // (bad subpath, content differs without --force) touched nothing,
-            // so marking the skill as errored would be a lie.
+            // so marking the skill as errored would be a lie. Keep the revision
+            // just resolved rather than passing None, which would blank the
+            // column and lose the skill's known upstream position until the
+            // next check.
             if marked_updating.get() {
-                let _ = store.update_skill_check_state(skill_id, None, "error", Some(&e.message));
+                let _ = store.update_skill_check_state(
+                    skill_id,
+                    Some(&remote_revision),
+                    "error",
+                    Some(&e.message),
+                );
             }
             Err(e)
         }
