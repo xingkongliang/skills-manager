@@ -2444,19 +2444,54 @@ pub fn validate_clone_temp_path(temp_dir: &str) -> Result<PathBuf, AppError> {
     Err(AppError::invalid_input("Invalid temp directory"))
 }
 
+/// Resolve which directory of a fresh checkout holds the skill.
+///
+/// Both inputs are attacker-reachable. `subpath` comes from the path segment of
+/// a `…/tree/<branch>/<path>` URL the user pasted, and `skill_id` from the part
+/// after `@` in a skills.sh shorthand, which `parse_skillssh_shorthand` does not
+/// constrain to a single path segment. `Path::join` returns an absolute argument
+/// verbatim and `..` segments climb out of the checkout, so both are checked for
+/// containment: without that, `install` copies the resolved directory into the
+/// library — which for a git-backed library can then be pushed to the user's
+/// backup remote.
+///
+/// A subpath that stays inside the checkout but does not exist is a different
+/// case: it is only recoverable when a skills.sh locator can find the skill by
+/// id, which is how a skill that moved upstream is picked up again (#278).
+/// Without a locator, falling through to repo-wide discovery would install or
+/// update whatever that discovery happens to return — in a repository that
+/// groups its skills, the entire `skills/` container.
 pub fn resolve_skill_dir(
     repo_dir: &Path,
     subpath: Option<&str>,
     skill_id: Option<&str>,
 ) -> Result<PathBuf, AppError> {
     if let Some(subpath) = subpath {
-        let path = repo_dir.join(subpath);
-        if path.exists() && path.is_dir() {
-            return Ok(path);
+        let candidate = repo_dir.join(subpath);
+        if !path_guard::is_path_safe(repo_dir, &candidate) {
+            return Err(AppError::invalid_input(format!(
+                "Path '{subpath}' resolves outside the repository"
+            )));
+        }
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
+        if skill_id.is_none() {
+            return Err(AppError::not_found(format!(
+                "Path '{subpath}' does not exist in the repository"
+            )));
         }
     }
 
-    git_fetcher::find_skill_dir(repo_dir, skill_id).map_err(AppError::git)
+    // `find_skill_dir` joins the locator id onto the checkout in several places
+    // before falling back to a recursive search, so its answer is checked too.
+    let resolved = git_fetcher::find_skill_dir(repo_dir, skill_id).map_err(AppError::git)?;
+    if !path_guard::is_path_safe(repo_dir, &resolved) {
+        return Err(AppError::invalid_input(
+            "Resolved skill directory is outside the repository",
+        ));
+    }
+    Ok(resolved)
 }
 
 pub fn resolve_skillssh_install_target(
@@ -3356,5 +3391,136 @@ mod tests {
             "{}",
             err.message
         );
+    }
+
+    // ── resolve_skill_dir: install / update / preview resolution ───────────
+    //
+    // Both inputs reach this from a URL the user pasted. The cases below are
+    // the ones that let a crafted or merely wrong URL resolve to something the
+    // caller did not ask for.
+
+    #[test]
+    fn resolve_accepts_a_subpath_inside_the_checkout() {
+        let tmp = tempdir().unwrap();
+        write_skill(&tmp.path().join("skills").join("pdf"), "pdf");
+
+        let resolved = resolve_skill_dir(tmp.path(), Some("skills/pdf"), None).unwrap();
+        assert_eq!(resolved, tmp.path().join("skills").join("pdf"));
+    }
+
+    #[test]
+    fn resolve_still_returns_a_container_for_enumeration() {
+        // preview/confirm install walk a container to list the skills inside
+        // it, so an existing non-skill directory must keep resolving.
+        let tmp = tempdir().unwrap();
+        write_skill(&tmp.path().join("skills").join("pdf"), "pdf");
+        write_skill(&tmp.path().join("skills").join("docx"), "docx");
+
+        let resolved = resolve_skill_dir(tmp.path(), Some("skills"), None).unwrap();
+        assert_eq!(resolved, tmp.path().join("skills"));
+    }
+
+    #[test]
+    fn resolve_rejects_parent_traversal_with_and_without_a_locator() {
+        let tmp = tempdir().unwrap();
+        write_skill(&tmp.path().join("outside"), "outside");
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+
+        // A locator must not soften the traversal check: the escaping path is
+        // refused either way, never quietly ignored in favour of discovery.
+        for locator in [None, Some("outside")] {
+            let err = resolve_skill_dir(&repo, Some("../outside"), locator).unwrap_err();
+            assert!(
+                err.message.contains("outside the repository"),
+                "locator {locator:?}: {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_rejects_absolute_subpath() {
+        let tmp = tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        write_skill(&outside, "outside");
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+
+        let err =
+            resolve_skill_dir(&repo, Some(outside.to_str().unwrap()), None).unwrap_err();
+        assert!(
+            err.message.contains("outside the repository"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_rejects_subpath_symlinked_out_of_the_checkout() {
+        let tmp = tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        write_skill(&outside, "outside");
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        std::os::unix::fs::symlink(&outside, repo.join("link")).unwrap();
+
+        let err = resolve_skill_dir(&repo, Some("link"), None).unwrap_err();
+        assert!(
+            err.message.contains("outside the repository"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_rejects_a_locator_that_escapes_the_checkout() {
+        // `owner/repo@../../x` survives parse_skillssh_shorthand, which only
+        // checks the owner/repo half, so the locator itself can climb out.
+        let tmp = tempdir().unwrap();
+        write_skill(&tmp.path().join("outside"), "outside");
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+
+        let err = resolve_skill_dir(&repo, None, Some("../outside")).unwrap_err();
+        assert!(
+            err.message.contains("outside the repository"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn resolve_refuses_a_missing_subpath_instead_of_discovering_the_container() {
+        // The measured bug: a tree URL naming a directory that does not exist
+        // installed the whole `skills/` container as one skill.
+        let tmp = tempdir().unwrap();
+        write_skill(&tmp.path().join("skills").join("pdf"), "pdf");
+
+        let err = resolve_skill_dir(tmp.path(), Some("artifacts-builder"), None).unwrap_err();
+        assert!(err.message.contains("does not exist"), "{}", err.message);
+    }
+
+    #[test]
+    fn resolve_lets_a_locator_recover_a_skill_that_moved_upstream() {
+        // #278's recovery path: the stored subpath is stale because upstream
+        // reorganized, and the locator finds the skill at its new home.
+        let tmp = tempdir().unwrap();
+        write_skill(&tmp.path().join("skills").join("db"), "db");
+
+        let resolved = resolve_skill_dir(tmp.path(), Some("db"), Some("db")).unwrap();
+        assert_eq!(resolved, tmp.path().join("skills").join("db"));
+    }
+
+    #[test]
+    fn resolve_errors_when_the_locator_finds_nothing() {
+        // Still #278: no match must not fall through to a container or root.
+        let tmp = tempdir().unwrap();
+        write_skill(&tmp.path().join("skills").join("db"), "db");
+
+        let err = resolve_skill_dir(tmp.path(), Some("gone"), Some("nope-not-here")).unwrap_err();
+        assert!(err.message.contains("not found"), "{}", err.message);
     }
 }
