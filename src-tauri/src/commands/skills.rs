@@ -2473,7 +2473,17 @@ pub fn resolve_skill_dir(
                 "Path '{subpath}' resolves outside the repository"
             )));
         }
-        if candidate.is_dir() {
+        // With a locator to fall back on, the stored path is only taken when it
+        // still holds a skill. An upstream reorganization can leave the path
+        // occupied by a container or an unrelated directory, and copying that
+        // over the installed skill is the same mistake as guessing — let the
+        // locator look the skill up at its new home instead.
+        let usable = if skill_id.is_some() {
+            is_valid_skill_dir(&candidate)
+        } else {
+            candidate.is_dir()
+        };
+        if usable {
             return Ok(candidate);
         }
         if skill_id.is_none() {
@@ -3418,6 +3428,8 @@ mod tests {
 
         let resolved = resolve_skill_dir(tmp.path(), Some("skills"), None).unwrap();
         assert_eq!(resolved, tmp.path().join("skills"));
+        // What preview/confirm actually do with that container.
+        assert_eq!(collect_git_skill_dirs(&resolved).len(), 2);
     }
 
     #[test]
@@ -3474,7 +3486,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn resolve_rejects_a_locator_that_escapes_the_checkout() {
         // `owner/repo@../../x` survives parse_skillssh_shorthand, which only
@@ -3508,6 +3519,20 @@ mod tests {
         // #278's recovery path: the stored subpath is stale because upstream
         // reorganized, and the locator finds the skill at its new home.
         let tmp = tempdir().unwrap();
+        write_skill(&tmp.path().join("skills").join("db"), "db");
+
+        let resolved = resolve_skill_dir(tmp.path(), Some("db"), Some("db")).unwrap();
+        assert_eq!(resolved, tmp.path().join("skills").join("db"));
+    }
+
+    #[test]
+    fn resolve_lets_a_locator_override_a_path_that_is_no_longer_the_skill() {
+        // The harder half of a reorganization: the stored path still exists,
+        // but upstream turned it into a container and moved the skill. Taking
+        // the path would copy the container over the installed skill.
+        let tmp = tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("db")).unwrap();
+        write_skill(&tmp.path().join("db").join("nested"), "nested");
         write_skill(&tmp.path().join("skills").join("db"), "db");
 
         let resolved = resolve_skill_dir(tmp.path(), Some("db"), Some("db")).unwrap();
