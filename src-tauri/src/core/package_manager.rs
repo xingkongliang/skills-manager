@@ -1131,14 +1131,50 @@ fn merge_hook_groups(
     target: &mut serde_json::Value,
     additions: &BTreeMap<String, Vec<serde_json::Value>>,
 ) -> Result<BTreeMap<String, Vec<serde_json::Value>>> {
+    const LEGACY_EVENTS: &[&str] = &[
+        "SessionStart",
+        "SessionEnd",
+        "SubagentStart",
+        "SubagentStop",
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolUse",
+        "PreCompact",
+        "PostCompact",
+        "UserPromptSubmit",
+        "Stop",
+    ];
     let root = target
         .as_object_mut()
         .ok_or_else(|| anyhow!("Existing Codex hooks.json must be an object"))?;
+    let mut legacy_groups = BTreeMap::new();
+    for event in LEGACY_EVENTS {
+        let Some(value) = root.remove(*event) else {
+            continue;
+        };
+        let groups = value
+            .as_array()
+            .cloned()
+            .ok_or_else(|| anyhow!("Existing Codex hook event {event} must be an array"))?;
+        legacy_groups.insert((*event).to_string(), groups);
+    }
     let hooks = root
         .entry("hooks")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or_else(|| anyhow!("Existing Codex hooks field must be an object"))?;
+    for (event, groups) in legacy_groups {
+        let target_groups = hooks
+            .entry(event)
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("Existing Codex hook event must be an array"))?;
+        for group in groups {
+            if !target_groups.contains(&group) {
+                target_groups.push(group);
+            }
+        }
+    }
     let mut added = BTreeMap::new();
     for (event, groups) in additions {
         let target_groups = hooks
@@ -2421,7 +2457,7 @@ mod tests {
             .unwrap();
         write(
             &codex_root.join("hooks.json"),
-            r#"{"description":"keep","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo keep"}]}]}}"#,
+            r#"{"description":"keep","SessionStart":[{"hooks":[{"type":"command","command":"echo keep"}]}],"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo keep"}]}]}}"#,
         );
 
         let inventory = scan_package(&package_root, "package-1").unwrap();
@@ -2455,6 +2491,7 @@ mod tests {
         let merged: serde_json::Value =
             serde_json::from_slice(&fs::read(codex_root.join("hooks.json")).unwrap()).unwrap();
         assert_eq!(merged["description"], "keep");
+        assert!(merged.get("SessionStart").is_none());
         assert_eq!(merged["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
 
         remove_binding(&store, &plan.binding_id, false).unwrap();
@@ -2463,6 +2500,7 @@ mod tests {
         let remaining: serde_json::Value =
             serde_json::from_slice(&fs::read(codex_root.join("hooks.json")).unwrap()).unwrap();
         assert_eq!(remaining["description"], "keep");
+        assert!(remaining.get("SessionStart").is_none());
         assert_eq!(
             remaining["hooks"]["SessionStart"].as_array().unwrap().len(),
             1
