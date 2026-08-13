@@ -957,16 +957,20 @@ fn apply_portable_operations(
                 target.display()
             );
         }
-        let applied_mode =
-            match sync_engine::sync_skill(&source, &target, sync_engine::SyncMode::Symlink) {
-                Ok(mode) => mode,
-                Err(error) => {
-                    for created_target in &created {
-                        let _ = sync_engine::remove_target(created_target);
-                    }
-                    return Err(error);
+        let applied_mode = match sync_engine::sync_skill(
+            &source,
+            &target,
+            sync_engine::SyncMode::Symlink,
+            sync_engine::ReplacePolicy::NoClobber,
+        ) {
+            Ok(mode) => mode,
+            Err(error) => {
+                for created_target in &created {
+                    let _ = sync_engine::remove_target(created_target);
                 }
-            };
+                return Err(error);
+            }
+        };
         if !matches!(applied_mode, sync_engine::SyncMode::Symlink) {
             let _ = sync_engine::remove_target(&target);
             for created_target in &created {
@@ -2421,16 +2425,6 @@ mod tests {
     }
 
     #[test]
-    fn portable_apply_refuses_existing_unmanaged_target() {
-        let temp = tempdir().unwrap();
-        let source = temp.path().join("source");
-        let target = temp.path().join("target");
-        fs::create_dir_all(&source).unwrap();
-        fs::create_dir_all(&target).unwrap();
-        assert!(!managed_target_matches(&source, &target).unwrap());
-    }
-
-    #[test]
     fn codex_host_bundle_merges_and_removes_only_managed_hooks() {
         let temp = tempdir().unwrap();
         let package_root = temp.path().join("package");
@@ -2621,10 +2615,24 @@ mod tests {
         .unwrap();
         assert_eq!(duplicate.binding_id, selected_plan.binding_id);
 
-        let applied =
-            apply_binding(&store, &selected_plan.binding_id, &selected_plan.plan_hash).unwrap();
         let target = project_root.join(".codex/skills/demo");
+        write(&target.join("keep.txt"), "user content");
+        let error =
+            apply_binding(&store, &selected_plan.binding_id, &selected_plan.plan_hash).unwrap_err();
+        assert!(error.to_string().contains("not managed by this binding"));
+        assert_eq!(
+            fs::read_to_string(target.join("keep.txt")).unwrap(),
+            "user content"
+        );
+        fs::remove_dir_all(&target).unwrap();
+
+        let retry_plan = preview_binding(&store, &selected_plan.binding_id).unwrap();
+        let applied = apply_binding(&store, &retry_plan.binding_id, &retry_plan.plan_hash).unwrap();
         assert_eq!(applied.binding.state, "installed");
+        assert!(managed_target_matches(&skill_root, &target).unwrap());
+
+        let reapply_plan = preview_binding(&store, &selected_plan.binding_id).unwrap();
+        apply_binding(&store, &reapply_plan.binding_id, &reapply_plan.plan_hash).unwrap();
         assert!(managed_target_matches(&skill_root, &target).unwrap());
         assert!(create_binding(
             &store,
@@ -2637,6 +2645,20 @@ mod tests {
         )
         .is_err());
 
+        sync_engine::remove_target(&target).unwrap();
+        write(&target.join("replacement.txt"), "user replacement");
+        let error = remove_binding(&store, &selected_plan.binding_id, false).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Refusing to remove non-symlink target"));
+        assert_eq!(
+            fs::read_to_string(target.join("replacement.txt")).unwrap(),
+            "user replacement"
+        );
+        fs::remove_dir_all(&target).unwrap();
+
+        let restore_plan = preview_binding(&store, &selected_plan.binding_id).unwrap();
+        apply_binding(&store, &restore_plan.binding_id, &restore_plan.plan_hash).unwrap();
         remove_binding(&store, &selected_plan.binding_id, false).unwrap();
         assert!(fs::symlink_metadata(&target).is_err());
         assert!(store
