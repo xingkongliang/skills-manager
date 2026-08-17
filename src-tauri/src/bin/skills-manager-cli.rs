@@ -8,6 +8,7 @@ use app_lib::core::{
     app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
     installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
     skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
+    well_known,
 };
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -641,6 +642,7 @@ enum InstallKind {
     Local,
     Git,
     Skillssh,
+    WellKnown,
 }
 
 enum SyncTarget {
@@ -1450,6 +1452,10 @@ fn classify_ref(
         return Ok(InstallKind::Skillssh);
     }
 
+    if well_known::is_site_ref(reference) {
+        return Ok(InstallKind::WellKnown);
+    }
+
     if reference.starts_with("./")
         || reference.starts_with("../")
         || reference.starts_with('/')
@@ -1513,6 +1519,9 @@ fn run_install(
         InstallKind::Local => install_local_action(store, reference, name, preset_id.as_deref())?,
         InstallKind::Git => install_git_action(store, reference, name, preset_id.as_deref())?,
         InstallKind::Skillssh => install_skillssh_action(store, reference, preset_id.as_deref())?,
+        InstallKind::WellKnown => {
+            install_well_known_action(store, reference, name, preset_id.as_deref())?
+        }
     };
 
     Ok(InstallReport {
@@ -1641,6 +1650,47 @@ fn install_skillssh_action(
     git_fetcher::cleanup_temp(&temp_dir);
     let (skill_id, install_name, central_path) = result?;
     Ok((skill_id, install_name, central_path, "skillssh".to_string()))
+}
+
+fn install_well_known_action(
+    store: &SkillStore,
+    site_url: &str,
+    name: Option<&str>,
+    active_scenario: Option<&str>,
+) -> anyhow::Result<(String, String, String, String)> {
+    let downloaded = well_known::download_site_skill(site_url, store.proxy_url().as_deref())?;
+    let result = (|| -> anyhow::Result<(String, String, String)> {
+        let _lock = RepoLock::acquire_foreground("cli install website skill")?;
+        let install_result = installer::install_from_local(&downloaded.skill_dir, name)?;
+        let metadata = cmd::InstallSourceMetadata {
+            source_type: "well-known".to_string(),
+            source_ref: Some(site_url.to_string()),
+            source_ref_resolved: Some(downloaded.resolved_url.clone()),
+            source_subpath: None,
+            source_branch: None,
+            source_revision: downloaded.revision.clone(),
+            remote_revision: downloaded.revision.clone(),
+            update_status: "local_only".to_string(),
+        };
+        let central_path = install_result.central_path.to_string_lossy().to_string();
+        let install_name = install_result.name.clone();
+        let skill_id = cmd::store_installed_skill_unlocked(
+            store,
+            &install_result,
+            &metadata,
+            active_scenario,
+        )
+        .map_err(map_app_err)?;
+        Ok((skill_id, install_name, central_path))
+    })();
+    well_known::cleanup_temp(&downloaded.temp_dir);
+    let (skill_id, install_name, central_path) = result?;
+    Ok((
+        skill_id,
+        install_name,
+        central_path,
+        "well-known".to_string(),
+    ))
 }
 
 /// Parse `owner/repo`, `owner/repo@skill`, or `owner/repo/skill` into

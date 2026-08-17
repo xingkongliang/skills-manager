@@ -169,6 +169,7 @@ npm run cli -- skills show db
 npm run cli -- skills install ./my-skill                       # local path
 npm run cli -- skills install https://github.com/foo/bar.git   # git URL
 npm run cli -- skills install vercel-labs/agent-skills@react-best-practices  # skills.sh
+npm run cli -- skills install https://www.skills.sh/site/uizze.com/ui-radar # website-synced skill
 npm run cli -- skills deploy <ref> --agent claude_code --agent codex  # deploy to both agents
 
 # Update / check from upstream (git skills re-clone, local skills re-import source).

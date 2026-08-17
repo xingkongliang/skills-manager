@@ -20,6 +20,7 @@ use crate::core::{
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
     sync_engine, sync_metadata,
     timing::should_log_first_or_slow,
+    well_known,
 };
 
 #[derive(Debug, Serialize)]
@@ -940,6 +941,44 @@ pub async fn install_git(
                 .ok();
         };
 
+        if well_known::is_site_ref(&repo_url) {
+            let outcome = (|| -> Result<(String, String), AppError> {
+                emit_progress("cloning");
+                let downloaded = well_known::download_site_skill(&repo_url, proxy_url.as_deref())
+                    .map_err(AppError::network)?;
+                emit_progress("installing");
+                let result = (|| -> Result<(String, String), AppError> {
+                    let _lock = RepoLock::acquire_foreground("install website skill")
+                        .map_err(AppError::db)?;
+                    let install_result = installer::install_from_local(
+                        &downloaded.skill_dir,
+                        name.as_deref(),
+                    )
+                    .map_err(AppError::io)?;
+                    let metadata = InstallSourceMetadata {
+                        source_type: "well-known".to_string(),
+                        source_ref: Some(repo_url.clone()),
+                        source_ref_resolved: Some(downloaded.resolved_url.clone()),
+                        source_subpath: None,
+                        source_branch: None,
+                        source_revision: downloaded.revision.clone(),
+                        remote_revision: downloaded.revision.clone(),
+                        update_status: "local_only".to_string(),
+                    };
+                    let skill_name = install_result.name.clone();
+                    let skill_id =
+                        store_installed_skill_unlocked(&store, &install_result, &metadata, None)?;
+                    Ok((skill_id, skill_name))
+                })();
+                well_known::cleanup_temp(&downloaded.temp_dir);
+                result
+            })();
+            log_install_outcome(&store, "well-known", outcome.as_ref());
+            outcome?;
+            emit_progress("done");
+            return Ok(());
+        }
+
         let outcome = (|| -> Result<(String, String), AppError> {
             git_fetcher::validate_git_url(&repo_url).map_err(AppError::git)?;
             emit_progress("cloning");
@@ -1120,6 +1159,53 @@ pub async fn preview_git_install(
 
     tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
+        if well_known::is_site_ref(&repo_url) {
+            app_handle
+                .emit(
+                    "install-progress",
+                    serde_json::json!({
+                        "skill_id": repo_url,
+                        "phase": "cloning",
+                    }),
+                )
+                .ok();
+            let downloaded = well_known::download_site_skill(&repo_url, proxy_url.as_deref())
+                .map_err(AppError::network)?;
+            let result = (|| -> Result<GitPreviewResult, AppError> {
+                let dirs = collect_git_skill_dirs(&downloaded.skill_dir);
+                if dirs.is_empty() {
+                    return Err(AppError::not_found("Downloaded source contains no skills"));
+                }
+                let skills = dirs
+                    .iter()
+                    .map(|dir| {
+                        let meta = skill_metadata::parse_skill_md(dir);
+                        let rel_path = skill_rel_key(&downloaded.skill_dir, dir);
+                        let basename = dir
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| rel_path.clone());
+                        let name = meta
+                            .name
+                            .filter(|s| !s.trim().is_empty())
+                            .unwrap_or(basename);
+                        GitSkillPreview {
+                            rel_path,
+                            name,
+                            description: meta.description,
+                        }
+                    })
+                    .collect();
+                Ok(GitPreviewResult {
+                    temp_dir: downloaded.temp_dir.to_string_lossy().to_string(),
+                    skills,
+                })
+            })();
+            if result.is_err() {
+                well_known::cleanup_temp(&downloaded.temp_dir);
+            }
+            return result;
+        }
         app_handle
             .emit(
                 "install-progress",
@@ -1203,6 +1289,44 @@ pub async fn confirm_git_install(
     let store = store.inner().clone();
     let proxy_url = store.proxy_url();
     tauri::async_runtime::spawn_blocking(move || {
+        if well_known::is_site_ref(&repo_url) {
+            let temp_path = validate_clone_temp_path(&temp_dir)?;
+            let result: Result<(), AppError> = (|| {
+                if items.is_empty() {
+                    return Ok(());
+                }
+                let skill_dir = well_known::skill_dir_from_temp(&temp_path)
+                    .map_err(AppError::invalid_input)?;
+                let all_dirs = collect_git_skill_dirs(&skill_dir);
+                let _lock = RepoLock::acquire_foreground("confirm website skill install")
+                    .map_err(AppError::db)?;
+                for dir in &all_dirs {
+                    let rel_key = skill_rel_key(&skill_dir, dir);
+                    let item = match items.iter().find(|item| item.rel_path == rel_key) {
+                        Some(item) => item,
+                        None => continue,
+                    };
+                    let custom_name = item.name.trim();
+                    let install_name = (!custom_name.is_empty()).then_some(custom_name);
+                    let install_result = installer::install_from_local(dir, install_name)
+                        .map_err(AppError::io)?;
+                    let metadata = InstallSourceMetadata {
+                        source_type: "well-known".to_string(),
+                        source_ref: Some(repo_url.clone()),
+                        source_ref_resolved: Some(repo_url.clone()),
+                        source_subpath: None,
+                        source_branch: None,
+                        source_revision: None,
+                        remote_revision: None,
+                        update_status: "local_only".to_string(),
+                    };
+                    store_installed_skill_unlocked(&store, &install_result, &metadata, None)?;
+                }
+                Ok(())
+            })();
+            well_known::cleanup_temp(&temp_path);
+            return result;
+        }
         let temp_path = validate_clone_temp_path(&temp_dir)?;
 
         let result: Result<(), AppError> = (|| {
@@ -2766,7 +2890,9 @@ pub fn validate_clone_temp_path(temp_dir: &str) -> Result<PathBuf, AppError> {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        if dir_name_str.starts_with(git_fetcher::CLONE_TEMP_PREFIX) {
+        if dir_name_str.starts_with(git_fetcher::CLONE_TEMP_PREFIX)
+            || dir_name_str.starts_with(well_known::TEMP_DIR_PREFIX)
+        {
             return Ok(temp_path);
         }
     }
