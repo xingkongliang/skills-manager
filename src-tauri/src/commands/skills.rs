@@ -1296,7 +1296,7 @@ pub async fn confirm_git_install(
                     return Ok(());
                 }
                 let skill_dir = well_known::skill_dir_from_temp(&temp_path)
-                    .map_err(AppError::invalid_input)?;
+                    .map_err(|error| AppError::invalid_input(error.to_string()))?;
                 let all_dirs = collect_git_skill_dirs(&skill_dir);
                 let _lock = RepoLock::acquire_foreground("confirm website skill install")
                     .map_err(AppError::db)?;
