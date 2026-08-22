@@ -47,6 +47,7 @@ const AGENT_ICON_FILES: Record<string, string> = {
   warp: "warp.svg",
   windsurf: "windsurf.svg",
   workbuddy: "workbuddy.png",
+  zcode: "zcode.svg",
   zencoder: "zencoder.png",
 };
 

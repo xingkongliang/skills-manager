@@ -171,6 +171,23 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: None,
         },
         ToolAdapter {
+            // ZCode mirrors the Claude Code layout: user-level skills live in
+            // `~/.zcode/skills/<name>/SKILL.md` and project-level skills in
+            // `<repo>/.zcode/skills`. Plugin skills under
+            // `~/.zcode/cli/plugins/cache/` are intentionally not scanned,
+            // matching the Claude Code plugin-marketplace policy above.
+            key: "zcode".into(),
+            display_name: "ZCode".into(),
+            relative_skills_dir: ".zcode/skills".into(),
+            relative_detect_dir: ".zcode".into(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: None,
+            category: ToolCategory::Coding,
+            is_custom: false,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        },
+        ToolAdapter {
             // oh-my-pi (omp) reads native skills from asymmetric paths: the
             // user-level scan is `~/.omp/agent/skills` (the active profile's
             // agent dir), while the project-level scan walks up for
@@ -975,6 +992,28 @@ mod tests {
             .expect("claude_code adapter should exist");
 
         assert!(adapter.additional_scan_dirs.is_empty());
+    }
+
+    #[test]
+    fn zcode_uses_claude_code_style_symmetric_paths() {
+        let adapter = default_tool_adapters()
+            .into_iter()
+            .find(|adapter| adapter.key == "zcode")
+            .expect("zcode adapter should exist");
+
+        assert_eq!(adapter.display_name, "ZCode");
+        assert_eq!(adapter.relative_skills_dir, ".zcode/skills");
+        assert_eq!(adapter.relative_detect_dir, ".zcode");
+        // Same shape globally (~/.zcode/skills) and per-project
+        // (<repo>/.zcode/skills), so no project override is needed.
+        assert_eq!(adapter.project_relative_skills_dir(), ".zcode/skills");
+        assert!(adapter.project_relative_skills_dir.is_none());
+        // Plugin skills under ~/.zcode/cli/plugins are not scanned by default,
+        // matching the Claude Code plugin-marketplace policy.
+        assert!(adapter.additional_scan_dirs.is_empty());
+        assert!(!adapter.is_custom);
+        assert!(!adapter.recursive_scan);
+        assert_eq!(adapter.category, ToolCategory::Coding);
     }
 
     #[test]
