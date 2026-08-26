@@ -1441,6 +1441,7 @@ export function Settings() {
                   { value: "zh", label: "简体中文" },
                   { value: "zh-TW", label: "繁體中文" },
                   { value: "en", label: "English" },
+                  { value: "es", label: "Español" },
                 ] as const).map((opt) => (
                   <button
                     key={opt.value}
