@@ -48,6 +48,7 @@ const AGENT_ICON_FILES: Record<string, string> = {
   windsurf: "windsurf.svg",
   workbuddy: "workbuddy.png",
   zencoder: "zencoder.png",
+  zcode: "zcode.svg",
 };
 
 // Monochrome line-art icons that render black (no fill / `currentColor`) and

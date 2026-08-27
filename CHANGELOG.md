@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.0] - 2026-08-27
+
+### Release Overview
+- ZCode joins the supported agents, Linux ARM64 gets its own packages, and a fresh install now opens in the language your system is set to instead of always Simplified Chinese.
+- Kimi Code is repointed at the directories it actually reads. Skills synced to Kimi were being written where Kimi never looks — **after upgrading, sync Kimi once more**.
+
+### User-facing
+- **ZCode is supported out of the box** (#370) — User-level skills sync to `~/.zcode/skills/` and project-level skills to `<repo>/.zcode/skills`, the same symmetric layout as Claude Code. Plugin skills under `~/.zcode/cli/plugins/` are deliberately not scanned, matching the Claude Code plugin-marketplace policy. That brings the built-in agent count to 53. Thanks to @brofea, who also supplied the official mark from z.ai rather than a redrawn one. Closes #243, #319.
+- **Kimi Code skills land where Kimi reads them** (#270) — The adapter deployed to `~/.config/agents/skills` and looked for `~/.kimi` to decide Kimi was installed. Those are the *old kimi-cli*'s locations; kimi-code is a separate generation that reads `$KIMI_CODE_HOME/skills/` (default `~/.kimi-code/skills/`) and `<project>/.kimi-code/skills/`. So a sync reported success while Kimi saw nothing, and an installed Kimi was shown as missing. Both are fixed. **Upgrading rewrites the paths but does not move files**: skills already copied to `~/.config/agents/skills` stay there — that directory is still Amp's and Replit's — so Kimi needs one more sync for its skills to arrive. Thanks to @Libeny.
+- **A fresh install opens in your system's language** (#374) — The first-run language was hardcoded to Simplified Chinese, so anyone who does not read it had to find 设置 → 语言 in a UI they could not navigate. The first launch now reads `navigator.languages` and picks the first locale the app can serve, falling back to English. An explicit script beats the region, so `zh-Hans-HK` stays Simplified. An existing choice is never touched — this runs only when neither the saved setting nor localStorage has one. Thanks to @sammcj.
+- **Linux ARM64 has its own packages** (#351) — Releases shipped Linux x86_64, macOS ARM64 and Windows x64; an ARM64 Linux machine had nothing it could run, and the macOS ARM64 assets are Mach-O binaries that will not help. `.deb` and `.rpm` are now built natively on an ARM64 runner. Thanks to @superwjfeng.
+
+### Developer & Governance
+- Retargeting one tool no longer deletes a directory another tool is still deployed to. Adapters can share a skills directory — Amp and Replit both use `~/.config/agents/skills`, and Kimi did until this release — and the stale-target cleanup removed the path outright without checking who else was pointing at it. Introduced by the Kimi move and caught before release by a cross-vendor review; the regression test fails without the guard.
+- `detectLanguage` matches the primary subtag rather than a bare prefix. `startsWith("zh")` also matched `zha` (Zhuang) and `startsWith("en")` matched `enm` (Middle English), consuming the tag and discarding the next entry in the list, which is the one the user actually prefers.
+- Three ZCode pull requests were open at once (#338, #370, #390), none of them answered before the next arrived. #370 was taken for using z.ai's own mark; the other two are closed as superseded with the reason stated. The README count and the path-contract test came from #390's work.
+
 ## [1.34.2] - 2026-08-16
 
 ### Release Overview

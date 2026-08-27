@@ -242,18 +242,38 @@ pub fn sync_desired_targets(
         if let Some(existing) = existing_targets.get(&key) {
             let target_path = PathBuf::from(&existing.target_path);
             if target_path != desired.target {
-                match sync_engine::remove_recorded_target(&target_path, &existing.mode) {
-                    Ok(true) => {}
-                    Ok(false) => log::warn!(
-                        "Keeping {}: no longer matches its recorded {} deployment; \
-                         dropping the stale record only",
+                // Adapters can share a skills directory: amp and replit both
+                // deploy to ~/.config/agents/skills, and kimi did too until it
+                // moved to ~/.kimi-code/skills (#270). When one of them is
+                // retargeted, the old path is not this tool's leftover — it is
+                // still another tool's live deployment. Drop the stale record,
+                // but leave the directory to whoever is still deployed there.
+                let claimed_by_another_tool = desired_targets.iter().any(|other| {
+                    other.tool != desired.tool
+                        && other.skill_id == desired.skill_id
+                        && other.target == target_path
+                });
+                if claimed_by_another_tool {
+                    log::info!(
+                        "Keeping {}: still the deployment target of another tool; \
+                         dropping {}'s stale record only",
                         target_path.display(),
-                        existing.mode
-                    ),
-                    Err(e) => log::warn!(
-                        "Failed to remove stale target {}: {e}",
-                        target_path.display()
-                    ),
+                        desired.tool
+                    );
+                } else {
+                    match sync_engine::remove_recorded_target(&target_path, &existing.mode) {
+                        Ok(true) => {}
+                        Ok(false) => log::warn!(
+                            "Keeping {}: no longer matches its recorded {} deployment; \
+                             dropping the stale record only",
+                            target_path.display(),
+                            existing.mode
+                        ),
+                        Err(e) => log::warn!(
+                            "Failed to remove stale target {}: {e}",
+                            target_path.display()
+                        ),
+                    }
                 }
                 if let Err(e) = store.delete_target(&desired.skill_id, &desired.tool) {
                     log::warn!(
@@ -1124,6 +1144,110 @@ mod sync_desired_targets_tests {
     use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
     use std::fs;
     use tempfile::tempdir;
+
+    /// Two adapters can point at the same skills directory — `amp` and
+    /// `replit` both deploy to `~/.config/agents/skills`, and `kimi` did too
+    /// until it moved to `~/.kimi-code/skills` (#270). When one of them is
+    /// retargeted, its stale record must be dropped, but the directory the
+    /// others are still deployed to must survive: it is their live
+    /// deployment, not this tool's leftover.
+    #[test]
+    fn retargeting_one_tool_keeps_a_directory_another_tool_still_claims() {
+        let _lock = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("repo");
+        central_repo::set_test_base_dir_override(Some(base.clone()));
+        fs::create_dir_all(central_repo::skills_dir()).unwrap();
+        let store = SkillStore::new(&base.join("test.db")).unwrap();
+
+        let source = central_repo::skills_dir().join("skill-a");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "real source").unwrap();
+
+        // The shared deployment both tools were synced to.
+        let shared = tmp.path().join("shared-agents").join("skill-a");
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(shared.join("SKILL.md"), "real source").unwrap();
+
+        // Where the retargeted tool is moving to.
+        let moved = tmp.path().join("kimi-code").join("skill-a");
+
+        let skill = SkillRecord {
+            id: "skill-a".to_string(),
+            name: "skill-a".to_string(),
+            description: None,
+            source_type: "import".to_string(),
+            source_ref: Some(source.to_string_lossy().to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: source.to_string_lossy().to_string(),
+            content_hash: Some("h1".to_string()),
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        store.insert_skill(&skill).unwrap();
+
+        for (id, tool) in [("target-amp", "amp"), ("target-kimi", "kimi")] {
+            store
+                .insert_target(&SkillTargetRecord {
+                    id: id.to_string(),
+                    skill_id: "skill-a".to_string(),
+                    tool: tool.to_string(),
+                    target_path: shared.to_string_lossy().to_string(),
+                    mode: "copy".to_string(),
+                    status: "ok".to_string(),
+                    synced_at: Some(1),
+                    last_error: None,
+                    source_hash: Some("h1".to_string()),
+                })
+                .unwrap();
+        }
+
+        // Adapter order puts amp before kimi, so amp is skipped as current
+        // before kimi reaches its retarget branch.
+        let desired = vec![
+            ScenarioSyncTarget {
+                skill_id: "skill-a".to_string(),
+                skill_name: "skill-a".to_string(),
+                tool: "amp".to_string(),
+                source: source.clone(),
+                target: shared.clone(),
+                mode: sync_engine::SyncMode::Copy,
+                source_hash: Some("h1".to_string()),
+            },
+            ScenarioSyncTarget {
+                skill_id: "skill-a".to_string(),
+                skill_name: "skill-a".to_string(),
+                tool: "kimi".to_string(),
+                source: source.clone(),
+                target: moved.clone(),
+                mode: sync_engine::SyncMode::Copy,
+                source_hash: Some("h1".to_string()),
+            },
+        ];
+
+        sync_desired_targets(&store, &desired).unwrap();
+
+        assert!(
+            shared.join("SKILL.md").exists(),
+            "amp's live deployment was deleted while retargeting kimi"
+        );
+        assert!(
+            moved.join("SKILL.md").exists(),
+            "kimi was not deployed to its new path"
+        );
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
 
     /// Startup must survive a collision. `ensure_default_startup_scenario`
     /// reaches this function through `sync_scenario_skills`, and its caller

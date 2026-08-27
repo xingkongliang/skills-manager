@@ -5,6 +5,23 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.35.0] - 2026-08-27
+
+### 发布概览
+- 新增 ZCode 支持，Linux ARM64 有了自己的安装包，全新安装不再一律以简体中文启动，而是跟随系统语言。
+- Kimi Code 被指向了它真正读取的目录。此前同步给 Kimi 的 skill 被写到了 Kimi 从不查看的地方——**升级后请对 Kimi 再同步一次**。
+
+### 用户可见更新
+- **开箱支持 ZCode**（#370）—— 用户级 skill 同步到 `~/.zcode/skills/`，项目级同步到 `<repo>/.zcode/skills`，与 Claude Code 是同一种对称布局。`~/.zcode/cli/plugins/` 下的插件 skill 刻意不扫描，与 Claude Code 的插件市场策略一致。内置 Agent 数量因此增加到 53 个。感谢 @brofea，图标用的是 z.ai 官网的原始标识而非重画版本。关闭 #243、#319。
+- **同步给 Kimi Code 的 skill 现在落在它会读的位置**（#270）—— 此前适配器把 skill 部署到 `~/.config/agents/skills`，并靠 `~/.kimi` 判断 Kimi 是否安装。那是**旧的 kimi-cli** 的位置；kimi-code 是另一个世代，读取的是 `$KIMI_CODE_HOME/skills/`（默认 `~/.kimi-code/skills/`）与 `<project>/.kimi-code/skills/`。于是同步显示成功、Kimi 里却什么都没有，而且装了 Kimi 也被显示为未安装。两者都已修复。**升级只会改写路径，不会搬动文件**：已经拷到 `~/.config/agents/skills` 的 skill 会留在原地——那个目录仍然属于 Amp 和 Replit——所以 Kimi 需要再同步一次才能拿到它的 skill。感谢 @Libeny。
+- **全新安装会以你系统的语言启动**（#374）—— 首次启动的语言此前硬编码为简体中文，不读中文的用户必须先在一个自己看不懂的界面里找到「设置 → 语言」。现在首次启动会读取 `navigator.languages`，选中第一个应用能提供的语言，都不匹配时回退到英文。显式的文字系统优先于地区，所以 `zh-Hans-HK` 仍是简体。已有的选择完全不受影响——只有在设置和 localStorage 都没有值时才会走到这一步。感谢 @sammcj。
+- **Linux ARM64 有了自己的安装包**（#351）—— 此前发布只有 Linux x86_64、macOS ARM64 和 Windows x64，ARM64 的 Linux 机器没有可运行的包，而 macOS ARM64 的产物是 Mach-O 二进制、拿过去也用不了。现在在原生 ARM64 runner 上构建 `.deb` 与 `.rpm`。感谢 @superwjfeng。
+
+### 开发者与治理更新
+- 重定向某个工具时，不再删掉另一个工具仍在使用的目录。多个适配器可以共用同一个 skills 目录——Amp 与 Replit 都用 `~/.config/agents/skills`，本次之前 Kimi 也在其中——而清理陈旧目标的逻辑会直接删除该路径，不检查还有谁指向它。这个缺陷由 Kimi 的路径迁移引入，在发布前经跨厂商复核发现；去掉这道守卫，回归测试即变红。
+- `detectLanguage` 改为匹配主语言子标签，而不是裸前缀。`startsWith("zh")` 会连 `zha`（壮语）一起匹配，`startsWith("en")` 会匹配 `enm`（中古英语），一旦匹配就吞掉该项、丢弃列表中的下一项——而后者才是用户真正偏好的语言。
+- ZCode 同时有三个 PR 挂着（#338、#370、#390），在下一个到来之前都没有得到回应。最终采用 #370，因为它使用了 z.ai 自己的标识；另外两个以「已被取代」关闭并说明了理由。README 的计数与路径约定测试来自 #390 的工作。
+
 ## [1.34.2] - 2026-08-16
 
 ### 发布概览

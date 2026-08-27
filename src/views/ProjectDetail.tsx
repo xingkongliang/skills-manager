@@ -530,12 +530,67 @@ export function ProjectDetail() {
     }
   };
 
+  // Push one variant to the center, then realign the rest from it.
+  //
+  // in_sync is the only status that proves a variant holds nothing of its own:
+  // it is a content-hash match. center_newer does NOT prove it —
+  // classify_sync_status reaches that status only after the hashes already
+  // differed, then picks a side by mtime — and project_only was never pushed at
+  // all. So any variant that is not in_sync may carry unique content.
+  //
+  // With more than one such variant there is no safe push. Writing the center
+  // rebuilds its directory and moves its mtime to now, so every other unproven
+  // variant re-reads as center_newer; the card then drops "update to center"
+  // (which needs project_only/project_newer/diverged) and offers only "update
+  // to project", which overwrites every variant — and the backend refuses only
+  // project_newer, so nothing stops it. Refuse and name the conflict instead,
+  // the way 1.34.0 answers a write that would destroy something.
+  const pushSkillToCenterAndAlign = async (
+    skill: ProjectSkillGroup
+  ): Promise<{ alignFailed: number; conflicting: number }> => {
+    if (!id) return { alignFailed: 0, conflicting: 0 };
+
+    const unproven = skill.variants.filter((v) => v.sync_status !== "in_sync");
+    if (unproven.length > 1) {
+      return { alignFailed: 0, conflicting: unproven.length };
+    }
+
+    const winner = unproven[0] ?? skill.primaryVariant;
+    await api.updateProjectSkillToCenter(id, winner.relative_path, winner.agent);
+
+    // Every remaining variant is in_sync, so pulling the freshly written center
+    // over it discards nothing — and it keeps a multi-agent group from flipping
+    // to "center_newer" off the stale-but-clean siblings right after the user
+    // updated *to* center. Serially: two agents' skills roots can be symlinks
+    // onto one real directory, and each realign removes and rebuilds its
+    // target, so concurrent calls on one path make a call fail for no reason.
+    let alignFailed = 0;
+    for (const variant of skill.variants.filter((v) => v !== winner)) {
+      try {
+        await api.updateProjectSkillFromCenter(id, variant.relative_path, variant.agent);
+      } catch {
+        alignFailed += 1;
+      }
+    }
+    return { alignFailed, conflicting: 0 };
+  };
+
   const handleUpdateCenter = async (skill: ProjectSkillGroup) => {
     if (!id) return;
     setUpdatingCenterSkill(getSkillKey(skill));
     try {
-      await api.updateProjectSkillToCenter(id, skill.primaryVariant.relative_path, skill.primaryVariant.agent);
-      toast.success(t("project.updateCenterSuccess", { name: skill.name }));
+      const { alignFailed, conflicting } = await pushSkillToCenterAndAlign(skill);
+      if (conflicting > 0) {
+        toast.warning(
+          t("project.updateCenterConflict", { name: skill.name, count: conflicting })
+        );
+      } else if (alignFailed > 0) {
+        toast.warning(
+          t("project.updateCenterAlignFailed", { name: skill.name, count: alignFailed })
+        );
+      } else {
+        toast.success(t("project.updateCenterSuccess", { name: skill.name }));
+      }
       await Promise.all([refreshManagedSkills(), refreshPresets(), loadSkills()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
@@ -706,6 +761,7 @@ export function ProjectDetail() {
     try {
       let updated = 0;
       let failed = 0;
+      let conflicting = 0;
       for (const skill of selectedSkills) {
         const canUpdateCenter =
           skill.status === "project_only" ||
@@ -713,14 +769,28 @@ export function ProjectDetail() {
           skill.status === "diverged";
         if (!canUpdateCenter) continue;
         try {
-          await api.updateProjectSkillToCenter(id, skill.primaryVariant.relative_path, skill.primaryVariant.agent);
-          updated++;
+          const { alignFailed, conflicting: conflictingForSkill } =
+            await pushSkillToCenterAndAlign(skill);
+          // Refused outright: neither written nor failed, so it is counted on
+          // its own rather than folded into either total.
+          if (conflictingForSkill > 0) {
+            conflicting += 1;
+            continue;
+          }
+          // The push landed but some sibling failed to realign → the group is
+          // not fully in sync, so count it as failed rather than reporting a
+          // clean success.
+          if (alignFailed > 0) failed++;
+          else updated++;
         } catch {
           failed++;
         }
       }
       if (updated > 0) {
         toast.success(t("project.batchUpdatedCenter", { count: updated }));
+      }
+      if (conflicting > 0) {
+        toast.warning(t("project.batchUpdateCenterConflict", { count: conflicting }));
       }
       if (failed > 0) {
         toast.error(t("project.batchUpdateCenterFailed", { count: failed }));
