@@ -34,6 +34,7 @@ import { PresetBar } from "../components/PresetBar";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
+import { enabledInstalledAgentKeys, getDefaultExportAgents } from "../lib/exportAgents";
 import { cn } from "../utils";
 import * as api from "../lib/tauri";
 import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
@@ -41,7 +42,6 @@ import { getErrorMessage } from "../lib/error";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 
 const PROJECT_DEFAULT_EXPORT_AGENTS_KEY = "project_default_export_agents";
-const PROJECT_EXPORT_AGENT_PRIORITY = ["claude_code", "codex", "cursor", "gemini_cli", "github_copilot"];
 
 const projectLastUsedAgentsKey = (projectId: string) =>
   `project_last_used_export_agents:${projectId}`;
@@ -60,35 +60,6 @@ interface ProjectSkillGroup {
   status: ProjectSkill["sync_status"];
   tags: string[];
   centerSkillIds: string[];
-}
-
-// Keys of project agents that can actually receive skills right now: both
-// installed on disk and enabled by the user. Used everywhere export targets
-// are derived so disabled/uninstalled agents never get project-local skills.
-function enabledInstalledAgentKeys(targets: ProjectAgentTarget[]): string[] {
-  return targets.filter((target) => target.installed && target.enabled).map((target) => target.key);
-}
-
-function getDefaultExportAgents(targets: ProjectAgentTarget[], savedValue?: string | null) {
-  const enabledKeys = enabledInstalledAgentKeys(targets);
-  const availableKeys = new Set(enabledKeys);
-  if (savedValue) {
-    try {
-      const parsed = JSON.parse(savedValue);
-      if (Array.isArray(parsed)) {
-        const filtered = parsed.filter((item): item is string => typeof item === "string" && availableKeys.has(item));
-        if (filtered.length > 0) {
-          return Array.from(new Set(filtered));
-        }
-      }
-    } catch {
-      // Ignore invalid persisted settings and fall back to built-in defaults.
-    }
-  }
-
-  const prioritized = PROJECT_EXPORT_AGENT_PRIORITY.filter((key) => availableKeys.has(key));
-  const fallback = enabledKeys;
-  return Array.from(new Set((prioritized.length > 0 ? prioritized : fallback).slice(0, 3)));
 }
 
 function getSyncStatusMeta(t: (key: string) => string, status: ProjectSkill["sync_status"]) {
