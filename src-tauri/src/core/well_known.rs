@@ -88,9 +88,7 @@ pub fn download_site_skill(input: &str, proxy_url: Option<&str>) -> Result<Downl
         download_v1_entry(&client, &index, entry, &site.skill_name, &skill_dir)?
     };
 
-    let temp_dir = temp
-        .keep()
-        .map_err(|error| anyhow::anyhow!("Failed to keep skills download directory: {error}"))?;
+    let temp_dir = temp.keep();
     let skill_dir = temp_dir.join("skill");
     Ok(DownloadedSkill {
         temp_dir,
