@@ -22,6 +22,7 @@ import {
   CircleSlash,
   Pencil,
   Trash2,
+  ChevronDown,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { useNavigate } from "react-router-dom";
@@ -47,6 +48,7 @@ import type {
   SkillToolToggle,
 } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { getSkillSourceInfo, buildSourceGroups, type SkillSourceGroup } from "../lib/skillSource";
 import {
   DndContext,
   closestCenter,
@@ -64,6 +66,9 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+
+const VIEW_MODE_LS_KEY = "skills-manager.mySkillsViewMode";
+const GROUP_BY_SOURCE_LS_KEY = "skills-manager.mySkillsGroupBySource";
 
 interface SortableSkillItemProps {
   id: string;
@@ -144,9 +149,41 @@ export function MySkills() {
     projects,
     refreshProjects,
   } = useApp();
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [viewMode, setViewMode] = useState<"grid" | "list">(() => {
+    try {
+      return localStorage.getItem(VIEW_MODE_LS_KEY) === "list" ? "list" : "grid";
+    } catch {
+      return "grid";
+    }
+  });
+  const [groupBySource, setGroupBySource] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(GROUP_BY_SOURCE_LS_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
   const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
+  const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_MODE_LS_KEY, viewMode);
+    } catch {
+      // localStorage may be unavailable.
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(GROUP_BY_SOURCE_LS_KEY, String(groupBySource));
+    } catch {
+      // localStorage may be unavailable.
+    }
+  }, [groupBySource]);
+  const [sourceSearch, setSourceSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [allTags, setAllTags] = useState<string[]>([]);
   // Tag management from the filter bar (#233): right-click a tag pill to
@@ -247,11 +284,14 @@ export function MySkills() {
   const hasActiveFilters =
     search.trim() !== "" ||
     sourceFilters.size > 0 ||
+    selectedSources.size > 0 ||
     tagFilters.size > 0 ||
     filterMode !== "all";
   const clearFilters = () => {
     setSearch("");
     setSourceFilters(new Set());
+    setSelectedSources(new Set());
+    setSourceSearch("");
     setTagFilters(new Set());
     setFilterMode("all");
   };
@@ -275,8 +315,8 @@ export function MySkills() {
     return displayNames;
   }, [skills]);
 
-  const filtered = useMemo(() => {
-    const result = skills.filter((skill) => {
+  const baseFiltered = useMemo(() => {
+    return skills.filter((skill) => {
       const displayName = skillDisplayNames.get(skill.id) || skill.name;
       const matchesSearch =
         skill.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -289,8 +329,46 @@ export function MySkills() {
       if (tagFilters.size > 0) {
         const wantUntagged = tagFilters.has(UNTAGGED_FILTER);
         const matchUntagged = wantUntagged && skill.tags.length === 0;
-        const matchTag = skill.tags.some((t) => tagFilters.has(t));
+        const matchTag = skill.tags.some((tag) => tagFilters.has(tag));
         if (!matchUntagged && !matchTag) return false;
+      }
+
+      return true;
+    });
+  }, [skills, skillDisplayNames, search, sourceFilters, tagFilters]);
+
+  const sourceGroups = useMemo(() => buildSourceGroups(baseFiltered), [baseFiltered]);
+
+  useEffect(() => {
+    if (selectedSources.size === 0) return;
+    const validKeys = new Set(sourceGroups.map((group) => group.key));
+    const next = new Set([...selectedSources].filter((key) => validKeys.has(key)));
+    if (next.size !== selectedSources.size) setSelectedSources(next);
+  }, [sourceGroups, selectedSources]);
+
+  useEffect(() => {
+    if (!sourceMenuOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSourceMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sourceMenuOpen]);
+
+  const visibleSourceOptions = useMemo(() => {
+    const query = sourceSearch.trim().toLowerCase();
+    if (!query) return sourceGroups;
+    return sourceGroups.filter((group) =>
+      [group.key, group.label, group.raw].some((value) =>
+        value.toLowerCase().includes(query)
+      )
+    );
+  }, [sourceGroups, sourceSearch]);
+
+  const filtered = useMemo(() => {
+    const result = baseFiltered.filter((skill) => {
+      if (selectedSources.size > 0 && !selectedSources.has(getSkillSourceInfo(skill).key)) {
+        return false;
       }
 
       if (!viewedPreset) return true;
@@ -318,7 +396,21 @@ export function MySkills() {
     }
 
     return result;
-  }, [skills, skillDisplayNames, search, sourceFilters, tagFilters, filterMode, viewedPreset, presetSkillOrder]);
+  }, [baseFiltered, selectedSources, filterMode, viewedPreset, presetSkillOrder]);
+
+  const displayGroups = useMemo(
+    () => (groupBySource ? buildSourceGroups(filtered) : null),
+    [filtered, groupBySource]
+  );
+
+  const toggleSourceGroupFilter = useCallback(
+    (key: string) => {
+      setSelectedSources((prev) =>
+        prev.size === 1 && prev.has(key) ? new Set<string>() : new Set([key])
+      );
+    },
+    []
+  );
 
   const {
     isMultiSelect, setIsMultiSelect,
@@ -373,7 +465,7 @@ export function MySkills() {
     [filtered, viewedPreset]
   );
 
-  const canDrag = !!viewedPreset;
+  const canDrag = !!viewedPreset && !groupBySource;
 
   const refreshGitStatus = useCallback(async () => {
     try {
@@ -1025,6 +1117,27 @@ export function MySkills() {
   const sourceTypeLabel = (skill: ManagedSkill) =>
     skill.source_type === "skillssh" ? "skills.sh" : skill.source_type;
 
+  const renderSourceHeader = (group: SkillSourceGroup) => (
+    <div
+      key={`source-group-${group.key}`}
+      className={cn(
+        "flex items-center gap-2 px-1 pt-3 first:pt-0",
+        viewMode === "grid" && "col-span-full"
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => toggleSourceGroupFilter(group.key)}
+        className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[12px] font-semibold text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+        title={group.raw || group.key}
+      >
+        {sourceIcon(group.type)}
+        <span className="truncate">{group.label || t("mySkills.sourceFilter.unknown")}</span>
+        <span className="text-[11px] font-medium text-faint">{group.count}</span>
+      </button>
+    </div>
+  );
+
   const refreshLabel = (skill: ManagedSkill) =>
     skill.source_type === "local" || skill.source_type === "import"
       ? t("mySkills.updateActions.reimport")
@@ -1134,6 +1247,17 @@ export function MySkills() {
             {t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
           </button>
           <button
+            onClick={() => setGroupBySource((value) => !value)}
+            className={cn(
+              "rounded-md p-2 transition-colors outline-none",
+              groupBySource ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+            )}
+            title={t("mySkills.groupBySource")}
+            aria-label={t("mySkills.groupBySource")}
+          >
+            <Layers className="h-4 w-4" />
+          </button>
+          <button
             onClick={() => setViewMode("grid")}
             className={cn(
               "rounded-md p-2 transition-colors outline-none",
@@ -1179,6 +1303,108 @@ export function MySkills() {
             {t(`mySkills.sourceFilter.${src}`)}
           </button>
         ))}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setSourceMenuOpen((open) => !open)}
+            title={
+              selectedSources.size > 0
+                ? t("mySkills.sourceFilter.selectedCount", { count: selectedSources.size })
+                : t("mySkills.sourceFilter.source")
+            }
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+              selectedSources.size > 0
+                ? "bg-accent text-white dark:bg-accent dark:text-white"
+                : "bg-surface-hover text-muted hover:text-secondary"
+            )}
+          >
+            <span className="max-w-[160px] truncate">
+              {selectedSources.size > 0
+                ? t("mySkills.sourceFilter.selectedCount", { count: selectedSources.size })
+                : t("mySkills.sourceFilter.source")}
+            </span>
+            <ChevronDown className={cn("h-3 w-3 transition-transform", sourceMenuOpen && "rotate-180")} />
+          </button>
+          {sourceMenuOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => {
+                  setSourceMenuOpen(false);
+                  setSourceSearch("");
+                }}
+              />
+              <div className="absolute left-0 top-full z-50 mt-1 w-72 overflow-hidden rounded-lg border border-border bg-surface shadow-2xl">
+                <div className="border-b border-border-subtle p-2">
+                  <input
+                    type="text"
+                    value={sourceSearch}
+                    onChange={(e) => setSourceSearch(e.target.value)}
+                    placeholder={t("mySkills.sourceFilter.searchPlaceholder")}
+                    className="app-input w-full"
+                    autoFocus
+                  />
+                </div>
+                <div className="max-h-64 overflow-y-auto p-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedSources(new Set());
+                      setSourceMenuOpen(false);
+                      setSourceSearch("");
+                    }}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors",
+                      selectedSources.size === 0
+                        ? "bg-surface-active text-primary"
+                        : "text-secondary hover:bg-surface-hover"
+                    )}
+                  >
+                    <span>{t("mySkills.sourceFilter.all")}</span>
+                    <span className="text-[11px] text-muted">{baseFiltered.length}</span>
+                  </button>
+                  {visibleSourceOptions.map((option) => {
+                    const isSelected = selectedSources.has(option.key);
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => setSelectedSources(toggleFilter(selectedSources, option.key))}
+                        className={cn(
+                          "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors",
+                          isSelected
+                            ? "bg-surface-active text-primary"
+                            : "text-secondary hover:bg-surface-hover"
+                        )}
+                      >
+                        <span className="flex min-w-0 flex-1 items-center gap-2">
+                          {isSelected ? (
+                            <SquareCheck className="h-3.5 w-3.5 shrink-0 text-accent" />
+                          ) : (
+                            <Square className="h-3.5 w-3.5 shrink-0 text-faint" />
+                          )}
+                          <span
+                            className="min-w-0 truncate"
+                            title={option.raw || option.key}
+                          >
+                            {option.label || t("mySkills.sourceFilter.unknown")}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-[11px] text-muted">{option.count}</span>
+                      </button>
+                    );
+                  })}
+                  {visibleSourceOptions.length === 0 && (
+                    <div className="px-2 py-2 text-[13px] text-muted">
+                      {t("mySkills.sourceFilter.noMatches")}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
         {allTags.length > 0 && (
           <>
             <span className="mx-0.5 h-3 w-px bg-border-subtle" />
@@ -1284,7 +1510,8 @@ export function MySkills() {
                 : "flex flex-col gap-0.5"
             )}
           >
-          {filtered.map((skill) => {
+          {(() => {
+            const renderSkill = (skill: ManagedSkill) => {
             const enabledInPreset = viewedPreset
               ? skill.preset_ids.includes(viewedPreset.id)
               : false;
@@ -1758,7 +1985,15 @@ export function MySkills() {
               )}
               </SortableSkillItem>
             );
-          })}
+          };
+
+            return displayGroups
+              ? displayGroups.flatMap((group) => [
+                  renderSourceHeader(group),
+                  ...group.skills.map(renderSkill),
+                ])
+              : filtered.map(renderSkill);
+          })()}
         </div>
           </SortableContext>
         </DndContext>

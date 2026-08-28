@@ -390,8 +390,14 @@
       "local": "Local",
       "import": "Imported",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "source": "Source",
+      "searchPlaceholder": "Search source",
+      "unknown": "Unknown source",
+      "noMatches": "No matching sources",
+      "selectedCount": "{{count}} source(s) selected"
     },
+    "groupBySource": "Group by source",
     "tags": {
       "filter": "Tags",
       "allTags": "All Tags",

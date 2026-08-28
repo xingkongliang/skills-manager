@@ -360,8 +360,14 @@
       "local": "本機",
       "import": "匯入",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "source": "來源",
+      "searchPlaceholder": "搜尋來源",
+      "unknown": "未知來源",
+      "noMatches": "沒有相符的來源",
+      "selectedCount": "已選 {{count}} 個來源"
     },
+    "groupBySource": "按來源分組",
     "tags": {
       "filter": "標籤",
       "allTags": "全部標籤",

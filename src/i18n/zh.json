@@ -390,8 +390,14 @@
       "local": "本地",
       "import": "导入",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "source": "来源",
+      "searchPlaceholder": "搜索来源",
+      "unknown": "未知来源",
+      "noMatches": "没有匹配的来源",
+      "selectedCount": "已选 {{count}} 个来源"
     },
+    "groupBySource": "按来源分组",
     "tags": {
       "filter": "标签",
       "allTags": "全部标签",
