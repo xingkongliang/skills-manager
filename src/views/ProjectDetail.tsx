@@ -38,6 +38,7 @@ import { cn } from "../utils";
 import * as api from "../lib/tauri";
 import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { compareSkillNames } from "../lib/skillSort";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 
 const PROJECT_DEFAULT_EXPORT_AGENTS_KEY = "project_default_export_agents";
@@ -157,7 +158,7 @@ export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
+  const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects, skillSortMode } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
   const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
   const [selectedExportAgents, setSelectedExportAgents] = useState<string[]>([]);
@@ -294,8 +295,12 @@ export function ProjectDetail() {
         primaryVariant: [...group.variants].sort((a, b) => a.agent_display_name.localeCompare(b.agent_display_name))[0],
         status: getGroupStatus(group.variants),
       }))
-      .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-  }, [skills]);
+      .sort((a, b) =>
+        skillSortMode === "desc"
+          ? compareSkillNames(b.name, a.name)
+          : compareSkillNames(a.name, b.name)
+      );
+  }, [skills, skillSortMode]);
 
   useEffect(() => {
     if (!detailSkill) return;

@@ -45,7 +45,7 @@ const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
 
 export function InstallSkills() {
   const { t } = useTranslation();
-  const { refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById, sortByName } = useApp();
+  const { refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById, skillSortMode } = useApp();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<"market" | "local" | "git">("market");
@@ -665,14 +665,14 @@ export function InstallSkills() {
     const filtered = marketSourceFilter === "all"
       ? marketSkills
       : marketSkills.filter((skill) => skill.source === marketSourceFilter);
-    if (sortByName) {
-      return sortSkillsByName(filtered, (s) => s.name);
+    if (skillSortMode !== "none") {
+      return sortSkillsByName(filtered, (s) => s.name, skillSortMode);
     }
     if (debouncedMarketQuery.trim().length > 0) {
       return [...filtered].sort((a, b) => b.installs - a.installs);
     }
     return filtered;
-  }, [marketSkills, marketSourceFilter, debouncedMarketQuery, sortByName]);
+  }, [marketSkills, marketSourceFilter, debouncedMarketQuery, skillSortMode]);
 
   const totalMarketPages = Math.max(1, Math.ceil(filteredMarketSkills.length / MARKET_PAGE_SIZE));
   const currentMarketPage = Math.min(marketPage, totalMarketPages);

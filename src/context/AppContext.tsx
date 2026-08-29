@@ -5,6 +5,7 @@ import type { AppUpdateInfo, ManagedSkill, Project, Preset, ToolInfo } from "../
 import * as api from "../lib/tauri";
 import i18n from "../i18n";
 import { applyTextSize } from "../lib/textScale";
+import { getStoredSkillSortMode, SKILL_SORT_MODE_LS_KEY, type SkillSortMode } from "../lib/skillSort";
 import { toast } from "sonner";
 
 interface AppState {
@@ -23,9 +24,9 @@ interface AppState {
   /** Result of the last app-version check. Notification only: installing an
    *  update is always started by the user from Settings. */
   appUpdate: AppUpdateInfo | null;
-  /** Sort skill lists by dictionary order (A–Z). Persisted to localStorage. */
-  sortByName: boolean;
-  toggleSortByName: () => void;
+  /** Skill-list sort mode: default order, A–Z, or Z–A. Persisted to localStorage. */
+  skillSortMode: SkillSortMode;
+  setSkillSortMode: (mode: SkillSortMode) => void;
   refreshAppUpdate: () => Promise<AppUpdateInfo>;
   refreshAppData: () => Promise<void>;
   refreshPresets: () => Promise<void>;
@@ -43,7 +44,6 @@ interface AppState {
 
 const VIEWED_PRESET_LS_KEY = "skills-manager.viewedPresetId";
 const LEGACY_VIEWED_PRESET_LS_KEY = "skills-manager.viewedScenarioId";
-const SORT_BY_NAME_LS_KEY = "skills-manager.sortByName";
 
 const AppContext = createContext<AppState | null>(null);
 
@@ -67,13 +67,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [helpOpen, setHelpOpen] = useState(false);
   const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
-  const [sortByName, setSortByName] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(SORT_BY_NAME_LS_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [skillSortMode, setSkillSortModeState] = useState<SkillSortMode>(getStoredSkillSortMode);
   const autoCheckInFlightRef = useRef(false);
   const appUpdateCheckedRef = useRef(false);
   const lastUpdateNotificationRef = useRef<string | null>(null);
@@ -302,16 +296,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return info;
   }, []);
 
-  const toggleSortByName = useCallback(() => {
-    setSortByName((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(SORT_BY_NAME_LS_KEY, next ? "1" : "0");
-      } catch {
-        // localStorage may be unavailable; the in-memory value still applies.
-      }
-      return next;
-    });
+  const setSkillSortMode = useCallback((mode: SkillSortMode) => {
+    setSkillSortModeState(mode);
+    try {
+      localStorage.setItem(SKILL_SORT_MODE_LS_KEY, mode);
+    } catch {
+      // localStorage may be unavailable; the in-memory value still applies.
+    }
   }, []);
 
   // Check for a newer app version on startup. This only ever *notifies* — the
@@ -473,8 +464,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         helpOpen,
         detailSkillId,
         appUpdate,
-        sortByName,
-        toggleSortByName,
+        skillSortMode,
+        setSkillSortMode,
         refreshAppUpdate,
         refreshAppData,
         refreshPresets,

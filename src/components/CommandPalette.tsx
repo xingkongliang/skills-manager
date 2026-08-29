@@ -38,7 +38,7 @@ export function CommandPalette() {
     viewedPreset,
     setViewedPresetId,
     openSkillDetailById,
-    sortByName,
+    skillSortMode,
   } = useApp();
 
   const [open, setOpen] = useState(false);
@@ -91,8 +91,8 @@ export function CommandPalette() {
         s.name.toLowerCase().includes(q) ||
         (s.description || "").toLowerCase().includes(q),
     );
-    const orderedSkills = sortByName
-      ? sortSkillsByName(matchedSkills, (s) => s.name)
+    const orderedSkills = skillSortMode !== "none"
+      ? sortSkillsByName(matchedSkills, (s) => s.name, skillSortMode)
       : matchedSkills;
     const skillItems: PaletteItem[] = orderedSkills
       .slice(0, 8)
@@ -199,7 +199,7 @@ export function CommandPalette() {
     openSkillDetailById,
     navigate,
     t,
-    sortByName,
+    skillSortMode,
   ]);
 
   useEffect(() => {

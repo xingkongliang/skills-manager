@@ -72,7 +72,7 @@ export function AddSkillsSheet(props: Props) {
 
 function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Props) {
   const { t } = useTranslation();
-  const { sortByName } = useApp();
+  const { skillSortMode } = useApp();
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
@@ -199,11 +199,11 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     });
   }, [managedSkills, search, sourceFilters, tagFilters]);
 
-  // Sort: with "Sort A–Z" on, a pure dictionary-order list; otherwise
+  // Sort: with A–Z / Z–A on, a pure dictionary-order list; otherwise
   // available first, then installed/conflict/unavailable (greyed out at bottom)
   const ordered = useMemo(() => {
-    if (sortByName) {
-      return sortSkillsByName(filtered, (s) => s.name);
+    if (skillSortMode !== "none") {
+      return sortSkillsByName(filtered, (s) => s.name, skillSortMode);
     }
     const statusOrder = { available: 0, conflict: 1, installed: 2, unavailable: 3 } as const;
     return [...filtered].sort((a, b) => {
@@ -212,7 +212,7 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
       if (sa !== sb) return statusOrder[sa] - statusOrder[sb];
       return a.name.localeCompare(b.name);
     });
-  }, [filtered, ctx, sortByName]);
+  }, [filtered, ctx, skillSortMode]);
 
   const skillsHaveUntagged = useMemo(
     () => managedSkills.some((s) => s.tags.length === 0),
