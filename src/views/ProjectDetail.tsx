@@ -27,6 +27,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
 import { DetailSheet } from "../components/DetailSheet";
+import { SkillSortButton } from "../components/SkillSortButton";
 import { AgentToggleSection, type AgentToggleItem } from "../components/AgentToggleSection";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { ProjectAgentDots } from "../components/ProjectAgentDots";
@@ -970,6 +971,7 @@ export function ProjectDetail() {
               >
                 <LayoutGrid className="h-4 w-4" />
               </button>
+              <SkillSortButton />
               <button
                 onClick={() => setViewMode("list")}
                 className={cn(

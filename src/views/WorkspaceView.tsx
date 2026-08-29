@@ -22,6 +22,7 @@ import { useApp } from "../context/AppContext";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PresetBar } from "../components/PresetBar";
 import { AgentIcon } from "../components/AgentIcon";
+import { SkillSortButton } from "../components/SkillSortButton";
 import { DetailSheet } from "../components/DetailSheet";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
@@ -844,6 +845,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
               >
                 <LayoutGrid className="h-4 w-4" />
               </button>
+              <SkillSortButton />
               <button
                 onClick={() => setViewMode("list")}
                 className={cn(
