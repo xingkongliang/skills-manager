@@ -6,7 +6,10 @@ export const SKILL_SORT_MODE_LS_KEY = "skills-manager.skillSort";
 export function getStoredSkillSortMode(): SkillSortMode {
   try {
     const stored = localStorage.getItem(SKILL_SORT_MODE_LS_KEY);
-    return stored === "asc" || stored === "desc" ? stored : "none";
+    if (stored === "asc" || stored === "desc" || stored === "none") return stored;
+    // First iteration of this feature stored an on/off boolean (1 = A–Z).
+    // Migrate it so a previously enabled toggle survives the upgrade.
+    return localStorage.getItem("skills-manager.sortByName") === "1" ? "asc" : "none";
   } catch {
     return "none";
   }
