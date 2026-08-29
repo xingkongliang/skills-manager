@@ -15,6 +15,8 @@ import { cn } from "../utils";
 import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { useApp } from "../context/AppContext";
+import { sortSkillsByName } from "../lib/skillSort";
 import {
   classifySkill,
   targetsToInstall,
@@ -70,6 +72,7 @@ export function AddSkillsSheet(props: Props) {
 
 function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Props) {
   const { t } = useTranslation();
+  const { sortByName } = useApp();
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
@@ -196,8 +199,12 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     });
   }, [managedSkills, search, sourceFilters, tagFilters]);
 
-  // Sort: available first, then installed/conflict/unavailable (greyed out at bottom)
+  // Sort: with "Sort A–Z" on, a pure dictionary-order list; otherwise
+  // available first, then installed/conflict/unavailable (greyed out at bottom)
   const ordered = useMemo(() => {
+    if (sortByName) {
+      return sortSkillsByName(filtered, (s) => s.name);
+    }
     const statusOrder = { available: 0, conflict: 1, installed: 2, unavailable: 3 } as const;
     return [...filtered].sort((a, b) => {
       const sa = classifySkill(a, ctx);
@@ -205,7 +212,7 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
       if (sa !== sb) return statusOrder[sa] - statusOrder[sb];
       return a.name.localeCompare(b.name);
     });
-  }, [filtered, ctx]);
+  }, [filtered, ctx, sortByName]);
 
   const skillsHaveUntagged = useMemo(
     () => managedSkills.some((s) => s.tags.length === 0),

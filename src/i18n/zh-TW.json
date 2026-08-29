@@ -249,6 +249,7 @@
     "remove": "從當前 Preset 移除",
     "moreActions": "更多操作",
     "dragToReorder": "拖曳排序",
+    "sortByName": "依名稱 A–Z 排序",
     "delete": "刪除 Skill",
     "deleteConfirm": "確定徹底刪除 Skill「{{name}}」嗎？中央倉庫檔案、Preset 關聯和已同步到各 Agent 的目標都會被移除。",
     "deleted": "已刪除",

@@ -249,6 +249,7 @@
     "remove": "Remove from preset",
     "moreActions": "More actions",
     "dragToReorder": "Drag to reorder",
+    "sortByName": "Sort skills A–Z",
     "delete": "Delete skill",
     "deleteConfirm": "Delete skill \"{{name}}\" permanently? This removes its central library files, preset links, and synced agent targets.",
     "deleted": "deleted",

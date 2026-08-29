@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { getPresetIconOption } from "../lib/presetIcons";
+import { sortSkillsByName } from "../lib/skillSort";
 import { cn } from "../utils";
 
 type ItemKind = "skill" | "preset" | "project" | "action";
@@ -37,6 +38,7 @@ export function CommandPalette() {
     viewedPreset,
     setViewedPresetId,
     openSkillDetailById,
+    sortByName,
   } = useApp();
 
   const [open, setOpen] = useState(false);
@@ -83,13 +85,16 @@ export function CommandPalette() {
   const items = useMemo<PaletteItem[]>(() => {
     const q = query.trim().toLowerCase();
 
-    const skillItems: PaletteItem[] = managedSkills
-      .filter(
-        (s) =>
-          !q ||
-          s.name.toLowerCase().includes(q) ||
-          (s.description || "").toLowerCase().includes(q),
-      )
+    const matchedSkills = managedSkills.filter(
+      (s) =>
+        !q ||
+        s.name.toLowerCase().includes(q) ||
+        (s.description || "").toLowerCase().includes(q),
+    );
+    const orderedSkills = sortByName
+      ? sortSkillsByName(matchedSkills, (s) => s.name)
+      : matchedSkills;
+    const skillItems: PaletteItem[] = orderedSkills
       .slice(0, 8)
       .map((s) => ({
         id: `skill:${s.id}`,
@@ -194,6 +199,7 @@ export function CommandPalette() {
     openSkillDetailById,
     navigate,
     t,
+    sortByName,
   ]);
 
   useEffect(() => {

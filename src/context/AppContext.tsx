@@ -23,6 +23,9 @@ interface AppState {
   /** Result of the last app-version check. Notification only: installing an
    *  update is always started by the user from Settings. */
   appUpdate: AppUpdateInfo | null;
+  /** Sort skill lists by dictionary order (A–Z). Persisted to localStorage. */
+  sortByName: boolean;
+  toggleSortByName: () => void;
   refreshAppUpdate: () => Promise<AppUpdateInfo>;
   refreshAppData: () => Promise<void>;
   refreshPresets: () => Promise<void>;
@@ -40,6 +43,7 @@ interface AppState {
 
 const VIEWED_PRESET_LS_KEY = "skills-manager.viewedPresetId";
 const LEGACY_VIEWED_PRESET_LS_KEY = "skills-manager.viewedScenarioId";
+const SORT_BY_NAME_LS_KEY = "skills-manager.sortByName";
 
 const AppContext = createContext<AppState | null>(null);
 
@@ -63,6 +67,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [helpOpen, setHelpOpen] = useState(false);
   const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
+  const [sortByName, setSortByName] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SORT_BY_NAME_LS_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const autoCheckInFlightRef = useRef(false);
   const appUpdateCheckedRef = useRef(false);
   const lastUpdateNotificationRef = useRef<string | null>(null);
@@ -291,6 +302,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return info;
   }, []);
 
+  const toggleSortByName = useCallback(() => {
+    setSortByName((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SORT_BY_NAME_LS_KEY, next ? "1" : "0");
+      } catch {
+        // localStorage may be unavailable; the in-memory value still applies.
+      }
+      return next;
+    });
+  }, []);
+
   // Check for a newer app version on startup. This only ever *notifies* — the
   // download and install stay behind the button in Settings, so the user
   // decides whether to take an update. Deliberately unlike the skill
@@ -450,6 +473,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         helpOpen,
         detailSkillId,
         appUpdate,
+        sortByName,
+        toggleSortByName,
         refreshAppUpdate,
         refreshAppData,
         refreshPresets,
