@@ -77,6 +77,22 @@
 - **灵活的应用设置** — 在一个页面里配置仓库路径、同步模式、主题、字号、语言、托盘行为、代理、Git 远程、更新检查，以及 Agent 在全应用中的显示顺序。
 - **应用内更新** — 有新版本时应用会主动提醒，并在 macOS 和 Windows 上直接完成安装。不会自行下载或安装：检查只负责告知，安装和重启各需一次点击。
 
+## 安装
+
+### macOS
+
+使用 [Homebrew](https://brew.sh) 安装：
+
+```bash
+brew install --cask skills-manager
+```
+
+也可以从 [最新 Release](https://github.com/xingkongliang/skills-manager/releases/latest) 直接下载 `.dmg`。
+
+### Windows 和 Linux
+
+从 [最新 Release](https://github.com/xingkongliang/skills-manager/releases/latest) 下载对应平台的安装包：Windows 为 `.exe` 或 `.msi`，Linux 为 `.AppImage`、`.deb` 或 `.rpm`（提供 x64 和 arm64）。
+
 ## 快速上手
 
 1. 从本地目录、Git 仓库、压缩包或市场安装 Skills。

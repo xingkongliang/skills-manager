@@ -81,6 +81,22 @@
 - **Flexible app settings** — Configure repo path, sync mode, theme, text size, language, tray behavior, proxy, Git remote, update checks, and the order agents appear throughout the app — all in one place.
 - **In-app updates** — The app tells you when a new version is out and installs it for you on macOS and Windows. Nothing downloads or installs on its own: checking only notifies, and installing and restarting each take a click.
 
+## Install
+
+### macOS
+
+Install with [Homebrew](https://brew.sh):
+
+```bash
+brew install --cask skills-manager
+```
+
+You can also download the `.dmg` for your Mac from the [latest release](https://github.com/xingkongliang/skills-manager/releases/latest).
+
+### Windows and Linux
+
+Download the installer for your platform from the [latest release](https://github.com/xingkongliang/skills-manager/releases/latest): `.exe` or `.msi` for Windows, and `.AppImage`, `.deb`, or `.rpm` for Linux (x64 and arm64).
+
 ## Quick Start
 
 1. Install skills from local folders, Git repositories, archives, or the marketplace.
