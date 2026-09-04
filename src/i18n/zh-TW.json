@@ -13,7 +13,8 @@
     "newPreset": "新增 Preset",
     "projects": "專案工作區",
     "addProject": "關聯專案",
-    "settings": "設定"
+    "settings": "設定",
+    "resize": "調整側邊欄寬度"
   },
   "help": {
     "eyebrow": "操作指南",
