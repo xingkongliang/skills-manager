@@ -716,6 +716,54 @@ pub enum DeployIntent {
     AdoptExisting,
 }
 
+/// Re-point every `source_ref` that names `target` at the referring skill's own
+/// central copy, ahead of an adoption that replaces `target` with a managed
+/// deployment (#425).
+///
+/// An adopted directory stops being an independent copy the moment the
+/// adoption runs: it becomes a link to (or copy of) central that can be
+/// removed at any time — by the agent's own skill management cleaning up what
+/// it does not recognize, or by a later undeploy. A skill whose `source_ref`
+/// still names that directory then fails its update check with
+/// `source_missing` forever, even though the central copy is intact.
+///
+/// The central copy always exists while the skill row does, so re-pointing
+/// keeps the source resolvable; the content-hash comparison against it keeps
+/// reporting `up_to_date`. Matching is by exact string or canonicalized path,
+/// because import records can spell the same directory with mixed separators
+/// than the deployment target computed from the adapter.
+pub(crate) fn detach_source_refs_from_adoption_target(
+    store: &SkillStore,
+    target: &Path,
+) -> Result<(), AppError> {
+    let target_str = target.to_string_lossy().into_owned();
+    let target_canonical = std::fs::canonicalize(target).ok();
+    for skill in store.get_all_skills().map_err(AppError::db)? {
+        let Some(source_ref) = skill.source_ref.as_deref() else {
+            continue;
+        };
+        // Already re-pointed by a previous adoption — nothing to do.
+        if source_ref == skill.central_path {
+            continue;
+        }
+        let points_at_target = source_ref == target_str
+            || target_canonical.as_ref().is_some_and(|canonical| {
+                std::fs::canonicalize(source_ref).is_ok_and(|source| &source == canonical)
+            });
+        if points_at_target {
+            store
+                .update_skill_source_ref(&skill.id, &skill.central_path)
+                .map_err(AppError::db)?;
+            log::info!(
+                "adoption: re-pointed source_ref of skill '{}' at its central copy; \
+                 the adopted agent directory is now a deployment, not a source (#425)",
+                skill.name
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn sync_single_skill_to_tool(
     store: &SkillStore,
     skill_id: &str,
@@ -765,6 +813,13 @@ pub fn sync_single_skill_to_tool(
         DeployIntent::AdoptExisting => sync_engine::ReplacePolicy::UserConfirmed,
         DeployIntent::Managed => replace_policy(recorded_mode.as_deref()),
     };
+    if matches!(intent, DeployIntent::AdoptExisting) {
+        // The directory at `target` may still be the import source of the very
+        // skill being deployed (or of a sibling record): re-point those at
+        // central BEFORE the replacement, so a failure partway through the
+        // adoption can never leave a dangling source behind (#425).
+        detach_source_refs_from_adoption_target(store, &target)?;
+    }
     let actual_mode = sync_engine::sync_skill(&source, &target, mode, policy).map_err(AppError::io)?;
 
     let now = chrono::Utc::now().timestamp_millis();

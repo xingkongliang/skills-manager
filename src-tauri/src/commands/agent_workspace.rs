@@ -627,6 +627,10 @@ fn update_agent_local_skill_from_center(
     let source = PathBuf::from(&managed.central_path);
     let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
     let mode = sync_engine::sync_mode_for_tool(agent, configured_mode.as_deref());
+    // The replacement below turns the agent's real directory into a deployment
+    // of central; any source_ref naming it must be re-pointed first, exactly
+    // like an adoption (#425).
+    scenario_service::detach_source_refs_from_adoption_target(store, Path::new(&target_path))?;
     // UserConfirmed: an explicit "update this agent copy from center" on a
     // skill the user picked, already guarded by the project_newer check above.
     // The target is a discovered agent skill dir, which carries no target row.
@@ -690,7 +694,7 @@ mod tests {
     use crate::core::content_hash;
     use crate::core::project_scanner::ProjectSkillInfo;
     use crate::core::skill_store::{ScenarioRecord, SkillRecord, SkillStore};
-    use crate::core::{central_repo, installer, tool_adapters, tool_service};
+    use crate::core::{central_repo, installer, sync_engine, tool_adapters, tool_service};
     use std::collections::HashMap;
 
     #[test]
@@ -1073,6 +1077,146 @@ mod tests {
                 .as_deref(),
             Some("")
         );
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn backfill_repoints_source_ref_when_adopting_the_import_source_dir() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(temp.path().join("center")));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        let skills_root = temp.path().join("agent-skills");
+        let skill_dir = skills_root.join("imported-tool");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: imported-tool\ndescription: Agent copy\n---\nlocal\n",
+        )
+        .unwrap();
+
+        // The #425 shape: an *imported* skill whose source_ref names the agent
+        // directory it was imported from. The importer records no target row,
+        // so the backfill below is about to adopt that very directory as a
+        // deployment.
+        let existing = installer::install_from_local(&skill_dir, Some("imported-tool")).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        store
+            .insert_skill(&SkillRecord {
+                id: "imported".to_string(),
+                name: "imported-tool".to_string(),
+                description: existing.description.clone(),
+                source_type: "import".to_string(),
+                source_ref: Some(skill_dir.to_string_lossy().to_string()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: existing.central_path.to_string_lossy().to_string(),
+                content_hash: Some(existing.content_hash.clone()),
+                enabled: true,
+                created_at: now,
+                updated_at: now,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: Some(now),
+                last_check_error: None,
+            })
+            .unwrap();
+
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::json!([
+                    {
+                        "key": "test_agent",
+                        "display_name": "Test Agent",
+                        "skills_dir": skills_root.to_string_lossy(),
+                        "project_relative_skills_dir": ".test-agent/skills"
+                    }
+                ])
+                .to_string(),
+            )
+            .unwrap();
+
+        // Stranded precondition: no targets at all.
+        assert!(store.get_all_targets().unwrap().is_empty());
+
+        let repaired = backfill_stranded_agent_targets(&store);
+        assert_eq!(repaired, 1);
+
+        // The adoption must have re-pointed source_ref at the central copy
+        // before replacing the directory: the agent dir is now a deployment,
+        // and a deployment can be removed at any time.
+        let skill = store.get_skill_by_id("imported").unwrap().unwrap();
+        assert_eq!(
+            skill.source_ref.as_deref(),
+            Some(existing.central_path.to_string_lossy().to_string().as_str())
+        );
+
+        // Simulate the agent cleaning up a deployment it does not recognize
+        // (what WorkBuddy did in #425): the source_ref must keep resolving, so
+        // the update check reports `up_to_date` instead of `source_missing`.
+        sync_engine::remove_target(&skill_dir).unwrap();
+        assert!(std::path::Path::new(skill.source_ref.as_deref().unwrap()).exists());
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn importing_an_agent_local_skill_leaves_source_ref_pointing_at_central() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(temp.path().join("center")));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        let skills_root = temp.path().join("agent-skills");
+        let skill_dir = skills_root.join("local-tool");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: local-tool\ndescription: Local test skill\n---\n",
+        )
+        .unwrap();
+
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::json!([
+                    {
+                        "key": "test_agent",
+                        "display_name": "Test Agent",
+                        "skills_dir": skills_root.to_string_lossy(),
+                        "project_relative_skills_dir": ".test-agent/skills"
+                    }
+                ])
+                .to_string(),
+            )
+            .unwrap();
+
+        import_agent_local_skill_to_center(&store, "test_agent", "local-tool").unwrap();
+
+        let skills = store.get_all_skills().unwrap();
+        assert_eq!(skills.len(), 1);
+        // Importing adopts the agent directory as a managed deployment, so the
+        // recorded source must be the central copy — not the agent path that
+        // just became a removable link (#425).
+        assert_eq!(
+            skills[0].source_ref.as_deref(),
+            Some(skills[0].central_path.as_str())
+        );
+
+        // Removing that deployment later (agent cleanup, or an undeploy) must
+        // not dangle the source.
+        sync_engine::remove_target(&skill_dir).unwrap();
+        assert!(std::path::Path::new(skills[0].source_ref.as_deref().unwrap()).exists());
 
         central_repo::set_test_base_dir_override(None);
     }
