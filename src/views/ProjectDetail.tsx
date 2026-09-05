@@ -27,6 +27,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
 import { DetailSheet } from "../components/DetailSheet";
+import { SkillSortButton } from "../components/SkillSortButton";
 import { AgentToggleSection, type AgentToggleItem } from "../components/AgentToggleSection";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { ProjectAgentDots } from "../components/ProjectAgentDots";
@@ -39,6 +40,7 @@ import { cn } from "../utils";
 import * as api from "../lib/tauri";
 import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { compareSkillNames } from "../lib/skillSort";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 const projectLastUsedAgentsKey = (projectId: string) =>
   `project_last_used_export_agents:${projectId}`;
@@ -125,7 +127,7 @@ export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
+  const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects, skillSortMode } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
   const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
   const [loading, setLoading] = useState(true);
@@ -261,8 +263,12 @@ export function ProjectDetail() {
         primaryVariant: [...group.variants].sort((a, b) => a.agent_display_name.localeCompare(b.agent_display_name))[0],
         status: getGroupStatus(group.variants),
       }))
-      .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-  }, [skills]);
+      .sort((a, b) =>
+        skillSortMode === "desc"
+          ? compareSkillNames(b.name, a.name)
+          : compareSkillNames(a.name, b.name)
+      );
+  }, [skills, skillSortMode]);
 
   useEffect(() => {
     if (!detailSkill) return;
@@ -926,6 +932,7 @@ export function ProjectDetail() {
               >
                 <LayoutGrid className="h-4 w-4" />
               </button>
+              <SkillSortButton />
               <button
                 onClick={() => setViewMode("list")}
                 className={cn(
