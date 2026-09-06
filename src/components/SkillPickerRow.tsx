@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../utils";
@@ -11,7 +12,7 @@ interface Props {
   allTags: string[];
   sourceLabel: string;
   selected: boolean;
-  onToggle: () => void;
+  onToggle: (e: MouseEvent<HTMLDivElement>) => void;
   busy?: boolean;
 }
 
