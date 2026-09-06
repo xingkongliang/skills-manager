@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleSlash,
   Loader2,
+  Minus,
   Search,
   X,
 } from "lucide-react";
@@ -206,6 +207,41 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
       return a.name.localeCompare(b.name);
     });
   }, [filtered, ctx]);
+
+  const visibleSelectableIds = useMemo(
+    () =>
+      ordered
+        .filter((skill) => classifySkill(skill, ctx) === "available")
+        .map((skill) => skill.id),
+    [ordered, ctx],
+  );
+
+  const anySelected = selectedIds.size > 0;
+  const allVisibleSelected =
+    visibleSelectableIds.length > 0 &&
+    visibleSelectableIds.every((id) => selectedIds.has(id));
+  const indeterminate = anySelected && !allVisibleSelected;
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected || (visibleSelectableIds.length === 0 && next.size > 0)) {
+        if (visibleSelectableIds.length > 0) {
+          for (const id of visibleSelectableIds) next.delete(id);
+        } else {
+          next.clear();
+        }
+      } else if (visibleSelectableIds.length > 0) {
+        for (const id of visibleSelectableIds) next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const selectAllLabel =
+    allVisibleSelected || (visibleSelectableIds.length === 0 && anySelected)
+      ? t("addFromLibrary.deselectAllSkills")
+      : t("addFromLibrary.selectAllSkills");
 
   const skillsHaveUntagged = useMemo(
     () => managedSkills.some((s) => s.tags.length === 0),
@@ -621,6 +657,40 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hide">
+          {(ordered.length > 0 || anySelected) && (
+            <div className="sticky top-0 z-10 flex items-center border-b border-border-subtle bg-bg-secondary px-5 py-2">
+              <button
+                type="button"
+                onClick={toggleSelectAll}
+                disabled={visibleSelectableIds.length === 0 && !anySelected}
+                aria-pressed={allVisibleSelected}
+                className="inline-flex items-center gap-3 rounded-md text-[12px] font-medium text-accent-light transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:text-muted disabled:hover:no-underline"
+              >
+                <span
+                  className={cn(
+                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                    indeterminate || allVisibleSelected
+                      ? "border-accent bg-accent text-white"
+                      : "border-border",
+                  )}
+                >
+                  {allVisibleSelected ? (
+                    <svg viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3">
+                      <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
+                    </svg>
+                  ) : indeterminate ? (
+                    <Minus className="h-3 w-3" strokeWidth={3} />
+                  ) : null}
+                </span>
+                {selectAllLabel}
+              </button>
+              {anySelected && (
+                <span className="ml-auto text-[12px] text-muted">
+                  {t("addFromLibrary.selectedCount", { count: selectedIds.size })}
+                </span>
+              )}
+            </div>
+          )}
           {ordered.length === 0 ? (
             <div className="px-5 py-12 text-center text-[13px] text-muted">
               {managedSkills.length === 0
