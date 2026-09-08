@@ -20,6 +20,10 @@ const PROJECT_MANIFEST_RELATIVE_PATH: &str = ".skillapse/project.json";
 const MAX_SETUP_OUTPUT_BYTES: usize = 16 * 1024;
 const MAX_PACKAGE_ARTIFACTS: usize = 256;
 
+#[cfg(test)]
+#[path = "package_manager_live_tests.rs"]
+mod live_tests;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageDetails {
     pub package: PackageRecord,
@@ -1680,6 +1684,20 @@ fn apply_native_operations(
         .map(|value| PathBuf::from(&value.path))
         .unwrap_or_else(|| PathBuf::from(&package.cache_path));
     let mut combined = String::new();
+    // A successful add may reuse an existing registration. Never claim it.
+    let owns_claude_marketplace = if binding.tool == "claude_code" {
+        let entries = claude_json_inventory(&["plugin", "marketplace", "list", "--json"], &cwd)?;
+        let mut exists = false;
+        for entry in entries {
+            let name = entry["name"]
+                .as_str()
+                .context("Claude marketplace list entry has no name")?;
+            exists |= name == marketplace_name;
+        }
+        !exists
+    } else {
+        false
+    };
     let mut marketplace_registered = false;
     for operation in &plan.operations {
         let Some(command) = operation.command.as_ref() else {
@@ -1687,7 +1705,9 @@ fn apply_native_operations(
         };
         let output = match run_checked_command(command, &cwd, Path::new(&package.cache_path)) {
             Ok(output) => {
-                if operation.kind == "add_marketplace" && materialized.is_some() {
+                if operation.kind == "add_marketplace"
+                    && (materialized.is_some() || owns_claude_marketplace)
+                {
                     marketplace_registered = true;
                     let target_ref = NativePluginTargetRef {
                         plugin_name: plugin_name.to_string(),
@@ -1814,6 +1834,27 @@ fn run_checked_command(command: &[String], cwd: &Path, package_root: &Path) -> R
             output.stderr,
         ))
     })
+}
+
+fn claude_json_inventory(args: &[&str], cwd: &Path) -> Result<Vec<serde_json::Value>> {
+    let output = Command::new("claude")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .context("Failed to execute Claude inventory command")?;
+    parse_inventory_output(output)
+}
+
+fn parse_inventory_output(output: std::process::Output) -> Result<Vec<serde_json::Value>> {
+    if !output.status.success() {
+        bail!(
+            "Claude inventory failed ({}): {}",
+            output.status,
+            truncate_output(String::from_utf8_lossy(&output.stderr).into_owned())
+        );
+    }
+    // Machine data must not pass through log truncation, sanitization or stderr merging.
+    serde_json::from_slice(&output.stdout).context("Invalid Claude inventory JSON")
 }
 
 fn run_checked_command_with<F>(
@@ -2076,8 +2117,11 @@ fn remove_native_plugin(
         return Ok(());
     }
 
-    let mut sibling = store
-        .get_package_bindings(&package.id)?
+    let mut bindings = Vec::new();
+    for candidate_package in store.get_all_packages()? {
+        bindings.extend(store.get_package_bindings(&candidate_package.id)?);
+    }
+    let mut sibling = bindings
         .into_iter()
         .filter(|candidate| candidate.id != binding.id)
         .find_map(|candidate| {
@@ -2103,6 +2147,22 @@ fn remove_native_plugin(
             store.upsert_package_binding(candidate)?;
         }
         return Ok(());
+    }
+
+    // Claude marketplace removal also uninstalls its other plugins, including
+    // plugins installed outside this manager. Preserve their registration.
+    if binding.tool == "claude_code" {
+        let entries = claude_json_inventory(&["plugin", "list", "--json"], &cwd)?;
+        for entry in entries {
+            let id = entry["id"]
+                .as_str()
+                .context("Claude plugin list entry has no id")?;
+            if id.rsplit_once('@').map(|(_, market)| market)
+                == Some(target_ref.marketplace_name.as_str())
+            {
+                return Ok(());
+            }
+        }
     }
 
     let marketplace_command =
@@ -3436,6 +3496,29 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn json_inventory_keeps_large_stdout_separate_from_warnings() {
+        let expected = serde_json::json!([{"name": "x".repeat(20_000)}]);
+        let mut output = Command::new("git").arg("--version").output().unwrap();
+        assert!(output.status.success());
+        output.stdout = serde_json::to_vec(&expected).unwrap();
+        output.stderr = b"warning: diagnostic only".to_vec();
+        assert_eq!(
+            serde_json::to_value(parse_inventory_output(output.clone()).unwrap()).unwrap(),
+            expected
+        );
+        output.stdout = b"invalid JSON".to_vec();
+        assert!(parse_inventory_output(output.clone()).is_err());
+        output.stdout = b"[]".to_vec();
+        output.status = Command::new("git")
+            .arg("--invalid-inventory-test-option")
+            .output()
+            .unwrap()
+            .status;
+        assert!(!output.status.success());
+        assert!(parse_inventory_output(output).is_err());
+    }
 
     fn write(path: &Path, content: &str) {
         if let Some(parent) = path.parent() {
