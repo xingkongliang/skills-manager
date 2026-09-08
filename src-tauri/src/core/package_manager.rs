@@ -1223,55 +1223,58 @@ fn apply_portable_operations(
 
     let package_root = Path::new(&package.cache_path);
     let mut created: Vec<PathBuf> = Vec::new();
-    let mut targets = Vec::new();
-    let mut seen_names = BTreeSet::new();
-    for item in selected {
-        if !seen_names.insert(item.name.clone()) {
-            continue;
-        }
-        let source = package_root.join(&item.relative_path);
-        let target_name = skill_metadata::sanitize_skill_name(&item.name)
-            .ok_or_else(|| anyhow!("Unsafe skill name: {}", item.name))?;
-        let target = target_root.join(target_name);
-        let already_managed = managed_target_matches(&source, &target)?;
-        if fs::symlink_metadata(&target).is_ok() && !already_managed {
-            bail!(
-                "Target already exists and is not managed by this binding: {}",
-                target.display()
-            );
-        }
-        let applied_mode = match sync_engine::sync_skill(
-            &source,
-            &target,
-            sync_engine::SyncMode::Symlink,
-            sync_engine::ReplacePolicy::NoClobber,
-        ) {
-            Ok(mode) => mode,
-            Err(error) => {
-                for created_target in &created {
-                    let _ = sync_engine::remove_target(created_target);
-                }
-                return Err(error);
+    let result = (|| {
+        let mut targets = Vec::new();
+        let mut seen_names = BTreeSet::new();
+        for item in selected {
+            if !seen_names.insert(item.name.clone()) {
+                continue;
             }
+            let source = package_root.join(&item.relative_path);
+            let target_name = skill_metadata::sanitize_skill_name(&item.name)
+                .ok_or_else(|| anyhow!("Unsafe skill name: {}", item.name))?;
+            let target = target_root.join(target_name);
+            let already_managed = managed_target_matches(&source, &target)?;
+            if fs::symlink_metadata(&target).is_ok() && !already_managed {
+                bail!(
+                    "Target already exists and is not managed by this binding: {}",
+                    target.display()
+                );
+            }
+            let applied_mode = sync_engine::sync_skill(
+                &source,
+                &target,
+                sync_engine::SyncMode::Symlink,
+                sync_engine::ReplacePolicy::NoClobber,
+            )?;
+            if !matches!(applied_mode, sync_engine::SyncMode::Symlink) {
+                let _ = sync_engine::remove_target(&target);
+                bail!("Managed package deployment requires symlink or junction support");
+            }
+            if !already_managed {
+                created.push(target.clone());
+            }
+            targets.push(target);
+        }
+        if matches!(binding.scope.as_str(), "project_shared" | "project_local") {
+            if let Some(project) = binding_project(store, binding)? {
+                exclude_generated_targets(Path::new(&project.path), &targets)?;
+            }
+        }
+        Ok((serde_json::to_string(&targets)?, None))
+    })();
+    if let Err(error) = result {
+        // All failure exits, including conflicts and project metadata writes,
+        // undo only links created by this attempt. Existing links stay intact.
+        let rollback_binding = PackageBindingRecord {
+            target_ref: Some(serde_json::to_string(&created)?),
+            ..binding.clone()
         };
-        if !matches!(applied_mode, sync_engine::SyncMode::Symlink) {
-            let _ = sync_engine::remove_target(&target);
-            for created_target in &created {
-                let _ = sync_engine::remove_target(created_target);
-            }
-            bail!("Managed package deployment requires symlink or junction support");
-        }
-        if !already_managed {
-            created.push(target.clone());
-        }
-        targets.push(target);
+        remove_portable_targets(&rollback_binding, package)
+            .with_context(|| format!("Installation failed ({error}); rollback also failed"))?;
+        return Err(error);
     }
-    if matches!(binding.scope.as_str(), "project_shared" | "project_local") {
-        if let Some(project) = binding_project(store, binding)? {
-            exclude_generated_targets(Path::new(&project.path), &targets)?;
-        }
-    }
-    Ok((serde_json::to_string(&targets)?, None))
+    result
 }
 
 fn apply_codex_host_bundle(
@@ -1987,6 +1990,34 @@ fn remove_hook_groups(
     Ok(())
 }
 
+// Resolve missing source suffixes through an existing ancestor. Never treat an
+// unresolvable symlink or permission error as a missing directory, and never
+// normalize traversal across symlinks lexically.
+fn link_source_is_in_package(root: &Path, source: &Path) -> bool {
+    if let Ok(resolved) = source.canonicalize() {
+        return resolved.starts_with(root);
+    }
+    if source
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return false;
+    }
+    for ancestor in source.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(_) => {
+                return ancestor
+                    .canonicalize()
+                    .map(|path| path.starts_with(root))
+                    .unwrap_or(false)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
 fn remove_portable_targets(binding: &PackageBindingRecord, package: &PackageRecord) -> Result<()> {
     let targets: Vec<PathBuf> = binding
         .target_ref
@@ -2014,10 +2045,7 @@ fn remove_portable_targets(binding: &PackageBindingRecord, package: &PackageReco
             target.parent().unwrap_or_else(|| Path::new(".")).join(link)
         };
         let points_into_package = match package_root.as_ref() {
-            Some(root) => resolved
-                .canonicalize()
-                .map(|path| path.starts_with(root))
-                .unwrap_or(false),
+            Some(root) => link_source_is_in_package(root, &resolved),
             None => false,
         };
         if !points_into_package {
@@ -3890,12 +3918,122 @@ mod tests {
             .file_type()
             .is_symlink());
 
+        // A real update removes the source tree, not only inventory rows.
+        fs::remove_dir_all(package_root.join("skills")).unwrap();
         store.replace_package_inventory(&package, &[], &[]).unwrap();
         store.mark_package_bindings_drifted(&package.id).unwrap();
         let details = package_details(&store, &package.id).unwrap();
         assert_eq!(details.artifacts[0].status, "missing");
         remove_binding(&store, &plan.binding_id, false).unwrap();
         assert!(fs::symlink_metadata(&target).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn missing_link_source_does_not_allow_escape_or_unresolved_symlinks() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("package");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        assert!(link_source_is_in_package(
+            &canonical_root,
+            &root.join("removed/skill")
+        ));
+        assert!(!link_source_is_in_package(
+            &canonical_root,
+            &outside.join("missing")
+        ));
+        assert!(!link_source_is_in_package(
+            &canonical_root,
+            &root.join("../outside/missing")
+        ));
+        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+        assert!(!link_source_is_in_package(
+            &canonical_root,
+            &root.join("escape/missing")
+        ));
+        std::os::unix::fs::symlink(outside.join("missing"), root.join("broken")).unwrap();
+        assert!(!link_source_is_in_package(
+            &canonical_root,
+            &root.join("broken/skill")
+        ));
+    }
+
+    #[test]
+    fn portable_failure_rolls_back_only_new_links() {
+        let temp = tempdir().unwrap();
+        let package_root = temp.path().join("package");
+        let target_root = temp.path().join("home/.codex/skills");
+        for name in ["a", "b", "c"] {
+            write(
+                &package_root.join(format!("skills/{name}/SKILL.md")),
+                &format!("---\nname: {name}\n---\n"),
+            );
+        }
+        let store = SkillStore::new(&temp.path().join("state.db")).unwrap();
+        store
+            .set_setting(
+                "custom_tool_paths",
+                &serde_json::json!({"codex": target_root}).to_string(),
+            )
+            .unwrap();
+        let inventory = scan_package(&package_root, "p1").unwrap();
+        let package = PackageRecord {
+            id: "p1".into(),
+            name: "Demo".into(),
+            source_url: "https://example.com/demo.git".into(),
+            requested_revision: None,
+            resolved_revision: "abc".into(),
+            cache_path: package_root.to_string_lossy().into(),
+            manifest_kind: inventory.manifest_kind.clone(),
+            status: "ready".into(),
+            created_at: 1,
+            updated_at: 1,
+        };
+        store
+            .replace_package_inventory(&package, &inventory.components, &inventory.surfaces)
+            .unwrap();
+        let plan = create_binding(&store, "p1", "", "codex", "user", None, "portable", &[]).unwrap();
+        // Use the actual coverage order: first link exists, second is new,
+        // third collides with user content.
+        let surface = store
+            .get_package_surfaces("p1")
+            .unwrap()
+            .into_iter()
+            .find(|s| Some(&s.id) == plan.surface_id.as_ref())
+            .unwrap();
+        let coverage: Vec<SurfaceCoverage> = serde_json::from_str(&surface.coverage_json).unwrap();
+        let first = target_root.join(&coverage[0].name);
+        let second = target_root.join(&coverage[1].name);
+        let third = target_root.join(&coverage[2].name);
+        sync_engine::sync_skill(
+            &package_root.join(&coverage[0].relative_path),
+            &first,
+            sync_engine::SyncMode::Symlink,
+            sync_engine::ReplacePolicy::NoClobber,
+        )
+        .unwrap();
+        write(&third.join("keep.txt"), "user content");
+
+        let error = apply_binding(&store, &plan.binding_id, &plan.plan_hash).unwrap_err();
+        assert!(error.to_string().contains("not managed by this binding"));
+        assert!(first.join("SKILL.md").is_file());
+        assert_eq!(
+            fs::read_to_string(third.join("keep.txt")).unwrap(),
+            "user content"
+        );
+        assert!(
+            fs::symlink_metadata(&second).is_err(),
+            "new link must be rolled back"
+        );
+        assert!(store
+            .get_package_binding_by_id(&plan.binding_id)
+            .unwrap()
+            .unwrap()
+            .target_ref
+            .is_none());
     }
 
     #[test]
