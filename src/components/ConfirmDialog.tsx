@@ -51,7 +51,7 @@ export function ConfirmDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-surface border border-border rounded-xl w-full max-w-sm p-5 shadow-2xl">
+      <div className="relative bg-surface border border-border rounded-xl w-full max-w-sm p-5 shadow-2xl flex flex-col max-h-[85vh]">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-[13px] font-semibold text-primary flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-400" />
@@ -64,7 +64,7 @@ export function ConfirmDialog({
 
         <p className="text-[13px] text-tertiary mb-5">{message}</p>
         {details && details.length > 0 ? (
-          <div className="mb-5 flex flex-wrap gap-2">
+          <div className="mb-5 flex flex-wrap gap-2 overflow-y-auto min-h-0">
             {details.map((detail) => (
               <span
                 key={detail}
