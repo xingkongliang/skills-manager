@@ -801,6 +801,7 @@
     "agents": "agent status",
     "skills": "skill list",
     "success": "Operation successful",
+    "close": "Close",
     "cancel": "Cancel",
     "confirm": "Confirm",
     "delete": "Delete",
