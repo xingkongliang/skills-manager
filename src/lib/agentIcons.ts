@@ -19,6 +19,7 @@ const AGENT_ICON_FILES: Record<string, string> = {
   firebender: "firebender.svg",
   gemini_cli: "gemini_cli.svg",
   github_copilot: "github_copilot.png",
+  gitlab_duo: "gitlab_duo.svg",
   goose: "goose.png",
   grok: "grok.svg",
   hermes: "hermes.png",
