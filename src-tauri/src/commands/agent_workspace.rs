@@ -1366,6 +1366,17 @@ mod tests {
             "---\nname: local-tool\ndescription: Agent copy\n---\nagent newer\n",
         )
         .unwrap();
+        // "Newer" has to be true on disk. Both copies are written in the same
+        // instant here, and the guard compares real mtimes on both sides — a
+        // stale `updated_at` on the center row no longer stands in for age.
+        let local_file = std::fs::File::options()
+            .write(true)
+            .open(skill_dir.join("SKILL.md"))
+            .unwrap();
+        let newer = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        local_file
+            .set_times(std::fs::FileTimes::new().set_modified(newer))
+            .unwrap();
 
         store
             .set_setting(

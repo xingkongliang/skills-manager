@@ -27,6 +27,10 @@
 </p>
 
 <p align="center">
+  <a href="https://skills.sh/xingkongliang/skills-manager"><img src="https://skills.sh/b/xingkongliang/skills-manager" alt="skills.sh 上的 manage-skills" /></a>
+</p>
+
+<p align="center">
   <img src="assets/demo/library.png" width="800" alt="Skills Manager 技能库" />
 </p>
 
@@ -50,8 +54,14 @@
 
 ## 功能
 
+<p align="center">
+  <img src="assets/diagram-concept-map.png" width="640" alt="概念图：技能库、Preset、全局工作区、项目工作区、Agent" />
+</p>
+
 - **统一技能库** — 从 Git 仓库、本地目录、`.zip` / `.skill` 文件或 [skills.sh](https://skills.sh) 市场安装技能，统一存放在 `~/.skills-manager`。
-- **Preset（预设）** — 将技能分组为命名 Preset。在任意工作区点击 Preset 标签，即可一键为当前 Agent 范围激活或停用其全部技能，激活的 Preset 显示 ✓，部分安装显示数量。
+- **技能市场** — 浏览市场上的热门 Skills，用关键词搜索找到需要的那个。
+- **让你的 Agent 管理 Skills** —— Claude Code、Codex、Cursor 等可以替你装一个 skill、部署到另一个 agent、或报告哪个 agent 有什么，走的是驱动 Skills Manager 而不是绕过它直接写 agent 目录——来源、preset、更新追踪和各 agent 的状态都不会丢。Dashboard 上一键完成设置，详见[让你的 Agent 来管理 Skills](#让你的-agent-来管理-skills)。
+- **Preset（预设）** — 将技能分组为命名 Preset。在任意工作区点击 Preset 标签，即可一键为当前 Agent 范围激活或停用其全部技能，激活的 Preset 显示 ✓，部分安装显示数量。应用 Preset 是一次性复制，不是实时同步。
 - **全局工作区** — 每个 Agent 都有自己的页面，列出其全局目录里的所有 Skills（包括不是通过 Skills Manager 安装的），始终反映 Agent 实际看到的内容。可按 Agent 添加或移除 Skills，也可通过「全部 Agents」总览跨所有已安装 Agent 统一管理。
 - **项目工作区** — 查看并管理任意项目的本地 Skills 目录，支持与中央库双向同步。支持嵌套 Skill 目录和导出时按 Agent 分配。
 - **关联工作区** — 将任意目录指定为 Skills 根目录，适合管理不在默认 Agent 路径下的 Skills。作为独立工作区管理，不参与全局 Preset 同步。
@@ -67,22 +77,44 @@
 - **灵活的应用设置** — 在一个页面里配置仓库路径、同步模式、主题、字号、语言、托盘行为、代理、Git 远程、更新检查，以及 Agent 在全应用中的显示顺序。
 - **应用内更新** — 有新版本时应用会主动提醒，并在 macOS 和 Windows 上直接完成安装。不会自行下载或安装：检查只负责告知，安装和重启各需一次点击。
 
-## 核心概念
+## 安装
 
-- **Preset 是可复用的 Skills 分组** — Preset 是一组命名的 Skills 集合。在任意工作区激活 Preset，即可将其所有 Skills 添加到选定 Agent；停用则反向移除。应用 Preset 是一次性复制，不是实时同步。
-- **全局工作区管理每个 Agent 的全局 Skills** — 每个已安装 Agent 都有自己的全局 Skills 目录（如 Claude Code 对应 `~/.claude/skills/`）。每个 Agent 页面会列出该目录里的所有内容（包括不是通过 Skills Manager 安装的 Skills），可以添加、移除或纳入管理；「全部 Agents」总览则跨 Agent 统一管理。
-- **项目工作区是项目专属 Skills 集合** — 项目工作区管理某个项目里的本地 Skills（如 `<project>/.claude/skills/`），只对该项目生效。
-- **标签用于归类和筛选** — 给同类 Skills 打上相同标签后，可以按标签快速筛选出需要的一组 Skills。
-- **批量操作随处可用** — 在任意工作区多选 Skills，进行批量操作。
+### macOS
+
+使用 [Homebrew](https://brew.sh) 安装：
+
+```bash
+brew install --cask skills-manager
+```
+
+也可以从 [最新 Release](https://github.com/xingkongliang/skills-manager/releases/latest) 直接下载 `.dmg`。
+
+### Windows 和 Linux
+
+从 [最新 Release](https://github.com/xingkongliang/skills-manager/releases/latest) 下载对应平台的安装包：Windows 为 `.exe` 或 `.msi`，Linux 为 `.AppImage`、`.deb` 或 `.rpm`（提供 x64 和 arm64）。
+
+所有安装包都自带 CLI，位置见 [二进制放在哪](#二进制放在哪)。
 
 ## 快速上手
 
-1. 从本地目录、Git 仓库、压缩包或市场安装 Skills。如有 SkillsMP API Key，还可开启 AI 搜索。
+1. 从本地目录、Git 仓库、压缩包或市场安装 Skills。
 2. 从侧边栏进入 **全局工作区**，选择一个 Agent（如 Claude Code）。
 3. 点击 **Preset** 标签为该 Agent 一键激活对应 Skills，或点 **+ 添加 Skills** 从技能库挑选并即时切换目标 Agent。激活的 Preset 显示 ✓，部分安装显示计数角标。
 4. 如需管理项目本地 Skills，打开 **项目工作区**，同样使用 Preset 标签，或通过 **+ 添加 Skills** 弹层用多 Agent 目标选择器挑选。
 5. 在 **设置** 中配置 Agent 路径、自定义工具、主题、语言、代理和 Git 偏好。
 6. 如果需要历史版本或多机同步，从侧边栏打开 **备份** 页，点击 **使用 GitHub 登录**——之后备份和跨设备同步都会自动进行。
+
+## 让你的 Agent 来管理 Skills
+
+Claude Code、Codex、Cursor 等可以替你装一个 Skill、把它部署到另一个 Agent、或者报告哪个 Agent 有什么——做法是驱动 Skills Manager，而不是绕过它直接往 Agent 目录里写。这正是来源元数据、Preset 归属、更新追踪和跨 Agent 部署状态得以保全的原因。
+
+Dashboard 上有一个一次性入口：勾选哪些 Agent 可以这么做，应用就把 [`manage-skills`](skills/manage-skills/SKILL.md) 装进技能库并只部署给这些 Agent。之后它就是一个普通的库内 Skill——增减 Agent 走它自己卡片上的 Agent 图标行。全程不需要配置 PATH：应用会把自己那份 CLI 发布到 Agent 会去找的位置。
+
+它同时也是一个正常发布的 Skill，不装应用也能直接装：
+
+```bash
+npx skills add xingkongliang/skills-manager
+```
 
 ## 备份与多设备同步
 
@@ -111,15 +143,11 @@
 
 ## 支持的工具
 
-开箱支持 51 个 Agent，包括：
+开箱支持 53 个 Agent，包括：
 
-Claude Code · Codex · Cursor · GitHub Copilot · Gemini CLI · OpenCode · OpenClaw · Hermes Agent · OpenHands · Cline · Goose · Windsurf · Continue · Grok · Antigravity · Qwen Code · Crush · Kilo Code · Roo Code · Amp · Kiro CLI · Droid · TRAE IDE · Warp · Qoder · CodeBuddy
+Claude Code · Codex · Cursor · GitHub Copilot · Gemini CLI · OpenCode · OpenClaw · Hermes Agent · OpenHands · Cline · Goose · Windsurf · Continue · Grok · Antigravity · Qwen Code · ZCode · Crush · Kilo Code · Roo Code · Amp · Kiro CLI · Droid · TRAE IDE · Warp · Qoder · CodeBuddy
 
 **设置**页会列出全部，并优先展示在你机器上检测到的那些。你也可以在那里添加自定义工具，以相同方式管理其 Skills。
-
-## 应用内帮助
-
-设置页中的 **帮助** 按钮会展示与上面一致的快速流程：推荐工作流、Preset、安装 Skills、技能库（含「未标签」筛选与卡片删除按钮）、全局工作区与 **+ 添加 Skills** 弹层、项目工作区的多 Agent 目标选择器、备份与多设备同步，以及环境设置（含「导出日志」用于 Issue 反馈），方便用户不离开应用也能快速理解使用方式。
 
 ## 技术栈
 
@@ -135,8 +163,8 @@ Claude Code · Codex · Cursor · GitHub Copilot · Gemini CLI · OpenCode · Op
 
 ### 前置依赖
 
-- Node.js 18+
-- Rust 工具链
+- Node.js 20.19+ 或 22.12+（Vite 7 的要求）
+- Rust 1.77.2 或更高
 - 当前系统的 [Tauri 依赖](https://v2.tauri.app/start/prerequisites/)
 
 ### 开发
@@ -148,39 +176,29 @@ npm run tauri:dev
 
 ### CLI
 
-仓库现在包含一个面向 agent 的 CLI，而且它是建立在与桌面应用共用的 Rust shared core 之上。也就是：repo 初始化、tool 解析、scenario 同步/应用逻辑，以及 metadata reindex，都被抽到了可复用 core 模块中，而不是另外在 CLI 里重写一份。
+仓库包含一个面向 agent 的 CLI，和桌面应用共用同一套 Rust core——同一个 SQLite 数据库、同一个中央技能库、同一套同步引擎。
 
 ```bash
-# 查看当前仓库路径和统计信息
-npm run cli -- repo status
-
-# 列出技能 / 查看单个技能
+# 看一眼现状
 npm run cli -- skills list
 npm run cli -- skills show db
 
-# 把中央库 skill 部署给具体 Agent
-npm run cli -- skills deploy db --agent claude_code --agent codex
-npm run cli -- skills status db
+# 装进技能库（默认不会自动部署到任何 Agent）
+npm run cli -- skills install ./my-skill
+npm run cli -- skills install https://github.com/foo/bar/tree/main/skills/baz
+npm run cli -- skills install vercel-labs/agent-skills@react-best-practices
 
-# 把已安装的技能改指向 git 源，技能 id、标签、Preset 归属和已有部署都保留
-# （典型场景：本地写的技能后来发布到了 GitHub）
-npm run cli -- skills set-source db --git-url https://github.com/you/skills/tree/main/db --dry-run
-npm run cli -- skills set-source db --git-url you/skills --subpath db --force
+# 部署给该有它的 Agent，然后核对
+npm run cli -- skills deploy react-best-practices --agent claude_code --agent codex
+npm run cli -- skills status react-best-practices
 
-# 管理和部署 Preset（CRUD/成员调整只整理数据，deploy 才修改 Agent 文件）
-npm run cli -- presets create "Web Dev" --description "前端开发"
-npm run cli -- presets add-skill "Web Dev" db
-npm run cli -- presets deploy "Web Dev" --agent codex
-npm run cli -- presets status "Web Dev"
-
-# 导出单个技能到其他 agent 工作目录
-npm run cli -- skills export db --dest ~/.claude/skills/db
-
-# 查看或同步 git 管理的 skills 仓库
-npm run cli -- git status
-npm run cli -- git pull
-npm run cli -- git commit -m "chore: update skills"
+# 拉上游更新；把 Agent 里已有的技能纳管进来
+npm run cli -- skills check --all
+npm run cli -- skills update --all
+npm run cli -- skills adopt ~/.claude/skills --dry-run
 ```
+
+任何命令组或子命令加 `--help` 都会打印完整用法——下面几个组能做的远不止上面这些例子，破坏性命令都支持 `--dry-run`（`remove` 还强制要求 `--yes`）。
 
 可用命令分组：
 - `repo`：查看或修改当前 base directory
@@ -191,15 +209,17 @@ npm run cli -- git commit -m "chore: update skills"
 
 额外参数：
 - `--skills-root <path>`：直接针对某个已 clone / 已导出的 skills repo 操作，而不是本机 app 默认目录。manager 的状态（DB、scenarios、cache、logs）会落在 `~/.skills-manager/external/<name>-<hash>/`，按 skills root 的规范化路径分目录隔离，外部仓库本身保持干净。
-- `--json`：给脚本 / agent 使用的机器可读输出
+- `--json`：给脚本 / agent 使用的机器可读输出。失败时在 stderr 打印 `{"ok": false, "code": …, "message": …}` 并以非零码退出。因目标不属于我们而被拒绝的部署会把路径作为数据带出来（`code: "TARGET_CONFLICT"`、`details.conflicts[].path`），调用方可以直接指出是哪个目录挡路，而不是转述一句话。
 
 ```bash
 npm run -s cli -- --skills-root /path/to/my-skills --json skills list
 ```
 
-#### 把 CLI 二进制安装到 PATH
+#### 二进制放在哪
 
-如果 agent / 脚本直接调用 `skills-manager-cli`（而不是 `npm run`），需要先把二进制放到 PATH 上：
+应用启动时会把自己那份 CLI 复制到 `~/.skills-manager/bin/skills-manager-cli`，版本永远与正在运行的应用一致，Agent 不需要你改 PATH 就能找到它。旁边的 `.version` 标记只在副本校验通过后才写、每次重新发布前先删——所以一次失败的复制（比如 Windows 上二进制正被占用）绝不会被当成可用的。
+
+把 CLI 放到**你自己**的 PATH 上手敲命令，是另一件事：
 
 ```bash
 npm run cli:install
@@ -224,26 +244,9 @@ npm run cli:build
 
 ## 常见问题
 
-### macOS 首次启动被 Gatekeeper 拦截（v1.28.5 及之前）
+**macOS 打不开应用。** 从 **v1.29.0** 起，发布版本都经过 Apple Developer ID 签名与公证，可以正常打开。如果看到「Apple 无法验证…」或「应用已损坏」，说明你用的是 v1.28.5 或更早的版本，升级即可解决。（升级会改变代码签名，macOS 可能会再问一次 `skills-manager-git-backup` 钥匙串权限，点「始终允许」。）
 
-**v1.29.0** 起的版本使用 Apple Developer ID 证书签名并经过 Apple 公证，可以直接打开——不会有提示，也不需要在终端里敲命令。如果你还在用旧版本，升级即可解决。
-
-**v1.28.5 及之前的版本**发布于公证之前，会被 macOS 拦截：
-
-<p align="center">
-  <img src="assets/CleanShot_20260530_093302@2x.png" width="320" alt="macOS Gatekeeper 提示：无法验证 skills-manager.app 是否包含恶意软件" />
-</p>
-
-- **"无法验证 App 是否包含恶意软件"** 或 **"无法打开，因为无法验证开发者"**（v1.20.0 – v1.28.5）—— 在 macOS 15（Sequoia）上，上图的弹窗只有 **移到废纸篓** / **完成** 两个按钮：点 **完成**，再打开 **系统设置 → 隐私与安全性**，点 **仍要打开**（第一次被拦截后会出现）。旧版 macOS 也可以在访达里右键点击应用、选择 **打开**，再在弹窗里确认。
-- **"应用已损坏，无法打开"**（v1.19.0 及之前版本）—— 在终端执行下面这条命令后重新打开应用即可：
-
-  ```bash
-  xattr -cr /Applications/skills-manager.app
-  ```
-
-  如果 `.app` 不在 `/Applications`，请替换为实际路径。
-
-升级到公证版本时，应用的代码签名发生了变化，macOS 可能会再问一次是否允许读取 `skills-manager-git-backup` 钥匙串条目。点 **始终允许** 即可——从 v1.29.0 起签名身份保持稳定，之后的更新应该不会再问。
+其它问题——[提个 issue](https://github.com/xingkongliang/skills-manager/issues)，并附上 **设置 → 导出日志** 打出来的压缩包。
 
 ## Star 增长
 

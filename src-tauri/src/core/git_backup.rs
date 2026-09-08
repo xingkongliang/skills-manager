@@ -289,6 +289,11 @@ pub(crate) fn init_repo_unlocked(skills_dir: &Path, device_name: &str) -> Result
     configure_device_identity(skills_dir, device_name)?;
 
     ensure_gitignore(skills_dir)?;
+    // Cleanup, not a precondition: a failure here means the backup carries a few
+    // stale `.pyc` entries, which is not a reason to refuse to back up at all.
+    if let Err(e) = untrack_python_artifacts(skills_dir) {
+        log::warn!("backup: could not untrack compiled-Python artifacts (continuing): {e:#}");
+    }
     // §3.6: a pre-existing oversized skill must not slip into the very first
     // commit — once tracked it can never be excluded again.
     if let Err(e) = apply_oversized_exclusions(skills_dir, SKILL_SIZE_LIMIT_BYTES) {
@@ -440,6 +445,11 @@ pub fn commit_all(skills_dir: &Path, message: &str) -> Result<()> {
 pub(crate) fn commit_all_unlocked(skills_dir: &Path, message: &str) -> Result<()> {
     ensure_repo(skills_dir)?;
     ensure_gitignore(skills_dir)?;
+    // Cleanup, not a precondition: a failure here means the backup carries a few
+    // stale `.pyc` entries, which is not a reason to refuse to back up at all.
+    if let Err(e) = untrack_python_artifacts(skills_dir) {
+        log::warn!("backup: could not untrack compiled-Python artifacts (continuing): {e:#}");
+    }
     // Atomic-write leftovers must never enter a commit: a committed
     // `x.json.tmp.<uuid>` trips the merge validator on every other device.
     // (Reconcile also cleans these, but a machine that only ever pushes
@@ -522,6 +532,11 @@ pub fn prune_hidden_refs_on_remote(skills_dir: &Path) -> Result<usize> {
 pub(crate) fn commit_resolution_unlocked(skills_dir: &Path, full_message: &str) -> Result<()> {
     ensure_repo(skills_dir)?;
     ensure_gitignore(skills_dir)?;
+    // Cleanup, not a precondition: a failure here means the backup carries a few
+    // stale `.pyc` entries, which is not a reason to refuse to back up at all.
+    if let Err(e) = untrack_python_artifacts(skills_dir) {
+        log::warn!("backup: could not untrack compiled-Python artifacts (continuing): {e:#}");
+    }
     remove_tmp_metadata_files(skills_dir);
     if let Err(e) = apply_oversized_exclusions(skills_dir, SKILL_SIZE_LIMIT_BYTES) {
         log::warn!("backup size: exclusion scan failed (continuing): {e:#}");
@@ -1394,9 +1409,31 @@ pub(crate) fn ensure_no_interrupted_git_operation(skills_dir: &Path) -> Result<(
     Ok(())
 }
 
+/// Patterns for compiled-Python artifacts, kept in exact parity with
+/// `content_hash::is_ignored` — `__pycache__` and `*.pyc`, nothing wider.
+///
+/// A skill's scripts run straight out of the library (agents reach it through a
+/// symlink), so Python writes `__pycache__/` into the library itself; filtering
+/// on import cannot help with something generated afterwards. The content hash
+/// already declares these outside a skill's content, so backing them up put the
+/// two layers at odds.
+///
+/// Deliberately not `*.py[cod]`: `is_ignored` counts `.pyd` (a real Windows
+/// extension module some skills ship) as content, so ignoring it here would
+/// recreate the same inconsistency in the other direction — the file would be
+/// missing after a restore and every device would report the skill as modified.
+const PYTHON_ARTIFACT_IGNORES: [&str; 2] = ["__pycache__/", "*.pyc"];
+
 fn ensure_gitignore(skills_dir: &Path) -> Result<()> {
     let gitignore = skills_dir.join(".gitignore");
-    let required = [".DS_Store", "Thumbs.db", "*.tmp", ".skills-manager.lock"];
+    let required = [
+        ".DS_Store",
+        "Thumbs.db",
+        "*.tmp",
+        ".skills-manager.lock",
+        PYTHON_ARTIFACT_IGNORES[0],
+        PYTHON_ARTIFACT_IGNORES[1],
+    ];
     let mut lines: Vec<String> = if gitignore.exists() {
         std::fs::read_to_string(&gitignore)?
             .lines()
@@ -1413,6 +1450,50 @@ fn ensure_gitignore(skills_dir: &Path) -> Result<()> {
         }
     }
     std::fs::write(&gitignore, format!("{}\n", lines.join("\n")))?;
+    Ok(())
+}
+
+/// Drop compiled-Python artifacts that were committed before they were ignored.
+///
+/// `.gitignore` only governs *untracked* paths — `git add -A` keeps re-staging
+/// anything already in the index, so adding the patterns above fixes nothing for
+/// a library that has been backing up `__pycache__` all along. This is the
+/// one-time catch-up; once the index is clean the `ls-files` below matches
+/// nothing and the whole thing is a no-op.
+///
+/// This deliberately untracks, where [`apply_oversized_exclusions`] deliberately
+/// does not (see its `never untrack` guard). The difference is what is at stake:
+/// an oversized skill is the user's own content and dropping it from the backup
+/// could destroy the only copy, whereas these are regenerated the next time the
+/// skill's scripts run and the content hash already treats them as absent.
+/// `--cached` keeps every byte on disk; other devices merely stop carrying them.
+fn untrack_python_artifacts(skills_dir: &Path) -> Result<()> {
+    let tracked = run_git(
+        skills_dir,
+        &["ls-files", "--", "*.pyc", "**/__pycache__/**"],
+    )?;
+    if tracked.trim().is_empty() {
+        return Ok(());
+    }
+
+    let count = tracked.lines().filter(|l| !l.trim().is_empty()).count();
+    run_git_checked(
+        skills_dir,
+        &[
+            "rm",
+            "-r",
+            "--cached",
+            "--quiet",
+            "--ignore-unmatch",
+            "--",
+            "*.pyc",
+            "**/__pycache__/**",
+        ],
+    )?;
+    log::info!(
+        "backup: stopped tracking {count} compiled-Python artifact(s); \
+         they stay on disk and are regenerated as needed"
+    );
     Ok(())
 }
 
@@ -1656,6 +1737,86 @@ mod tests {
     #[test]
     fn default_device_name_is_never_empty() {
         assert!(!default_device_name().is_empty());
+    }
+
+    // ── ensure_gitignore / compiled-Python artifacts ──
+
+    /// `ensure_gitignore` is append-only, and other code leans on that: it must
+    /// add what is missing without reordering, rewriting, or dropping whatever
+    /// the user put there themselves.
+    #[test]
+    fn ensure_gitignore_appends_missing_entries_and_leaves_user_lines_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let gitignore = dir.join(".gitignore");
+        std::fs::write(&gitignore, "# my own notes\nsecret-notes/\n*.tmp\n").unwrap();
+
+        ensure_gitignore(dir).unwrap();
+        let lines: Vec<String> = std::fs::read_to_string(&gitignore)
+            .unwrap()
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect();
+
+        // The user's lines survive verbatim, in their original order, at the top.
+        assert_eq!(&lines[..3], &["# my own notes", "secret-notes/", "*.tmp"]);
+        // The already-present entry is not duplicated.
+        assert_eq!(lines.iter().filter(|l| *l == "*.tmp").count(), 1);
+        for required in [
+            ".DS_Store",
+            "Thumbs.db",
+            ".skills-manager.lock",
+            "__pycache__/",
+            "*.pyc",
+        ] {
+            assert!(lines.iter().any(|l| l == required), "missing {required}");
+        }
+
+        // Running it again changes nothing at all.
+        let before = std::fs::read_to_string(&gitignore).unwrap();
+        ensure_gitignore(dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&gitignore).unwrap(), before);
+    }
+
+    /// Ignoring a pattern does nothing to paths already in the index, so a
+    /// library that has been backing up `__pycache__` needs an explicit
+    /// catch-up — otherwise `git add -A` keeps re-staging them forever.
+    #[test]
+    fn compiled_python_artifacts_already_committed_are_untracked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_repo_unlocked(dir, "Test Device").unwrap();
+
+        // Simulate a library from before the ignore rule existed: force the
+        // artifacts in past the .gitignore, exactly as history would have them.
+        let cache = dir.join("docx/scripts/__pycache__");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("helpers.cpython-311.pyc"), b"\x00bytecode").unwrap();
+        std::fs::write(dir.join("docx/scripts/helpers.py"), "print('hi')").unwrap();
+        // A real Windows extension module must NOT be swept up with them.
+        std::fs::write(dir.join("docx/scripts/_native.pyd"), b"\x00ext").unwrap();
+        run_git_checked(dir, &["add", "-A", "--force"]).unwrap();
+        run_git_checked(dir, &["commit", "-m", "before the ignore rule"]).unwrap();
+        assert!(is_tracked(dir, "docx/scripts/__pycache__/helpers.cpython-311.pyc"));
+
+        commit_all_unlocked(dir, "backup").unwrap();
+
+        assert!(
+            !is_tracked(dir, "docx/scripts/__pycache__/helpers.cpython-311.pyc"),
+            "compiled artifacts must stop being tracked"
+        );
+        // Untracked, not deleted: they are still on disk for the interpreter.
+        assert!(cache.join("helpers.cpython-311.pyc").is_file());
+        // Real content is untouched — including `.pyd`, which `content_hash`
+        // counts as part of the skill.
+        assert!(is_tracked(dir, "docx/scripts/helpers.py"));
+        assert!(is_tracked(dir, "docx/scripts/_native.pyd"));
+
+        // Idempotent: a second round finds nothing left to do.
+        std::fs::write(dir.join("note.md"), "x").unwrap();
+        commit_all_unlocked(dir, "backup again").unwrap();
+        assert!(is_tracked(dir, "docx/scripts/helpers.py"));
+        assert!(is_tracked(dir, "docx/scripts/_native.pyd"));
     }
 
     #[test]

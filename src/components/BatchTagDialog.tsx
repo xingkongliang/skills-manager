@@ -11,11 +11,13 @@ interface Props {
   open: boolean;
   skills: TaggableSkill[];
   allTags: string[];
+  /** Scope warning, e.g. when edits from a project page reach the central library. */
+  note?: string;
   onClose: () => void;
   onApply: (adds: string[], removes: string[]) => Promise<void>;
 }
 
-export function BatchTagDialog({ open, skills, allTags, onClose, onApply }: Props) {
+export function BatchTagDialog({ open, skills, allTags, note, onClose, onApply }: Props) {
   const { t } = useTranslation();
   const [adds, setAdds] = useState<string[]>([]);
   const [removes, setRemoves] = useState<string[]>([]);
@@ -30,6 +32,18 @@ export function BatchTagDialog({ open, skills, allTags, onClose, onApply }: Prop
       setInput("");
     }
   }, [open]);
+
+  // Escape closes the dialog; the tag input handles its own Escape first.
+  useEffect(() => {
+    if (!open || loading) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (e.target === inputRef.current) return;
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, loading, onClose]);
 
   const tagCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -100,6 +114,12 @@ export function BatchTagDialog({ open, skills, allTags, onClose, onApply }: Prop
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {note && (
+          <p className="mb-4 rounded-lg bg-surface-hover px-3 py-2 text-[12px] leading-snug text-muted">
+            {note}
+          </p>
+        )}
 
         <div className="space-y-4">
           <div>

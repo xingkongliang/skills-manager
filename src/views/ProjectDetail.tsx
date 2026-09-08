@@ -18,6 +18,9 @@ import {
   Square,
   Plus,
   CircleSlash,
+  CheckCircle2,
+  Circle,
+  Tag,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -34,15 +37,12 @@ import { PresetBar } from "../components/PresetBar";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
+import { enabledInstalledAgentKeys, getDefaultExportAgents } from "../lib/exportAgents";
 import { cn } from "../utils";
 import * as api from "../lib/tauri";
 import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
-
-const PROJECT_DEFAULT_EXPORT_AGENTS_KEY = "project_default_export_agents";
-const PROJECT_EXPORT_AGENT_PRIORITY = ["claude_code", "codex", "cursor", "gemini_cli", "github_copilot"];
-
 const projectLastUsedAgentsKey = (projectId: string) =>
   `project_last_used_export_agents:${projectId}`;
 
@@ -60,35 +60,6 @@ interface ProjectSkillGroup {
   status: ProjectSkill["sync_status"];
   tags: string[];
   centerSkillIds: string[];
-}
-
-// Keys of project agents that can actually receive skills right now: both
-// installed on disk and enabled by the user. Used everywhere export targets
-// are derived so disabled/uninstalled agents never get project-local skills.
-function enabledInstalledAgentKeys(targets: ProjectAgentTarget[]): string[] {
-  return targets.filter((target) => target.installed && target.enabled).map((target) => target.key);
-}
-
-function getDefaultExportAgents(targets: ProjectAgentTarget[], savedValue?: string | null) {
-  const enabledKeys = enabledInstalledAgentKeys(targets);
-  const availableKeys = new Set(enabledKeys);
-  if (savedValue) {
-    try {
-      const parsed = JSON.parse(savedValue);
-      if (Array.isArray(parsed)) {
-        const filtered = parsed.filter((item): item is string => typeof item === "string" && availableKeys.has(item));
-        if (filtered.length > 0) {
-          return Array.from(new Set(filtered));
-        }
-      }
-    } catch {
-      // Ignore invalid persisted settings and fall back to built-in defaults.
-    }
-  }
-
-  const prioritized = PROJECT_EXPORT_AGENT_PRIORITY.filter((key) => availableKeys.has(key));
-  const fallback = enabledKeys;
-  return Array.from(new Set((prioritized.length > 0 ? prioritized : fallback).slice(0, 3)));
 }
 
 function getSyncStatusMeta(t: (key: string) => string, status: ProjectSkill["sync_status"]) {
@@ -160,7 +131,6 @@ export function ProjectDetail() {
   const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
   const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
-  const [selectedExportAgents, setSelectedExportAgents] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("all");
@@ -181,6 +151,7 @@ export function ProjectDetail() {
   const [deleteTarget, setDeleteTarget] = useState<ProjectSkillGroup | null>(null);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
+  const [batchToggling, setBatchToggling] = useState(false);
   const PROJECT_ADD_CALLOUT_KEY = "skills-manager.projectAddCalloutDismissed";
   const [showAddCallout, setShowAddCallout] = useState(() => {
     try {
@@ -341,6 +312,9 @@ export function ProjectDetail() {
     filtered,
     getKey: getSkillKey,
     isItemActive: (s) => s.enabledCount === s.totalCount,
+    filterSignal: JSON.stringify([search, [...tagFilters].sort(), filterMode]),
+    scopeSignal: id ?? "",
+    escapeEnabled: !batchTagDialogOpen && !batchDeleteConfirm,
   });
 
   const exportTargets = useMemo(() => {
@@ -386,18 +360,7 @@ export function ProjectDetail() {
     [projectPresetVariants]
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadDefaultExportAgents = async () => {
-      const savedValue = await api.getSettings(PROJECT_DEFAULT_EXPORT_AGENTS_KEY).catch(() => null);
-      if (cancelled) return;
-      setSelectedExportAgents(getDefaultExportAgents(exportTargets, savedValue));
-    };
-    loadDefaultExportAgents();
-    return () => {
-      cancelled = true;
-    };
-  }, [exportTargets]);
+  const selectedExportAgents = useMemo(() => getDefaultExportAgents(exportTargets), [exportTargets]);
 
   const [lastUsedExportAgents, setLastUsedExportAgents] = useState<string[] | null>(null);
   useEffect(() => {
@@ -449,9 +412,14 @@ export function ProjectDetail() {
   }, [exportTargets, lastUsedExportAgents, selectedExportAgents]);
 
   const presetBarAgentKeys = useMemo(() => {
+    // The real targets load asynchronously; until they arrive `exportTargets`
+    // stands in with a claude_code-only singleton. Applying a preset off that
+    // stand-in would deploy to Claude Code alone — the exact failure #400
+    // reported — so keep the bar out of the DOM until the targets are real.
+    if (projectAgentTargets.length === 0) return [];
     const availableKeys = new Set(enabledInstalledAgentKeys(exportTargets));
     return selectedExportAgents.filter((key) => availableKeys.has(key));
-  }, [exportTargets, selectedExportAgents]);
+  }, [exportTargets, projectAgentTargets, selectedExportAgents]);
 
   const enabledCount = groupedSkills.filter((s) => s.enabledCount > 0).length;
   const allTags = useMemo(() => {
@@ -477,25 +445,43 @@ export function ProjectDetail() {
     () => groupedSkills.filter((skill) => selectedIds.has(getSkillKey(skill))),
     [getSkillKey, groupedSkills, selectedIds]
   );
-  const selectedTaggableSkills = useMemo(
-    () => selectedSkills.filter((skill) => skill.centerSkillIds.length > 0),
-    [selectedSkills]
-  );
-  const anyCanUpdateCenter = useMemo(
-    () => selectedSkills.some((skill) => (
+  /**
+   * Tags live on the central skill, and one selected row can map to several of
+   * them — so the button counts (and the dialog shows) the central skills that
+   * will actually change, not the rows that were clicked.
+   */
+  const selectedCenterSkills = useMemo(() => {
+    const byId = new Map(managedSkills.map((skill) => [skill.id, skill]));
+    const ids = new Set(selectedSkills.flatMap((skill) => skill.centerSkillIds));
+    return [...ids]
+      .map((centerId) => byId.get(centerId))
+      .filter((skill): skill is ManagedSkill => !!skill);
+  }, [managedSkills, selectedSkills]);
+  // Counts, not booleans: the buttons must announce how many skills they will
+  // actually touch, which is rarely the whole selection.
+  const updatableCenterCount = useMemo(
+    () => selectedSkills.filter((skill) => (
       skill.status === "project_only" ||
       skill.status === "project_newer" ||
       skill.status === "diverged"
-    )),
+    )).length,
     [selectedSkills]
   );
-  const anyCanUpdateProject = useMemo(
-    () => selectedSkills.some((skill) => (
+  const updatableProjectCount = useMemo(
+    () => selectedSkills.filter((skill) => (
       skill.status === "project_newer" ||
       skill.status === "center_newer" ||
       skill.status === "diverged"
-    )),
+    )).length,
     [selectedSkills]
+  );
+  const togglableSelectedCount = useMemo(
+    () => selectedSkills.filter((skill) => (
+      anyDisabled
+        ? skill.enabledCount !== skill.totalCount
+        : skill.enabledCount > 0
+    )).length,
+    [selectedSkills, anyDisabled]
   );
 
   const handleOpenDetail = async (skill: ProjectSkillGroup) => {
@@ -530,12 +516,67 @@ export function ProjectDetail() {
     }
   };
 
+  // Push one variant to the center, then realign the rest from it.
+  //
+  // in_sync is the only status that proves a variant holds nothing of its own:
+  // it is a content-hash match. center_newer does NOT prove it —
+  // classify_sync_status reaches that status only after the hashes already
+  // differed, then picks a side by mtime — and project_only was never pushed at
+  // all. So any variant that is not in_sync may carry unique content.
+  //
+  // With more than one such variant there is no safe push. Writing the center
+  // rebuilds its directory and moves its mtime to now, so every other unproven
+  // variant re-reads as center_newer; the card then drops "update to center"
+  // (which needs project_only/project_newer/diverged) and offers only "update
+  // to project", which overwrites every variant — and the backend refuses only
+  // project_newer, so nothing stops it. Refuse and name the conflict instead,
+  // the way 1.34.0 answers a write that would destroy something.
+  const pushSkillToCenterAndAlign = async (
+    skill: ProjectSkillGroup
+  ): Promise<{ alignFailed: number; conflicting: number }> => {
+    if (!id) return { alignFailed: 0, conflicting: 0 };
+
+    const unproven = skill.variants.filter((v) => v.sync_status !== "in_sync");
+    if (unproven.length > 1) {
+      return { alignFailed: 0, conflicting: unproven.length };
+    }
+
+    const winner = unproven[0] ?? skill.primaryVariant;
+    await api.updateProjectSkillToCenter(id, winner.relative_path, winner.agent);
+
+    // Every remaining variant is in_sync, so pulling the freshly written center
+    // over it discards nothing — and it keeps a multi-agent group from flipping
+    // to "center_newer" off the stale-but-clean siblings right after the user
+    // updated *to* center. Serially: two agents' skills roots can be symlinks
+    // onto one real directory, and each realign removes and rebuilds its
+    // target, so concurrent calls on one path make a call fail for no reason.
+    let alignFailed = 0;
+    for (const variant of skill.variants.filter((v) => v !== winner)) {
+      try {
+        await api.updateProjectSkillFromCenter(id, variant.relative_path, variant.agent);
+      } catch {
+        alignFailed += 1;
+      }
+    }
+    return { alignFailed, conflicting: 0 };
+  };
+
   const handleUpdateCenter = async (skill: ProjectSkillGroup) => {
     if (!id) return;
     setUpdatingCenterSkill(getSkillKey(skill));
     try {
-      await api.updateProjectSkillToCenter(id, skill.primaryVariant.relative_path, skill.primaryVariant.agent);
-      toast.success(t("project.updateCenterSuccess", { name: skill.name }));
+      const { alignFailed, conflicting } = await pushSkillToCenterAndAlign(skill);
+      if (conflicting > 0) {
+        toast.warning(
+          t("project.updateCenterConflict", { name: skill.name, count: conflicting })
+        );
+      } else if (alignFailed > 0) {
+        toast.warning(
+          t("project.updateCenterAlignFailed", { name: skill.name, count: alignFailed })
+        );
+      } else {
+        toast.success(t("project.updateCenterSuccess", { name: skill.name }));
+      }
       await Promise.all([refreshManagedSkills(), refreshPresets(), loadSkills()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
@@ -663,41 +704,46 @@ export function ProjectDetail() {
   };
 
   const handleBatchToggleProject = async () => {
-    if (!id) return;
+    if (!id || batchToggling) return;
     const enabling = anyDisabled;
     let count = 0;
     let failed = 0;
-    for (const skill of selectedSkills) {
-      try {
-        if (enabling && skill.enabledCount !== skill.totalCount) {
-          await Promise.all(
-            skill.variants.map((variant) =>
-              api.toggleProjectSkill(id, variant.relative_path, variant.agent, true)
-            )
-          );
-          count++;
-        } else if (!enabling && skill.enabledCount > 0) {
-          await Promise.all(
-            skill.variants.map((variant) =>
-              api.toggleProjectSkill(id, variant.relative_path, variant.agent, false)
-            )
-          );
-          count++;
+    setBatchToggling(true);
+    try {
+      for (const skill of selectedSkills) {
+        try {
+          if (enabling && skill.enabledCount !== skill.totalCount) {
+            await Promise.all(
+              skill.variants.map((variant) =>
+                api.toggleProjectSkill(id, variant.relative_path, variant.agent, true)
+              )
+            );
+            count++;
+          } else if (!enabling && skill.enabledCount > 0) {
+            await Promise.all(
+              skill.variants.map((variant) =>
+                api.toggleProjectSkill(id, variant.relative_path, variant.agent, false)
+              )
+            );
+            count++;
+          }
+        } catch {
+          failed++;
+          // continue with remaining
         }
-      } catch {
-        failed++;
-        // continue with remaining
       }
+      if (count > 0) {
+        toast.success(enabling
+          ? t("project.batchEnabled", { count })
+          : t("project.batchDisabled", { count }));
+      }
+      if (failed > 0) {
+        toast.error(t("project.batchToggleFailed", { count: failed }));
+      }
+      await loadSkills();
+    } finally {
+      setBatchToggling(false);
     }
-    if (count > 0) {
-      toast.success(enabling
-        ? t("project.batchEnabled", { count })
-        : t("project.batchDisabled", { count }));
-    }
-    if (failed > 0) {
-      toast.error(t("project.batchToggleFailed", { count: failed }));
-    }
-    await loadSkills();
   };
 
   const handleBatchUpdateCenter = async () => {
@@ -706,6 +752,7 @@ export function ProjectDetail() {
     try {
       let updated = 0;
       let failed = 0;
+      let conflicting = 0;
       for (const skill of selectedSkills) {
         const canUpdateCenter =
           skill.status === "project_only" ||
@@ -713,14 +760,28 @@ export function ProjectDetail() {
           skill.status === "diverged";
         if (!canUpdateCenter) continue;
         try {
-          await api.updateProjectSkillToCenter(id, skill.primaryVariant.relative_path, skill.primaryVariant.agent);
-          updated++;
+          const { alignFailed, conflicting: conflictingForSkill } =
+            await pushSkillToCenterAndAlign(skill);
+          // Refused outright: neither written nor failed, so it is counted on
+          // its own rather than folded into either total.
+          if (conflictingForSkill > 0) {
+            conflicting += 1;
+            continue;
+          }
+          // The push landed but some sibling failed to realign → the group is
+          // not fully in sync, so count it as failed rather than reporting a
+          // clean success.
+          if (alignFailed > 0) failed++;
+          else updated++;
         } catch {
           failed++;
         }
       }
       if (updated > 0) {
         toast.success(t("project.batchUpdatedCenter", { count: updated }));
+      }
+      if (conflicting > 0) {
+        toast.warning(t("project.batchUpdateCenterConflict", { count: conflicting }));
       }
       if (failed > 0) {
         toast.error(t("project.batchUpdateCenterFailed", { count: failed }));
@@ -767,14 +828,10 @@ export function ProjectDetail() {
   };
 
   const handleBatchEditTags = async (adds: string[], removes: string[]) => {
-    const skillMap = new Map(managedSkills.map((skill) => [skill.id, skill]));
-    const centerIds = Array.from(new Set(selectedTaggableSkills.flatMap((skill) => skill.centerSkillIds)));
     let updated = 0;
     let failed = 0;
 
-    for (const centerSkillId of centerIds) {
-      const centerSkill = skillMap.get(centerSkillId);
-      if (!centerSkill) continue;
+    for (const centerSkill of selectedCenterSkills) {
       const removeSet = new Set(removes);
       const nextTags = centerSkill.tags.filter((tag) => !removeSet.has(tag));
       for (const tag of adds) {
@@ -786,7 +843,7 @@ export function ProjectDetail() {
       if (!changed) continue;
 
       try {
-        await api.setSkillTags(centerSkillId, nextTags);
+        await api.setSkillTags(centerSkill.id, nextTags);
         updated++;
       } catch {
         failed++;
@@ -857,13 +914,13 @@ export function ProjectDetail() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t("project.searchPlaceholder")}
-                className="app-input h-9 w-full rounded-md pl-8 font-medium"
+                className="app-input w-full pl-8 font-medium"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
               />
             </div>
-            <div className="app-segmented shrink-0">
+            <div className="app-segmented app-toolbar-segmented shrink-0">
               {(["all", "enabled", "disabled"] as const).map((mode) => (
                 <button
                   key={mode}
@@ -878,7 +935,7 @@ export function ProjectDetail() {
               ))}
             </div>
 
-            <div className="app-segmented shrink-0">
+            <div className="app-segmented app-toolbar-segmented shrink-0">
               <button
                 onClick={loadSkills}
                 className="rounded-md p-2 text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary"
@@ -904,15 +961,20 @@ export function ProjectDetail() {
               >
                 <List className="h-4 w-4" />
               </button>
+
+              {/* Selection can stay active in either view. */}
+              <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 self-center bg-border-subtle" />
               <button
+                type="button"
+                aria-pressed={isMultiSelect}
                 onClick={() => isMultiSelect ? exitMultiSelect() : setIsMultiSelect(true)}
                 className={cn(
-                  "rounded-md p-2 transition-colors outline-none",
-                  isMultiSelect ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+                  "app-segmented-button inline-flex items-center gap-1.5 hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-border",
+                  isMultiSelect && "app-segmented-button-active hover:bg-surface-active hover:text-secondary"
                 )}
-                title={isMultiSelect ? t("project.cancelSelect") : t("project.selectMode")}
               >
                 <SquareCheck className="h-4 w-4" />
+                {isMultiSelect ? t("project.cancelSelect") : t("project.selectMode")}
               </button>
             </div>
 
@@ -922,7 +984,7 @@ export function ProjectDetail() {
                   setShowExportDialog(true);
                   dismissAddCallout();
                 }}
-                className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+                className="app-toolbar-button app-toolbar-button-primary"
               >
                 <Plus className="h-3.5 w-3.5" />
                 {t("project.addSkill")}
@@ -1025,32 +1087,67 @@ export function ProjectDetail() {
         <MultiSelectToolbar
           selectedCount={selectedIds.size}
           isAllSelected={isAllSelected}
-          anyDisabled={anyDisabled}
-          anyCanUpdateCenter={anyCanUpdateCenter}
-          anyCanUpdateProject={anyCanUpdateProject}
-          showToggle={project.supports_skill_toggle}
-          updatingCenter={batchUpdatingCenter}
-          updatingProject={batchUpdatingProject}
+          actions={[
+            ...(project.supports_skill_toggle && togglableSelectedCount > 0
+              ? [{
+                  key: "toggle",
+                  tone: "primary" as const,
+                  label: anyDisabled
+                    ? t("project.batchEnable", { count: togglableSelectedCount })
+                    : t("project.batchDisable", { count: togglableSelectedCount }),
+                  icon: anyDisabled
+                    ? <CheckCircle2 className="h-3.5 w-3.5" />
+                    : <Circle className="h-3.5 w-3.5" />,
+                  busy: batchToggling,
+                  onSelect: handleBatchToggleProject,
+                }]
+              : []),
+            ...(updatableProjectCount > 0
+              ? [{
+                  key: "update-project",
+                  label: t("project.batchUpdateProject", { count: updatableProjectCount }),
+                  icon: <Download className="h-3.5 w-3.5" />,
+                  busy: batchUpdatingProject,
+                  onSelect: handleBatchUpdateProject,
+                }]
+              : []),
+            ...(updatableCenterCount > 0
+              ? [{
+                  key: "update-center",
+                  label: t("project.batchUpdateCenter", { count: updatableCenterCount }),
+                  icon: <Upload className="h-3.5 w-3.5" />,
+                  busy: batchUpdatingCenter,
+                  onSelect: handleBatchUpdateCenter,
+                }]
+              : []),
+          ]}
+          overflowActions={[
+            ...(selectedCenterSkills.length > 0
+              ? [{
+                  key: "tags",
+                  label: t("project.batchEditTags", { count: selectedCenterSkills.length }),
+                  icon: <Tag className="h-3.5 w-3.5" />,
+                  onSelect: () => setBatchTagDialogOpen(true),
+                }]
+              : []),
+            {
+              key: "delete",
+              tone: "danger" as const,
+              label: t("project.deleteSelected", { count: selectedIds.size }),
+              icon: <Trash2 className="h-3.5 w-3.5" />,
+              onSelect: () => setBatchDeleteConfirm(true),
+            },
+          ]}
           labels={{
             hint: t("project.selectHint"),
             selected: t("project.selectedCount", { count: selectedIds.size }),
-            updateCenter: t("project.batchUpdateCenter", { count: selectedIds.size }),
-            updateProject: t("project.batchUpdateProject", { count: selectedIds.size }),
-            delete: t("project.deleteSelected", { count: selectedIds.size }),
-            enable: t("project.batchEnable", { count: selectedIds.size }),
-            disable: t("project.batchDisable", { count: selectedIds.size }),
             selectAll: t("project.selectAll"),
             deselectAll: t("project.deselectAll"),
             cancel: t("common.cancel"),
-            editTags: t("project.batchEditTags", { count: selectedTaggableSkills.length }),
+            more: t("mySkills.moreActions"),
           }}
-          onUpdateCenter={handleBatchUpdateCenter}
-          onUpdateProject={handleBatchUpdateProject}
-          onDelete={() => setBatchDeleteConfirm(true)}
-          onToggle={handleBatchToggleProject}
           onSelectAll={handleSelectAll}
           onCancel={exitMultiSelect}
-          onEditTags={selectedTaggableSkills.length > 0 ? () => setBatchTagDialogOpen(true) : undefined}
         />
       )}
 
@@ -1456,8 +1553,9 @@ export function ProjectDetail() {
 
       <BatchTagDialog
         open={batchTagDialogOpen}
-        skills={selectedTaggableSkills}
+        skills={selectedCenterSkills}
         allTags={allTags}
+        note={t("project.batchTagScopeNote")}
         onClose={() => setBatchTagDialogOpen(false)}
         onApply={handleBatchEditTags}
       />

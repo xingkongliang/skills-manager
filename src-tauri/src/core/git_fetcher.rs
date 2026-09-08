@@ -1,4 +1,5 @@
 use crate::core::central_repo;
+use crate::core::git_credentials;
 use crate::core::skill_metadata;
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
@@ -109,16 +110,133 @@ fn canonicalize_clone_url(url: &str) -> String {
 /// canonical form so e.g. `https://github.com/x/y` and `https://github.com/x/y.git`
 /// share the same cache slot.
 fn repo_cache_dir(url: &str) -> PathBuf {
+    repo_cache_dir_for(url, false)
+}
+
+/// Cache slot for a URL. A subpath-scoped checkout gets its own `-sparse` slot
+/// rather than sharing the full one, because the two are not interchangeable:
+/// the flows that need a whole tree (repo preview with no subpath, the skills.sh
+/// locator search, `resolve_skill_dir`'s repo-wide fallback) must never be handed
+/// a checkout holding one directory. A repo used both ways simply keeps two
+/// caches, and the full path keeps behaving exactly as it did before.
+fn repo_cache_dir_for(url: &str, sparse: bool) -> PathBuf {
     let canonical = canonicalize_clone_url(url);
     let mut hasher = Sha256::new();
     hasher.update(canonical.as_bytes());
     let hash = format!("{:x}", hasher.finalize());
     let short = &hash[..16];
-    central_repo::cache_dir().join("repos").join(short)
+    let name = if sparse {
+        format!("{short}-sparse")
+    } else {
+        short.to_string()
+    };
+    central_repo::cache_dir().join("repos").join(name)
 }
+
+/// Upper bound on the whole repo cache.
+///
+/// A backstop, not a quota. Nothing ever deleted a cache slot before, so a
+/// library built from many repositories accumulated one checkout per repository
+/// and kept it forever — measured at 569 MB across 48 repositories on an
+/// ordinary machine, the oldest untouched for four months.
+const REPO_CACHE_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 
 struct RepoCacheLock {
     _file: File,
+}
+
+/// Delete least-recently-used cache slots until the cache is back under the limit.
+///
+/// Called only where a slot is about to be cloned fresh. Refreshing an existing
+/// slot adds a delta; a new repository adds a whole checkout, so that is where the
+/// growth comes from — and it keeps a batch update from paying for the walk once
+/// per repository (the walk is ~0.8s over a 569 MB cache).
+///
+/// `keep` is the slot the caller is about to write. A slot another install holds
+/// is skipped rather than waited for: deleting a checkout from under a running
+/// install would break it. The lock *file* is deliberately left behind — unlinking
+/// it while someone waits on it would let two installs each hold a lock on a
+/// different inode for the same slot.
+fn prune_repo_cache(keep: &Path) {
+    prune_cache_root(
+        &central_repo::cache_dir().join("repos"),
+        keep,
+        REPO_CACHE_LIMIT_BYTES,
+    )
+}
+
+/// Takes its root and limit rather than reading them from the central config, so
+/// it is a plain function of the directory in front of it — testable without
+/// touching process-global state that parallel tests would fight over.
+fn prune_cache_root(root: &Path, keep: &Path, limit: u64) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+
+    let mut slots: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    let mut total: u64 = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let (size, used) = slot_stats(&path);
+        total = total.saturating_add(size);
+        slots.push((path, size, used));
+    }
+
+    slots.sort_by_key(|(_, _, used)| *used);
+    for (path, size, _) in slots {
+        if total <= limit {
+            break;
+        }
+        if path == keep {
+            continue;
+        }
+        let lock_path = path.with_extension("lock");
+        let Ok(file) = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+        else {
+            continue;
+        };
+        if file.try_lock_exclusive().is_err() {
+            continue;
+        }
+        if std::fs::remove_dir_all(&path).is_ok() {
+            log::info!("pruned repo cache slot {}", path.display());
+            total = total.saturating_sub(size);
+        }
+    }
+}
+
+/// Bytes in a cache slot, and when anything inside it was last written.
+///
+/// The recency half cannot come from the slot directory's own mtime: a fetch
+/// writes objects deep inside `.git`, never in the slot root, so that mtime stays
+/// at creation time and "least recently used" would silently mean "oldest",
+/// evicting a repository that is updated weekly before one nobody has touched
+/// since it was cloned. The size walk visits every file anyway, so the real
+/// answer is free.
+fn slot_stats(dir: &Path) -> (u64, std::time::SystemTime) {
+    let mut size = 0u64;
+    let mut newest = std::time::UNIX_EPOCH;
+    for entry in walkdir::WalkDir::new(dir).into_iter().flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        size = size.saturating_add(meta.len());
+        if let Ok(modified) = meta.modified() {
+            newest = newest.max(modified);
+        }
+    }
+    (size, newest)
 }
 
 fn lock_repo_cache(
@@ -268,17 +386,18 @@ fn try_update_cached_repo(
         cb("Updating cached repository…");
     }
 
+    // `-c` is a *global* git option: `git fetch -c key=value` is rejected with
+    // "unknown switch `c`", so it has to precede the subcommand. It used to sit
+    // after `fetch`, which made every cache refresh fail outright whenever a
+    // proxy was configured — those users re-cloned the whole repository on every
+    // install and update instead of ever reusing the cache.
     let mut fetch_cmd = git_command();
-    fetch_cmd
-        .arg("-C")
-        .arg(cached)
-        .arg("fetch")
-        .arg("--depth")
-        .arg("1");
+    fetch_cmd.arg("-C").arg(cached);
     if let Some(proxy) = proxy_url.filter(|s| !s.is_empty()) {
         fetch_cmd.arg("-c").arg(format!("http.proxy={proxy}"));
         fetch_cmd.arg("-c").arg(format!("https.proxy={proxy}"));
     }
+    fetch_cmd.arg("fetch").arg("--depth").arg("1");
     fetch_cmd.arg("origin");
     if let Some(branch) = branch {
         fetch_cmd.arg(branch);
@@ -323,20 +442,44 @@ fn try_update_cached_repo(
         return Ok(false);
     }
 
-    // Reset to the fetched HEAD.
-    let target = branch
-        .map(|b| format!("origin/{b}"))
-        .unwrap_or_else(|| "origin/HEAD".to_string());
-    let reset_status = git_command()
-        .arg("-C")
-        .arg(cached)
-        .args(["reset", "--hard", &target])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    match reset_status {
-        Ok(s) if s.success() => Ok(true),
-        _ => {
+    // Reset to the fetched HEAD. A branch has a remote-tracking ref, but a tag
+    // does not — `origin/<tag>` is not a revision — so fall back to FETCH_HEAD,
+    // which the fetch above just wrote. Without the fallback a tag source never
+    // reuses its cache and silently re-clones on every check.
+    let targets: Vec<String> = match branch {
+        Some(b) => vec![format!("origin/{b}"), "FETCH_HEAD".to_string()],
+        None => vec!["origin/HEAD".to_string()],
+    };
+    // Against a full cache this reset is local and returns immediately. Against a
+    // sparse cache it is a partial clone, so writing the worktree lazily fetches
+    // the blobs it needs — which is why it runs under the same timeout and cancel
+    // flag as the fetch above instead of blocking forever on a dead network.
+    let mut cancelled = false;
+    let reset_ok = targets.iter().any(|target| {
+        match run_git_watched_at(
+            cached,
+            &["reset", "--hard", target],
+            proxy_url,
+            cancel,
+            &None,
+        ) {
+            Ok(()) => true,
+            Err(e) => {
+                cancelled |= is_cancellation(&e);
+                false
+            }
+        }
+    });
+    // A cancellation is not a broken cache. Collapsed into `reset_ok == false` it
+    // reads as "every target failed", and the cache below gets deleted — so
+    // cancelling an install would silently cost the user the next full download.
+    // The fetch above already treats cancellation this way; so must this.
+    if cancelled {
+        bail!("Installation cancelled");
+    }
+    match reset_ok {
+        true => Ok(true),
+        false => {
             let _ = std::fs::remove_dir_all(cached);
             Ok(false)
         }
@@ -427,6 +570,385 @@ pub fn clone_repo_ref_with_progress(
     proxy_url: Option<&str>,
     on_progress: Option<ProgressCallback>,
 ) -> Result<PathBuf> {
+    clone_repo_ref_scoped(url, branch, None, cancel, proxy_url, on_progress)
+}
+
+/// Clone `url`, narrowed to `subpath` when one is known.
+///
+/// With a subpath this fetches only that directory (`--filter=blob:none` plus a
+/// sparse-checkout), which is the difference between downloading a repository and
+/// downloading one skill — measured at 15 MB versus 472 KB for a single skill out
+/// of `anthropics/skills`. Every way that can fail — a server with
+/// `uploadpack.allowFilter` off, a git too old to read the sparse arguments the
+/// way we mean them, a subpath that upstream has since moved — falls back to the
+/// full checkout, so the narrow path can only ever be faster, never the reason an
+/// install stops working.
+///
+/// Pass `None` for `subpath` whenever the caller needs to search the repository
+/// rather than read one known directory.
+pub fn clone_repo_ref_scoped(
+    url: &str,
+    branch: Option<&str>,
+    subpath: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+    on_progress: Option<ProgressCallback>,
+) -> Result<PathBuf> {
+    if let Some(subpath) = sparse_pattern(subpath) {
+        match clone_repo_sparse(url, branch, &subpath, cancel, proxy_url, &on_progress) {
+            Ok(dir) => return Ok(dir),
+            Err(e) if is_cancellation(&e) => return Err(e),
+            Err(e) => {
+                log::info!(
+                    "narrow clone of '{subpath}' from {url} unavailable, using a full checkout: {e}"
+                );
+            }
+        }
+    }
+
+    clone_repo_full(url, branch, cancel, proxy_url, on_progress)
+}
+
+/// Whether an error is a user cancellation rather than a fault worth retrying
+/// differently.
+fn is_cancellation(err: &anyhow::Error) -> bool {
+    let message = err.to_string();
+    message.contains("cancelled") || message.contains("canceled")
+}
+
+/// Turn a stored subpath into a sparse-checkout pattern, or `None` when it is not
+/// one we are willing to hand to git.
+///
+/// The pattern given to git must select the same directory the caller will later
+/// `join` onto the checkout. Tidying the string here — trimming, swapping
+/// separators — would break that: on unix a trailing space and a backslash are
+/// both legal parts of a directory name, so `skills/foo ` would narrow to
+/// `skills/foo`, pass the guard, and then leave the caller reading a directory the
+/// checkout does not contain, with no failure to fall back on. So nothing is
+/// rewritten; a path that is not already clean simply takes the full checkout.
+///
+/// Windows is the one exception, and only because `\` cannot be part of a name
+/// there — `content_hash` normalizes separators under the same `cfg` for the same
+/// reason.
+fn sparse_pattern(subpath: Option<&str>) -> Option<String> {
+    let raw = subpath?;
+    #[cfg(windows)]
+    let raw = &raw.replace('\\', "/");
+
+    if raw.is_empty()
+        || raw != raw.trim()
+        || raw.starts_with('/')
+        || raw.ends_with('/')
+        || raw.contains('\\')
+    {
+        return None;
+    }
+    if raw
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return None;
+    }
+    Some(raw.to_string())
+}
+
+/// Clone only `subpath` out of `url`, reusing (and widening) the sparse cache slot.
+fn clone_repo_sparse(
+    url: &str,
+    branch: Option<&str>,
+    subpath: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+    on_progress: &Option<ProgressCallback>,
+) -> Result<PathBuf> {
+    let cached_dir = repo_cache_dir_for(url, true);
+    let _cache_lock = lock_repo_cache(&cached_dir, on_progress)?;
+
+    // One slot serves every skill from this repo: the objects are what is
+    // expensive, and they are shared. The lock holds until this call's copy is
+    // taken, so a later install re-scoping the worktree cannot disturb it.
+    let reusable = cached_dir.exists()
+        && try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, on_progress)?;
+
+    if !reusable {
+        let _ = std::fs::remove_dir_all(&cached_dir);
+        prune_repo_cache(&cached_dir);
+        sparse_clone_into(&cached_dir, url, branch, cancel, proxy_url, on_progress).inspect_err(
+            |_| {
+                let _ = std::fs::remove_dir_all(&cached_dir);
+            },
+        )?;
+    }
+
+    set_sparse_scope(&cached_dir, subpath, cancel, proxy_url, on_progress)?;
+
+    // `sparse-checkout set` succeeds on a path the repository does not have — it
+    // just leaves that path absent, keeping the root files cone mode always
+    // includes. So the result has to be inspected rather than trusted.
+    if !sparse_checkout_holds_a_skill(&cached_dir, subpath) {
+        bail!("'{subpath}' is not a skill directory in the narrow checkout of {url}");
+    }
+
+    copy_cached_repo(&cached_dir, cancel)
+}
+
+fn sparse_clone_into(
+    dest: &Path,
+    url: &str,
+    branch: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+    on_progress: &Option<ProgressCallback>,
+) -> Result<()> {
+    if let Some(cb) = on_progress {
+        cb("Fetching only the requested skill directory…");
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut command = git_command();
+    command
+        .arg("clone")
+        .arg("--filter=blob:none")
+        .arg("--no-checkout")
+        .arg("--sparse")
+        .arg("--depth")
+        .arg("1");
+    // `git clone -c` applies the value before the initial fetch, so unlike
+    // `git fetch` this really does route the clone through the proxy.
+    if let Some(proxy) = proxy_url.filter(|s| !s.is_empty()) {
+        command.arg("-c").arg(format!("http.proxy={proxy}"));
+        command.arg("-c").arg(format!("https.proxy={proxy}"));
+    }
+    if let Some(branch) = branch {
+        command.arg("--branch").arg(branch);
+    }
+    command.arg("--progress").arg(url).arg(dest);
+    run_git_watched(command, cancel, on_progress)
+}
+
+/// Point the cache's sparse checkout at `subpath` and materialize it.
+///
+/// `set` rather than `add`: fetched objects stay in the cache either way, so
+/// carrying every previously requested skill in the worktree buys nothing.
+fn set_sparse_scope(
+    cached: &Path,
+    subpath: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+    on_progress: &Option<ProgressCallback>,
+) -> Result<()> {
+    // `--cone` is explicit because cone mode is only the default on newer git,
+    // and the non-cone reading of the same argument is a gitignore-style pattern
+    // that would not bring the directory's contents with it.
+    run_git_watched_at(
+        cached,
+        &["sparse-checkout", "set", "--cone", subpath],
+        proxy_url,
+        cancel,
+        on_progress,
+    )?;
+    run_git_watched_at(cached, &["checkout"], proxy_url, cancel, on_progress)
+}
+
+/// Whether the narrow checkout produced a skill at exactly `subpath`.
+///
+/// Deliberately strict: a directory that merely *contains* skills is refused, so
+/// a container subpath takes the full checkout. That is not conservatism for its
+/// own sake — `resolve_skill_dir` accepts a stored path only when the path itself
+/// is a skill, and otherwise searches the whole repository for the locator id. Let
+/// a container through here and that search runs against a tree holding one
+/// directory, which does not fail cleanly: it can resolve a *different* skill that
+/// happens to be inside the narrow scope. Refusing containers keeps the repo-wide
+/// search on a repo-wide checkout, which is the only tree it is correct on.
+fn sparse_checkout_holds_a_skill(cached: &Path, subpath: &str) -> bool {
+    skill_metadata::is_valid_skill_dir(&cached.join(subpath))
+}
+
+/// Materialize an install checkout from a sparse cache by copying it.
+///
+/// `git clone --local` cannot be used here. Cloning from a partial clone asks the
+/// source to serve objects it does not have, and git aborts with "could not fetch
+/// <oid> from promisor remote", taking the whole install with it. A plain copy
+/// keeps the promisor and sparse configuration intact, and is cheap precisely
+/// because a sparse cache holds one skill instead of a repository.
+fn copy_cached_repo(cached: &Path, cancel: Option<&Arc<AtomicBool>>) -> Result<PathBuf> {
+    let temp_dir =
+        std::env::temp_dir().join(format!("{CLONE_TEMP_PREFIX}{}", uuid::Uuid::new_v4()));
+    if let Err(e) = copy_dir_contents(cached, &temp_dir, cancel) {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(e);
+    }
+    detach_from_promisor(&temp_dir);
+    Ok(temp_dir)
+}
+
+/// Cut an install checkout loose from the promisor remote it was copied from.
+///
+/// This is the boundary that keeps the narrow clone from becoming a permanent tax
+/// on everyone who touches this code. A partial clone carries IOUs: a git command
+/// that reaches an object we never fetched silently becomes a network round trip,
+/// which can hang, needs a proxy, and needs credentials. Callers run git against
+/// the checkout we hand back — `checkout_revision`, `get_head_revision`, whatever
+/// gets added next — and nothing in the type system would tell them that.
+///
+/// Dropping the config makes a missing object an immediate error instead, exactly
+/// as it has always been in a shallow full checkout.
+///
+/// The precise claim, because a broader one would be wrong: no git command against
+/// the returned checkout fetches an object *behind the caller's back*. An explicit
+/// `fetch`/`pull`/`ls-remote` still reaches origin, whose URL the copy keeps — no
+/// caller does that today, and one that started would be doing something visibly
+/// network-shaped. What this rules out is the invisible case, which is the one
+/// nobody would think to instrument.
+fn detach_from_promisor(repo_dir: &Path) {
+    // Three keys, because git registers a promisor remote from *any* of them.
+    // `git clone --filter` writes the two `remote.origin.*` ones and, since 2.25,
+    // not `extensions.partialClone` — but leaving that one out would mean the set
+    // is complete only for the git that happens to write our caches, and getting
+    // it wrong restores lazy fetching silently.
+    for key in [
+        "remote.origin.promisor",
+        "remote.origin.partialclonefilter",
+        "extensions.partialClone",
+    ] {
+        let _ = git_command()
+            .arg("-C")
+            .arg(repo_dir)
+            .args(["config", "--unset", key])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// Recursive copy that skips symlinks, so it can never follow a link out of the
+/// cache. Nothing downstream misses them: the installer drops symlinks, and
+/// `content_hash` counts only regular files.
+fn copy_dir_contents(src: &Path, dst: &Path, cancel: Option<&Arc<AtomicBool>>) -> Result<()> {
+    if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+        bail!("Installation cancelled");
+    }
+    std::fs::create_dir_all(dst).with_context(|| format!("Failed to create {}", dst.display()))?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        let target = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_contents(&entry.path(), &target, cancel)?;
+        } else {
+            std::fs::copy(entry.path(), &target).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    entry.path().display(),
+                    target.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// `git -C <dir> <args…>` under the shared cancel/timeout policy.
+///
+/// These are not local-only commands. In a partial clone both `sparse-checkout`
+/// and `checkout` fetch the blobs they are about to write, so they block on the
+/// network exactly like a clone does and have to be just as cancellable — the
+/// reason this exists rather than a plain `Command::output()`.
+///
+/// The proxy is passed per invocation rather than read from the cache's config:
+/// `git clone -c` persisted whatever proxy was in effect when the cache was
+/// created, and a command line `-c` is what lets a since-changed proxy win over
+/// that stale value.
+fn run_git_watched_at(
+    dir: &Path,
+    args: &[&str],
+    proxy_url: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    on_progress: &Option<ProgressCallback>,
+) -> Result<()> {
+    let mut command = git_command();
+    command.arg("-C").arg(dir);
+    if let Some(proxy) = proxy_url.filter(|s| !s.is_empty()) {
+        command.arg("-c").arg(format!("http.proxy={proxy}"));
+        command.arg("-c").arg(format!("https.proxy={proxy}"));
+    }
+    command.args(args);
+    run_git_watched(command, cancel, on_progress)
+}
+
+/// Run a git subprocess under the shared cancel/timeout policy, forwarding its
+/// stderr to `on_progress`.
+///
+/// The full-clone loop below is deliberately left inline rather than reshaped to
+/// call this: it has no end-to-end test coverage, so the safe move is to add a
+/// path beside it, not to rewrite it.
+fn run_git_watched(
+    mut command: Command,
+    cancel: Option<&Arc<AtomicBool>>,
+    on_progress: &Option<ProgressCallback>,
+) -> Result<()> {
+    let mut child = command
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to start git")?;
+
+    let (stderr_rx, stderr_thread) =
+        spawn_stderr_collector(child.stderr.take(), on_progress.is_some());
+    let deadline = Instant::now() + Duration::from_secs(CLONE_TIMEOUT_SECS);
+
+    loop {
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("Installation cancelled");
+        }
+
+        if let Some(ref cb) = on_progress {
+            while let Ok(line) = stderr_rx.try_recv() {
+                if !is_ssh_warning(&line) && !line.trim().is_empty() {
+                    cb(&line);
+                }
+            }
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let collected = stderr_thread.join().unwrap_or_default();
+                if status.success() {
+                    return Ok(());
+                }
+                bail!("git exited with {}: {}", status, collected.trim());
+            }
+            Ok(None) => {
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!("git timed out after {}s", CLONE_TIMEOUT_SECS);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("Failed to wait for git: {e}")
+            }
+        }
+    }
+}
+
+fn clone_repo_full(
+    url: &str,
+    branch: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+    on_progress: Option<ProgressCallback>,
+) -> Result<PathBuf> {
     let cached_dir = repo_cache_dir(url);
     let _cache_lock = lock_repo_cache(&cached_dir, &on_progress)?;
 
@@ -447,6 +969,7 @@ pub fn clone_repo_ref_with_progress(
 
     // Remove any leftover partial clone.
     let _ = std::fs::remove_dir_all(&cached_dir);
+    prune_repo_cache(&cached_dir);
 
     let timeout = Duration::from_secs(CLONE_TIMEOUT_SECS);
     let mut system_git_stderr: Option<String> = None;
@@ -563,6 +1086,7 @@ pub fn clone_repo_ref_with_progress(
         true
     });
 
+    git_credentials::install_git2_credentials(&mut callbacks, url);
     let mut fetch_opts = git2::FetchOptions::new();
     fetch_opts.remote_callbacks(callbacks);
     fetch_opts.depth(1);
@@ -576,6 +1100,13 @@ pub fn clone_repo_ref_with_progress(
     match builder.clone(url, &cached_dir) {
         Ok(_) => materialize_cached_repo(&cached_dir, cancel),
         Err(git2_err) => {
+            // The pinned ref may be a tag, which the clone above cannot check
+            // out. Retry in the shape that works before giving up.
+            if let Some(pinned) = branch {
+                if clone_tag_with_git2(url, pinned, &cached_dir, cancel, proxy_url).is_ok() {
+                    return materialize_cached_repo(&cached_dir, cancel);
+                }
+            }
             let _ = std::fs::remove_dir_all(&cached_dir);
             // Include system git stderr in the error if available.
             let detail = system_git_stderr
@@ -585,6 +1116,63 @@ pub fn clone_repo_ref_with_progress(
             anyhow::bail!("Failed to clone {}: {}{}", url, git2_err, detail)
         }
     }
+}
+
+/// Fetch a repository pinned to a **tag** with libgit2.
+///
+/// `RepoBuilder::branch` resolves its argument under `refs/remotes/origin/`, so
+/// a tag fails there with "reference 'refs/remotes/origin/<tag>' not found".
+/// Init an empty repo and shallow-fetch the tag ref directly instead, then
+/// detach onto the commit it peels to — cloning the default branch first would
+/// download a second snapshot nobody wants.
+///
+/// Verified against a real https remote; `file://` cannot do shallow at all, so
+/// a local-transport test would prove nothing here.
+///
+/// Only reachable when system git is missing or failed: system git's
+/// `clone --branch` already accepts tags.
+fn clone_tag_with_git2(
+    url: &str,
+    tag: &str,
+    cached_dir: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+) -> Result<()> {
+    let _ = std::fs::remove_dir_all(cached_dir);
+    let deadline = Instant::now() + Duration::from_secs(CLONE_TIMEOUT_SECS);
+    let fetch_opts = || {
+        let cancel = cancel.cloned();
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.transfer_progress(move |_| {
+            if cancel.as_ref().is_some_and(|c| c.load(Ordering::SeqCst)) {
+                return false;
+            }
+            Instant::now() <= deadline
+        });
+        git_credentials::install_git2_credentials(&mut callbacks, url);
+        let mut opts = git2::FetchOptions::new();
+        opts.remote_callbacks(callbacks);
+        opts.depth(1);
+        if let Some(proxy) = proxy_url.filter(|s| !s.is_empty()) {
+            let mut proxy_opts = git2::ProxyOptions::new();
+            proxy_opts.url(proxy);
+            opts.proxy_options(proxy_opts);
+        }
+        opts
+    };
+
+    let repo = git2::Repository::init(cached_dir)?;
+    {
+        // A named remote, not an anonymous one: the cache-reuse path identifies
+        // a cached repo by `git remote get-url origin`.
+        let mut remote = repo.remote("origin", url)?;
+        let refspec = format!("+refs/tags/{tag}:refs/tags/{tag}");
+        remote.fetch(&[refspec.as_str()], Some(&mut fetch_opts()), None)?;
+    }
+    let commit = repo.revparse_single(&format!("refs/tags/{tag}^{{commit}}"))?;
+    repo.set_head_detached(commit.id())?;
+    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
+    Ok(())
 }
 
 pub fn get_head_revision(repo_dir: &Path) -> Result<String> {
@@ -622,16 +1210,15 @@ pub fn resolve_remote_revision(
     if let Some(proxy) = proxy_url.filter(|s| !s.is_empty()) {
         proxy_opts.url(proxy);
     }
-    remote.connect_auth(Direction::Fetch, None, Some(proxy_opts))?;
+    let mut callbacks = git2::RemoteCallbacks::new();
+    git_credentials::install_git2_credentials(&mut callbacks, url);
+    remote.connect_auth(Direction::Fetch, Some(callbacks), Some(proxy_opts))?;
     let refs = remote.list()?;
 
-    if let Some(branch) = branch {
-        let target = format!("refs/heads/{branch}");
-        if let Some(head) = refs.iter().find(|head| head.name() == target) {
+    for wanted in candidate_ref_names(branch) {
+        if let Some(head) = refs.iter().find(|head| head.name() == wanted) {
             return Ok(head.oid().to_string());
         }
-    } else if let Some(head) = refs.iter().find(|head| head.name() == "HEAD") {
-        return Ok(head.oid().to_string());
     }
 
     anyhow::bail!("Unable to resolve remote revision for {}", url)
@@ -825,6 +1412,51 @@ fn parse_github_tree_url_path(url: &str) -> Option<(String, String)> {
     Some((clone_url, path))
 }
 
+/// Split a `tree/<path>` tail against the remote's actual refs.
+///
+/// Branches are matched first: a tag may only claim a URL that no branch
+/// explains. Matching the longest ref across heads and tags at once would let
+/// a tag named `main/v1` swallow a URL that means branch `main` plus subpath
+/// `v1/...`.
+fn split_tree_path_with_known_refs(
+    path: &str,
+    known: &RemoteRefNames,
+) -> (String, Option<String>) {
+    match_known_ref(path, &known.heads)
+        .or_else(|| match_known_ref(path, &known.tags))
+        .unwrap_or_else(|| split_tree_branch_path(path, &[]))
+}
+
+/// Longest ref in `known` that matches a `/`-bounded prefix of `path`, split
+/// into `(ref, optional subpath)`. `None` when nothing matches.
+///
+/// Callers must try branches before tags: taking the longest match across both
+/// at once lets a tag named `main/v1` steal a URL that means branch `main`
+/// plus subpath `v1/...`.
+fn match_known_ref(path: &str, known: &[String]) -> Option<(String, Option<String>)> {
+    let mut best: Option<&str> = None;
+    for name in known {
+        if name.is_empty() {
+            continue;
+        }
+        let matches = path == name.as_str()
+            || path
+                .strip_prefix(name.as_str())
+                .is_some_and(|rest| rest.starts_with('/'));
+        if matches && best.is_none_or(|b: &str| name.len() > b.len()) {
+            best = Some(name);
+        }
+    }
+    best.map(|name| {
+        let subpath = path
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        (name.to_string(), subpath)
+    })
+}
+
 /// Split a `tree/<path>` tail into `(branch, optional subpath)`.
 ///
 /// GitHub tree URLs are ambiguous when the branch name contains a `/`
@@ -834,28 +1466,8 @@ fn parse_github_tree_url_path(url: &str) -> Option<(String, String)> {
 /// With a populated `known_branches`, pick the longest branch that matches a
 /// `/`-bounded prefix of `path`.
 fn split_tree_branch_path(path: &str, known_branches: &[String]) -> (String, Option<String>) {
-    if !known_branches.is_empty() {
-        let mut best: Option<&str> = None;
-        for branch in known_branches {
-            if branch.is_empty() {
-                continue;
-            }
-            let matches = path == branch.as_str()
-                || path
-                    .strip_prefix(branch.as_str())
-                    .is_some_and(|rest| rest.starts_with('/'));
-            if matches && best.is_none_or(|b: &str| branch.len() > b.len()) {
-                best = Some(branch);
-            }
-        }
-        if let Some(branch) = best {
-            let subpath = path
-                .strip_prefix(branch)
-                .and_then(|rest| rest.strip_prefix('/'))
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string());
-            return (branch.to_string(), subpath);
-        }
+    if let Some(hit) = match_known_ref(path, known_branches) {
+        return hit;
     }
 
     let mut parts = path.splitn(2, '/');
@@ -880,58 +1492,124 @@ pub fn parse_git_source_resolved(url: &str, proxy_url: Option<&str>) -> ParsedGi
         return parsed;
     }
 
-    let branches = match list_remote_branches(&clone_url, proxy_url) {
-        Ok(b) if !b.is_empty() => b,
+    let known = match list_remote_ref_names(&clone_url, proxy_url) {
+        Ok(refs) if !refs.is_empty() => refs,
         Ok(_) => {
             log::warn!(
-                "ls-remote returned no branches for {}; using optimistic tree-URL parse",
+                "ls-remote returned no refs for {}; using optimistic tree-URL parse",
                 clone_url
             );
             return parsed;
         }
         Err(e) => {
             log::warn!(
-                "ls-remote failed for {}: {} — using optimistic tree-URL parse (slash-branch URLs may parse incorrectly)",
+                "ls-remote failed for {}: {} — using optimistic tree-URL parse (slash-ref URLs may parse incorrectly)",
                 clone_url,
                 e
             );
             return parsed;
         }
     };
-    let (branch, subpath) = split_tree_branch_path(&path, &branches);
+    let (branch, subpath) = split_tree_path_with_known_refs(&path, &known);
     parsed.branch = Some(branch);
     parsed.subpath = subpath;
     parsed
 }
 
-fn list_remote_branches(url: &str, proxy_url: Option<&str>) -> Result<Vec<String>> {
+/// Branch and tag names on the remote, used to split a `tree/<path>` URL.
+///
+/// Tags count: `tree/release/v1.0/skills/foo` is as valid a tag URL as it is a
+/// branch URL, and listing only heads would silently split it as branch
+/// `release` plus subpath `v1.0/skills/foo`. They stay in separate lists
+/// because branches must be matched first.
+#[derive(Debug, Default, PartialEq)]
+struct RemoteRefNames {
+    heads: Vec<String>,
+    tags: Vec<String>,
+}
+
+impl RemoteRefNames {
+    fn is_empty(&self) -> bool {
+        self.heads.is_empty() && self.tags.is_empty()
+    }
+}
+
+fn list_remote_ref_names(url: &str, proxy_url: Option<&str>) -> Result<RemoteRefNames> {
     let mut cmd = git_command();
     if let Some(proxy) = proxy_url.filter(|s| !s.is_empty()) {
         cmd.arg("-c").arg(format!("http.proxy={proxy}"));
         cmd.arg("-c").arg(format!("https.proxy={proxy}"));
     }
     let output = cmd
-        .args(["ls-remote", "--heads", url])
+        .args(["ls-remote", "--heads", "--tags", url])
         .output()
-        .with_context(|| format!("Failed to list remote branches for {}", url))?;
+        .with_context(|| format!("Failed to list remote refs for {}", url))?;
 
     if !output.status.success() {
-        anyhow::bail!("git ls-remote --heads exited with {}", output.status);
+        anyhow::bail!("git ls-remote exited with {}", output.status);
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let branches: Vec<String> = stdout
+    Ok(parse_remote_ref_names(&stdout))
+}
+
+fn parse_remote_ref_names(stdout: &str) -> RemoteRefNames {
+    let mut refs = RemoteRefNames::default();
+    for line in stdout.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(_sha) = parts.next() else { continue };
+        let Some(refname) = parts.next() else { continue };
+        // Peeled entries name the same tag; keep one entry per ref.
+        if refname.ends_with("^{}") {
+            continue;
+        }
+        if let Some(name) = refname.strip_prefix("refs/heads/") {
+            refs.heads.push(name.to_string());
+        } else if let Some(name) = refname.strip_prefix("refs/tags/") {
+            refs.tags.push(name.to_string());
+        }
+    }
+    refs
+}
+
+/// Ref names that a stored source ref may resolve to, most preferred first.
+///
+/// A source ref is stored as a bare name (`main`, `v0.8.0`) with no record of
+/// whether it is a branch or a tag — GitHub `tree/` URLs do not distinguish
+/// them either. Branches win over tags so an ambiguous name keeps its historic
+/// meaning, and the peeled tag (`^{}`) wins over the tag object because only
+/// the peeled line carries the commit an annotated tag points at.
+fn candidate_ref_names(source_ref: Option<&str>) -> Vec<String> {
+    match source_ref {
+        Some(name) => vec![
+            format!("refs/heads/{name}"),
+            format!("refs/tags/{name}^{{}}"),
+            format!("refs/tags/{name}"),
+        ],
+        None => vec!["HEAD".to_string()],
+    }
+}
+
+/// Pick a revision out of `git ls-remote` output by exact ref name.
+///
+/// Never take "the first line": querying a tag returns both the tag object and
+/// its peeled commit, and their order is the remote's business, not ours.
+fn select_remote_revision(stdout: &str, candidates: &[String]) -> Option<String> {
+    let refs: Vec<(&str, &str)> = stdout
         .lines()
         .filter_map(|line| {
             let mut parts = line.split_whitespace();
-            let _sha = parts.next()?;
-            let refname = parts.next()?;
-            refname
-                .strip_prefix("refs/heads/")
-                .map(|name| name.to_string())
+            let sha = parts.next()?;
+            let name = parts.next()?;
+            (!sha.is_empty()).then_some((name, sha))
         })
         .collect();
-    Ok(branches)
+
+    candidates.iter().find_map(|wanted| {
+        refs.iter()
+            .find(|(name, _)| *name == wanted.as_str())
+            .map(|(_, sha)| sha.to_string())
+    })
 }
 
 fn resolve_remote_revision_with_git(
@@ -939,16 +1617,15 @@ fn resolve_remote_revision_with_git(
     branch: Option<&str>,
     proxy_url: Option<&str>,
 ) -> Result<String> {
-    let target = branch
-        .map(|branch| format!("refs/heads/{branch}"))
-        .unwrap_or_else(|| "HEAD".to_string());
+    let candidates = candidate_ref_names(branch);
     let mut cmd = git_command();
     if let Some(proxy) = proxy_url.filter(|s| !s.is_empty()) {
         cmd.arg("-c").arg(format!("http.proxy={proxy}"));
         cmd.arg("-c").arg(format!("https.proxy={proxy}"));
     }
+    cmd.args(["ls-remote", url]);
+    cmd.args(&candidates);
     let output = cmd
-        .args(["ls-remote", url, &target])
         .output()
         .with_context(|| format!("Failed to query remote {}", url))?;
 
@@ -957,14 +1634,8 @@ fn resolve_remote_revision_with_git(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let revision = stdout
-        .lines()
-        .find_map(|line| line.split_whitespace().next())
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("No remote revision found"))?;
-
-    Ok(revision)
+    select_remote_revision(&stdout, &candidates)
+        .ok_or_else(|| anyhow::anyhow!("No remote revision found"))
 }
 
 #[cfg(test)]
@@ -1245,6 +1916,144 @@ mod tests {
         assert_eq!(parsed.branch, None);
     }
 
+    // ── libgit2 tag clone (network; run with `-- --ignored`) ──
+
+    const TAG_REPO: &str = "https://github.com/xingkongliang/skills-manager.git";
+    const TAG_NAME: &str = "v1.36.0";
+    const TAG_COMMIT: &str = "824c51e1c09e64a0ace8cff893d7ec8b3e079959";
+
+    #[test]
+    #[ignore = "hits the network"]
+    fn libgit2_clones_a_tag_and_lands_on_its_commit() {
+        let tmp = tempdir().unwrap();
+        let dest = tmp.path().join("repo");
+        clone_tag_with_git2(TAG_REPO, TAG_NAME, &dest, None, None)
+            .expect("libgit2 must be able to clone a tag");
+        let repo = git2::Repository::open(&dest).unwrap();
+        assert_eq!(
+            repo.head().unwrap().peel_to_commit().unwrap().id().to_string(),
+            TAG_COMMIT
+        );
+        assert!(dest.join("package.json").exists(), "working tree checked out");
+    }
+
+    #[test]
+    #[ignore = "hits the network and mutates PATH; run alone"]
+    fn a_tag_installs_with_no_system_git_on_path() {
+        // The whole point of the git2 path: a machine without git. Emptying PATH
+        // makes every `git_command()` fail, so this exercises the real fallback
+        // wiring, not just the helper.
+        let original = std::env::var_os("PATH");
+        std::env::set_var("PATH", "");
+        let result = clone_repo_ref(TAG_REPO, Some(TAG_NAME), None, None);
+        match original {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+
+        let dir = result.expect("a tag source must install without system git");
+        assert!(dir.join("package.json").exists());
+        cleanup_temp(&dir);
+    }
+
+    // ── remote ref resolution ──
+
+    #[test]
+    fn candidate_refs_prefer_branch_then_peeled_tag_then_tag() {
+        assert_eq!(
+            candidate_ref_names(Some("v0.8.0")),
+            vec![
+                "refs/heads/v0.8.0",
+                "refs/tags/v0.8.0^{}",
+                "refs/tags/v0.8.0",
+            ]
+        );
+        assert_eq!(candidate_ref_names(None), vec!["HEAD"]);
+    }
+
+    #[test]
+    fn resolves_annotated_tag_to_its_peeled_commit() {
+        // Both lines come back for an annotated tag. The first one is the tag
+        // object; only the peeled line is the commit the tag points at.
+        let stdout = "857196de\trefs/tags/v0.8.0\n346411fa\trefs/tags/v0.8.0^{}\n";
+        assert_eq!(
+            select_remote_revision(stdout, &candidate_ref_names(Some("v0.8.0"))),
+            Some("346411fa".to_string())
+        );
+    }
+
+    #[test]
+    fn resolves_lightweight_tag_without_peeled_line() {
+        let stdout = "c2ad91cc\trefs/tags/preview-1\n";
+        assert_eq!(
+            select_remote_revision(stdout, &candidate_ref_names(Some("preview-1"))),
+            Some("c2ad91cc".to_string())
+        );
+    }
+
+    #[test]
+    fn branch_wins_over_a_tag_of_the_same_name() {
+        let stdout = "aaaa\trefs/tags/release\nbbbb\trefs/heads/release\n";
+        assert_eq!(
+            select_remote_revision(stdout, &candidate_ref_names(Some("release"))),
+            Some("bbbb".to_string())
+        );
+    }
+
+    #[test]
+    fn unrelated_refs_do_not_resolve() {
+        // Guards the old "just take the first line" behaviour: a ref the remote
+        // does not have must fail rather than borrow another ref's revision.
+        let stdout = "aaaa\trefs/heads/main\n";
+        assert_eq!(
+            select_remote_revision(stdout, &candidate_ref_names(Some("v9.9.9"))),
+            None
+        );
+    }
+
+    #[test]
+    fn head_resolves_when_no_ref_is_pinned() {
+        let stdout = "94f6d9c0\tHEAD\naaaa\trefs/heads/master\n";
+        assert_eq!(
+            select_remote_revision(stdout, &candidate_ref_names(None)),
+            Some("94f6d9c0".to_string())
+        );
+    }
+
+    #[test]
+    fn remote_ref_names_split_heads_from_tags_and_drop_peeled_duplicates() {
+        let stdout = "aaaa\trefs/heads/main\n\
+                      bbbb\trefs/tags/v1.0\n\
+                      cccc\trefs/tags/v1.0^{}\n\
+                      dddd\trefs/pull/7/head\n";
+        let refs = parse_remote_ref_names(stdout);
+        assert_eq!(refs.heads, vec!["main"]);
+        assert_eq!(refs.tags, vec!["v1.0"]);
+    }
+
+    #[test]
+    fn a_tag_cannot_steal_a_url_that_a_branch_explains() {
+        // Longest-match across heads and tags at once would read this as tag
+        // `main/v1` + subpath `skills`, silently re-pointing the skill.
+        let refs = parse_remote_ref_names(
+            "aaaa\trefs/heads/main\nbbbb\trefs/tags/main/v1\n",
+        );
+        let (branch, subpath) = split_tree_path_with_known_refs("main/v1/skills", &refs);
+        assert_eq!(branch, "main");
+        assert_eq!(subpath.as_deref(), Some("v1/skills"));
+    }
+
+    #[test]
+    fn a_slash_tag_still_resolves_when_no_branch_matches() {
+        let refs = parse_remote_ref_names(
+            "aaaa\trefs/heads/master\nbbbb\trefs/tags/release/v0.8.0\n",
+        );
+        let (branch, subpath) =
+            split_tree_path_with_known_refs("release/v0.8.0/skills/herdr", &refs);
+        assert_eq!(branch, "release/v0.8.0");
+        assert_eq!(subpath.as_deref(), Some("skills/herdr"));
+    }
+
     // ── split_tree_branch_path ──
 
     #[test]
@@ -1299,6 +2108,14 @@ mod tests {
         let (b, s) = split_tree_branch_path("feature/x/sub", &branches);
         assert_eq!(b, "feature"); // falls through to optimistic parse
         assert_eq!(s.as_deref(), Some("x/sub"));
+    }
+
+    #[test]
+    fn split_tree_branch_path_handles_a_tag_with_a_slash() {
+        let refs = vec!["master".to_string(), "release/v0.8.0".to_string()];
+        let (b, s) = split_tree_branch_path("release/v0.8.0/skills/herdr", &refs);
+        assert_eq!(b, "release/v0.8.0");
+        assert_eq!(s.as_deref(), Some("skills/herdr"));
     }
 
     #[test]
@@ -1428,5 +2245,555 @@ mod tests {
         fs::write(dir.join("file.txt"), "data").unwrap();
         cleanup_temp(&dir);
         assert!(!dir.exists());
+    }
+    // ── narrow (partial + sparse) clone ──
+
+    #[test]
+    fn sparse_slot_is_separate_from_the_full_slot() {
+        let url = "https://github.com/acme/skills";
+        assert_ne!(
+            repo_cache_dir_for(url, true),
+            repo_cache_dir_for(url, false)
+        );
+        assert_eq!(repo_cache_dir_for(url, false), repo_cache_dir(url));
+        // Both slots still canonicalize the URL the same way.
+        assert_eq!(
+            repo_cache_dir_for(url, true),
+            repo_cache_dir_for("https://github.com/acme/skills.git/", true)
+        );
+    }
+
+    #[test]
+    fn sparse_pattern_accepts_plain_subpaths_and_rejects_the_rest() {
+        assert_eq!(
+            sparse_pattern(Some("skills/foo")).as_deref(),
+            Some("skills/foo")
+        );
+        assert_eq!(sparse_pattern(Some("a")).as_deref(), Some("a"));
+
+        // Nothing to narrow to, or something we refuse to hand to git. Every one
+        // of these means "use the full checkout", never an error.
+        assert_eq!(sparse_pattern(None), None);
+        assert_eq!(sparse_pattern(Some("")), None);
+        assert_eq!(sparse_pattern(Some("   ")), None);
+        assert_eq!(sparse_pattern(Some("/")), None);
+        assert_eq!(sparse_pattern(Some("../escape")), None);
+        assert_eq!(sparse_pattern(Some("skills/../../etc")), None);
+        assert_eq!(sparse_pattern(Some("skills/./foo")), None);
+        assert_eq!(sparse_pattern(Some("skills//foo")), None);
+        assert_eq!(sparse_pattern(Some("/skills/foo")), None);
+        assert_eq!(sparse_pattern(Some("skills/foo/")), None);
+    }
+
+    /// The pattern handed to git has to name the same directory the caller will
+    /// join onto the checkout. Tidying these up instead of refusing them would
+    /// narrow to a neighbouring directory, pass the guard, and leave the caller
+    /// reading a path the checkout does not have — with no failure to fall back
+    /// on, because from git's point of view everything succeeded.
+    #[cfg(unix)]
+    #[test]
+    fn sparse_pattern_refuses_names_it_would_have_to_rewrite() {
+        // A trailing space and a backslash are both legal in a unix directory name.
+        assert_eq!(sparse_pattern(Some("skills/foo ")), None);
+        assert_eq!(sparse_pattern(Some(" skills/foo")), None);
+        assert_eq!(sparse_pattern(Some("skills\\foo")), None);
+    }
+
+    #[test]
+    fn sparse_checkout_holds_a_skill_distinguishes_a_skill_from_leftovers() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        // Missing entirely — what `sparse-checkout set` leaves behind when the
+        // path does not exist upstream, silently and with exit code 0.
+        assert!(!sparse_checkout_holds_a_skill(root, "skills/gone"));
+
+        // Present but empty.
+        fs::create_dir_all(root.join("skills/empty")).unwrap();
+        assert!(!sparse_checkout_holds_a_skill(root, "skills/empty"));
+
+        // Non-empty but not a skill and holding none: upstream reorganized and
+        // left something else at the recorded path. This must fail so the caller
+        // falls back to a full checkout, where the locator search can find the
+        // skill at its new home.
+        fs::create_dir_all(root.join("skills/moved")).unwrap();
+        fs::write(root.join("skills/moved/README.md"), "moved elsewhere").unwrap();
+        assert!(!sparse_checkout_holds_a_skill(root, "skills/moved"));
+
+        // A skill.
+        fs::create_dir_all(root.join("skills/real")).unwrap();
+        fs::write(root.join("skills/real/SKILL.md"), "---\nname: real\n---").unwrap();
+        assert!(sparse_checkout_holds_a_skill(root, "skills/real"));
+
+        // A directory that only *contains* skills is refused, even though the
+        // narrow checkout of it looks perfectly healthy. `resolve_skill_dir` takes
+        // a stored path only when the path itself is a skill and otherwise
+        // searches the whole repository for its locator id; against a tree holding
+        // one directory that search does not fail cleanly, it can land on whatever
+        // skill happens to be inside the narrow scope. Refusing containers here is
+        // what keeps that search on a full checkout.
+        fs::create_dir_all(root.join("group/inner")).unwrap();
+        fs::write(root.join("group/inner/SKILL.md"), "---\nname: inner\n---").unwrap();
+        assert!(!sparse_checkout_holds_a_skill(root, "group"));
+    }
+
+    /// The cancelled-reset guard in `try_update_cached_repo` recognizes a
+    /// cancellation by its message, so the two have to keep agreeing: if they
+    /// drift, cancelling an install goes back to deleting a healthy cache.
+    #[test]
+    fn a_cancelled_git_run_reports_itself_as_a_cancellation() {
+        let tmp = tempdir().unwrap();
+        let cancel = Arc::new(AtomicBool::new(true));
+        let err = run_git_watched_at(tmp.path(), &["status"], None, Some(&cancel), &None)
+            .expect_err("a set cancel flag must abort the run");
+        assert!(is_cancellation(&err), "got {err}");
+    }
+
+    #[test]
+    fn copy_dir_contents_copies_nested_files() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("a/b")).unwrap();
+        fs::write(src.join("top.txt"), "top").unwrap();
+        fs::write(src.join("a/b/deep.txt"), "deep").unwrap();
+
+        let dst = tmp.path().join("dst");
+        copy_dir_contents(&src, &dst, None).unwrap();
+
+        assert_eq!(fs::read_to_string(dst.join("top.txt")).unwrap(), "top");
+        assert_eq!(
+            fs::read_to_string(dst.join("a/b/deep.txt")).unwrap(),
+            "deep"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_dir_contents_skips_symlinks_instead_of_following_them_out() {
+        let tmp = tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), "not ours").unwrap();
+
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("kept.txt"), "kept").unwrap();
+        std::os::unix::fs::symlink(&outside, src.join("escape")).unwrap();
+
+        let dst = tmp.path().join("dst");
+        copy_dir_contents(&src, &dst, None).unwrap();
+
+        assert!(dst.join("kept.txt").exists());
+        assert!(
+            !dst.join("escape").exists(),
+            "a symlink out of the cache must not be followed into the checkout"
+        );
+    }
+
+    #[test]
+    fn copy_dir_contents_honours_cancellation() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("a.txt"), "a").unwrap();
+
+        let cancel = Arc::new(AtomicBool::new(true));
+        let err = copy_dir_contents(&src, &tmp.path().join("dst"), Some(&cancel)).unwrap_err();
+        assert!(is_cancellation(&err), "got {err}");
+    }
+
+    // ── narrow clone, end to end (network; run with `-- --ignored`) ──
+
+    const SPARSE_REPO: &str = "https://github.com/anthropics/skills";
+    const SPARSE_SUBPATH: &str = "skills/mcp-builder";
+    const SPARSE_SIBLING: &str = "skills/canvas-design";
+
+    #[test]
+    #[ignore = "hits the network"]
+    fn narrow_clone_fetches_one_skill_and_leaves_its_siblings_behind() {
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let checkout =
+            clone_repo_ref_scoped(SPARSE_REPO, None, Some(SPARSE_SUBPATH), None, None, None)
+                .expect("narrow clone must succeed against a filter-capable remote");
+
+        assert!(
+            checkout.join(SPARSE_SUBPATH).join("SKILL.md").is_file(),
+            "the requested skill must be checked out"
+        );
+        assert!(
+            !checkout.join(SPARSE_SIBLING).exists(),
+            "a sibling skill must not be downloaded — that is the whole point"
+        );
+        assert!(
+            repo_cache_dir_for(SPARSE_REPO, true).exists(),
+            "the narrow checkout must come from the sparse cache slot"
+        );
+        assert!(
+            !repo_cache_dir_for(SPARSE_REPO, false).exists(),
+            "the full cache slot must be left untouched"
+        );
+        // End to end, over a real partial clone: what the caller receives is not
+        // one. Callers run plain git against this directory, so it has to be
+        // incapable of wandering onto the network behind their back.
+        for key in ["remote.origin.promisor", "remote.origin.partialclonefilter"] {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&checkout)
+                .args(["config", "--get", key])
+                .output()
+                .unwrap();
+            assert!(
+                !out.status.success(),
+                "the install checkout must be detached from the promisor remote ({key})"
+            );
+        }
+
+        // A second skill from the same repo reuses the cache — its objects are
+        // what cost something — and re-scopes the worktree to itself.
+        let second =
+            clone_repo_ref_scoped(SPARSE_REPO, None, Some(SPARSE_SIBLING), None, None, None)
+                .expect("a second skill must reuse the cache");
+        assert!(second.join(SPARSE_SIBLING).join("SKILL.md").is_file());
+        assert!(
+            !second.join(SPARSE_SUBPATH).exists(),
+            "each checkout carries the skill it asked for, not every earlier one"
+        );
+
+        cleanup_temp(&checkout);
+        cleanup_temp(&second);
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    #[ignore = "hits the network"]
+    fn a_container_subpath_falls_back_to_the_full_checkout() {
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        // `skills` holds skills but is not one. Narrowing to it would leave the
+        // locator search looking at a fraction of the repository.
+        let checkout = clone_repo_ref_scoped(SPARSE_REPO, None, Some("skills"), None, None, None)
+            .expect("a container subpath must degrade to a full checkout");
+
+        assert!(checkout.join(SPARSE_SUBPATH).join("SKILL.md").is_file());
+        assert!(
+            checkout.join(SPARSE_SIBLING).join("SKILL.md").is_file(),
+            "the fallback must be a full checkout, siblings included"
+        );
+
+        cleanup_temp(&checkout);
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    #[ignore = "hits the network"]
+    fn a_subpath_that_no_longer_exists_falls_back_to_the_full_checkout() {
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        // `sparse-checkout set` succeeds on a path that is not in the tree — it
+        // simply leaves it absent — so without the post-checkout inspection this
+        // would hand back a checkout missing the very directory it was asked for,
+        // instead of a repository the locator search can walk.
+        let checkout = clone_repo_ref_scoped(
+            SPARSE_REPO,
+            None,
+            Some("skills/this-skill-does-not-exist"),
+            None,
+            None,
+            None,
+        )
+        .expect("a stale subpath must degrade to a full checkout, not an error");
+
+        assert!(
+            checkout.join(SPARSE_SUBPATH).join("SKILL.md").is_file(),
+            "the fallback must be a full checkout the caller can search"
+        );
+
+        cleanup_temp(&checkout);
+        central_repo::set_test_base_dir_override(None);
+    }
+    // ── the promisor boundary ──
+
+    /// The rule this locks in: nothing handed outside this module is a partial
+    /// clone. If someone removes the detach, callers' plain `git` calls silently
+    /// become network calls again — which is the maintenance cost the narrow
+    /// clone would otherwise impose on every future change.
+    #[test]
+    fn an_install_checkout_is_never_left_attached_to_a_promisor_remote() {
+        let tmp = tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .arg("init")
+            .status()
+            .is_ok_and(|s| s.success()));
+        for (key, value) in [
+            ("remote.origin.url", "https://example.invalid/x.git"),
+            ("remote.origin.promisor", "true"),
+            ("remote.origin.partialclonefilter", "blob:none"),
+        ] {
+            Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(["config", key, value])
+                .status()
+                .unwrap();
+        }
+
+        detach_from_promisor(&repo);
+
+        for key in ["remote.origin.promisor", "remote.origin.partialclonefilter"] {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(["config", "--get", key])
+                .output()
+                .unwrap();
+            assert!(
+                !out.status.success(),
+                "{key} must be gone, still reads {}",
+                String::from_utf8_lossy(&out.stdout).trim()
+            );
+        }
+        // The remote itself stays: it is what `source_ref_resolved` reports and
+        // what a later fetch of this checkout would use.
+        let url = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["config", "--get", "remote.origin.url"])
+            .output()
+            .unwrap();
+        assert!(url.status.success());
+    }
+
+    /// Pins the *outcome* rather than the config keys: a checkout that has been
+    /// detached must fail on a missing object without reaching for the remote.
+    ///
+    /// Naming the keys is not enough on its own. Git registers a promisor remote
+    /// from any of three settings, so a key set that is right for today's git and
+    /// wrong for another would leave lazy fetching switched back on with every
+    /// key-checking test still green. This one asks the question the boundary is
+    /// actually about, and needs no network to do it: the partial clone is served
+    /// over `file://` from a repo in the same temp directory.
+    #[test]
+    fn a_detached_checkout_fails_on_a_missing_object_without_reaching_the_remote() {
+        fn git(dir: &Path, args: &[&str]) -> std::process::Output {
+            Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .expect("git must be runnable")
+        }
+
+        let tmp = tempdir().unwrap();
+        let source = tmp.path().join("source");
+        fs::create_dir_all(source.join("kept")).unwrap();
+        fs::create_dir_all(source.join("absent")).unwrap();
+        fs::write(source.join("kept/f.txt"), "kept").unwrap();
+        fs::write(source.join("absent/f.txt"), "absent").unwrap();
+        git(&source, &["init"]);
+        git(&source, &["add", "-A"]);
+        git(
+            &source,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-m",
+                "init",
+            ],
+        );
+        // The filter is served by the *source* repo, so the switch belongs there.
+        git(&source, &["config", "uploadpack.allowFilter", "true"]);
+
+        // `file://` needs forward slashes and, on Windows, a slash before the
+        // drive letter: `file:///C:/…` where unix wants `file:///tmp/…`.
+        fn file_url(path: &Path) -> String {
+            let raw = path.display().to_string().replace('\\', "/");
+            if raw.starts_with('/') {
+                format!("file://{raw}")
+            } else {
+                format!("file:///{raw}")
+            }
+        }
+
+        let checkout = tmp.path().join("checkout");
+        let source_url = file_url(&source);
+        let cloned = Command::new("git")
+            .args(["clone", "--filter=blob:none", "--no-local", "--no-checkout"])
+            .arg("--sparse")
+            .arg(&source_url)
+            .arg(&checkout)
+            .output()
+            .unwrap();
+        assert!(
+            cloned.status.success(),
+            "clone failed: {}",
+            String::from_utf8_lossy(&cloned.stderr)
+        );
+        git(&checkout, &["sparse-checkout", "set", "--cone", "kept"]);
+        git(&checkout, &["checkout"]);
+        // Stand in for a git that records the promisor under `extensions` instead
+        // of, or as well as, the two `remote.origin.*` keys. Today's git writes
+        // only the latter pair, so without this line the third key in
+        // `detach_from_promisor` would be defensive code no test ever exercises —
+        // and dropping it from the list would go unnoticed.
+        git(&checkout, &["config", "extensions.partialClone", "origin"]);
+
+        let oid = git(&checkout, &["rev-parse", "HEAD:absent/f.txt"]);
+        let oid = String::from_utf8_lossy(&oid.stdout).trim().to_string();
+
+        // Point origin somewhere that does not exist, so any attempt to reach it
+        // is unmistakable in the error rather than quietly succeeding.
+        let gone = file_url(&tmp.path().join("gone"));
+        git(&checkout, &["config", "remote.origin.url", &gone]);
+
+        // Precondition, asserted rather than assumed: this really is a partial
+        // clone with that object missing. Without it the test could pass on a git
+        // that ignored the filter and fetched everything.
+        let before = git(&checkout, &["cat-file", "-s", &oid]);
+        let before_err = String::from_utf8_lossy(&before.stderr).to_string();
+        assert!(
+            !before.status.success() && before_err.contains("promisor"),
+            "setup must produce a genuine partial clone, got: {before_err}"
+        );
+
+        detach_from_promisor(&checkout);
+
+        let after = git(&checkout, &["cat-file", "-s", &oid]);
+        let after_err = String::from_utf8_lossy(&after.stderr).to_string();
+        assert!(!after.status.success(), "the object is still missing");
+        assert!(
+            !after_err.contains("promisor") && !after_err.contains(&gone),
+            "a detached checkout must not go to the remote for a missing object, got: {after_err}"
+        );
+
+        // And the objects it does have are still readable.
+        assert_eq!(
+            fs::read_to_string(checkout.join("kept/f.txt")).unwrap(),
+            "kept"
+        );
+    }
+
+    // ── cache prune ──
+
+    /// Writes the marker deep inside the slot, the way git writes fetched objects,
+    /// so the recency signal has to come from a walk rather than the slot's own
+    /// directory mtime.
+    fn seed_cache_slot(root: &Path, name: &str, bytes: usize, used: std::time::SystemTime) {
+        let deep = root.join(name).join(".git").join("objects");
+        fs::create_dir_all(&deep).unwrap();
+        let blob = deep.join("pack");
+        fs::write(&blob, vec![b'x'; bytes]).unwrap();
+        File::options()
+            .write(true)
+            .open(&blob)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(used))
+            .unwrap();
+    }
+
+    #[test]
+    fn prune_is_a_no_op_while_the_cache_fits() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        seed_cache_slot(root, "a", 1024, std::time::UNIX_EPOCH);
+
+        prune_cache_root(root, &root.join("nothing"), 8192);
+
+        assert!(
+            root.join("a").exists(),
+            "a cache under the limit is left alone"
+        );
+    }
+
+    #[test]
+    fn prune_ranks_by_the_newest_file_inside_a_slot_not_the_slot_itself() {
+        // Both slots were created now; only their contents differ in age. Ranking
+        // on the directory's own mtime cannot tell them apart, which is exactly
+        // the mistake this guards against.
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        let now = std::time::SystemTime::now();
+        seed_cache_slot(root, "stale", 4096, now - Duration::from_secs(86_400 * 30));
+        seed_cache_slot(root, "fresh", 4096, now);
+
+        // Make the two signals disagree on purpose, or this test proves nothing:
+        // adding an entry to `stale` bumps that directory's own mtime to now, so
+        // by directory mtime `stale` looks like the *most* recently used slot,
+        // while the only file in it is a month old. Ranking on the directory
+        // therefore evicts `fresh` and keeps `stale` — the exact inversion this
+        // guards against. An empty directory adds no bytes and no file mtime, so
+        // it cannot move the correct signal.
+        fs::create_dir_all(root.join("stale").join("refs")).unwrap();
+
+        prune_cache_root(root, &root.join("nothing"), 6000);
+
+        assert!(!root.join("stale").exists(), "the stale slot goes first");
+        assert!(root.join("fresh").exists(), "the recently used slot stays");
+    }
+
+    #[test]
+    fn prune_evicts_the_least_recently_used_and_spares_the_slot_being_written() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        let now = std::time::SystemTime::now();
+        let day = Duration::from_secs(86_400);
+        // `being-written` is deliberately the *least* recently used slot. If it
+        // were the newest, plain LRU would spare it anyway and the guard could be
+        // deleted with every assertion still green — which is exactly how the
+        // first version of this test proved nothing.
+        seed_cache_slot(root, "being-written", 4096, now - day * 30);
+        seed_cache_slot(root, "middle", 4096, now - day);
+        seed_cache_slot(root, "newest", 4096, now);
+
+        // Fits two of the three.
+        prune_cache_root(root, &root.join("being-written"), 10_000);
+
+        assert!(
+            root.join("being-written").exists(),
+            "the slot the caller is about to clone into must survive, even as the \
+             least recently used one"
+        );
+        assert!(
+            !root.join("middle").exists(),
+            "eviction moves past the protected slot to the next oldest"
+        );
+        assert!(root.join("newest").exists(), "eviction stops once it fits");
+    }
+
+    #[test]
+    fn prune_skips_a_slot_another_install_is_holding() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        let now = std::time::SystemTime::now();
+        seed_cache_slot(root, "held", 4096, now - Duration::from_secs(86_400 * 30));
+        seed_cache_slot(root, "free", 4096, now - Duration::from_secs(86_400));
+
+        // Stand in for another install that already holds the oldest slot.
+        let held = lock_repo_cache(&root.join("held"), &None).unwrap();
+
+        prune_cache_root(root, &root.join("nothing"), 6000);
+
+        assert!(
+            root.join("held").exists(),
+            "deleting a checkout out from under a running install would break it"
+        );
+        assert!(
+            !root.join("free").exists(),
+            "eviction moves on to the next candidate instead of giving up"
+        );
+        drop(held);
     }
 }

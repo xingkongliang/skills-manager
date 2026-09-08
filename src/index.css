@@ -121,6 +121,22 @@
     @apply flex flex-wrap items-center justify-between gap-3;
   }
 
+  .app-toolbar-segmented {
+    @apply h-10;
+  }
+
+  .app-toolbar-button {
+    @apply inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg text-[13px] font-medium transition-colors outline-none;
+  }
+
+  .app-toolbar-button-secondary {
+    @apply border border-border-subtle bg-surface px-2.5 text-muted hover:bg-surface-hover hover:text-secondary;
+  }
+
+  .app-toolbar-button-primary {
+    @apply border border-accent-border bg-accent-dark px-3 text-white hover:bg-accent;
+  }
+
   .app-input {
     @apply h-10 rounded-lg border border-border-subtle bg-surface px-3 text-[13px] text-secondary outline-none transition-colors placeholder:text-faint focus:border-border;
   }
@@ -130,7 +146,7 @@
   }
 
   .app-segmented-button {
-    @apply rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors outline-none hover:text-tertiary;
+    @apply whitespace-nowrap rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors outline-none hover:text-tertiary;
   }
 
   .app-segmented-button-active {

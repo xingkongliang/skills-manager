@@ -12,7 +12,10 @@ import {
   RefreshCw,
   Search,
   CircleSlash,
+  Square,
+  SquareCheck,
   Trash2,
+  Unlink,
   Upload,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -30,6 +33,8 @@ import type { ManagedSkill, ProjectSkill } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
+import { useMultiSelect } from "../hooks/useMultiSelect";
+import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import type { WorkspaceConfig } from "./workspaceConfigs";
 
 function compactHomePath(path: string) {
@@ -56,6 +61,8 @@ function WorkspaceSkillCard({
   active = false,
   actions,
   actionsHover = false,
+  selectable = false,
+  selected = false,
   onClick,
 }: {
   viewMode: "grid" | "list";
@@ -67,23 +74,36 @@ function WorkspaceSkillCard({
   active?: boolean;
   actions?: ReactNode;
   actionsHover?: boolean;
+  /** Multi-select mode: the leading slot becomes a checkbox and clicks select. */
+  selectable?: boolean;
+  selected?: boolean;
   onClick: () => void;
 }) {
+  const leadingSlot = selectable
+    ? (selected
+        ? <SquareCheck className="h-3.5 w-3.5 text-accent" />
+        : <Square className="h-3.5 w-3.5 text-faint" />)
+    : (
+      <span
+        className={cn(
+          "h-2 w-2 rounded-full",
+          active
+            ? "bg-accent-light shadow-[0_0_0_3px_var(--color-accent-bg)]"
+            : "bg-surface-active"
+        )}
+      />
+    );
   if (viewMode === "list") {
     return (
       <div
-        className="app-panel group relative flex cursor-pointer items-center gap-3.5 rounded-xl border-transparent px-3.5 py-3 transition-all hover:border-border hover:bg-surface-hover"
+        className={cn(
+          "app-panel group relative flex cursor-pointer items-center gap-3.5 rounded-xl border-transparent px-3.5 py-3 transition-all hover:border-border hover:bg-surface-hover",
+          selectable && selected && "ring-1 ring-accent border-accent/40"
+        )}
         onClick={onClick}
       >
         <div className="flex h-4 w-4 shrink-0 items-center justify-center">
-          <span
-            className={cn(
-              "h-2 w-2 rounded-full",
-              active
-                ? "bg-accent-light shadow-[0_0_0_3px_var(--color-accent-bg)]"
-                : "bg-surface-active"
-            )}
-          />
+          {leadingSlot}
         </div>
         <h3
           className="w-[180px] shrink-0 truncate text-[14px] font-semibold text-secondary group-hover:text-primary"
@@ -137,20 +157,14 @@ function WorkspaceSkillCard({
   return (
     <div
       className={cn(
-        "app-panel group relative flex h-full cursor-pointer flex-col overflow-hidden shadow-card transition-all hover:-translate-y-px hover:border-border hover:shadow-card-hover"
+        "app-panel group relative flex h-full cursor-pointer flex-col overflow-hidden shadow-card transition-all hover:-translate-y-px hover:border-border hover:shadow-card-hover",
+        selectable && selected && "ring-1 ring-accent border-accent/40"
       )}
       onClick={onClick}
     >
       <div className="flex items-center gap-2.5 px-3.5 pt-3 pb-1.5">
         <div className="flex h-4 w-4 shrink-0 items-center justify-center">
-          <span
-            className={cn(
-              "h-2 w-2 rounded-full",
-              active
-                ? "bg-accent-light shadow-[0_0_0_3px_var(--color-accent-bg)]"
-                : "bg-surface-active"
-            )}
-          />
+          {leadingSlot}
         </div>
         <h3
           className="flex-1 truncate text-[14px] font-semibold text-primary group-hover:text-accent-light"
@@ -248,6 +262,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const [uploadConfirmSkill, setUploadConfirmSkill] = useState<ProjectSkill | null>(null);
   const [pullConfirmSkill, setPullConfirmSkill] = useState<ProjectSkill | null>(null);
   const [deleteLocalConfirmSkill, setDeleteLocalConfirmSkill] = useState<ProjectSkill | null>(null);
+  const [batchUnsyncConfirm, setBatchUnsyncConfirm] = useState(false);
+  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
+  const [batchRunning, setBatchRunning] = useState(false);
   const localDetailRequestRef = useRef(0);
 
   // Cross-category redirect: a deep link like /global-workspace/openclaw should
@@ -477,6 +494,96 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     () => localSkills.filter((skill) => !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id)).length,
     [localSkills, managedLocalIds]
   );
+
+  const localSkillKey = (skill: ProjectSkill) => `${skill.agent}:${skill.relative_path}`;
+
+  const {
+    isMultiSelect, setIsMultiSelect,
+    selectedIds,
+    toggleSelect,
+    isAllSelected,
+    handleSelectAll,
+    exitMultiSelect,
+  } = useMultiSelect({
+    items: localSkills,
+    filtered: visibleLocalSkills,
+    getKey: localSkillKey,
+    isItemActive: () => true,
+    filterSignal: JSON.stringify([search, [...tagFilters].sort()]),
+    scopeSignal: agentKey ?? "",
+    escapeEnabled: !batchUnsyncConfirm && !batchDeleteConfirm,
+  });
+
+  /**
+   * "Remove" means two different things here, so the toolbar never merges them:
+   * a managed skill is unsynced (the central copy survives), while a local-only
+   * skill is deleted from disk for good.
+   */
+  const selectedUnsyncable = useMemo(
+    () => visibleLocalSkills.filter((skill) =>
+      selectedIds.has(localSkillKey(skill))
+      && !!skill.center_skill_id
+      && managedLocalIds.has(skill.center_skill_id)
+    ),
+    [visibleLocalSkills, selectedIds, managedLocalIds]
+  );
+  const selectedDeletable = useMemo(
+    () => visibleLocalSkills.filter((skill) =>
+      selectedIds.has(localSkillKey(skill))
+      && !(skill.center_skill_id && managedLocalIds.has(skill.center_skill_id))
+      && skill.sync_status === "project_only"
+    ),
+    [visibleLocalSkills, selectedIds, managedLocalIds]
+  );
+
+  const handleBatchUnsync = async () => {
+    if (!agentKey) return;
+    setBatchRunning(true);
+    let removed = 0;
+    let failed = 0;
+    try {
+      for (const skill of selectedUnsyncable) {
+        if (!skill.center_skill_id) continue;
+        try {
+          await api.unsyncSkillFromTool(skill.center_skill_id, agentKey);
+          removed++;
+        } catch {
+          failed++;
+        }
+      }
+      if (removed > 0) toast.success(t("globalWorkspace.batchRemoved", { count: removed }));
+      if (failed > 0) toast.error(t("globalWorkspace.batchRemoveFailed", { count: failed }));
+      await Promise.all([refreshManagedSkills(), refreshTools(), loadLocalSkills()]);
+    } finally {
+      setBatchRunning(false);
+      setBatchUnsyncConfirm(false);
+      exitMultiSelect();
+    }
+  };
+
+  const handleBatchDeleteLocal = async () => {
+    if (!currentToolKey) return;
+    setBatchRunning(true);
+    let deleted = 0;
+    let failed = 0;
+    try {
+      for (const skill of selectedDeletable) {
+        try {
+          await api.deleteGlobalLocalSkill(currentToolKey, skill.relative_path);
+          deleted++;
+        } catch {
+          failed++;
+        }
+      }
+      if (deleted > 0) toast.success(t("globalWorkspace.localSkills.deletedLocalBatch", { count: deleted }));
+      if (failed > 0) toast.error(t("globalWorkspace.localSkills.deleteLocalBatchFailed", { count: failed }));
+      await Promise.all([refreshManagedSkills(), refreshTools(), loadLocalSkills()]);
+    } finally {
+      setBatchRunning(false);
+      setBatchDeleteConfirm(false);
+      exitMultiSelect();
+    }
+  };
 
   const handleRemoveLocalManagedSkill = async (skill: ProjectSkill) => {
     if (!agentKey || !skill.center_skill_id || !managedLocalIds.has(skill.center_skill_id)) return;
@@ -814,14 +921,14 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t("globalWorkspace.localSkills.searchPlaceholder")}
-                className="app-input h-9 w-full rounded-md pl-8 font-medium"
+                className="app-input w-full pl-8 font-medium"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
               />
             </div>
 
-            <div className="app-segmented shrink-0">
+            <div className="app-segmented app-toolbar-segmented shrink-0">
               <button
                 onClick={() => void loadLocalSkills()}
                 disabled={localSkillsLoading}
@@ -848,11 +955,26 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
               >
                 <List className="h-4 w-4" />
               </button>
+
+              {/* Selection can stay active in either view. */}
+              <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 self-center bg-border-subtle" />
+              <button
+                type="button"
+                aria-pressed={isMultiSelect}
+                onClick={() => isMultiSelect ? exitMultiSelect() : setIsMultiSelect(true)}
+                className={cn(
+                  "app-segmented-button inline-flex items-center gap-1.5 hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-border",
+                  isMultiSelect && "app-segmented-button-active hover:bg-surface-active hover:text-secondary"
+                )}
+              >
+                <SquareCheck className="h-4 w-4" />
+                {isMultiSelect ? t("globalWorkspace.cancelSelect") : t("globalWorkspace.selectMode")}
+              </button>
             </div>
 
             <button
               onClick={() => setAddDialogOpen(true)}
-              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+              className="app-toolbar-button app-toolbar-button-primary"
             >
               <Plus className="h-3.5 w-3.5" />
               {t("globalWorkspace.addSkill")}
@@ -962,6 +1084,44 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           )}
         </div>
       ) : (
+        <>
+        {isMultiSelect && (
+          <MultiSelectToolbar
+            selectedCount={selectedIds.size}
+            isAllSelected={isAllSelected}
+            actions={[
+              ...(selectedUnsyncable.length > 0
+                ? [{
+                    key: "unsync",
+                    label: t("globalWorkspace.deleteSelected", { count: selectedUnsyncable.length }),
+                    icon: <Unlink className="h-3.5 w-3.5" />,
+                    busy: batchRunning,
+                    onSelect: () => setBatchUnsyncConfirm(true),
+                  }]
+                : []),
+              ...(selectedDeletable.length > 0
+                ? [{
+                    key: "delete",
+                    tone: "danger" as const,
+                    label: t("globalWorkspace.localSkills.deleteLocalSelected", { count: selectedDeletable.length }),
+                    icon: <Trash2 className="h-3.5 w-3.5" />,
+                    busy: batchRunning,
+                    onSelect: () => setBatchDeleteConfirm(true),
+                  }]
+                : []),
+            ]}
+            labels={{
+              hint: t("globalWorkspace.selectHint"),
+              selected: t("globalWorkspace.selectedCount", { count: selectedIds.size }),
+              selectAll: t("globalWorkspace.selectAll"),
+              deselectAll: t("globalWorkspace.deselectAll"),
+              cancel: t("common.cancel"),
+              more: t("mySkills.moreActions"),
+            }}
+            onSelectAll={handleSelectAll}
+            onCancel={exitMultiSelect}
+          />
+        )}
         <div
           className={cn(
             "pb-8",
@@ -973,10 +1133,11 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           {visibleLocalSkills.map((skill) => {
             const statusMeta = getLocalStatusMeta(t, skill.sync_status);
             const isManaged = !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id);
+            const key = localSkillKey(skill);
 
             return (
               <WorkspaceSkillCard
-                key={`${skill.agent}:${skill.relative_path}`}
+                key={key}
                 viewMode={viewMode}
                 title={skill.name}
                 description={skill.description || skill.relative_path}
@@ -984,13 +1145,16 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
                 status={statusMeta}
                 fileCount={skill.files.length}
                 active={isManaged}
-                actions={renderLocalSkillActions(skill, viewMode)}
+                actions={isMultiSelect ? undefined : renderLocalSkillActions(skill, viewMode)}
                 actionsHover={viewMode === "list"}
-                onClick={() => void openLocalDetail(skill)}
+                selectable={isMultiSelect}
+                selected={selectedIds.has(key)}
+                onClick={() => isMultiSelect ? toggleSelect(key) : void openLocalDetail(skill)}
               />
             );
           })}
         </div>
+        </>
       )}
 
       {currentTool && (
@@ -1099,6 +1263,33 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         onClose={() => setPullConfirmSkill(null)}
         onConfirm={() => pullConfirmSkill ? handlePullLocalSkill(pullConfirmSkill) : Promise.resolve()}
       />
+      <ConfirmDialog
+        open={batchUnsyncConfirm}
+        title={t("globalWorkspace.removeSkill")}
+        message={t("globalWorkspace.batchRemoveConfirm", {
+          count: selectedUnsyncable.length,
+          agent: currentTool?.display_name ?? "",
+        })}
+        details={selectedUnsyncable.map((skill) => skill.name)}
+        tone="warning"
+        confirmLabel={t("globalWorkspace.removeSkill")}
+        onClose={() => setBatchUnsyncConfirm(false)}
+        onConfirm={handleBatchUnsync}
+      />
+
+      <ConfirmDialog
+        open={batchDeleteConfirm}
+        title={t("globalWorkspace.localSkills.deleteLocalConfirmTitle")}
+        message={t("globalWorkspace.localSkills.deleteLocalBatchConfirm", {
+          count: selectedDeletable.length,
+          agent: currentTool?.display_name ?? "",
+        })}
+        details={selectedDeletable.map((skill) => skill.relative_path)}
+        confirmLabel={t("common.delete")}
+        onClose={() => setBatchDeleteConfirm(false)}
+        onConfirm={handleBatchDeleteLocal}
+      />
+
       <ConfirmDialog
         open={!!deleteLocalConfirmSkill}
         title={t("globalWorkspace.localSkills.deleteLocalConfirmTitle")}

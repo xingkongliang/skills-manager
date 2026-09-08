@@ -124,6 +124,77 @@ pub fn delete_credential(host: &str) -> Result<()> {
     }
 }
 
+/// Attach a credentials callback to libgit2 network operations against `url`.
+///
+/// Sources, in order: the credential this app stored in the OS keychain for the
+/// host, then the user's git credential helper (osxkeychain, Git Credential
+/// Manager, libsecret) — the same place system git would have looked — then an
+/// ssh-agent key for ssh remotes.
+///
+/// The helper fallback is the one that matters for skill sources. The keychain
+/// only holds hosts this app connected itself, which in practice means the
+/// backup remote; a skill living on a private GitLab or Gitea has no entry
+/// there and would still fail with a keychain-only callback.
+///
+/// Without any callback libgit2 reports "no callback set" (#379). A desktop
+/// launch hits that whenever the system-git attempt fails first: a GUI process
+/// has a leaner PATH than a shell and cannot prompt, so it falls through to
+/// libgit2 — which is why the same skill checks fine from the CLI.
+///
+/// Each source is offered once. libgit2 re-invokes this callback after every
+/// rejection, so a source that answers unconditionally would spin forever.
+pub fn install_git2_credentials(callbacks: &mut git2::RemoteCallbacks<'_>, url: &str) {
+    // Resolve the host now, but read the keychain only from inside the callback:
+    // libgit2 invokes it solely when the remote actually demands credentials, and
+    // almost every skill source is a public repository that never will. Reading
+    // eagerly would touch the keychain on every update check for nothing — and on
+    // macOS each unsigned build that does so raises an authorization prompt.
+    let host = https_host(url);
+    let host_label = host.clone().unwrap_or_else(|| "this remote".to_string());
+    let mut tried_stored = false;
+    let mut tried_helper = false;
+    let mut tried_agent = false;
+
+    callbacks.credentials(move |url, username_from_url, allowed| {
+        if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
+            if !tried_stored {
+                tried_stored = true;
+                if let Some(cred) = host
+                    .as_deref()
+                    .and_then(|h| load_credential(h).ok().flatten())
+                {
+                    return git2::Cred::userpass_plaintext(&cred.username, &cred.password);
+                }
+            }
+            if !tried_helper {
+                tried_helper = true;
+                if let Ok(config) = git2::Config::open_default() {
+                    if let Ok(cred) =
+                        git2::Cred::credential_helper(&config, url, username_from_url)
+                    {
+                        return Ok(cred);
+                    }
+                }
+            }
+        }
+        if allowed.contains(git2::CredentialType::SSH_KEY) && !tried_agent {
+            tried_agent = true;
+            if let Some(user) = username_from_url {
+                return git2::Cred::ssh_key_from_agent(user);
+            }
+        }
+        if allowed.contains(git2::CredentialType::DEFAULT) {
+            return git2::Cred::default();
+        }
+        // Phrased for the user, not for libgit2: this string reaches the UI.
+        Err(git2::Error::from_str(&format!(
+            "Authentication failed: no credentials available for {host_label}. \
+             Sign in to that host with git (for example `gh auth setup-git` for \
+             GitHub), then check for updates again."
+        )))
+    });
+}
+
 /// The askpass script git invokes for username/password prompts. Static
 /// content, no secrets — safe on disk. Git for Windows executes shebang
 /// scripts through its bundled sh, so a single POSIX script covers all
@@ -207,6 +278,35 @@ pub(crate) fn use_mock_keyring() {
 
 #[cfg(test)]
 mod tests {
+    /// The regression #379 reports: libgit2 got `None` for callbacks and
+    /// answered "no callback set", which reached the user verbatim.
+    ///
+    /// Uses a host this app never stores credentials for, so it exercises the
+    /// helper fallback and the final message without reading the app's own
+    /// keychain entry — a test binary is unsigned and reading that entry would
+    /// block on a macOS authorization prompt.
+    #[test]
+    #[ignore = "hits the network"]
+    fn libgit2_is_given_a_credentials_callback() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init_bare(dir.path()).unwrap();
+        let url = "https://gitlab.com/skills-manager-no-such-owner/nope.git";
+        let mut remote = repo.remote_anonymous(url).unwrap();
+        let mut callbacks = git2::RemoteCallbacks::new();
+        install_git2_credentials(&mut callbacks, url);
+
+        // RemoteConnection is not Debug, so unwrap the error by hand.
+        let msg = match remote.connect_auth(git2::Direction::Fetch, Some(callbacks), None) {
+            Ok(_) => panic!("a private remote must not connect anonymously"),
+            Err(e) => e.to_string(),
+        };
+
+        assert!(
+            !msg.contains("no callback set"),
+            "libgit2 still has no credentials callback: {msg}"
+        );
+    }
+
     use super::*;
 
     #[test]

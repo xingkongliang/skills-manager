@@ -35,5 +35,6 @@ dist-ssr
 docs
 reference
 CLAUDE.md
+AGENTS.md
 .loop-log
 

@@ -5,10 +5,32 @@ use std::fmt;
 ///
 /// Serialized as `{"kind": "Database", "message": "..."}` so the frontend
 /// can branch on `kind` while still showing a human-readable `message`.
+///
+/// `details` carries machine-readable specifics for the few kinds where the
+/// caller has to do more than print the message. It is omitted from the wire
+/// format when absent, so every existing consumer is unaffected.
 #[derive(Debug, Serialize)]
 pub struct AppError {
     pub kind: ErrorKind,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<ErrorDetails>,
+}
+
+/// The paths a deployment refused to write, because they belong to someone
+/// else (#363). Nothing at them was touched. Carried only by
+/// `ErrorKind::TargetConflict`, which is what says how to read them — the ways
+/// out are documented once, in the `manage-skills` skill, not repeated here on
+/// every error.
+#[derive(Debug, Serialize)]
+pub struct ErrorDetails {
+    pub conflicts: Vec<TargetConflictDetail>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TargetConflictDetail {
+    pub path: String,
+    pub reason: String,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -22,6 +44,9 @@ pub enum ErrorKind {
     InvalidInput,
     Cancelled,
     Internal,
+    /// A write was refused because the target is not ours to replace. Always
+    /// carries `ErrorDetails::TargetConflict`.
+    TargetConflict,
 }
 
 impl fmt::Display for AppError {
@@ -35,6 +60,7 @@ impl AppError {
         Self {
             kind: ErrorKind::NotFound,
             message: msg.into(),
+            details: None,
         }
     }
 
@@ -42,6 +68,7 @@ impl AppError {
         Self {
             kind: ErrorKind::InvalidInput,
             message: msg.into(),
+            details: None,
         }
     }
 
@@ -50,6 +77,7 @@ impl AppError {
         Self {
             kind: ErrorKind::Cancelled,
             message: msg.into(),
+            details: None,
         }
     }
 
@@ -58,6 +86,7 @@ impl AppError {
         Self {
             kind: ErrorKind::Database,
             message: e.to_string(),
+            details: None,
         }
     }
 
@@ -66,6 +95,7 @@ impl AppError {
         Self {
             kind: ErrorKind::Git,
             message: e.to_string(),
+            details: None,
         }
     }
 
@@ -77,6 +107,7 @@ impl AppError {
             Self {
                 kind: ErrorKind::Cancelled,
                 message,
+                details: None,
             }
         } else if lower.contains("connection refused")
             || lower.contains("could not resolve host")
@@ -87,11 +118,13 @@ impl AppError {
             Self {
                 kind: ErrorKind::Network,
                 message,
+                details: None,
             }
         } else {
             Self {
                 kind: ErrorKind::Git,
                 message,
+                details: None,
             }
         }
     }
@@ -101,6 +134,7 @@ impl AppError {
         Self {
             kind: ErrorKind::Network,
             message: e.to_string(),
+            details: None,
         }
     }
 
@@ -109,6 +143,21 @@ impl AppError {
         Self {
             kind: ErrorKind::Io,
             message: e.to_string(),
+            details: None,
+        }
+    }
+
+    /// A deployment refusal, with the paths that stopped it. Callers that
+    /// drive this programmatically (the CLI, and the frontend toast) need the
+    /// paths, not a sentence containing them.
+    pub fn target_conflict(
+        message: impl Into<String>,
+        conflicts: Vec<TargetConflictDetail>,
+    ) -> Self {
+        Self {
+            kind: ErrorKind::TargetConflict,
+            message: message.into(),
+            details: Some(ErrorDetails { conflicts }),
         }
     }
 
@@ -116,15 +165,19 @@ impl AppError {
         Self {
             kind: ErrorKind::Internal,
             message: e.to_string(),
+            details: None,
         }
     }
 }
+
+impl std::error::Error for AppError {}
 
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
         Self {
             kind: ErrorKind::Io,
             message: e.to_string(),
+            details: None,
         }
     }
 }
@@ -134,6 +187,7 @@ impl From<tokio::task::JoinError> for AppError {
         Self {
             kind: ErrorKind::Internal,
             message: e.to_string(),
+            details: None,
         }
     }
 }
@@ -143,6 +197,7 @@ impl From<tauri::Error> for AppError {
         Self {
             kind: ErrorKind::Internal,
             message: e.to_string(),
+            details: None,
         }
     }
 }

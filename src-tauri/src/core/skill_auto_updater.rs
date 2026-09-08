@@ -158,8 +158,8 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     // operation to a single skill's network round-trip (rather than the
     // entire round). A skill whose lock is busy — a manual install/update is
     // running — is simply skipped; the next scheduled round picks it up.
-    let (mut checked, mut available, mut updated, mut failed) =
-        (0usize, 0usize, 0usize, 0usize);
+    let (mut checked, mut available, mut updated, mut held_back, mut failed) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
     for skill_id in ids {
         // Yield the lock to any waiting user-initiated operation before taking
         // it again for the next skill (see FOREGROUND_YIELD).
@@ -198,7 +198,15 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         available += 1;
 
         if apply {
-            match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None) {
+            match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None, None) {
+                Ok(result) if !result.pending_removals.is_empty() => {
+                    held_back += 1;
+                    log::info!(
+                        "skill auto-updater: holding back {skill_id} — updating would remove {} \
+                         path(s) the new version does not have; update it by hand to review",
+                        result.pending_removals.len()
+                    );
+                }
                 Ok(_) => updated += 1,
                 Err(err) => {
                     failed += 1;
@@ -211,7 +219,7 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         }
     }
     log::info!(
-        "skill auto-updater: round done — checked={checked} available={available} updated={updated} failed={failed}"
+        "skill auto-updater: round done — checked={checked} available={available} updated={updated} held_back={held_back} failed={failed}"
     );
     Ok(())
 }

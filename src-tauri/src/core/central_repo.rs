@@ -9,6 +9,9 @@ use walkdir::WalkDir;
 const CONFIG_FILE_NAME: &str = "repo-config.json";
 
 static BASE_DIR_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+/// Test-only redirection of the home directory, so a test can exercise paths
+/// that are deliberately *not* relocatable by the user (see `cli_bridge`).
+static HOME_DIR_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static SKILLS_DIR_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static STARTUP_WARNINGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static STARTUP_ERROR_LOG: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
@@ -79,9 +82,34 @@ struct RepoPathConfig {
 }
 
 fn default_base_dir() -> PathBuf {
+    home_base_dir()
+}
+
+/// `~/.skills-manager`, ignoring any configured relocation.
+///
+/// The library can be moved anywhere the user likes, but a few things must
+/// stay where another program can find them without being told — the CLI
+/// bridge an agent runs, above all. Those use this rather than [`base_dir`].
+pub fn home_base_dir() -> PathBuf {
+    if let Some(path) = HOME_DIR_OVERRIDE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+    {
+        return path.join(".skills-manager");
+    }
     dirs::home_dir()
         .expect("Cannot determine home directory")
         .join(".skills-manager")
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_home_dir_override(path: Option<PathBuf>) {
+    *HOME_DIR_OVERRIDE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap() = path;
 }
 
 fn config_file_path() -> PathBuf {

@@ -169,14 +169,19 @@ pub struct ReplaceRefused {
     pub reason: &'static str,
 }
 
+/// The one place this refusal is worded. `ReplaceRefused` and the
+/// `TargetConflict` that carries it out to callers both render through here so
+/// the two cannot drift apart.
+pub fn refusal_message(target: &Path, reason: &str) -> String {
+    format!(
+        "Refusing to replace {target:?}: it {reason}. The existing content was left untouched — \
+         import it into the library, or move it aside, and try again."
+    )
+}
+
 impl std::fmt::Display for ReplaceRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Refusing to replace {:?}: it {}. The existing content was left untouched — \
-             import it into the library, or move it aside, and try again.",
-            self.target, self.reason
-        )
+        f.write_str(&refusal_message(&self.target, self.reason))
     }
 }
 

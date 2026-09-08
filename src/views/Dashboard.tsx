@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Layers, CheckCircle2, Bot, Plus, Download, AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useApp } from "../context/AppContext";
+import { AgentControlSetupCard } from "../components/AgentControlSetupCard";
 
 export function Dashboard() {
   const { t } = useTranslation();
@@ -47,6 +48,8 @@ export function Dashboard() {
           })}
         </p>
       </div>
+
+      <AgentControlSetupCard />
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3.5">

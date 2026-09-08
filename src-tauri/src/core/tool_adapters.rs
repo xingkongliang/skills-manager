@@ -409,14 +409,14 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
         ToolAdapter {
             key: "kimi".into(),
             display_name: "Kimi Code CLI".into(),
-            relative_skills_dir: ".config/agents/skills".into(),
-            relative_detect_dir: ".kimi".into(),
+            relative_skills_dir: ".kimi-code/skills".into(),
+            relative_detect_dir: ".kimi-code".into(),
             additional_scan_dirs: vec![],
             override_skills_dir: None,
             category: ToolCategory::Coding,
             is_custom: false,
             recursive_scan: false,
-            project_relative_skills_dir: None,
+            project_relative_skills_dir: Some(".kimi-code/skills".into()),
         },
         ToolAdapter {
             key: "replit".into(),
@@ -713,6 +713,18 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: None,
         },
         ToolAdapter {
+            key: "zcode".into(),
+            display_name: "ZCode".into(),
+            relative_skills_dir: ".zcode/skills".into(),
+            relative_detect_dir: ".zcode".into(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: None,
+            category: ToolCategory::Coding,
+            is_custom: false,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        },
+        ToolAdapter {
             key: "adal".into(),
             display_name: "AdaL".into(),
             relative_skills_dir: ".adal/skills".into(),
@@ -786,6 +798,32 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             additional_scan_dirs: vec![],
             override_skills_dir: None,
             category: ToolCategory::Lobster,
+            is_custom: false,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        },
+        ToolAdapter {
+            // DeepSeek Harness resolves its home as `$DSH_HOME` or `~/.dsh`
+            // (`packages/util/home-paths/src/index.ts`) and scans `skills`
+            // beneath it, so the deploy target is `~/.dsh/skills`.
+            //
+            // It also reads the shared `~/.agents/skills` root (`$DSH_AGENTS_HOME`
+            // or `~/.agents`) — discovery only, like Codex and Copilot, so a
+            // deployment lands in its own directory and cannot be mistaken for
+            // another agent's.
+            //
+            // Project roots are `<project>/.dsh/skills` and
+            // `<project>/.agents/skills`; the former is the higher-ranked of the
+            // two and matches the global path, so no project override is needed.
+            // Verified against `packages/skill/skill-filesystem/src/index.ts`
+            // rather than the README alone.
+            key: "deepseek_harness".into(),
+            display_name: "DeepSeek Harness".into(),
+            relative_skills_dir: ".dsh/skills".into(),
+            relative_detect_dir: ".dsh".into(),
+            additional_scan_dirs: vec![".agents/skills".into()],
+            override_skills_dir: None,
+            category: ToolCategory::Coding,
             is_custom: false,
             recursive_scan: false,
             project_relative_skills_dir: None,
@@ -1032,6 +1070,29 @@ mod tests {
         assert_eq!(found.project_relative_skills_dir(), ".omp/skills");
     }
 
+    /// Paths verified against the harness source rather than its README:
+    /// `packages/util/home-paths/src/index.ts` for the home, and
+    /// `packages/skill/skill-filesystem/src/index.ts` for the root list.
+    #[test]
+    fn deepseek_harness_deploys_to_its_own_home_and_discovers_the_shared_root() {
+        let adapter = default_tool_adapters()
+            .into_iter()
+            .find(|adapter| adapter.key == "deepseek_harness")
+            .expect("deepseek_harness adapter should exist");
+
+        assert_eq!(adapter.relative_skills_dir, ".dsh/skills");
+        assert_eq!(adapter.relative_detect_dir, ".dsh");
+        // The project root it ranks highest is `<project>/.dsh/skills`, which
+        // matches the global path, so it needs no override.
+        assert_eq!(adapter.project_relative_skills_dir(), ".dsh/skills");
+        // Shared root: discovery only, never a deploy target.
+        assert!(adapter
+            .additional_scan_dirs
+            .contains(&".agents/skills".to_string()));
+        assert!(!adapter.is_custom);
+        assert_eq!(adapter.category, ToolCategory::Coding);
+    }
+
     #[test]
     fn opencode_uses_distinct_project_and_global_skill_paths() {
         let adapter = default_tool_adapters()
@@ -1043,5 +1104,22 @@ mod tests {
         assert_eq!(adapter.relative_skills_dir, ".config/opencode/skills");
         // Project path under workspace: .opencode/skills
         assert_eq!(adapter.project_relative_skills_dir(), ".opencode/skills");
+    }
+
+    #[test]
+    fn zcode_uses_expected_default_paths() {
+        let adapter = default_tool_adapters()
+            .into_iter()
+            .find(|adapter| adapter.key == "zcode")
+            .expect("zcode adapter should exist");
+
+        assert_eq!(adapter.display_name, "ZCode");
+        assert_eq!(adapter.relative_skills_dir, ".zcode/skills");
+        assert_eq!(adapter.relative_detect_dir, ".zcode");
+        assert_eq!(adapter.project_relative_skills_dir(), ".zcode/skills");
+        assert_eq!(adapter.category, ToolCategory::Coding);
+        assert!(!adapter.is_custom);
+        assert!(!adapter.recursive_scan);
+        assert!(adapter.additional_scan_dirs.is_empty());
     }
 }

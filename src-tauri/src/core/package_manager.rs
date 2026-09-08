@@ -289,6 +289,7 @@ fn import_git_package_with_id(
         .as_ref()
         .filter(|value| value.len() == 40 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
         .cloned();
+    // Packages scan every artifact root; the unscoped clone keeps the full tree.
     let checkout = git_fetcher::clone_repo_ref(
         &source,
         if pinned_commit.is_some() {

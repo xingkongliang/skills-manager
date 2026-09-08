@@ -8,14 +8,28 @@ export const ERROR_KINDS = [
   "invalid_input",
   "cancelled",
   "internal",
+  "target_conflict",
 ] as const;
 
 export type ErrorKind = (typeof ERROR_KINDS)[number];
+
+/** A deployment target that is not ours to replace (#363). Nothing at these
+ *  paths was touched. */
+export interface TargetConflictDetail {
+  path: string;
+  reason: string;
+}
+
+export interface TargetConflictDetails {
+  conflicts: TargetConflictDetail[];
+}
 
 /** Structured error returned by Tauri commands. */
 export interface AppError {
   kind: ErrorKind;
   message: string;
+  /** Present only for kinds that carry machine-readable specifics. */
+  details?: TargetConflictDetails;
 }
 
 const validKinds: ReadonlySet<string> = new Set(ERROR_KINDS);

@@ -81,6 +81,18 @@
     "installNew": "Install New Skills",
     "recentActivity": "Recent Activity"
   },
+  "agentControl": {
+    "title": "Let your agents manage skills",
+    "body": "Let Claude Code, Codex and others install and deploy skills for you, with sources and deployment state still tracked here.",
+    "cta": "Set up",
+    "pickAgents": "Which agents should be able to do this",
+    "confirm": "Enable for {{count}}",
+    "confirmEmpty": "Pick agents",
+    "dismiss": "Don't show this again",
+    "done": "{{count}} agent(s) can now manage your skills",
+    "errorNotFound": "The management skill installed but could not be found in the library.",
+    "errorGeneric": "Could not set this up."
+  },
   "backup": {
     "title": "Backup",
     "subtitle": "Connect once, then back up or restore your skill library from one place.",
@@ -317,7 +329,7 @@
     "sourceType": "Source type",
     "sourceRef": "Source",
     "sourceResolved": "Resolved source",
-    "sourceBranch": "Branch",
+    "sourceBranch": "Branch / Tag",
     "sourceSubpath": "Subpath",
     "sourceRevision": "Revision",
     "docTabs": {
@@ -375,7 +387,10 @@
       "relinked": "Source path relinked",
       "detachSource": "Keep local copy",
       "detachedSource": "Source tracking removed",
-      "alreadyUpToDate": "Skill content unchanged (version synced)"
+      "alreadyUpToDate": "Skill content unchanged (version synced)",
+      "removalTitle": "This update removes files",
+      "removalMessage": "Updating {{name}} will remove {{count}} file(s) that the new version does not have. If any of them are yours, move them somewhere outside the skill folder first — nothing has changed yet.",
+      "removalConfirm": "Update anyway"
     },
     "gitConfigEntry": "Sync Config",
     "filters": {
@@ -437,6 +452,17 @@
       "addButton": "Add",
       "clickToRemove": "Click to mark for removal",
       "undoRemove": "Click to keep this tag"
+    },
+    "batchHeldBack": "{{count}} skill(s) were left alone — updating them would remove files ({{names}}). Update them one at a time to see what.",
+    "batchSyncAgents": "Sync to agents ({{count}})",
+    "batchSynced": "Synced {{count}} skill targets",
+    "batchSyncFailed": "{{count}} targets failed to sync",
+    "batchSyncDialog": {
+      "title": "Sync {{count}} skills to agents",
+      "description": "Pick the target agents. Only skills that are not there yet are added — unsync one at a time from the agent dots on a card.",
+      "apply": "Sync {{count}}",
+      "noAgents": "No installed and enabled agents.",
+      "allSynced": "Every selected skill is already on this agent"
     }
   },
   "install": {
@@ -619,7 +645,7 @@
     "help": "Help",
     "website": "Website",
     "about": "About",
-    "version": "Skills Manager 1.33.1",
+    "version": "Skills Manager 1.38.0",
     "tagline": "Cross-platform. Minimal, efficient, seamless multi-preset switching.",
     "checkUpdate": "Check for Updates",
     "checking": "Checking…",
@@ -886,6 +912,8 @@
     "importToCenterSuccess": "\"{{name}}\" updated to Skills Center",
     "importFromCenterSuccess": "\"{{name}}\" added to {{count}} project agents",
     "updateCenterSuccess": "\"{{name}}\" updated to Skills Center",
+    "updateCenterConflict": "\"{{name}}\": {{count}} variants each may hold content of their own — reconcile them into one before updating the center. Nothing was written.",
+    "updateCenterAlignFailed": "\"{{name}}\": pushed to center, but {{count}} variant(s) failed to realign",
     "updateProjectSuccess": "\"{{name}}\" updated to project",
     "resetFromCenter": "Restore center version",
     "resetFromCenterSuccess": "\"{{name}}\" restored to center version",
@@ -958,12 +986,14 @@
     "batchUpdateProject": "Update Project ({{count}})",
     "batchUpdatedCenter": "{{count}} skills updated to Skills Center",
     "batchUpdatedProject": "{{count}} skills updated in project",
-    "batchUpdateCenterFailed": "{{count}} skills failed to update to Skills Center",
+    "batchUpdateCenterFailed": "{{count}} skill(s) did not finish updating to the Skills Center",
+    "batchUpdateCenterConflict": "{{count}} skill(s) have several variants that may each hold content of their own, and were left untouched",
     "batchUpdateProjectFailed": "{{count}} skills failed to update in project",
     "skillDirectoryNotFound": "Skill directory not found",
     "batchEditTags": "Tags ({{count}})",
     "batchTagsUpdated": "Tags updated for {{count}} center skills",
-    "batchTagsFailed": "{{count}} center skills failed to update tags"
+    "batchTagsFailed": "{{count}} center skills failed to update tags",
+    "batchTagScopeNote": "Tags live in the central library, so edits affect every project using these skills. Project-only local skills are left untouched."
   },
   "presetActions": {
     "button": "Apply Preset",
@@ -1117,7 +1147,11 @@
         "localNewer": "Local changed",
         "centerNewer": "Center changed",
         "diverged": "Conflict"
-      }
+      },
+      "deleteLocalSelected": "Delete {{count}} permanently",
+      "deleteLocalBatchConfirm": "Permanently delete {{count}} local skills from {{agent}}? They exist only in this agent’s folder and cannot be recovered.",
+      "deletedLocalBatch": "{{count}} local skills deleted",
+      "deleteLocalBatchFailed": "{{count}} local skills failed to delete"
     }
   }
 }

@@ -467,14 +467,15 @@ pub(crate) fn classify_sync_status(
         return "in_sync".to_string();
     }
 
-    // DB hash may be stale — recompute center hash from disk as fallback
+    // The DB hash may be stale, and `updated_at` is the wrong clock for the
+    // comparison further down, so read the center from disk once and answer
+    // both questions from the same walk.
+    let center_entries =
+        crate::core::content_hash::list_content_files(Path::new(&managed.central_path));
+
     if let Some(project_hash) = skill.content_hash.as_deref() {
-        if let Ok(live_center_hash) =
-            crate::core::content_hash::hash_directory(Path::new(&managed.central_path))
-        {
-            if project_hash == live_center_hash {
-                return "in_sync".to_string();
-            }
+        if project_hash == crate::core::content_hash::hash_entries(&center_entries) {
+            return "in_sync".to_string();
         }
     }
 
@@ -482,11 +483,21 @@ pub(crate) fn classify_sync_status(
         return "diverged".to_string();
     };
 
-    let center_updated_at = managed.updated_at;
+    // The project side is a filesystem mtime, so the center has to be one too.
+    // `updated_at` is a database column stamped when the row was written:
+    // editing files in the library does not move it, and a metadata-only write
+    // moves it while no content changed. Comparing the two rulers reported
+    // "center is newer" for a project copy the user had just edited, and that
+    // status invites a pull, which overwrites the edit — the diagnosis behind
+    // #328.
+    let Some(center_modified_at) = crate::core::content_hash::latest_modified_ms(&center_entries)
+    else {
+        return "diverged".to_string();
+    };
     let threshold_ms = 1_000;
-    if project_modified_at > center_updated_at + threshold_ms {
+    if project_modified_at > center_modified_at + threshold_ms {
         "project_newer".to_string()
-    } else if center_updated_at > project_modified_at + threshold_ms {
+    } else if center_modified_at > project_modified_at + threshold_ms {
         "center_newer".to_string()
     } else {
         "diverged".to_string()
@@ -1251,10 +1262,21 @@ mod tests {
         assert_eq!(classify_sync_status(&project, Some(&managed)), "in_sync");
     }
 
+    /// Newest content mtime of a directory, the same figure the project side
+    /// is built from, so both sides of the comparison use one ruler.
+    fn center_mtime_ms(dir: &std::path::Path) -> i64 {
+        content_hash::latest_modified_ms(&content_hash::list_content_files(dir)).unwrap()
+    }
+
+    /// `updated_at` is a database column, not a filesystem mtime. With the
+    /// project copy genuinely newer on disk, a much later `updated_at` must not
+    /// flip the answer to "center_newer" — that reading invited a pull and
+    /// overwrote the edit the user had just made (#328).
     #[test]
-    fn classify_sync_status_falls_back_to_timestamps_when_live_hash_differs() {
+    fn classify_sync_status_ignores_the_db_column_when_the_project_is_newer_on_disk() {
         let center_dir = tempdir().unwrap();
         fs::write(center_dir.path().join("SKILL.md"), "# Center\n").unwrap();
+        let center_mtime = center_mtime_ms(center_dir.path());
 
         let project_dir = tempdir().unwrap();
         fs::write(project_dir.path().join("SKILL.md"), "# Project changed\n").unwrap();
@@ -1263,17 +1285,47 @@ mod tests {
         let managed = sample_managed_skill(
             center_dir.path().to_string_lossy().to_string(),
             Some("stale-db-hash".to_string()),
-            1_000,
+            center_mtime + 60_000,
         );
         let project = sample_project_skill(
             project_dir.path().to_string_lossy().to_string(),
             Some(project_hash),
-            Some(5_000),
+            Some(center_mtime + 5_000),
         );
 
         assert_eq!(
             classify_sync_status(&project, Some(&managed)),
             "project_newer"
+        );
+    }
+
+    /// The other direction, and the reason the fix is not simply "always say
+    /// project_newer": a center that really is ahead still reports so, with an
+    /// `updated_at` old enough that only the real mtime can produce it.
+    #[test]
+    fn classify_sync_status_reports_a_center_that_is_newer_on_disk() {
+        let center_dir = tempdir().unwrap();
+        fs::write(center_dir.path().join("SKILL.md"), "# Center\n").unwrap();
+        let center_mtime = center_mtime_ms(center_dir.path());
+
+        let project_dir = tempdir().unwrap();
+        fs::write(project_dir.path().join("SKILL.md"), "# Project older\n").unwrap();
+        let project_hash = content_hash::hash_directory(project_dir.path()).unwrap();
+
+        let managed = sample_managed_skill(
+            center_dir.path().to_string_lossy().to_string(),
+            Some("stale-db-hash".to_string()),
+            0,
+        );
+        let project = sample_project_skill(
+            project_dir.path().to_string_lossy().to_string(),
+            Some(project_hash),
+            Some(center_mtime - 5_000),
+        );
+
+        assert_eq!(
+            classify_sync_status(&project, Some(&managed)),
+            "center_newer"
         );
     }
 

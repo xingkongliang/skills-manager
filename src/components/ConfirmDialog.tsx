@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X, AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -25,6 +25,16 @@ export function ConfirmDialog({
 }: Props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
+
+  // Escape closes the dialog, except while the confirmed action is running.
+  useEffect(() => {
+    if (!open || loading) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, loading, onClose]);
 
   if (!open) return null;
 

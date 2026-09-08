@@ -377,6 +377,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   i18n.t("mySkills.autoUpdated", { count: result.refreshed })
                 );
               }
+              // Held back rather than applied: updating would have removed
+              // files the new version does not have, and nobody was here to ask.
+              if (result.held_back.length > 0) {
+                toast.warning(
+                  i18n.t("mySkills.batchHeldBack", {
+                    count: result.held_back.length,
+                    names: result.held_back.slice(0, 3).join("、"),
+                  })
+                );
+              }
               if (result.failed.length > 0) {
                 console.warn("Auto-update failures:", result.failed);
                 toast.error(

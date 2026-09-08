@@ -42,7 +42,11 @@ export function CardActionMenu({ actions, label, className, onOpenChange }: Prop
       }
     };
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpenState(false);
+      if (e.key !== "Escape") return;
+      // The open menu consumes this Escape: it must not also reach the window
+      // listeners behind it (multi-select mode would exit and drop the selection).
+      e.stopPropagation();
+      setOpenState(false);
     };
     document.addEventListener("mousedown", handlePointer);
     document.addEventListener("keydown", handleEscape);
@@ -92,7 +96,7 @@ export function CardActionMenu({ actions, label, className, onOpenChange }: Prop
               className={cn(
                 "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-40",
                 action.danger
-                  ? "text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                  ? "text-danger hover:bg-danger-bg"
                   : "text-secondary hover:bg-surface-hover"
               )}
             >

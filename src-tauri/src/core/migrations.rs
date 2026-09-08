@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 11;
+const LATEST_VERSION: u32 = 12;
 
 /// Run all pending migrations on the database.
 ///
@@ -58,6 +58,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         8 => migrate_v8_to_v9(conn),
         9 => migrate_v9_to_v10(conn),
         10 => migrate_v10_to_v11(conn),
+        11 => migrate_v11_to_v12(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -385,6 +386,9 @@ fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
 }
 
 fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
+    // Upstream v8 only removed a setting; the fork's v8 created packages.
+    // Ensure the package tables exist for either lineage before adding columns.
+    migrate_v7_to_v8(conn)?;
     add_column_if_missing(
         conn,
         "package_bindings",
@@ -437,6 +441,32 @@ fn migrate_v10_to_v11(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_package_surfaces_artifact_tool
             ON package_surfaces(package_id, artifact_key, tool);
         ",
+    )?;
+    Ok(())
+}
+
+/// Drop the orphaned `project_default_export_agents` preference.
+///
+/// It was written behind a "save default agents" action that 688fc9b removed
+/// along with the old Add Skills flow, leaving the reader behind. Users who
+/// used that button still carry a frozen subset they can neither see nor
+/// change, and it silently narrows which agents a project preset reaches —
+/// exactly the failure #400 reported, but invisible and unfixable from the UI.
+/// A preference with no way to inspect or edit it is a trap, not a preference.
+fn migrate_v11_to_v12(conn: &Connection) -> Result<()> {
+    // A database can reach this step without a settings table (older partial
+    // schemas do), and a cleanup has no business failing an upgrade.
+    let has_settings: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_settings {
+        return Ok(());
+    }
+    conn.execute(
+        "DELETE FROM settings WHERE key = 'project_default_export_agents'",
+        [],
     )?;
     Ok(())
 }
@@ -717,6 +747,127 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, LATEST_VERSION);
+    }
+
+    #[test]
+    fn upstream_v8_database_gains_package_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        // Upstream v8 has the common v7 schema and no package tables.
+        for version in 0..7 {
+            migrate_step(&conn, version).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 8).unwrap();
+        conn.execute("INSERT INTO settings VALUES ('theme', 'dark')", [])
+            .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        for table in ["package_components", "package_surfaces", "package_bindings"] {
+            assert!(has_column(&conn, table, "artifact_key").unwrap());
+        }
+        assert!(has_column(&conn, "package_bindings", "ownership").unwrap());
+        assert!(has_column(&conn, "package_bindings", "applied_surface_kind").unwrap());
+        let theme: String = conn
+            .query_row("SELECT value FROM settings WHERE key = 'theme'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(theme, "dark");
+    }
+
+    #[test]
+    fn fork_v11_upgrade_preserves_artifacts_and_cleans_old_preference() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        for version in 0..11 {
+            migrate_step(&conn, version).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 11).unwrap();
+        conn.execute_batch(
+            "INSERT INTO settings VALUES ('project_default_export_agents', '[]');
+             INSERT INTO settings VALUES ('theme', 'dark');
+             INSERT INTO packages
+                 (id, name, source_url, resolved_revision, cache_path, created_at, updated_at)
+                 VALUES ('p1', 'Demo', 'https://example.com/demo.git', 'abc', '/tmp/p1', 1, 1);
+             INSERT INTO package_bindings
+                 (id, package_id, artifact_key, tool, scope, state, ownership,
+                  applied_surface_kind, target_ref, applied_revision, created_at, updated_at)
+                 VALUES ('b1', 'p1', 'plugins/demo', 'claude_code', 'user', 'installed',
+                         'adopted', 'native_plugin', 'keep', 'abc', 1, 1);",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let preserved: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM package_bindings WHERE id = 'b1'
+             AND artifact_key = 'plugins/demo' AND state = 'installed'
+             AND ownership = 'adopted' AND applied_surface_kind = 'native_plugin'
+             AND target_ref = 'keep' AND applied_revision = 'abc')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(preserved);
+        assert_eq!(count_setting(&conn), 0);
+        let theme: String = conn
+            .query_row("SELECT value FROM settings WHERE key = 'theme'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(theme, "dark");
+    }
+
+    #[test]
+    fn orphaned_default_export_agents_setting_is_dropped() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Arrive at v7 the way a real upgrading database does, then plant the
+        // row that the removed UI used to write.
+        conn.pragma_update(None, "user_version", 0).unwrap();
+        run_migrations(&conn).unwrap();
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('project_default_export_agents', ?1)",
+            ["[\"claude_code\",\"codex\"]"],
+        )
+        .unwrap();
+        assert_eq!(
+            count_setting(&conn),
+            1,
+            "precondition: the row must exist, or this test proves nothing"
+        );
+
+        run_migrations(&conn).unwrap();
+
+        assert_eq!(
+            count_setting(&conn),
+            0,
+            "upgrade must delete the orphaned preference"
+        );
+        // Unrelated settings must survive.
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('theme', 'dark')",
+            [],
+        )
+        .unwrap();
+        run_migrations(&conn).unwrap();
+        let theme: String = conn
+            .query_row("SELECT value FROM settings WHERE key = 'theme'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(theme, "dark");
+    }
+
+    fn count_setting(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM settings WHERE key = 'project_default_export_agents'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 
     #[test]

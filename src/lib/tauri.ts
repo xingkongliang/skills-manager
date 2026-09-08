@@ -428,25 +428,66 @@ export interface UpdateSkillResult {
   skill: ManagedSkill;
   /** False when a monorepo commit didn't touch this skill's subdirectory. */
   content_changed: boolean;
+  /**
+   * What the update would remove. Non-empty means **nothing was changed** —
+   * show these and call again with `removal_approval` if the user accepts.
+   */
+  pending_removals: PendingRemoval[];
+  /**
+   * Identifies exactly what `pending_removals` describes. Passing it back
+   * approves that list at that revision and nothing else.
+   */
+  removal_approval: string | null;
 }
 
-export const updateSkill = (skillId: string) =>
-  invoke<UpdateSkillResult>("update_skill", { skillId });
+export interface PendingRemoval {
+  /** `"library"`, or the agent key whose deployed copy holds it. */
+  location: string;
+  path: string;
+}
+
+/** `approvedRemovals` carries back `removal_approval` from a declined call. */
+export const updateSkill = (skillId: string, approvedRemovals?: string | null) =>
+  invoke<UpdateSkillResult>("update_skill", {
+    skillId,
+    approvedRemovals: approvedRemovals ?? null,
+  });
 
 export interface BatchUpdateSkillsResult {
   refreshed: number;
   unchanged: number;
+  /** Skills left alone because updating would have removed files. */
+  held_back: string[];
   failed: string[];
 }
 
 export const batchUpdateSkills = (skillIds: string[]) =>
   invoke<BatchUpdateSkillsResult>("batch_update_skills", { skillIds });
 
-export const reimportLocalSkill = (skillId: string) =>
-  invoke<ManagedSkill>("reimport_local_skill", { skillId });
+export interface ReimportSkillResult {
+  skill: ManagedSkill;
+  /** Non-empty means nothing was changed — see UpdateSkillResult. */
+  pending_removals: PendingRemoval[];
+  /** Approves exactly `pending_removals` — see UpdateSkillResult. */
+  removal_approval: string | null;
+}
 
-export const relinkLocalSkillSource = (skillId: string, sourcePath: string) =>
-  invoke<ManagedSkill>("relink_local_skill_source", { skillId, sourcePath });
+export const reimportLocalSkill = (skillId: string, approvedRemovals?: string | null) =>
+  invoke<ReimportSkillResult>("reimport_local_skill", {
+    skillId,
+    approvedRemovals: approvedRemovals ?? null,
+  });
+
+export const relinkLocalSkillSource = (
+  skillId: string,
+  sourcePath: string,
+  approvedRemovals?: string | null,
+) =>
+  invoke<ReimportSkillResult>("relink_local_skill_source", {
+    skillId,
+    sourcePath,
+    approvedRemovals: approvedRemovals ?? null,
+  });
 
 export const detachLocalSkillSource = (skillId: string) =>
   invoke<ManagedSkill>("detach_local_skill_source", { skillId });

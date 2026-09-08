@@ -465,7 +465,7 @@ pub async fn reorder_preset_skills(
 pub(crate) fn sync_scenario_skills(
     store: &SkillStore,
     scenario_id: &str,
-) -> Result<Vec<String>, AppError> {
+) -> Result<Vec<scenario_service::TargetConflict>, AppError> {
     scenario_service::sync_scenario_skills(store, scenario_id)
 }
 

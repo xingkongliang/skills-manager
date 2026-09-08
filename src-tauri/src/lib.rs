@@ -893,6 +893,22 @@ pub fn run() {
                 }
             });
 
+            // Publish the CLI that ships in this bundle to a fixed path so
+            // agents can drive Skills Manager without it being on PATH. A
+            // ~15 MB copy plus one `--version` run, so never on the UI thread.
+            // The crate version, not `tauri.conf.json`'s: it is what the CLI
+            // reports about itself, and the bridge verifies the copy by asking
+            // it. Reading the app config here would silently disable the
+            // bridge for everyone if the two ever drifted apart.
+            tauri::async_runtime::spawn_blocking(|| {
+                let step = Instant::now();
+                core::cli_bridge::ensure_bridge(env!("CARGO_PKG_VERSION"));
+                log::info!(
+                    "startup: cli bridge step done in {} ms",
+                    step.elapsed().as_millis()
+                );
+            });
+
             let step = Instant::now();
             if is_tray_icon_enabled(&store_for_setup) {
                 ensure_tray_icon(app.handle())?;
