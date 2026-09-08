@@ -18,13 +18,23 @@ use super::{central_repo, sync_engine, tool_adapters};
 
 const PROJECT_MANIFEST_RELATIVE_PATH: &str = ".skillapse/project.json";
 const MAX_SETUP_OUTPUT_BYTES: usize = 16 * 1024;
+const MAX_PACKAGE_ARTIFACTS: usize = 256;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageDetails {
     pub package: PackageRecord,
+    pub artifacts: Vec<PackageArtifact>,
     pub components: Vec<PackageComponentRecord>,
     pub surfaces: Vec<PackageSurfaceRecord>,
     pub bindings: Vec<PackageBindingRecord>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageArtifact {
+    pub key: String,
+    pub name: String,
+    pub root_path: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,7 +44,7 @@ pub struct SurfaceCoverage {
     pub relative_path: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanOperation {
     pub kind: String,
     pub description: String,
@@ -45,6 +55,7 @@ pub struct PlanOperation {
 #[derive(Debug, Clone, Serialize)]
 pub struct BindingPlan {
     pub binding_id: String,
+    pub artifact_key: String,
     pub package_name: String,
     pub package_revision: String,
     pub tool: String,
@@ -86,6 +97,8 @@ struct ProjectManifestPackage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProjectManifestBinding {
     package: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact: Option<String>,
     tool: String,
     #[serde(default = "default_surface_policy")]
     surface: String,
@@ -99,12 +112,36 @@ struct ManagedHookFile {
     hash: String,
 }
 
+#[derive(Debug)]
+struct InstalledCodexPlugin {
+    marketplace: String,
+    version: Option<String>,
+    root: PathBuf,
+}
+
+#[derive(Debug)]
+enum CodexPluginPresence {
+    Matching(InstalledCodexPlugin),
+    Conflict {
+        root: PathBuf,
+        repository: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CodexBundleTargetRef {
     skill_targets: Vec<PathBuf>,
     hook_files: Vec<ManagedHookFile>,
     hooks_file: PathBuf,
     added_hooks: BTreeMap<String, Vec<serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NativePluginTargetRef {
+    plugin_name: String,
+    marketplace_name: String,
+    marketplace_path: PathBuf,
+    marketplace_registered: bool,
 }
 
 fn default_surface_policy() -> String {
@@ -117,6 +154,13 @@ struct ScannedInventory {
     manifest_kind: String,
     components: Vec<PackageComponentRecord>,
     surfaces: Vec<PackageSurfaceRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct NativeArtifact {
+    key: String,
+    name: String,
+    manifests: BTreeMap<String, String>,
 }
 
 pub fn list_packages(store: &SkillStore) -> Result<Vec<PackageDetails>> {
@@ -135,12 +179,66 @@ pub fn package_details(store: &SkillStore, package_id: &str) -> Result<PackageDe
 }
 
 fn details_for_record(store: &SkillStore, package: PackageRecord) -> Result<PackageDetails> {
+    let components = store.get_package_components(&package.id)?;
+    let surfaces = store.get_package_surfaces(&package.id)?;
+    let bindings = store.get_package_bindings(&package.id)?;
+    let artifacts = package_artifacts(&package, &components, &surfaces, &bindings);
     Ok(PackageDetails {
-        components: store.get_package_components(&package.id)?,
-        surfaces: store.get_package_surfaces(&package.id)?,
-        bindings: store.get_package_bindings(&package.id)?,
+        artifacts,
+        components,
+        surfaces,
+        bindings,
         package,
     })
+}
+
+fn package_artifacts(
+    package: &PackageRecord,
+    components: &[PackageComponentRecord],
+    surfaces: &[PackageSurfaceRecord],
+    bindings: &[PackageBindingRecord],
+) -> Vec<PackageArtifact> {
+    let mut keys = BTreeSet::new();
+    keys.extend(
+        components
+            .iter()
+            .map(|component| component.artifact_key.clone()),
+    );
+    keys.extend(surfaces.iter().map(|surface| surface.artifact_key.clone()));
+    keys.extend(bindings.iter().map(|binding| binding.artifact_key.clone()));
+    keys.into_iter()
+        .map(|key| {
+            let available = components.iter().any(|item| item.artifact_key == key)
+                || surfaces.iter().any(|item| item.artifact_key == key);
+            let manifest_name = surfaces
+                .iter()
+                .filter(|surface| surface.artifact_key == key)
+                .find_map(|surface| {
+                    native_plugin_manifest(Path::new(&package.cache_path), surface)
+                        .ok()?
+                        .get("name")?
+                        .as_str()
+                        .map(str::to_string)
+                });
+            let name = manifest_name.unwrap_or_else(|| {
+                if key.is_empty() {
+                    package.name.clone()
+                } else {
+                    key.rsplit('/').next().unwrap_or(&key).to_string()
+                }
+            });
+            PackageArtifact {
+                root_path: if key.is_empty() {
+                    ".".to_string()
+                } else {
+                    key.clone()
+                },
+                key,
+                name,
+                status: if available { "available" } else { "missing" }.to_string(),
+            }
+        })
+        .collect()
 }
 
 pub fn import_git_package(
@@ -347,20 +445,30 @@ pub fn delete_package(store: &SkillStore, package_id: &str) -> Result<()> {
 pub fn create_binding(
     store: &SkillStore,
     package_id: &str,
+    artifact_key: &str,
     tool: &str,
     scope: &str,
     project_id: Option<&str>,
     surface_policy: &str,
     requested_components: &[String],
 ) -> Result<BindingPlan> {
-    validate_binding_input(store, package_id, tool, scope, project_id, surface_policy)?;
+    validate_binding_input(
+        store,
+        package_id,
+        artifact_key,
+        tool,
+        scope,
+        project_id,
+        surface_policy,
+    )?;
     let now = now_ms();
     let requested_components_json = serde_json::to_string(requested_components)?;
     let mut binding = store
-        .get_package_binding(package_id, tool, scope, project_id)?
+        .get_package_binding(package_id, artifact_key, tool, scope, project_id)?
         .unwrap_or_else(|| PackageBindingRecord {
             id: uuid::Uuid::new_v4().to_string(),
             package_id: package_id.to_string(),
+            artifact_key: artifact_key.to_string(),
             tool: tool.to_string(),
             scope: scope.to_string(),
             project_id: project_id.map(str::to_string),
@@ -376,6 +484,8 @@ pub fn create_binding(
             last_error: None,
             created_at: now,
             updated_at: now,
+            ownership: "managed".to_string(),
+            applied_surface_kind: None,
         });
     if binding.target_ref.is_some()
         && (binding.surface_policy != surface_policy
@@ -397,6 +507,7 @@ pub fn create_binding(
 fn validate_binding_input(
     store: &SkillStore,
     package_id: &str,
+    artifact_key: &str,
     tool: &str,
     scope: &str,
     project_id: Option<&str>,
@@ -404,6 +515,17 @@ fn validate_binding_input(
 ) -> Result<()> {
     if store.get_package_by_id(package_id)?.is_none() {
         bail!("Package not found: {package_id}");
+    }
+    let artifact_exists = store
+        .get_package_components(package_id)?
+        .iter()
+        .any(|component| component.artifact_key == artifact_key)
+        || store
+            .get_package_surfaces(package_id)?
+            .iter()
+            .any(|surface| surface.artifact_key == artifact_key);
+    if !artifact_exists {
+        bail!("Package artifact not found: {artifact_key:?}");
     }
     if tool_adapters::find_adapter_with_store(store, tool).is_none() {
         bail!("Unknown tool: {tool}");
@@ -464,6 +586,7 @@ fn select_surface(
 ) -> Option<PackageSurfaceRecord> {
     let mut candidates: Vec<_> = surfaces
         .iter()
+        .filter(|surface| surface.artifact_key == binding.artifact_key)
         .filter(|surface| surface.tool == binding.tool || surface.tool == "*")
         .filter(|surface| match binding.surface_policy.as_str() {
             "native" => surface.kind == "native_plugin",
@@ -496,6 +619,7 @@ fn build_plan(
 ) -> Result<BindingPlan> {
     let mut plan = BindingPlan {
         binding_id: binding.id.clone(),
+        artifact_key: binding.artifact_key.clone(),
         package_name: package.name.clone(),
         package_revision: package.resolved_revision.clone(),
         tool: binding.tool.clone(),
@@ -525,6 +649,7 @@ fn build_plan(
         let mut names: Vec<_> = store
             .get_package_components(&package.id)?
             .into_iter()
+            .filter(|component| component.artifact_key == binding.artifact_key)
             .filter(|component| {
                 component
                     .host_hint
@@ -591,9 +716,16 @@ fn build_plan(
         _ => {}
     }
 
+    let adopted_version_mismatch = plan
+        .operations
+        .iter()
+        .any(|operation| operation.kind == "adopt_plugin_version_mismatch");
     if plan.operations.is_empty() {
         plan.compatibility = "unsupported".to_string();
         plan.can_apply = false;
+    } else if adopted_version_mismatch {
+        plan.compatibility = "partial".to_string();
+        plan.can_apply = true;
     } else if plan.missing_components.is_empty() {
         plan.compatibility = "full".to_string();
         plan.can_apply = true;
@@ -706,17 +838,139 @@ fn build_native_plan(
         return Ok(());
     }
     let package_root = Path::new(&package.cache_path);
-    let (marketplace_path, marketplace_name) = native_marketplace(package_root, &binding.tool)?;
-    let Some((marketplace_path, marketplace_name)) = marketplace_path.zip(marketplace_name) else {
-        plan.risk_items.push(format!(
-            "{} plugin manifest exists, but no compatible marketplace manifest was found",
-            binding.tool
-        ));
-        return Ok(());
-    };
     let plugin_name = native_plugin_name(package_root, surface)?;
+    if binding.tool == "codex" {
+        match find_installed_codex_remote_plugin(store, package, surface)? {
+            Some(CodexPluginPresence::Matching(installed)) => {
+                let package_version = native_plugin_version(package_root, surface)?;
+                let version_mismatch =
+                    package_version.is_some() && package_version != installed.version;
+                let version_detail = match (&installed.version, &package_version) {
+                    (Some(installed), Some(package)) => {
+                        format!(" (installed {installed}, package {package})")
+                    }
+                    _ => String::new(),
+                };
+                plan.risk_items.push(format!(
+                    "Existing Codex plugin will be adopted without reinstalling or taking uninstall ownership{version_detail}"
+                ));
+                plan.operations.push(PlanOperation {
+                    kind: if version_mismatch {
+                        "adopt_plugin_version_mismatch".to_string()
+                    } else {
+                        "adopt_plugin".to_string()
+                    },
+                    description: format!(
+                        "Adopt {plugin_name} from marketplace {}{version_detail}",
+                        installed.marketplace
+                    ),
+                    target: installed.root.to_string_lossy().to_string(),
+                    command: None,
+                });
+                return Ok(());
+            }
+            Some(CodexPluginPresence::Conflict { root, repository }) => {
+                plan.risk_items.push(format!(
+                    "Codex already has plugin {plugin_name} from a different repository ({}) at {}",
+                    repository.as_deref().unwrap_or("unknown"),
+                    root.display()
+                ));
+                return Ok(());
+            }
+            None => {}
+        }
+        if binding.ownership == "adopted" {
+            plan.risk_items
+                .push("The adopted Codex plugin is no longer installed".to_string());
+            return Ok(());
+        }
+    }
+    if binding.target_ref.is_some() && binding.ownership == "managed" {
+        if binding.tool == "claude_code" {
+            if binding.state == "failed" {
+                plan.risk_items.push(
+                    "Remove the incomplete Claude plugin binding before installing again"
+                        .to_string(),
+                );
+                return Ok(());
+            }
+            if binding.applied_revision.as_deref() == Some(package.resolved_revision.as_str()) {
+                plan.risk_items
+                    .push("The Claude plugin already matches the package revision".to_string());
+                return Ok(());
+            }
+            let target_ref = native_target_ref(binding, package, Some(surface))?;
+            if target_ref.plugin_name != plugin_name {
+                plan.risk_items.push(
+                    "The Claude plugin identity changed; remove the old binding before installing the new plugin"
+                        .to_string(),
+                );
+                return Ok(());
+            }
+            let (_, current_marketplace) =
+                native_marketplace(package_root, &binding.tool, &plugin_name)?;
+            if current_marketplace.as_deref() != Some(target_ref.marketplace_name.as_str()) {
+                plan.risk_items.push(
+                    "The Claude marketplace identity changed; remove the old binding before installing the new plugin"
+                        .to_string(),
+                );
+                return Ok(());
+            }
+            let selector = format!("{}@{}", target_ref.plugin_name, target_ref.marketplace_name);
+            plan.risk_items.push(
+                "The upgraded native plugin may change hooks, MCP servers, apps, or commands"
+                    .to_string(),
+            );
+            plan.risk_items
+                .push("Restart Claude Code after the upgrade".to_string());
+            plan.operations.push(PlanOperation {
+                kind: "update_marketplace".to_string(),
+                description: format!("Refresh Claude marketplace {}", target_ref.marketplace_name),
+                target: target_ref.marketplace_name.clone(),
+                command: Some(vec![
+                    "claude".to_string(),
+                    "plugin".to_string(),
+                    "marketplace".to_string(),
+                    "update".to_string(),
+                    target_ref.marketplace_name.clone(),
+                ]),
+            });
+            plan.operations.push(PlanOperation {
+                kind: "update_plugin".to_string(),
+                description: format!("Upgrade native Claude plugin {selector}"),
+                target: selector.clone(),
+                // ponytail: never pass --yes until the UI can show the changed install command.
+                command: Some(vec![
+                    "claude".to_string(),
+                    "plugin".to_string(),
+                    "update".to_string(),
+                    "--scope".to_string(),
+                    claude_scope(&binding.scope)?.to_string(),
+                    selector,
+                ]),
+            });
+            return Ok(());
+        }
+        // ponytail: Codex has marketplace refresh, but no installed-plugin update command.
+        plan.risk_items
+            .push("Remove the installed native plugin before applying an update".to_string());
+        return Ok(());
+    }
+    let (native_path, native_name) = native_marketplace(package_root, &binding.tool, &plugin_name)?;
+    let (marketplace_path, marketplace_name, materialize) =
+        if let Some((path, name)) = native_path.zip(native_name) {
+            (path, name, false)
+        } else if binding.tool == "codex" {
+            let (path, name) = generated_codex_marketplace(package, binding)?;
+            (path, name, true)
+        } else {
+            plan.risk_items.push(format!(
+                "{} plugin manifest exists, but no compatible marketplace manifest was found",
+                binding.tool
+            ));
+            return Ok(());
+        };
     let selector = format!("{plugin_name}@{marketplace_name}");
-    let project = binding_project(store, binding)?;
 
     let add_command = if binding.tool == "codex" {
         vec![
@@ -758,19 +1012,24 @@ fn build_native_plan(
     };
     plan.risk_items
         .push("Native plugins may enable hooks, MCP servers, apps, or commands".to_string());
+    if materialize {
+        plan.operations.push(PlanOperation {
+            kind: "materialize_codex_marketplace".to_string(),
+            description: format!("Generate Codex marketplace for {plugin_name}"),
+            target: marketplace_path.to_string_lossy().to_string(),
+            command: None,
+        });
+    }
     plan.operations.push(PlanOperation {
         kind: "add_marketplace".to_string(),
         description: format!("Register marketplace {marketplace_name}"),
-        target: project
-            .as_ref()
-            .map(|value| value.path.clone())
-            .unwrap_or_else(|| "user".to_string()),
+        target: marketplace_path.to_string_lossy().to_string(),
         command: Some(add_command),
     });
     plan.operations.push(PlanOperation {
         kind: "install_plugin".to_string(),
         description: format!("Install native plugin {selector}"),
-        target: binding.scope.clone(),
+        target: selector,
         command: Some(install_command),
     });
     Ok(())
@@ -878,13 +1137,23 @@ pub fn apply_binding(
     let result = match plan.surface_kind.as_deref() {
         Some("portable_skills") => apply_portable_operations(store, &binding, &package, &plan),
         Some("host_bundle") => apply_codex_host_bundle(store, &binding, &package, &plan),
-        Some("native_plugin") => apply_command_operations(store, &binding, &package, &plan),
+        Some("native_plugin") => apply_native_operations(store, &binding, &package, &plan),
         Some("setup_script") => apply_command_operations(store, &binding, &package, &plan),
         _ => bail!("Unsupported surface"),
     };
 
     match result {
         Ok((target_ref, output)) => {
+            binding.ownership = if plan.operations.iter().any(|operation| {
+                matches!(
+                    operation.kind.as_str(),
+                    "adopt_plugin" | "adopt_plugin_version_mismatch"
+                )
+            }) {
+                "adopted".to_string()
+            } else {
+                "managed".to_string()
+            };
             binding.state = if plan.compatibility == "partial" {
                 "partial".to_string()
             } else {
@@ -893,6 +1162,7 @@ pub fn apply_binding(
             binding.compatibility = plan.compatibility.clone();
             binding.target_ref = Some(target_ref);
             binding.applied_revision = Some(package.resolved_revision.clone());
+            binding.applied_surface_kind = plan.surface_kind.clone();
             binding.approved_plan_hash = Some(plan.plan_hash.clone());
             binding.last_error = None;
             binding.updated_at = now_ms();
@@ -907,7 +1177,19 @@ pub fn apply_binding(
             })
         }
         Err(error) => {
-            binding.state = "failed".to_string();
+            binding = store
+                .get_package_binding_by_id(binding_id)?
+                .unwrap_or(binding);
+            binding.state = if plan
+                .operations
+                .iter()
+                .any(|operation| operation.kind == "update_plugin")
+                && binding.target_ref.is_some()
+            {
+                "drifted".to_string()
+            } else {
+                "failed".to_string()
+            };
             binding.last_error = Some(error.to_string());
             binding.approved_plan_hash = None;
             binding.updated_at = now_ms();
@@ -1275,17 +1557,20 @@ fn apply_command_operations(
         .unwrap_or_else(|| PathBuf::from(&package.cache_path));
     let mut combined = String::new();
     for operation in &plan.operations {
-        let command = operation
-            .command
-            .as_ref()
-            .ok_or_else(|| anyhow!("Missing command for {}", operation.kind))?;
+        let Some(command) = operation.command.as_ref() else {
+            if matches!(
+                operation.kind.as_str(),
+                "adopt_plugin" | "adopt_plugin_version_mismatch"
+            ) {
+                continue;
+            }
+            bail!("Missing command for {}", operation.kind);
+        };
         let output = match run_checked_command(command, &cwd, Path::new(&package.cache_path)) {
             Ok(output) => output,
             Err(error)
                 if operation.kind == "add_marketplace"
-                    && ["already exists", "already registered", "already configured"]
-                        .iter()
-                        .any(|needle| error.to_string().to_ascii_lowercase().contains(needle)) =>
+                    && is_marketplace_already_registered_error(&error) =>
             {
                 String::new()
             }
@@ -1302,7 +1587,240 @@ fn apply_command_operations(
     Ok((target_ref, (!combined.is_empty()).then_some(combined)))
 }
 
+fn apply_native_operations(
+    store: &SkillStore,
+    binding: &PackageBindingRecord,
+    package: &PackageRecord,
+    plan: &BindingPlan,
+) -> Result<(String, Option<String>)> {
+    if plan.operations.iter().any(|operation| {
+        matches!(
+            operation.kind.as_str(),
+            "adopt_plugin" | "adopt_plugin_version_mismatch"
+        )
+    }) {
+        return apply_command_operations(store, binding, package, plan);
+    }
+    if plan
+        .operations
+        .iter()
+        .any(|operation| operation.kind == "update_plugin")
+    {
+        let cwd = binding_project(store, binding)?
+            .map(|project| PathBuf::from(project.path))
+            .unwrap_or_else(|| PathBuf::from(&package.cache_path));
+        let mut combined = String::new();
+        for operation in &plan.operations {
+            if !matches!(
+                operation.kind.as_str(),
+                "update_marketplace" | "update_plugin"
+            ) {
+                bail!("Unexpected operation in native plugin update plan");
+            }
+            let command = operation
+                .command
+                .as_ref()
+                .ok_or_else(|| anyhow!("Native plugin update operation has no command"))?;
+            let output = run_checked_command(command, &cwd, Path::new(&package.cache_path))?;
+            if !output.trim().is_empty() {
+                if !combined.is_empty() {
+                    combined.push('\n');
+                }
+                combined.push_str(&output);
+            }
+        }
+        let target_ref = binding
+            .target_ref
+            .clone()
+            .ok_or_else(|| anyhow!("Native plugin update target metadata is missing"))?;
+        return Ok((target_ref, (!combined.is_empty()).then_some(combined)));
+    }
+    let install = plan
+        .operations
+        .iter()
+        .find(|operation| operation.kind == "install_plugin")
+        .ok_or_else(|| anyhow!("Native plugin plan has no install operation"))?;
+    let (plugin_name, marketplace_name) = install
+        .target
+        .split_once('@')
+        .ok_or_else(|| anyhow!("Native plugin selector is invalid"))?;
+    validate_native_identifier("Plugin", plugin_name)?;
+    validate_native_identifier("Marketplace", marketplace_name)?;
+    let marketplace = plan
+        .operations
+        .iter()
+        .find(|operation| operation.kind == "add_marketplace")
+        .ok_or_else(|| anyhow!("Native plugin plan has no marketplace operation"))?;
+    let marketplace_path = PathBuf::from(&marketplace.target);
+
+    let materialized = plan
+        .operations
+        .iter()
+        .find(|operation| operation.kind == "materialize_codex_marketplace");
+    if let Some(operation) = materialized {
+        if Path::new(&operation.target) != marketplace_path {
+            bail!("Generated marketplace target changed after approval");
+        }
+        materialize_codex_marketplace(
+            package,
+            binding,
+            &marketplace_path,
+            marketplace_name,
+            plugin_name,
+        )?;
+    }
+
+    let project = binding_project(store, binding)?;
+    let cwd = project
+        .as_ref()
+        .map(|value| PathBuf::from(&value.path))
+        .unwrap_or_else(|| PathBuf::from(&package.cache_path));
+    let mut combined = String::new();
+    let mut marketplace_registered = false;
+    for operation in &plan.operations {
+        let Some(command) = operation.command.as_ref() else {
+            continue;
+        };
+        let output = match run_checked_command(command, &cwd, Path::new(&package.cache_path)) {
+            Ok(output) => {
+                if operation.kind == "add_marketplace" && materialized.is_some() {
+                    marketplace_registered = true;
+                    let target_ref = NativePluginTargetRef {
+                        plugin_name: plugin_name.to_string(),
+                        marketplace_name: marketplace_name.to_string(),
+                        marketplace_path: marketplace_path.clone(),
+                        marketplace_registered: true,
+                    };
+                    let mut pending = binding.clone();
+                    pending.ownership = "managed".to_string();
+                    pending.state = "failed".to_string();
+                    pending.target_ref = Some(serde_json::to_string(&target_ref)?);
+                    pending.applied_revision = Some(package.resolved_revision.clone());
+                    pending.applied_surface_kind = Some("native_plugin".to_string());
+                    pending.last_error = Some("Native plugin installation did not complete".into());
+                    pending.updated_at = now_ms();
+                    if let Err(persist_error) = store.upsert_package_binding(&pending) {
+                        if let Err(rollback_error) = rollback_generated_codex_apply(
+                            binding,
+                            package,
+                            &cwd,
+                            &install.target,
+                            marketplace_name,
+                            &marketplace_path,
+                        ) {
+                            bail!(
+                                "Failed to persist native install state: {persist_error}; rollback failed: {rollback_error}"
+                            );
+                        }
+                        return Err(persist_error);
+                    }
+                }
+                output
+            }
+            Err(error)
+                if operation.kind == "add_marketplace"
+                    && materialized.is_none()
+                    && is_marketplace_already_registered_error(&error) =>
+            {
+                String::new()
+            }
+            Err(error) => {
+                if marketplace_registered && materialized.is_some() {
+                    if let Err(rollback_error) = rollback_generated_codex_apply(
+                        binding,
+                        package,
+                        &cwd,
+                        &install.target,
+                        marketplace_name,
+                        &marketplace_path,
+                    ) {
+                        bail!("{error}; generated marketplace rollback failed: {rollback_error}");
+                    }
+                }
+                return Err(error);
+            }
+        };
+        if !output.trim().is_empty() {
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(&output);
+        }
+    }
+    let target_ref = NativePluginTargetRef {
+        plugin_name: plugin_name.to_string(),
+        marketplace_name: marketplace_name.to_string(),
+        marketplace_path,
+        marketplace_registered,
+    };
+    Ok((
+        serde_json::to_string(&target_ref)?,
+        (!combined.is_empty()).then_some(combined),
+    ))
+}
+
+fn is_marketplace_already_registered_error(error: &anyhow::Error) -> bool {
+    let detail = error.to_string().to_ascii_lowercase();
+    ["already exists", "already registered", "already configured"]
+        .iter()
+        .any(|needle| detail.contains(needle))
+}
+
+fn rollback_generated_codex_apply(
+    binding: &PackageBindingRecord,
+    package: &PackageRecord,
+    cwd: &Path,
+    selector: &str,
+    marketplace_name: &str,
+    marketplace_path: &Path,
+) -> Result<()> {
+    let plugin_error = run_remove_command(
+        &native_plugin_remove_command(binding, selector)?,
+        cwd,
+        Path::new(&package.cache_path),
+    )
+    .err();
+    let marketplace_error = run_remove_command(
+        &native_marketplace_remove_command(binding, marketplace_name)?,
+        cwd,
+        Path::new(&package.cache_path),
+    )
+    .err();
+    match (plugin_error, marketplace_error) {
+        (Some(plugin), Some(marketplace)) => {
+            bail!("plugin cleanup failed: {plugin}; marketplace cleanup failed: {marketplace}")
+        }
+        (Some(error), None) | (None, Some(error)) => return Err(error),
+        (None, None) => {}
+    }
+    remove_generated_codex_marketplace(marketplace_path)
+}
+
 fn run_checked_command(command: &[String], cwd: &Path, package_root: &Path) -> Result<String> {
+    run_checked_command_with(command, cwd, package_root, |program, args, cwd| {
+        let output = Command::new(program)
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .with_context(|| format!("Failed to execute {}", program.display()))?;
+        Ok((
+            output.status.success(),
+            output.status.to_string(),
+            output.stdout,
+            output.stderr,
+        ))
+    })
+}
+
+fn run_checked_command_with<F>(
+    command: &[String],
+    cwd: &Path,
+    package_root: &Path,
+    runner: F,
+) -> Result<String>
+where
+    F: FnOnce(&Path, &[String], &Path) -> Result<(bool, String, Vec<u8>, Vec<u8>)>,
+{
     let executable = command.first().ok_or_else(|| anyhow!("Empty command"))?;
     let executable_path = Path::new(executable);
     let program = if executable_path.components().count() > 1 {
@@ -1314,20 +1832,16 @@ fn run_checked_command(command: &[String], cwd: &Path, package_root: &Path) -> R
     } else {
         executable_path.to_path_buf()
     };
-    let output = Command::new(&program)
-        .args(&command[1..])
-        .current_dir(cwd)
-        .output()
-        .with_context(|| format!("Failed to execute {}", program.display()))?;
-    let stdout = truncate_output(String::from_utf8_lossy(&output.stdout).to_string());
-    let stderr = truncate_output(String::from_utf8_lossy(&output.stderr).to_string());
-    if !output.status.success() {
+    let (success, status, stdout, stderr) = runner(&program, &command[1..], cwd)?;
+    let stdout = truncate_output(String::from_utf8_lossy(&stdout).to_string());
+    let stderr = truncate_output(String::from_utf8_lossy(&stderr).to_string());
+    if !success {
         let detail = if stderr.trim().is_empty() {
             stdout
         } else {
             stderr
         };
-        bail!("Command failed ({}): {}", output.status, detail.trim());
+        bail!("Command failed ({status}): {}", detail.trim());
     }
     Ok(if stderr.trim().is_empty() {
         stdout
@@ -1362,15 +1876,19 @@ pub fn remove_binding(store: &SkillStore, binding_id: &str, forget_setup: bool) 
     let surface = binding
         .resolved_surface_id
         .as_deref()
-        .and_then(|id| surfaces.iter().find(|surface| surface.id == id).cloned())
-        .or_else(|| select_surface(&binding, &surfaces));
+        .and_then(|id| surfaces.iter().find(|surface| surface.id == id).cloned());
 
-    if binding.target_ref.is_some() {
-        match surface.as_ref().map(|value| value.kind.as_str()) {
+    if binding.target_ref.is_some() && binding.ownership != "adopted" {
+        let applied_kind = binding.applied_surface_kind.as_deref().or_else(|| {
+            // Legacy bindings are backfilled when their applied surface still exists.
+            // Never select a different current surface for uninstall.
+            surface.as_ref().map(|value| value.kind.as_str())
+        });
+        match applied_kind {
             Some("portable_skills") => remove_portable_targets(&binding, &package)?,
             Some("host_bundle") => remove_codex_host_bundle(store, &binding, &package)?,
             Some("native_plugin") => {
-                remove_native_plugin(store, &binding, &package, surface.as_ref().unwrap())?
+                remove_native_plugin(store, &binding, &package, surface.as_ref())?
             }
             Some("setup_script") if forget_setup => {}
             Some("setup_script") => remove_setup_package(&binding, &package)?,
@@ -1516,60 +2034,164 @@ fn remove_native_plugin(
     store: &SkillStore,
     binding: &PackageBindingRecord,
     package: &PackageRecord,
-    surface: &PackageSurfaceRecord,
+    surface: Option<&PackageSurfaceRecord>,
 ) -> Result<()> {
-    let (_, marketplace_name) = native_marketplace(Path::new(&package.cache_path), &binding.tool)?;
-    let marketplace_name =
-        marketplace_name.ok_or_else(|| anyhow!("Marketplace metadata missing"))?;
-    let selector = format!(
-        "{}@{}",
-        native_plugin_name(Path::new(&package.cache_path), surface)?,
-        marketplace_name
-    );
-    let command = if binding.tool == "codex" {
-        vec![
+    let target_ref = native_target_ref(binding, package, surface)?;
+    let selector = format!("{}@{}", target_ref.plugin_name, target_ref.marketplace_name);
+    let command = native_plugin_remove_command(binding, &selector)?;
+    let cwd = binding_project(store, binding)?
+        .map(|project| PathBuf::from(project.path))
+        .unwrap_or_else(|| PathBuf::from(&package.cache_path));
+    run_remove_command(&command, &cwd, Path::new(&package.cache_path))?;
+    if !target_ref.marketplace_registered {
+        return Ok(());
+    }
+
+    let mut sibling = store
+        .get_package_bindings(&package.id)?
+        .into_iter()
+        .filter(|candidate| candidate.id != binding.id)
+        .find_map(|candidate| {
+            if candidate.tool != binding.tool
+                || candidate.scope != binding.scope
+                || candidate.project_id != binding.project_id
+                || candidate.ownership != "managed"
+                || candidate.applied_surface_kind.as_deref() != Some("native_plugin")
+            {
+                return None;
+            }
+            let parsed: NativePluginTargetRef =
+                serde_json::from_str(candidate.target_ref.as_deref()?).ok()?;
+            (parsed.marketplace_name == target_ref.marketplace_name
+                && parsed.marketplace_path == target_ref.marketplace_path)
+                .then_some((candidate, parsed))
+        });
+    if let Some((candidate, sibling_ref)) = sibling.as_mut() {
+        if !sibling_ref.marketplace_registered {
+            sibling_ref.marketplace_registered = true;
+            candidate.target_ref = Some(serde_json::to_string(&*sibling_ref)?);
+            candidate.updated_at = now_ms();
+            store.upsert_package_binding(candidate)?;
+        }
+        return Ok(());
+    }
+
+    let marketplace_command =
+        native_marketplace_remove_command(binding, &target_ref.marketplace_name)?;
+    run_remove_command(&marketplace_command, &cwd, Path::new(&package.cache_path))?;
+    remove_generated_codex_marketplace(&target_ref.marketplace_path)
+}
+
+fn native_plugin_remove_command(
+    binding: &PackageBindingRecord,
+    selector: &str,
+) -> Result<Vec<String>> {
+    if binding.tool == "codex" {
+        Ok(vec![
             "codex".to_string(),
             "plugin".to_string(),
             "remove".to_string(),
-            selector,
+            selector.to_string(),
             "--json".to_string(),
-        ]
+        ])
     } else {
-        vec![
+        Ok(vec![
             "claude".to_string(),
             "plugin".to_string(),
             "uninstall".to_string(),
             "--scope".to_string(),
             claude_scope(&binding.scope)?.to_string(),
-            selector,
-        ]
-    };
-    let cwd = binding_project(store, binding)?
-        .map(|project| PathBuf::from(project.path))
-        .unwrap_or_else(|| PathBuf::from(&package.cache_path));
-    run_remove_command(&command, &cwd, Path::new(&package.cache_path))?;
-    let marketplace_command = if binding.tool == "codex" {
-        vec![
+            selector.to_string(),
+        ])
+    }
+}
+
+fn native_marketplace_remove_command(
+    binding: &PackageBindingRecord,
+    marketplace_name: &str,
+) -> Result<Vec<String>> {
+    if binding.tool == "codex" {
+        Ok(vec![
             "codex".to_string(),
             "plugin".to_string(),
             "marketplace".to_string(),
             "remove".to_string(),
-            marketplace_name,
+            marketplace_name.to_string(),
             "--json".to_string(),
-        ]
+        ])
     } else {
-        vec![
+        Ok(vec![
             "claude".to_string(),
             "plugin".to_string(),
             "marketplace".to_string(),
             "remove".to_string(),
             "--scope".to_string(),
             claude_scope(&binding.scope)?.to_string(),
-            marketplace_name,
-        ]
-    };
-    run_remove_command(&marketplace_command, &cwd, Path::new(&package.cache_path))?;
+            marketplace_name.to_string(),
+        ])
+    }
+}
+
+fn remove_generated_codex_marketplace(marketplace_path: &Path) -> Result<()> {
+    let generated_root = central_repo::base_dir().join("generated/codex");
+    if marketplace_path.starts_with(&generated_root)
+        && path_guard::is_path_safe(&generated_root, marketplace_path)
+        && marketplace_path.is_dir()
+    {
+        fs::remove_dir_all(marketplace_path)?;
+    }
     Ok(())
+}
+
+fn native_target_ref(
+    binding: &PackageBindingRecord,
+    package: &PackageRecord,
+    surface: Option<&PackageSurfaceRecord>,
+) -> Result<NativePluginTargetRef> {
+    let raw = binding
+        .target_ref
+        .as_deref()
+        .ok_or_else(|| anyhow!("Native plugin target metadata is missing"))?;
+    if let Ok(target_ref) = serde_json::from_str::<NativePluginTargetRef>(raw) {
+        validate_native_identifier("Plugin", &target_ref.plugin_name)?;
+        validate_native_identifier("Marketplace", &target_ref.marketplace_name)?;
+        return Ok(target_ref);
+    }
+
+    // Legacy v8/v9 bindings stored approved plan operations instead of apply-time facts.
+    let operations: Vec<PlanOperation> =
+        serde_json::from_str(raw).context("Native plugin target metadata is invalid")?;
+    let selector = operations
+        .iter()
+        .find(|operation| operation.kind == "install_plugin")
+        .and_then(|operation| operation.command.as_ref())
+        .and_then(|command| command.iter().find(|arg| arg.contains('@')))
+        .ok_or_else(|| anyhow!("Legacy native plugin selector is missing"))?;
+    let (plugin_name, marketplace_name) = selector
+        .split_once('@')
+        .ok_or_else(|| anyhow!("Legacy native plugin selector is invalid"))?;
+    validate_native_identifier("Plugin", plugin_name)?;
+    validate_native_identifier("Marketplace", marketplace_name)?;
+    let marketplace_path = operations
+        .iter()
+        .find(|operation| operation.kind == "add_marketplace")
+        .and_then(|operation| operation.command.as_ref())
+        .and_then(|command| {
+            command
+                .iter()
+                .rev()
+                .find(|arg| !arg.starts_with('-') && Path::new(arg).is_absolute())
+        })
+        .map(PathBuf::from)
+        .or_else(|| surface.map(|_| PathBuf::from(&package.cache_path)))
+        .ok_or_else(|| anyhow!("Legacy marketplace path is missing"))?;
+    Ok(NativePluginTargetRef {
+        plugin_name: plugin_name.to_string(),
+        marketplace_name: marketplace_name.to_string(),
+        marketplace_path,
+        // Old records cannot prove that Skills Manager created the registration.
+        marketplace_registered: false,
+    })
 }
 
 fn run_remove_command(command: &[String], cwd: &Path, package_root: &Path) -> Result<()> {
@@ -1607,9 +2229,111 @@ fn remove_setup_package(binding: &PackageBindingRecord, package: &PackageRecord)
     bail!("This setup-based package has no safe automatic uninstall command")
 }
 
+fn generated_codex_marketplace(
+    package: &PackageRecord,
+    binding: &PackageBindingRecord,
+) -> Result<(PathBuf, String)> {
+    let digest = hex::encode(Sha256::digest(binding.artifact_key.as_bytes()));
+    let package_token: String = package
+        .id
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    let name = format!("skillapse-{package_token}-{}", &digest[..8]);
+    validate_native_identifier("Marketplace", &name)?;
+    let root = central_repo::base_dir()
+        .join("generated/codex")
+        .join(&package.id)
+        .join(&digest[..16])
+        .join(&package.resolved_revision);
+    Ok((root, name))
+}
+
+fn materialize_codex_marketplace(
+    package: &PackageRecord,
+    binding: &PackageBindingRecord,
+    target: &Path,
+    marketplace_name: &str,
+    plugin_name: &str,
+) -> Result<()> {
+    let generated_root = central_repo::base_dir().join("generated/codex");
+    fs::create_dir_all(&generated_root)?;
+    if !path_guard::is_path_safe(&generated_root, target) {
+        bail!(
+            "Generated Codex marketplace path escapes managed staging: {} is not under {}",
+            target.display(),
+            generated_root.display()
+        );
+    }
+    let expected = serde_json::json!({
+        "package_id": package.id,
+        "artifact_key": binding.artifact_key,
+        "revision": package.resolved_revision,
+        "marketplace": marketplace_name,
+        "plugin": plugin_name,
+    });
+    let marker = target.join(".skillapse-generated.json");
+    if target.exists() {
+        let current: serde_json::Value =
+            serde_json::from_slice(&fs::read(&marker).with_context(|| {
+                format!(
+                    "Generated marketplace marker is missing: {}",
+                    marker.display()
+                )
+            })?)?;
+        if current != expected {
+            bail!("Generated Codex marketplace metadata does not match the approved plan");
+        }
+        return Ok(());
+    }
+
+    let stage = generated_root.join(format!(".stage-{}", uuid::Uuid::new_v4()));
+    if !path_guard::is_path_safe(&generated_root, &stage) {
+        bail!("Generated Codex marketplace staging path is unsafe");
+    }
+    let source_root = artifact_root(Path::new(&package.cache_path), &binding.artifact_key);
+    if !path_guard::is_path_safe(Path::new(&package.cache_path), &source_root) {
+        bail!("Package artifact path escapes the managed package cache");
+    }
+    let result = (|| {
+        let plugin_root = stage.join("plugins").join(plugin_name);
+        copy_package_tree(&source_root, &plugin_root)?;
+        let marketplace_path = stage.join(".agents/plugins/marketplace.json");
+        if let Some(parent) = marketplace_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let marketplace = serde_json::json!({
+            "name": marketplace_name,
+            "plugins": [{
+                "name": plugin_name,
+                "source": {
+                    "source": "local",
+                    "path": format!("./plugins/{plugin_name}")
+                }
+            }]
+        });
+        fs::write(&marketplace_path, serde_json::to_vec_pretty(&marketplace)?)?;
+        fs::write(
+            stage.join(".skillapse-generated.json"),
+            serde_json::to_vec_pretty(&expected)?,
+        )?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(&stage, target)?;
+        Ok(())
+    })();
+    if result.is_err() && stage.exists() {
+        let _ = fs::remove_dir_all(&stage);
+    }
+    result
+}
+
 fn native_marketplace(
     package_root: &Path,
     tool: &str,
+    plugin_name: &str,
 ) -> Result<(Option<PathBuf>, Option<String>)> {
     let relative = match tool {
         "codex" => ".agents/plugins/marketplace.json",
@@ -1624,22 +2348,189 @@ fn native_marketplace(
     let name = value
         .get("name")
         .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
+        .map(|name| validate_native_identifier("Marketplace", name).map(str::to_string))
+        .transpose()?;
+    if tool == "codex" {
+        let source = value
+            .get("plugins")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|plugins| {
+                plugins.iter().find(|plugin| {
+                    plugin.get("name").and_then(serde_json::Value::as_str) == Some(plugin_name)
+                })
+            })
+            .and_then(|plugin| plugin.get("source"))
+            .and_then(serde_json::Value::as_object);
+        let Some(source) = source else {
+            return Ok((None, None));
+        };
+        if source.get("source").and_then(serde_json::Value::as_str) != Some("local") {
+            return Ok((None, None));
+        }
+        let local_path = source
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("Codex local marketplace source has no path"))?;
+        if local_path.contains('~') || Path::new(local_path).is_absolute() {
+            bail!("Codex local marketplace source path is unsafe: {local_path:?}");
+        }
+        let resolved = package_root.join(local_path);
+        if !path_guard::is_path_safe(package_root, &resolved) {
+            bail!("Codex local marketplace source escapes the package cache");
+        }
+        if !resolved.is_dir() {
+            bail!("Codex local marketplace source does not exist: {local_path:?}");
+        }
+    }
     Ok((Some(package_root.to_path_buf()), name))
 }
 
 fn native_plugin_name(package_root: &Path, surface: &PackageSurfaceRecord) -> Result<String> {
+    let value = native_plugin_manifest(package_root, surface)?;
+    let name = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("Plugin manifest has no name"))?;
+    Ok(validate_native_identifier("Plugin", name)?.to_string())
+}
+
+fn validate_native_identifier<'a>(kind: &str, value: &'a str) -> Result<&'a str> {
+    let valid = !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'));
+    if !valid {
+        bail!("{kind} name contains unsafe CLI characters: {value:?}");
+    }
+    Ok(value)
+}
+
+fn native_plugin_version(
+    package_root: &Path,
+    surface: &PackageSurfaceRecord,
+) -> Result<Option<String>> {
+    Ok(native_plugin_manifest(package_root, surface)?
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string))
+}
+
+fn native_plugin_manifest(
+    package_root: &Path,
+    surface: &PackageSurfaceRecord,
+) -> Result<serde_json::Value> {
     let manifest_path = surface
         .manifest_path
         .as_deref()
         .ok_or_else(|| anyhow!("Native plugin manifest is missing"))?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&fs::read(package_root.join(manifest_path))?)?;
-    value
+    Ok(serde_json::from_slice(&fs::read(
+        package_root.join(manifest_path),
+    )?)?)
+}
+
+fn find_installed_codex_remote_plugin(
+    store: &SkillStore,
+    package: &PackageRecord,
+    surface: &PackageSurfaceRecord,
+) -> Result<Option<CodexPluginPresence>> {
+    let package_root = Path::new(&package.cache_path);
+    let package_manifest = native_plugin_manifest(package_root, surface)?;
+    let plugin_name = package_manifest
         .get("name")
         .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("Plugin manifest has no name"))
+        .ok_or_else(|| anyhow!("Plugin manifest has no name"))?;
+    if skill_metadata::sanitize_skill_name(plugin_name).as_deref() != Some(plugin_name) {
+        bail!("Unsafe plugin name: {plugin_name}");
+    }
+    let package_repository = plugin_repository(&package_manifest)
+        .map(normalize_repository)
+        .unwrap_or_else(|| normalize_repository(&package.source_url));
+    let adapter = tool_adapters::find_adapter_with_store(store, "codex")
+        .ok_or_else(|| anyhow!("Unknown tool: codex"))?;
+    let config_root = adapter
+        .skills_dir()
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| anyhow!("Codex skills path has no config directory"))?;
+    let cache_root = config_root.join("plugins/cache");
+    let marketplaces = match fs::read_dir(&cache_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+
+    // ponytail: adopt explicit remote-install markers only; add config-backed local detection when needed.
+    for marketplace in marketplaces {
+        let marketplace = marketplace?;
+        if !marketplace.file_type()?.is_dir() {
+            continue;
+        }
+        let plugin_root = marketplace.path().join(plugin_name);
+        if !plugin_root
+            .join(".codex-remote-plugin-install.json")
+            .is_file()
+        {
+            continue;
+        }
+        let versions = fs::read_dir(&plugin_root)?;
+        for version in versions {
+            let version = version?;
+            if !version.file_type()?.is_dir() {
+                continue;
+            }
+            let installed_root = version.path();
+            let manifest_path = installed_root.join(".codex-plugin/plugin.json");
+            if !manifest_path.is_file() {
+                continue;
+            }
+            let installed_manifest: serde_json::Value =
+                serde_json::from_slice(&fs::read(&manifest_path)?)?;
+            if installed_manifest
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                != Some(plugin_name)
+            {
+                continue;
+            }
+            let installed_repository =
+                plugin_repository(&installed_manifest).map(normalize_repository);
+            if installed_repository.as_deref() != Some(package_repository.as_str()) {
+                return Ok(Some(CodexPluginPresence::Conflict {
+                    root: installed_root,
+                    repository: installed_repository,
+                }));
+            }
+            return Ok(Some(CodexPluginPresence::Matching(InstalledCodexPlugin {
+                marketplace: marketplace.file_name().to_string_lossy().to_string(),
+                version: installed_manifest
+                    .get("version")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                root: installed_root,
+            })));
+        }
+    }
+    Ok(None)
+}
+
+fn plugin_repository(manifest: &serde_json::Value) -> Option<&str> {
+    manifest
+        .get("repository")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| manifest.get("homepage").and_then(serde_json::Value::as_str))
+}
+
+fn normalize_repository(value: &str) -> String {
+    value
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .to_string()
 }
 
 fn hash_plan(plan: &BindingPlan) -> Result<String> {
@@ -1689,11 +2580,17 @@ fn write_project_manifest_binding(
         source: package.source_url.clone(),
         revision: package.resolved_revision.clone(),
     });
-    manifest
-        .bindings
-        .retain(|item| !(item.package == package.id && item.tool == binding.tool));
+    if !binding.artifact_key.is_empty() {
+        manifest.version = 2;
+    }
+    manifest.bindings.retain(|item| {
+        !(item.package == package.id
+            && item.artifact.as_deref().unwrap_or("") == binding.artifact_key
+            && item.tool == binding.tool)
+    });
     manifest.bindings.push(ProjectManifestBinding {
         package: package.id,
+        artifact: (!binding.artifact_key.is_empty()).then(|| binding.artifact_key.clone()),
         tool: binding.tool.clone(),
         surface: binding.surface_policy.clone(),
         components: serde_json::from_str(&binding.requested_components_json)?,
@@ -1713,9 +2610,11 @@ fn remove_project_manifest_binding(
         return Ok(());
     }
     let mut manifest = read_project_manifest(&path)?;
-    manifest
-        .bindings
-        .retain(|item| !(item.package == binding.package_id && item.tool == binding.tool));
+    manifest.bindings.retain(|item| {
+        !(item.package == binding.package_id
+            && item.artifact.as_deref().unwrap_or("") == binding.artifact_key
+            && item.tool == binding.tool)
+    });
     let still_used = manifest
         .bindings
         .iter()
@@ -1750,6 +2649,11 @@ pub fn sync_project_manifest(store: &SkillStore, project_id: &str) -> Result<Vec
 
     let mut plans = Vec::new();
     for manifest_binding in manifest.bindings {
+        let artifact_key = manifest_binding
+            .artifact
+            .as_deref()
+            .unwrap_or("")
+            .to_string();
         let package_id = local_ids
             .get(&manifest_binding.package)
             .ok_or_else(|| {
@@ -1759,48 +2663,16 @@ pub fn sync_project_manifest(store: &SkillStore, project_id: &str) -> Result<Vec
                 )
             })?
             .clone();
-        validate_binding_input(
+        plans.push(create_binding(
             store,
             &package_id,
+            &artifact_key,
             &manifest_binding.tool,
             "project_shared",
             Some(project_id),
             &manifest_binding.surface,
-        )?;
-        let now = now_ms();
-        let mut binding = store
-            .get_package_binding(
-                &package_id,
-                &manifest_binding.tool,
-                "project_shared",
-                Some(project_id),
-            )?
-            .unwrap_or_else(|| PackageBindingRecord {
-                id: uuid::Uuid::new_v4().to_string(),
-                package_id: package_id.clone(),
-                tool: manifest_binding.tool.clone(),
-                scope: "project_shared".to_string(),
-                project_id: Some(project_id.to_string()),
-                surface_policy: manifest_binding.surface.clone(),
-                requested_components_json: "[]".to_string(),
-                desired_enabled: true,
-                resolved_surface_id: None,
-                compatibility: "unsupported".to_string(),
-                state: "not_applied".to_string(),
-                target_ref: None,
-                applied_revision: None,
-                approved_plan_hash: None,
-                last_error: None,
-                created_at: now,
-                updated_at: now,
-            });
-        binding.surface_policy = manifest_binding.surface;
-        binding.requested_components_json = serde_json::to_string(&manifest_binding.components)?;
-        binding.desired_enabled = true;
-        binding.approved_plan_hash = None;
-        binding.updated_at = now;
-        store.upsert_package_binding(&binding)?;
-        plans.push(preview_binding(store, &binding.id)?);
+            &manifest_binding.components,
+        )?);
     }
     Ok(plans)
 }
@@ -1815,11 +2687,21 @@ fn read_project_manifest(path: &Path) -> Result<ProjectManifest> {
     }
     let manifest: ProjectManifest = serde_json::from_slice(&fs::read(path)?)
         .with_context(|| format!("Invalid Skillapse manifest: {}", path.display()))?;
-    if manifest.version != 1 {
+    if !matches!(manifest.version, 1 | 2) {
         bail!(
             "Unsupported Skillapse project manifest version: {}",
             manifest.version
         );
+    }
+    if manifest.version == 1
+        && manifest.bindings.iter().any(|binding| {
+            binding
+                .artifact
+                .as_deref()
+                .is_some_and(|key| !key.is_empty())
+        })
+    {
+        bail!("Skillapse manifest v1 cannot contain artifact-scoped bindings");
     }
     Ok(manifest)
 }
@@ -1903,9 +2785,131 @@ fn scan_entry(entry: &DirEntry) -> bool {
     )
 }
 
+fn discover_native_artifacts(root: &Path) -> Result<Vec<NativeArtifact>> {
+    let mut artifacts: BTreeMap<String, NativeArtifact> = BTreeMap::new();
+    for entry in WalkDir::new(root)
+        .max_depth(8)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(scan_entry)
+    {
+        let entry = entry?;
+        if !entry.file_type().is_file() || entry.file_name() != "plugin.json" {
+            continue;
+        }
+        let Some(manifest_dir) = entry.path().parent() else {
+            continue;
+        };
+        let tool = match manifest_dir.file_name().and_then(|value| value.to_str()) {
+            Some(".claude-plugin") => "claude_code",
+            Some(".codex-plugin") => "codex",
+            _ => continue,
+        };
+        let artifact_root = manifest_dir
+            .parent()
+            .ok_or_else(|| anyhow!("Plugin manifest has no artifact root"))?;
+        let key = relative_string(root, artifact_root)?;
+        let manifest_path = relative_string(root, entry.path())?;
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(entry.path())?)
+            .with_context(|| format!("Invalid plugin manifest: {}", entry.path().display()))?;
+        let name = value
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("Plugin manifest has no name: {}", entry.path().display()))?;
+        let name = validate_native_identifier("Plugin", name)?.to_string();
+        let artifact = artifacts
+            .entry(key.clone())
+            .or_insert_with(|| NativeArtifact {
+                key,
+                name: name.clone(),
+                manifests: BTreeMap::new(),
+            });
+        if artifact.name != name {
+            bail!(
+                "Plugin manifests under artifact {:?} disagree on name: {:?} and {:?}",
+                artifact.key,
+                artifact.name,
+                name
+            );
+        }
+        if artifact
+            .manifests
+            .insert(tool.to_string(), manifest_path)
+            .is_some()
+        {
+            bail!(
+                "Artifact {:?} has duplicate {tool} plugin manifests",
+                artifact.key
+            );
+        }
+        if artifacts.len() > MAX_PACKAGE_ARTIFACTS {
+            bail!("Package contains more than {MAX_PACKAGE_ARTIFACTS} plugin artifacts");
+        }
+    }
+
+    let mut names = BTreeMap::new();
+    for artifact in artifacts.values() {
+        if let Some(previous) = names.insert(artifact.name.clone(), artifact.key.clone()) {
+            if previous != artifact.key {
+                bail!(
+                    "Plugin name {:?} is ambiguous across artifacts {:?} and {:?}",
+                    artifact.name,
+                    previous,
+                    artifact.key
+                );
+            }
+        }
+    }
+    Ok(artifacts.into_values().collect())
+}
+
+fn artifact_key_for_relative(relative: &str, artifact_keys: &[String]) -> String {
+    artifact_keys
+        .iter()
+        .filter(|key| !key.is_empty())
+        .filter(|key| relative == key.as_str() || relative.starts_with(&format!("{key}/")))
+        .max_by_key(|key| key.len())
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn artifact_root<'a>(package_root: &'a Path, artifact_key: &str) -> PathBuf {
+    if artifact_key.is_empty() {
+        package_root.to_path_buf()
+    } else {
+        package_root.join(artifact_key)
+    }
+}
+
+fn artifact_relative<'a>(relative: &'a str, artifact_key: &str) -> &'a str {
+    if artifact_key.is_empty() {
+        relative
+    } else {
+        relative
+            .strip_prefix(artifact_key)
+            .and_then(|value| value.strip_prefix('/'))
+            .unwrap_or(relative)
+    }
+}
+
+fn join_artifact_path(artifact_key: &str, relative: &str) -> String {
+    if artifact_key.is_empty() {
+        relative.to_string()
+    } else if relative == "." || relative.is_empty() {
+        artifact_key.to_string()
+    } else {
+        format!("{artifact_key}/{relative}")
+    }
+}
+
 fn scan_package(root: &Path, package_id: &str) -> Result<ScannedInventory> {
+    let native_artifacts = discover_native_artifacts(root)?;
+    let artifact_keys: Vec<String> = native_artifacts
+        .iter()
+        .map(|artifact| artifact.key.clone())
+        .collect();
     let mut components = Vec::new();
-    let mut skill_coverage_by_root: BTreeMap<(String, String, i32), Vec<SurfaceCoverage>> =
+    let mut skill_coverage_by_root: BTreeMap<(String, String, String, i32), Vec<SurfaceCoverage>> =
         BTreeMap::new();
     let mut seen_components = HashSet::new();
 
@@ -1936,10 +2940,12 @@ fn scan_package(root: &Path, package_id: &str) -> Result<ScannedInventory> {
                 .map(|value| value.to_string_lossy().to_string())
                 .unwrap_or_else(|| "skill".to_string())
         });
-        let (tool, surface_root, priority) = classify_skill_surface(&relative_dir);
+        let artifact_key = artifact_key_for_relative(&relative_dir, &artifact_keys);
+        let (tool, surface_root, priority) = classify_skill_surface(&relative_dir, &artifact_key);
         components.push(PackageComponentRecord {
             id: stable_id(package_id, "skill", &relative_dir),
             package_id: package_id.to_string(),
+            artifact_key: artifact_key.clone(),
             kind: "skill".to_string(),
             name: name.clone(),
             relative_path: relative_dir.clone(),
@@ -1947,7 +2953,7 @@ fn scan_package(root: &Path, package_id: &str) -> Result<ScannedInventory> {
             required: false,
         });
         skill_coverage_by_root
-            .entry((tool, surface_root, priority))
+            .entry((artifact_key, tool, surface_root, priority))
             .or_default()
             .push(SurfaceCoverage {
                 name,
@@ -1956,10 +2962,20 @@ fn scan_package(root: &Path, package_id: &str) -> Result<ScannedInventory> {
             });
     }
 
-    scan_conventional_components(root, package_id, &mut components, &mut seen_components)?;
+    let mut scan_roots = BTreeSet::from([String::new()]);
+    scan_roots.extend(artifact_keys.iter().cloned());
+    for artifact_key in &scan_roots {
+        scan_conventional_components(
+            root,
+            package_id,
+            artifact_key,
+            &mut components,
+            &mut seen_components,
+        )?;
+    }
 
     let mut surfaces = Vec::new();
-    for ((tool, surface_root, priority), mut coverage) in skill_coverage_by_root {
+    for ((artifact_key, tool, surface_root, priority), mut coverage) in skill_coverage_by_root {
         coverage.sort_by(|a, b| {
             a.name
                 .cmp(&b.name)
@@ -1968,6 +2984,7 @@ fn scan_package(root: &Path, package_id: &str) -> Result<ScannedInventory> {
         surfaces.push(PackageSurfaceRecord {
             id: stable_id(package_id, "portable", &format!("{tool}:{surface_root}")),
             package_id: package_id.to_string(),
+            artifact_key,
             tool,
             kind: "portable_skills".to_string(),
             root_path: surface_root,
@@ -1979,25 +2996,23 @@ fn scan_package(root: &Path, package_id: &str) -> Result<ScannedInventory> {
     }
 
     let mut manifest_kinds = Vec::new();
-    add_native_surface(
-        root,
-        package_id,
-        "claude_code",
-        ".claude-plugin/plugin.json",
-        &components,
-        &mut surfaces,
-        &mut manifest_kinds,
-    )?;
-    add_native_surface(
-        root,
-        package_id,
-        "codex",
-        ".codex-plugin/plugin.json",
-        &components,
-        &mut surfaces,
-        &mut manifest_kinds,
-    )?;
-    add_codex_host_bundle_surface(root, package_id, &components, &mut surfaces)?;
+    for artifact in &native_artifacts {
+        for (tool, manifest_path) in &artifact.manifests {
+            add_native_surface(
+                root,
+                package_id,
+                &artifact.key,
+                tool,
+                manifest_path,
+                &components,
+                &mut surfaces,
+                &mut manifest_kinds,
+            )?;
+        }
+    }
+    for artifact_key in &scan_roots {
+        add_codex_host_bundle_surface(root, package_id, artifact_key, &components, &mut surfaces)?;
+    }
     add_setup_surfaces(root, package_id, &components, &mut surfaces)?;
 
     let name = infer_package_name(root, &manifest_kinds)?.unwrap_or_else(|| "package".to_string());
@@ -2024,19 +3039,28 @@ fn scan_package(root: &Path, package_id: &str) -> Result<ScannedInventory> {
 fn add_codex_host_bundle_surface(
     root: &Path,
     package_id: &str,
+    artifact_key: &str,
     components: &[PackageComponentRecord],
     surfaces: &mut Vec<PackageSurfaceRecord>,
 ) -> Result<()> {
-    let manifest = root.join(".codex/hooks.json");
-    let hooks_dir = root.join(".codex/hooks");
+    if !artifact_key.is_empty() {
+        // ponytail: nested hook bundles stay disabled until artifact-relative hook assets are needed.
+        return Ok(());
+    }
+    let artifact_root = artifact_root(root, artifact_key);
+    let manifest = artifact_root.join(".codex/hooks.json");
+    let hooks_dir = artifact_root.join(".codex/hooks");
     if !manifest.is_file() || !hooks_dir.is_dir() {
         return Ok(());
     }
     let mut coverage: Vec<SurfaceCoverage> = components
         .iter()
         .filter(|component| {
-            component.relative_path.starts_with(".codex/skills/")
-                || component.relative_path == ".codex/hooks.json"
+            component.artifact_key == artifact_key
+                && (artifact_relative(&component.relative_path, artifact_key)
+                    .starts_with(".codex/skills/")
+                    || artifact_relative(&component.relative_path, artifact_key)
+                        == ".codex/hooks.json")
         })
         .map(|component| SurfaceCoverage {
             name: component.name.clone(),
@@ -2051,12 +3075,13 @@ fn add_codex_host_bundle_surface(
     }
     coverage.sort_by(|a, b| a.kind.cmp(&b.kind).then(a.name.cmp(&b.name)));
     surfaces.push(PackageSurfaceRecord {
-        id: stable_id(package_id, "bundle", "codex"),
+        id: stable_id(package_id, "bundle", &format!("{artifact_key}:codex")),
         package_id: package_id.to_string(),
+        artifact_key: artifact_key.to_string(),
         tool: "codex".to_string(),
         kind: "host_bundle".to_string(),
-        root_path: ".codex".to_string(),
-        manifest_path: Some(".codex/hooks.json".to_string()),
+        root_path: join_artifact_path(artifact_key, ".codex"),
+        manifest_path: Some(join_artifact_path(artifact_key, ".codex/hooks.json")),
         priority: 95,
         coverage_json: serde_json::to_string(&coverage)?,
         install_command_json: None,
@@ -2067,9 +3092,11 @@ fn add_codex_host_bundle_surface(
 fn scan_conventional_components(
     root: &Path,
     package_id: &str,
+    artifact_key: &str,
     components: &mut Vec<PackageComponentRecord>,
     seen: &mut HashSet<(String, String)>,
 ) -> Result<()> {
+    let scan_root = artifact_root(root, artifact_key);
     let rules: &[(&str, &str, Option<&str>)] = &[
         ("hooks.json", "hook", None),
         ("hooks/hooks.json", "hook", None),
@@ -2077,9 +3104,18 @@ fn scan_conventional_components(
         (".mcp.json", "mcp", None),
     ];
     for (relative, kind, host_hint) in rules {
-        let path = root.join(relative);
+        let path = scan_root.join(relative);
         if path.is_file() {
-            push_component(root, package_id, &path, kind, *host_hint, components, seen)?;
+            push_component(
+                root,
+                package_id,
+                artifact_key,
+                &path,
+                kind,
+                *host_hint,
+                components,
+                seen,
+            )?;
         }
     }
     for (directory, kind, extension, host_hint) in [
@@ -2098,7 +3134,7 @@ fn scan_conventional_components(
         (".codex/rules", "rule", Some("md"), Some("codex")),
         (".cursor/rules", "rule", None, Some("cursor")),
     ] {
-        let base = root.join(directory);
+        let base = scan_root.join(directory);
         if !base.is_dir() {
             continue;
         }
@@ -2119,6 +3155,7 @@ fn scan_conventional_components(
             push_component(
                 root,
                 package_id,
+                artifact_key,
                 entry.path(),
                 kind,
                 host_hint,
@@ -2133,6 +3170,7 @@ fn scan_conventional_components(
 fn push_component(
     root: &Path,
     package_id: &str,
+    artifact_key: &str,
     path: &Path,
     kind: &str,
     host_hint: Option<&str>,
@@ -2150,6 +3188,7 @@ fn push_component(
     components.push(PackageComponentRecord {
         id: stable_id(package_id, kind, &relative),
         package_id: package_id.to_string(),
+        artifact_key: artifact_key.to_string(),
         kind: kind.to_string(),
         name,
         relative_path: relative,
@@ -2159,7 +3198,8 @@ fn push_component(
     Ok(())
 }
 
-fn classify_skill_surface(relative_dir: &str) -> (String, String, i32) {
+fn classify_skill_surface(relative_dir: &str, artifact_key: &str) -> (String, String, i32) {
+    let local_dir = artifact_relative(relative_dir, artifact_key);
     let mappings = [
         (".claude/skills/", "claude_code", ".claude/skills", 90),
         (".codex/skills/", "codex", ".codex/skills", 90),
@@ -2171,19 +3211,28 @@ fn classify_skill_surface(relative_dir: &str) -> (String, String, i32) {
         (".kiro/skills/", "kiro", ".kiro/skills", 90),
     ];
     for (prefix, tool, root, priority) in mappings {
-        if relative_dir.starts_with(prefix) || relative_dir == root {
-            return (tool.to_string(), root.to_string(), priority);
+        if local_dir.starts_with(prefix) || local_dir == root {
+            return (
+                tool.to_string(),
+                join_artifact_path(artifact_key, root),
+                priority,
+            );
         }
     }
-    if relative_dir.starts_with("skills/") || relative_dir == "skills" {
-        return ("*".to_string(), "skills".to_string(), 70);
+    if local_dir.starts_with("skills/") || local_dir == "skills" {
+        return (
+            "*".to_string(),
+            join_artifact_path(artifact_key, "skills"),
+            70,
+        );
     }
-    ("*".to_string(), ".".to_string(), 40)
+    ("*".to_string(), join_artifact_path(artifact_key, "."), 40)
 }
 
 fn add_native_surface(
     root: &Path,
     package_id: &str,
+    artifact_key: &str,
     tool: &str,
     manifest_relative: &str,
     components: &[PackageComponentRecord],
@@ -2206,11 +3255,12 @@ fn add_native_surface(
     let coverage: Vec<SurfaceCoverage> = components
         .iter()
         .filter(|component| {
-            component
-                .host_hint
-                .as_deref()
-                .map(|hint| hint == tool)
-                .unwrap_or(true)
+            component.artifact_key == artifact_key
+                && component
+                    .host_hint
+                    .as_deref()
+                    .map(|hint| hint == tool)
+                    .unwrap_or(true)
         })
         .map(|component| SurfaceCoverage {
             name: component.name.clone(),
@@ -2219,11 +3269,16 @@ fn add_native_surface(
         })
         .collect();
     surfaces.push(PackageSurfaceRecord {
-        id: stable_id(package_id, "native", tool),
+        id: stable_id(package_id, "native", &format!("{artifact_key}:{tool}")),
         package_id: package_id.to_string(),
+        artifact_key: artifact_key.to_string(),
         tool: tool.to_string(),
         kind: "native_plugin".to_string(),
-        root_path: ".".to_string(),
+        root_path: if artifact_key.is_empty() {
+            ".".to_string()
+        } else {
+            artifact_key.to_string()
+        },
         manifest_path: Some(manifest_relative.to_string()),
         priority: 100,
         coverage_json: serde_json::to_string(&coverage)?,
@@ -2280,6 +3335,7 @@ fn add_setup_surfaces(
         surfaces.push(PackageSurfaceRecord {
             id: stable_id(package_id, "setup", tool),
             package_id: package_id.to_string(),
+            artifact_key: String::new(),
             tool: tool.to_string(),
             kind: "setup_script".to_string(),
             root_path: ".".to_string(),
@@ -2425,6 +3481,517 @@ mod tests {
     }
 
     #[test]
+    fn marketplace_repo_scopes_two_artifacts_and_bindings_independently() {
+        let temp = tempdir().unwrap();
+        let package_root = temp.path().join("package");
+        let codex_root = temp.path().join("home/.codex");
+        write(
+            &package_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+                "name":"agents-dev",
+                "plugins":[
+                    {"name":"alpha","source":{"source":"local","path":"./plugins/alpha"}},
+                    {"name":"beta","source":{"source":"local","path":"./plugins/beta"}}
+                ]
+            }"#,
+        );
+        for name in ["alpha", "beta"] {
+            write(
+                &package_root.join(format!("plugins/{name}/.claude-plugin/plugin.json")),
+                &format!(r#"{{"name":"{name}","version":"1.0.0"}}"#),
+            );
+            write(
+                &package_root.join(format!("plugins/{name}/.codex-plugin/plugin.json")),
+                &format!(r#"{{"name":"{name}","version":"1.0.0"}}"#),
+            );
+            write(
+                &package_root.join(format!("plugins/{name}/skills/{name}/SKILL.md")),
+                &format!("---\nname: {name}\n---\n"),
+            );
+        }
+
+        let inventory = scan_package(&package_root, "package-1").unwrap();
+        for name in ["alpha", "beta"] {
+            let key = format!("plugins/{name}");
+            let surface = inventory
+                .surfaces
+                .iter()
+                .find(|surface| {
+                    surface.artifact_key == key
+                        && surface.tool == "codex"
+                        && surface.kind == "native_plugin"
+                })
+                .unwrap();
+            let coverage: Vec<SurfaceCoverage> =
+                serde_json::from_str(&surface.coverage_json).unwrap();
+            assert!(coverage
+                .iter()
+                .all(|item| item.relative_path.starts_with(&key)));
+            assert!(coverage.iter().any(|item| item.name == name));
+            assert!(!coverage.iter().any(|item| item.name != name));
+        }
+
+        let store = SkillStore::new(&temp.path().join("state.db")).unwrap();
+        store
+            .set_setting(
+                "custom_tool_paths",
+                &serde_json::json!({ "codex": codex_root.join("skills") }).to_string(),
+            )
+            .unwrap();
+        let package = PackageRecord {
+            id: "package-1".into(),
+            name: "Agents".into(),
+            source_url: "https://github.com/example/agents".into(),
+            requested_revision: Some("main".into()),
+            resolved_revision: "abc123".into(),
+            cache_path: package_root.to_string_lossy().to_string(),
+            manifest_kind: inventory.manifest_kind.clone(),
+            status: "ready".into(),
+            created_at: 1,
+            updated_at: 1,
+        };
+        store
+            .replace_package_inventory(&package, &inventory.components, &inventory.surfaces)
+            .unwrap();
+
+        let alpha = create_binding(
+            &store,
+            &package.id,
+            "plugins/alpha",
+            "codex",
+            "user",
+            None,
+            "native",
+            &[],
+        )
+        .unwrap();
+        let beta = create_binding(
+            &store,
+            &package.id,
+            "plugins/beta",
+            "codex",
+            "user",
+            None,
+            "native",
+            &[],
+        )
+        .unwrap();
+        assert_ne!(alpha.binding_id, beta.binding_id);
+        assert!(alpha.operations.iter().any(|operation| {
+            operation
+                .command
+                .as_ref()
+                .is_some_and(|command| command.iter().any(|arg| arg == "alpha@agents-dev"))
+        }));
+        assert!(beta.operations.iter().any(|operation| {
+            operation
+                .command
+                .as_ref()
+                .is_some_and(|command| command.iter().any(|arg| arg == "beta@agents-dev"))
+        }));
+    }
+
+    #[test]
+    fn duplicate_plugin_identity_across_artifacts_fails_closed() {
+        let temp = tempdir().unwrap();
+        for key in ["plugins/a", "plugins/b"] {
+            write(
+                &temp.path().join(key).join(".codex-plugin/plugin.json"),
+                r#"{"name":"duplicate"}"#,
+            );
+        }
+        let error = scan_package(temp.path(), "p1").unwrap_err();
+        assert!(error.to_string().contains("ambiguous across artifacts"));
+    }
+
+    #[test]
+    fn unsafe_native_cli_names_fail_during_scan() {
+        for (name, needle) in [
+            ("-force", "unsafe CLI"),
+            ("a@b", "unsafe CLI"),
+            ("../x", "unsafe CLI"),
+        ] {
+            let temp = tempdir().unwrap();
+            write(
+                &temp.path().join(".codex-plugin/plugin.json"),
+                &serde_json::json!({ "name": name }).to_string(),
+            );
+            let error = scan_package(temp.path(), "p1").unwrap_err();
+            assert!(error.to_string().contains(needle));
+        }
+    }
+
+    #[test]
+    fn incompatible_codex_marketplace_gets_deterministic_managed_materialization() {
+        let _base_dir_guard = central_repo::test_base_dir_lock();
+        let temp = tempdir().unwrap();
+        let manager_root = temp.path().join("manager");
+        central_repo::set_test_base_dir_override(Some(manager_root.clone()));
+        let package_root = temp.path().join("package");
+        let codex_root = temp.path().join("home/.codex");
+        write(
+            &package_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"superpowers","version":"6.3.0"}"#,
+        );
+        write(
+            &package_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+                "name":"superpowers-dev",
+                "plugins":[{"name":"superpowers","source":{"source":"url","url":"./"}}]
+            }"#,
+        );
+        write(
+            &package_root.join("skills/demo/SKILL.md"),
+            "---\nname: demo\n---\n",
+        );
+        let store = SkillStore::new(&temp.path().join("state.db")).unwrap();
+        store
+            .set_setting(
+                "custom_tool_paths",
+                &serde_json::json!({ "codex": codex_root.join("skills") }).to_string(),
+            )
+            .unwrap();
+        let inventory = scan_package(&package_root, "package-1").unwrap();
+        let package = PackageRecord {
+            id: "package-1".into(),
+            name: "Superpowers".into(),
+            source_url: "https://github.com/example/superpowers".into(),
+            requested_revision: Some("main".into()),
+            resolved_revision: "abc123".into(),
+            cache_path: package_root.to_string_lossy().to_string(),
+            manifest_kind: inventory.manifest_kind.clone(),
+            status: "ready".into(),
+            created_at: 1,
+            updated_at: 1,
+        };
+        store
+            .replace_package_inventory(&package, &inventory.components, &inventory.surfaces)
+            .unwrap();
+
+        let first = create_binding(
+            &store,
+            &package.id,
+            "",
+            "codex",
+            "user",
+            None,
+            "native",
+            &[],
+        )
+        .unwrap();
+        let second = preview_binding(&store, &first.binding_id).unwrap();
+        assert_eq!(first.plan_hash, second.plan_hash);
+        let materialize = first
+            .operations
+            .iter()
+            .find(|operation| operation.kind == "materialize_codex_marketplace")
+            .unwrap();
+        assert!(!materialize.target.contains('~'));
+        let install = first
+            .operations
+            .iter()
+            .find(|operation| operation.kind == "install_plugin")
+            .unwrap();
+        let (plugin_name, marketplace_name) = install.target.split_once('@').unwrap();
+        let binding = store
+            .get_package_binding_by_id(&first.binding_id)
+            .unwrap()
+            .unwrap();
+        materialize_codex_marketplace(
+            &package,
+            &binding,
+            Path::new(&materialize.target),
+            marketplace_name,
+            plugin_name,
+        )
+        .unwrap();
+        let generated: serde_json::Value = serde_json::from_slice(
+            &fs::read(Path::new(&materialize.target).join(".agents/plugins/marketplace.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(generated["plugins"][0]["source"]["source"], "local");
+        assert_eq!(
+            generated["plugins"][0]["source"]["path"],
+            "./plugins/superpowers"
+        );
+        assert!(Path::new(&materialize.target).starts_with(manager_root.join("generated/codex")));
+
+        let mut installed_binding = binding;
+        installed_binding.target_ref = Some(
+            serde_json::to_string(&NativePluginTargetRef {
+                plugin_name: plugin_name.into(),
+                marketplace_name: marketplace_name.into(),
+                marketplace_path: PathBuf::from(&materialize.target),
+                marketplace_registered: true,
+            })
+            .unwrap(),
+        );
+        installed_binding.ownership = "managed".into();
+        store.upsert_package_binding(&installed_binding).unwrap();
+        let blocked = preview_binding(&store, &first.binding_id).unwrap();
+        assert!(!blocked.can_apply);
+        assert!(blocked
+            .risk_items
+            .iter()
+            .any(|item| item.contains("Remove the installed native plugin")));
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn managed_claude_native_binding_uses_provider_upgrade_without_reinstall() {
+        let temp = tempdir().unwrap();
+        let package_root = temp.path().join("package");
+        write(
+            &package_root.join(".claude-plugin/plugin.json"),
+            r#"{"name":"superpowers","version":"6.3.0"}"#,
+        );
+        write(
+            &package_root.join(".claude-plugin/marketplace.json"),
+            r#"{"name":"superpowers-dev","plugins":[{"name":"superpowers","source":"./"}]}"#,
+        );
+        write(
+            &package_root.join("skills/demo/SKILL.md"),
+            "---\nname: demo\n---\n",
+        );
+        let store = SkillStore::new(&temp.path().join("state.db")).unwrap();
+        let inventory = scan_package(&package_root, "package-1").unwrap();
+        let package = PackageRecord {
+            id: "package-1".into(),
+            name: "Superpowers".into(),
+            source_url: "https://github.com/example/superpowers".into(),
+            requested_revision: Some("main".into()),
+            resolved_revision: "new-revision".into(),
+            cache_path: package_root.to_string_lossy().to_string(),
+            manifest_kind: inventory.manifest_kind.clone(),
+            status: "ready".into(),
+            created_at: 1,
+            updated_at: 1,
+        };
+        store
+            .replace_package_inventory(&package, &inventory.components, &inventory.surfaces)
+            .unwrap();
+        let initial = create_binding(
+            &store,
+            &package.id,
+            "",
+            "claude_code",
+            "user",
+            None,
+            "native",
+            &[],
+        )
+        .unwrap();
+        let mut binding = store
+            .get_package_binding_by_id(&initial.binding_id)
+            .unwrap()
+            .unwrap();
+        binding.target_ref = Some(
+            serde_json::to_string(&NativePluginTargetRef {
+                plugin_name: "superpowers".into(),
+                marketplace_name: "superpowers-dev".into(),
+                marketplace_path: package_root.clone(),
+                marketplace_registered: false,
+            })
+            .unwrap(),
+        );
+        binding.ownership = "managed".into();
+        binding.state = "drifted".into();
+        binding.applied_revision = Some("old-revision".into());
+        binding.applied_surface_kind = Some("native_plugin".into());
+        store.upsert_package_binding(&binding).unwrap();
+
+        let upgrade = preview_binding(&store, &initial.binding_id).unwrap();
+        assert!(upgrade.can_apply);
+        assert_eq!(upgrade.operations.len(), 2);
+        assert_eq!(upgrade.operations[0].kind, "update_marketplace");
+        assert_eq!(
+            upgrade.operations[0].command.as_deref().unwrap(),
+            [
+                "claude",
+                "plugin",
+                "marketplace",
+                "update",
+                "superpowers-dev"
+            ]
+        );
+        assert_eq!(upgrade.operations[1].kind, "update_plugin");
+        assert_eq!(
+            upgrade.operations[1].command.as_deref().unwrap(),
+            [
+                "claude",
+                "plugin",
+                "update",
+                "--scope",
+                "user",
+                "superpowers@superpowers-dev"
+            ]
+        );
+        assert!(!upgrade.operations[1]
+            .command
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|argument| argument == "--yes"));
+    }
+
+    #[test]
+    fn vanished_artifact_binding_keeps_apply_metadata_and_remains_removable() {
+        let temp = tempdir().unwrap();
+        let package_root = temp.path().join("package");
+        let codex_root = temp.path().join("home/.codex");
+        write(
+            &package_root.join("skills/demo/SKILL.md"),
+            "---\nname: demo\n---\n",
+        );
+        let store = SkillStore::new(&temp.path().join("state.db")).unwrap();
+        store
+            .set_setting(
+                "custom_tool_paths",
+                &serde_json::json!({ "codex": codex_root.join("skills") }).to_string(),
+            )
+            .unwrap();
+        let inventory = scan_package(&package_root, "package-1").unwrap();
+        let package = PackageRecord {
+            id: "package-1".into(),
+            name: "Demo".into(),
+            source_url: "https://example.com/demo.git".into(),
+            requested_revision: Some("main".into()),
+            resolved_revision: "abc123".into(),
+            cache_path: package_root.to_string_lossy().to_string(),
+            manifest_kind: inventory.manifest_kind.clone(),
+            status: "ready".into(),
+            created_at: 1,
+            updated_at: 1,
+        };
+        store
+            .replace_package_inventory(&package, &inventory.components, &inventory.surfaces)
+            .unwrap();
+        let plan = create_binding(
+            &store,
+            &package.id,
+            "",
+            "codex",
+            "user",
+            None,
+            "portable",
+            &[],
+        )
+        .unwrap();
+        let applied = apply_binding(&store, &plan.binding_id, &plan.plan_hash).unwrap();
+        assert_eq!(
+            applied.binding.applied_surface_kind.as_deref(),
+            Some("portable_skills")
+        );
+        let target = codex_root.join("skills/demo");
+        assert!(fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+
+        store.replace_package_inventory(&package, &[], &[]).unwrap();
+        store.mark_package_bindings_drifted(&package.id).unwrap();
+        let details = package_details(&store, &package.id).unwrap();
+        assert_eq!(details.artifacts[0].status, "missing");
+        remove_binding(&store, &plan.binding_id, false).unwrap();
+        assert!(fs::symlink_metadata(&target).is_err());
+    }
+
+    #[test]
+    fn codex_native_binding_adopts_matching_remote_plugin() {
+        let temp = tempdir().unwrap();
+        let package_root = temp.path().join("package");
+        let codex_root = temp.path().join("home/.codex");
+        let installed_root = codex_root.join("plugins/cache/openai-curated-remote/demo/1.0.0");
+        write(
+            &package_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"demo","version":"2.0.0","repository":"https://github.com/example/demo"}"#,
+        );
+        write(
+            &package_root.join(".agents/plugins/marketplace.json"),
+            r#"{"name":"demo-dev"}"#,
+        );
+        write(
+            &installed_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"demo","version":"1.0.0","repository":"https://github.com/example/demo"}"#,
+        );
+        write(
+            &installed_root
+                .parent()
+                .unwrap()
+                .join(".codex-remote-plugin-install.json"),
+            r#"{"schema_version":1}"#,
+        );
+
+        let store = SkillStore::new(&temp.path().join("state.db")).unwrap();
+        store
+            .set_setting(
+                "custom_tool_paths",
+                &serde_json::json!({ "codex": codex_root.join("skills") }).to_string(),
+            )
+            .unwrap();
+        let inventory = scan_package(&package_root, "package-1").unwrap();
+        let package = PackageRecord {
+            id: "package-1".into(),
+            name: "Demo".into(),
+            source_url: "https://github.com/example/demo".into(),
+            requested_revision: Some("main".into()),
+            resolved_revision: "abc123".into(),
+            cache_path: package_root.to_string_lossy().to_string(),
+            manifest_kind: "codex_plugin".into(),
+            status: "ready".into(),
+            created_at: 1,
+            updated_at: 1,
+        };
+        store
+            .replace_package_inventory(&package, &inventory.components, &inventory.surfaces)
+            .unwrap();
+
+        let plan = create_binding(
+            &store,
+            &package.id,
+            "",
+            "codex",
+            "user",
+            None,
+            "native",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(plan.compatibility, "partial");
+        assert_eq!(plan.operations[0].kind, "adopt_plugin_version_mismatch");
+        assert!(plan.operations[0].command.is_none());
+
+        let applied = apply_binding(&store, &plan.binding_id, &plan.plan_hash).unwrap();
+        assert_eq!(applied.binding.ownership, "adopted");
+        assert_eq!(applied.binding.state, "partial");
+        remove_binding(&store, &plan.binding_id, false).unwrap();
+        assert!(installed_root.join(".codex-plugin/plugin.json").is_file());
+
+        write(
+            &installed_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"demo","version":"1.0.0","repository":"https://github.com/other/demo"}"#,
+        );
+        let conflict = create_binding(
+            &store,
+            &package.id,
+            "",
+            "codex",
+            "user",
+            None,
+            "native",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(conflict.compatibility, "unsupported");
+        assert!(conflict.operations.is_empty());
+        assert!(conflict
+            .risk_items
+            .iter()
+            .any(|item| item.contains("different repository")));
+    }
+
+    #[test]
     fn codex_host_bundle_merges_and_removes_only_managed_hooks() {
         let temp = tempdir().unwrap();
         let package_root = temp.path().join("package");
@@ -2475,7 +4042,8 @@ mod tests {
             .replace_package_inventory(&package, &inventory.components, &inventory.surfaces)
             .unwrap();
 
-        let plan = create_binding(&store, &package.id, "codex", "user", None, "auto", &[]).unwrap();
+        let plan =
+            create_binding(&store, &package.id, "", "codex", "user", None, "auto", &[]).unwrap();
         assert_eq!(plan.compatibility, "full");
         assert_eq!(plan.surface_kind.as_deref(), Some("host_bundle"));
         let applied = apply_binding(&store, &plan.binding_id, &plan.plan_hash).unwrap();
@@ -2544,6 +4112,7 @@ mod tests {
         let component = PackageComponentRecord {
             id: "component-1".into(),
             package_id: package.id.clone(),
+            artifact_key: String::new(),
             kind: "skill".into(),
             name: "demo".into(),
             relative_path: "skills/demo".into(),
@@ -2553,6 +4122,7 @@ mod tests {
         let hook = PackageComponentRecord {
             id: "component-2".into(),
             package_id: package.id.clone(),
+            artifact_key: String::new(),
             kind: "hook".into(),
             name: "danger-hook".into(),
             relative_path: "hooks.json".into(),
@@ -2562,6 +4132,7 @@ mod tests {
         let surface = PackageSurfaceRecord {
             id: "surface-1".into(),
             package_id: package.id.clone(),
+            artifact_key: String::new(),
             tool: "*".into(),
             kind: "portable_skills".into(),
             root_path: "skills".into(),
@@ -2582,6 +4153,7 @@ mod tests {
         let plan = create_binding(
             &store,
             &package.id,
+            "",
             "codex",
             "project_local",
             Some("project-1"),
@@ -2594,6 +4166,7 @@ mod tests {
         let selected_plan = create_binding(
             &store,
             &package.id,
+            "",
             "codex",
             "project_local",
             Some("project-1"),
@@ -2606,6 +4179,7 @@ mod tests {
         let duplicate = create_binding(
             &store,
             &package.id,
+            "",
             "codex",
             "project_local",
             Some("project-1"),
@@ -2637,6 +4211,7 @@ mod tests {
         assert!(create_binding(
             &store,
             &package.id,
+            "",
             "codex",
             "project_local",
             Some("project-1"),
@@ -2684,12 +4259,39 @@ mod tests {
         let loaded = read_project_manifest(&path).unwrap();
         assert_eq!(loaded.version, 1);
         assert_eq!(loaded.packages[0].id, "p1");
+
+        let manifest = ProjectManifest {
+            version: 2,
+            packages: loaded.packages,
+            bindings: vec![ProjectManifestBinding {
+                package: "p1".into(),
+                artifact: Some("plugins/review".into()),
+                tool: "codex".into(),
+                surface: "native".into(),
+                components: vec![],
+            }],
+        };
+        write_project_manifest(temp.path(), &path, &manifest).unwrap();
+        let loaded = read_project_manifest(&path).unwrap();
+        assert_eq!(loaded.version, 2);
+        assert_eq!(
+            loaded.bindings[0].artifact.as_deref(),
+            Some("plugins/review")
+        );
+
+        let invalid_v1 = ProjectManifest {
+            version: 1,
+            ..loaded
+        };
+        write_project_manifest(temp.path(), &path, &invalid_v1).unwrap();
+        assert!(read_project_manifest(&path).is_err());
     }
 
     #[test]
     fn plan_hash_changes_when_command_changes() {
         let mut plan = BindingPlan {
             binding_id: "b".into(),
+            artifact_key: String::new(),
             package_name: "p".into(),
             package_revision: "abc123".into(),
             tool: "codex".into(),
@@ -2719,5 +4321,31 @@ mod tests {
             .unwrap()
             .push("--new".into());
         assert_ne!(first, hash_plan(&plan).unwrap());
+    }
+
+    #[test]
+    fn command_runner_seam_keeps_host_cli_out_of_unit_tests() {
+        let temp = tempdir().unwrap();
+        let invoked = std::cell::Cell::new(false);
+        let output = run_checked_command_with(
+            &[
+                "codex".into(),
+                "plugin".into(),
+                "add".into(),
+                "demo@market".into(),
+            ],
+            temp.path(),
+            temp.path(),
+            |program, args, cwd| {
+                invoked.set(true);
+                assert_eq!(program, Path::new("codex"));
+                assert_eq!(args, ["plugin", "add", "demo@market"]);
+                assert_eq!(cwd, temp.path());
+                Ok((true, "exit status: 0".into(), b"ok".to_vec(), vec![]))
+            },
+        )
+        .unwrap();
+        assert!(invoked.get());
+        assert_eq!(output, "ok");
     }
 }

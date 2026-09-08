@@ -61,6 +61,7 @@ pub async fn delete_package(
 #[tauri::command]
 pub async fn create_package_binding(
     package_id: String,
+    artifact_key: String,
     tool: String,
     scope: String,
     project_id: Option<String>,
@@ -73,6 +74,7 @@ pub async fn create_package_binding(
         package_manager::create_binding(
             &store,
             &package_id,
+            &artifact_key,
             &tool,
             &scope,
             project_id.as_deref(),

@@ -50,6 +50,7 @@ function bindingSurfaceKind(binding: PackageBinding, surfaces: PackageDetails["s
   if (resolved) return resolved.kind;
   const rank = { native_plugin: 4, host_bundle: 3, portable_skills: 2, setup_script: 1 } as const;
   return surfaces
+    .filter((surface) => surface.artifact_key === binding.artifact_key)
     .filter((surface) => surface.tool === binding.tool || surface.tool === "*")
     .filter((surface) => binding.surface_policy === "auto" || surface.kind.startsWith(binding.surface_policy))
     .sort((a, b) =>
@@ -71,6 +72,7 @@ function PlanDialog({
 }) {
   const { t } = useTranslation();
   if (!plan) return null;
+  const isUpgrade = plan.operations.some((operation) => operation.kind === "update_plugin");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
@@ -79,7 +81,7 @@ function PlanDialog({
           <div>
             <div className="mb-1 flex items-center gap-2">
               <ShieldAlert className="h-4 w-4 text-amber-400" />
-              <h2 className="text-[15px] font-semibold text-primary">{t("packages.planTitle")}</h2>
+              <h2 className="text-[15px] font-semibold text-primary">{t(isUpgrade ? "packages.upgradePlanTitle" : "packages.planTitle")}</h2>
             </div>
             <p className="text-[13px] text-tertiary">
               {plan.package_name} · {plan.package_revision.slice(0, 10)} · {plan.tool} · {plan.scope}
@@ -141,7 +143,7 @@ function PlanDialog({
             className="flex items-center gap-2 rounded-lg border border-accent-border bg-accent-dark px-3 py-1.5 text-[13px] font-medium text-white hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
           >
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-            {t("packages.approveApply")}
+            {t(isUpgrade ? "packages.approveUpgrade" : "packages.approveApply")}
           </button>
         </div>
       </div>
@@ -154,6 +156,7 @@ export function Packages() {
   const { tools, projects } = useApp();
   const [items, setItems] = useState<PackageDetails[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedArtifactKey, setSelectedArtifactKey] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [revision, setRevision] = useState("");
   const [busy, setBusy] = useState<BusyAction>("load");
@@ -175,12 +178,32 @@ export function Packages() {
     () => [...tools].sort((a, b) => Number(b.installed) - Number(a.installed) || a.display_name.localeCompare(b.display_name)),
     [tools],
   );
+  const firstArtifactKey = selected?.artifacts[0]?.key ?? "";
+  const artifactSignature = selected?.artifacts.map((artifact) => artifact.key).join("\n") ?? "";
+  const selectedArtifact = useMemo(
+    () => selected?.artifacts.find((artifact) => artifact.key === selectedArtifactKey)
+      ?? selected?.artifacts[0]
+      ?? null,
+    [selected, selectedArtifactKey],
+  );
+  const artifactComponents = useMemo(
+    () => selected?.components.filter((component) => component.artifact_key === selectedArtifact?.key) ?? [],
+    [selected, selectedArtifact?.key],
+  );
+  const artifactSurfaces = useMemo(
+    () => selected?.surfaces.filter((surface) => surface.artifact_key === selectedArtifact?.key) ?? [],
+    [selected, selectedArtifact?.key],
+  );
+  const artifactBindings = useMemo(
+    () => selected?.bindings.filter((binding) => binding.artifact_key === selectedArtifact?.key) ?? [],
+    [selected, selectedArtifact?.key],
+  );
   const skillNames = useMemo(() => {
-    const names = selected?.components
+    const names = artifactComponents
       .filter((component) => component.kind === "skill")
-      .map((component) => component.name) ?? [];
+      .map((component) => component.name);
     return [...new Set(names)].sort();
-  }, [selected]);
+  }, [artifactComponents]);
   const removingSetupBinding = Boolean(
     removeBindingTarget
       && selected
@@ -210,7 +233,12 @@ export function Packages() {
     if (!manifestProjectId && projects.length > 0) setManifestProjectId(projects[0].id);
   }, [manifestProjectId, projectId, projects]);
 
-  useEffect(() => setSelectedComponents(new Set()), [selected?.package.id]);
+  useEffect(() => {
+    setSelectedArtifactKey(firstArtifactKey);
+    setSelectedComponents(new Set());
+  }, [selected?.package.id, artifactSignature, firstArtifactKey]);
+
+  useEffect(() => setSelectedComponents(new Set()), [selectedArtifact?.key]);
 
   const run = async (action: BusyAction, work: () => Promise<void>) => {
     setBusy(action);
@@ -234,7 +262,7 @@ export function Packages() {
   });
 
   const handleCreateBinding = () => run("binding", async () => {
-    if (!selected || !tool) return;
+    if (!selected || !selectedArtifact || !tool || selectedArtifact.status === "missing") return;
     const needsProject = scope === "project_shared" || scope === "project_local";
     if (needsProject && !projectId) {
       toast.error(t("packages.projectRequired"));
@@ -242,6 +270,7 @@ export function Packages() {
     }
     const nextPlan = await api.createPackageBinding(
       selected.package.id,
+      selectedArtifact.key,
       tool,
       scope,
       needsProject ? projectId : null,
@@ -254,10 +283,11 @@ export function Packages() {
 
   const handleApply = async () => {
     if (!plan) return;
+    const isUpgrade = plan.operations.some((operation) => operation.kind === "update_plugin");
     setBusy("apply");
     try {
       const result = await api.applyPackageBinding(plan.binding_id, plan.plan_hash);
-      toast.success(t("packages.applied", { name: result.plan.package_name }));
+      toast.success(t(isUpgrade ? "packages.upgraded" : "packages.applied", { name: result.plan.package_name }));
       setPlan(null);
       await reload();
     } catch (error) {
@@ -413,9 +443,33 @@ export function Packages() {
                 </div>
 
                 <div className="rounded-xl border border-border bg-surface p-4">
+                  <h3 className="mb-3 text-[13px] font-semibold text-primary">{t("packages.artifacts")}</h3>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {selected.artifacts.map((artifact) => (
+                      <button
+                        key={artifact.key}
+                        onClick={() => setSelectedArtifactKey(artifact.key)}
+                        className={cn(
+                          "rounded-lg border p-3 text-left transition-colors",
+                          selectedArtifact?.key === artifact.key
+                            ? "border-accent-border bg-accent-bg"
+                            : "border-border bg-bg-secondary hover:bg-surface-hover",
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-[13px] font-medium text-secondary">{artifact.name}</span>
+                          <span className={cn("text-[11px]", artifact.status === "missing" ? "text-red-400" : "text-muted")}>{t(`packages.artifactStatus.${artifact.status}`)}</span>
+                        </div>
+                        <p className="mt-1 truncate text-[12px] text-faint">{artifact.root_path}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border bg-surface p-4">
                   <h3 className="mb-3 text-[13px] font-semibold text-primary">{t("packages.hostSurfaces")}</h3>
                   <div className="grid gap-2 sm:grid-cols-2">
-                    {selected.surfaces.map((surface) => (
+                    {artifactSurfaces.map((surface) => (
                       <div key={surface.id} className="rounded-lg border border-border bg-bg-secondary p-3">
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[13px] font-medium text-secondary">{surface.tool === "*" ? t("packages.allTools") : surface.tool}</span>
@@ -485,7 +539,7 @@ export function Packages() {
 
                   <button
                     onClick={() => void handleCreateBinding()}
-                    disabled={busy !== null || !tool}
+                    disabled={busy !== null || !tool || selectedArtifact?.status === "missing"}
                     className="mt-3 flex items-center gap-2 rounded-lg border border-accent-border bg-accent-dark px-3 py-1.5 text-[13px] font-medium text-white hover:bg-accent disabled:opacity-50"
                   >
                     {busy === "binding" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitBranch className="h-3.5 w-3.5" />}
@@ -495,12 +549,23 @@ export function Packages() {
 
                 <div className="rounded-xl border border-border bg-surface p-4">
                   <h3 className="mb-3 text-[13px] font-semibold text-primary">{t("packages.bindings")}</h3>
-                  {selected.bindings.length === 0 ? (
+                  {artifactBindings.length === 0 ? (
                     <p className="text-[13px] text-muted">{t("packages.noBindings")}</p>
                   ) : (
                     <div className="space-y-2">
-                      {selected.bindings.map((binding) => {
+                      {artifactBindings.map((binding) => {
                         const project = projects.find((item) => item.id === binding.project_id);
+                        const upgradeAvailable = binding.tool === "claude_code"
+                          && binding.ownership === "managed"
+                          && binding.target_ref !== null
+                          && binding.state !== "failed"
+                          && binding.applied_revision !== selected.package.resolved_revision
+                          && bindingSurfaceKind(binding, selected.surfaces) === "native_plugin";
+                        const upToDate = binding.tool === "claude_code"
+                          && binding.ownership === "managed"
+                          && binding.target_ref !== null
+                          && binding.applied_revision === selected.package.resolved_revision
+                          && bindingSurfaceKind(binding, selected.surfaces) === "native_plugin";
                         return (
                           <div key={binding.id} className="flex items-center gap-3 rounded-lg border border-border bg-bg-secondary p-3">
                             {binding.compatibility === "full" ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : binding.compatibility === "partial" ? <AlertTriangle className="h-4 w-4 text-amber-400" /> : <XCircle className="h-4 w-4 text-red-400" />}
@@ -508,13 +573,25 @@ export function Packages() {
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="text-[13px] font-medium text-secondary">{binding.tool}</span>
                                 <span className="text-[12px] text-muted">{binding.scope}</span>
+                                {binding.ownership === "adopted" && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[11px] text-blue-300">{t("packages.adopted")}</span>}
                                 {project && <span className="text-[12px] text-faint">· {project.name}</span>}
                               </div>
                               <p className={cn("mt-1 text-[12px]", stateClass(binding.state))}>{binding.state}{binding.last_error ? ` · ${binding.last_error}` : ""}</p>
                             </div>
-                            <button onClick={() => void handlePreview(binding.id)} className="rounded p-1.5 text-muted hover:bg-surface-hover hover:text-primary" title={t("packages.previewBinding")}>
-                              <Play className="h-3.5 w-3.5" />
-                            </button>
+                            {upToDate ? (
+                              <span className="rounded px-2 py-1.5 text-[12px] text-emerald-400">
+                                {t("packages.upToDate")}
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => void handlePreview(binding.id)}
+                                className="flex items-center gap-1.5 rounded px-2 py-1.5 text-muted hover:bg-surface-hover hover:text-primary"
+                                title={t(upgradeAvailable ? "packages.upgradePlugin" : "packages.previewBinding")}
+                              >
+                                {upgradeAvailable ? <RefreshCw className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                                {upgradeAvailable && <span className="text-[12px]">{t("packages.upgradePlugin")}</span>}
+                              </button>
+                            )}
                             <button onClick={() => setRemoveBindingTarget(binding)} className="rounded p-1.5 text-muted hover:bg-red-500/10 hover:text-red-400" title={t("common.delete")}>
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>

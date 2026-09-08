@@ -127,6 +127,7 @@ pub struct PackageRecord {
 pub struct PackageComponentRecord {
     pub id: String,
     pub package_id: String,
+    pub artifact_key: String,
     pub kind: String,
     pub name: String,
     pub relative_path: String,
@@ -138,6 +139,7 @@ pub struct PackageComponentRecord {
 pub struct PackageSurfaceRecord {
     pub id: String,
     pub package_id: String,
+    pub artifact_key: String,
     pub tool: String,
     pub kind: String,
     pub root_path: String,
@@ -151,6 +153,7 @@ pub struct PackageSurfaceRecord {
 pub struct PackageBindingRecord {
     pub id: String,
     pub package_id: String,
+    pub artifact_key: String,
     pub tool: String,
     pub scope: String,
     pub project_id: Option<String>,
@@ -166,6 +169,8 @@ pub struct PackageBindingRecord {
     pub last_error: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub ownership: String,
+    pub applied_surface_kind: Option<String>,
 }
 
 impl SkillStore {
@@ -1330,11 +1335,12 @@ impl SkillStore {
         for component in components {
             tx.execute(
                 "INSERT INTO package_components (
-                    id, package_id, kind, name, relative_path, host_hint, required
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    id, package_id, artifact_key, kind, name, relative_path, host_hint, required
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     component.id,
                     component.package_id,
+                    component.artifact_key,
                     component.kind,
                     component.name,
                     component.relative_path,
@@ -1346,12 +1352,13 @@ impl SkillStore {
         for surface in surfaces {
             tx.execute(
                 "INSERT INTO package_surfaces (
-                    id, package_id, tool, kind, root_path, manifest_path, priority,
+                    id, package_id, artifact_key, tool, kind, root_path, manifest_path, priority,
                     coverage_json, install_command_json
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     surface.id,
                     surface.package_id,
+                    surface.artifact_key,
                     surface.tool,
                     surface.kind,
                     surface.root_path,
@@ -1410,9 +1417,9 @@ impl SkillStore {
     pub fn get_package_components(&self, package_id: &str) -> Result<Vec<PackageComponentRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, package_id, kind, name, relative_path, host_hint, required
+            "SELECT id, package_id, artifact_key, kind, name, relative_path, host_hint, required
              FROM package_components WHERE package_id = ?1
-             ORDER BY kind, name COLLATE NOCASE, relative_path",
+             ORDER BY artifact_key, kind, name COLLATE NOCASE, relative_path",
         )?;
         let components = stmt
             .query_map(params![package_id], map_package_component_row)?
@@ -1423,10 +1430,10 @@ impl SkillStore {
     pub fn get_package_surfaces(&self, package_id: &str) -> Result<Vec<PackageSurfaceRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, package_id, tool, kind, root_path, manifest_path, priority,
+            "SELECT id, package_id, artifact_key, tool, kind, root_path, manifest_path, priority,
                     coverage_json, install_command_json
              FROM package_surfaces WHERE package_id = ?1
-             ORDER BY tool, priority DESC, kind",
+             ORDER BY artifact_key, tool, priority DESC, kind",
         )?;
         let surfaces = stmt
             .query_map(params![package_id], map_package_surface_row)?
@@ -1437,12 +1444,12 @@ impl SkillStore {
     pub fn get_package_bindings(&self, package_id: &str) -> Result<Vec<PackageBindingRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, package_id, tool, scope, project_id, surface_policy,
+            "SELECT id, package_id, artifact_key, tool, scope, project_id, surface_policy,
                     requested_components_json, desired_enabled, resolved_surface_id,
                     compatibility, state, target_ref, applied_revision, approved_plan_hash,
-                    last_error, created_at, updated_at
+                    last_error, created_at, updated_at, ownership, applied_surface_kind
              FROM package_bindings WHERE package_id = ?1
-             ORDER BY tool, scope, project_id",
+             ORDER BY artifact_key, tool, scope, project_id",
         )?;
         let bindings = stmt
             .query_map(params![package_id], map_package_binding_row)?
@@ -1453,10 +1460,10 @@ impl SkillStore {
     pub fn get_package_binding_by_id(&self, id: &str) -> Result<Option<PackageBindingRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, package_id, tool, scope, project_id, surface_policy,
+            "SELECT id, package_id, artifact_key, tool, scope, project_id, surface_policy,
                     requested_components_json, desired_enabled, resolved_surface_id,
                     compatibility, state, target_ref, applied_revision, approved_plan_hash,
-                    last_error, created_at, updated_at
+                    last_error, created_at, updated_at, ownership, applied_surface_kind
              FROM package_bindings WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map(params![id], map_package_binding_row)?;
@@ -1466,22 +1473,23 @@ impl SkillStore {
     pub fn get_package_binding(
         &self,
         package_id: &str,
+        artifact_key: &str,
         tool: &str,
         scope: &str,
         project_id: Option<&str>,
     ) -> Result<Option<PackageBindingRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, package_id, tool, scope, project_id, surface_policy,
+            "SELECT id, package_id, artifact_key, tool, scope, project_id, surface_policy,
                     requested_components_json, desired_enabled, resolved_surface_id,
                     compatibility, state, target_ref, applied_revision, approved_plan_hash,
-                    last_error, created_at, updated_at
+                    last_error, created_at, updated_at, ownership, applied_surface_kind
              FROM package_bindings
-             WHERE package_id = ?1 AND tool = ?2 AND scope = ?3
-               AND IFNULL(project_id, '') = IFNULL(?4, '')",
+             WHERE package_id = ?1 AND artifact_key = ?2 AND tool = ?3 AND scope = ?4
+               AND IFNULL(project_id, '') = IFNULL(?5, '')",
         )?;
         let mut rows = stmt.query_map(
-            params![package_id, tool, scope, project_id],
+            params![package_id, artifact_key, tool, scope, project_id],
             map_package_binding_row,
         )?;
         Ok(rows.next().transpose()?)
@@ -1491,12 +1499,13 @@ impl SkillStore {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO package_bindings (
-                id, package_id, tool, scope, project_id, surface_policy,
+                id, package_id, artifact_key, tool, scope, project_id, surface_policy,
                 requested_components_json, desired_enabled, resolved_surface_id,
                 compatibility, state, target_ref, applied_revision, approved_plan_hash,
-                last_error, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                last_error, created_at, updated_at, ownership, applied_surface_kind
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
              ON CONFLICT(id) DO UPDATE SET
+                artifact_key = excluded.artifact_key,
                 tool = excluded.tool,
                 scope = excluded.scope,
                 project_id = excluded.project_id,
@@ -1510,10 +1519,13 @@ impl SkillStore {
                 applied_revision = excluded.applied_revision,
                 approved_plan_hash = excluded.approved_plan_hash,
                 last_error = excluded.last_error,
-                updated_at = excluded.updated_at",
+                updated_at = excluded.updated_at,
+                ownership = excluded.ownership,
+                applied_surface_kind = excluded.applied_surface_kind",
             params![
                 binding.id,
                 binding.package_id,
+                binding.artifact_key,
                 binding.tool,
                 binding.scope,
                 binding.project_id,
@@ -1529,6 +1541,8 @@ impl SkillStore {
                 binding.last_error,
                 binding.created_at,
                 binding.updated_at,
+                binding.ownership,
+                binding.applied_surface_kind,
             ],
         )?;
         Ok(())
@@ -1857,11 +1871,12 @@ fn map_package_component_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Packag
     Ok(PackageComponentRecord {
         id: row.get(0)?,
         package_id: row.get(1)?,
-        kind: row.get(2)?,
-        name: row.get(3)?,
-        relative_path: row.get(4)?,
-        host_hint: row.get(5)?,
-        required: row.get::<_, i32>(6)? != 0,
+        artifact_key: row.get(2)?,
+        kind: row.get(3)?,
+        name: row.get(4)?,
+        relative_path: row.get(5)?,
+        host_hint: row.get(6)?,
+        required: row.get::<_, i32>(7)? != 0,
     })
 }
 
@@ -1869,13 +1884,14 @@ fn map_package_surface_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PackageS
     Ok(PackageSurfaceRecord {
         id: row.get(0)?,
         package_id: row.get(1)?,
-        tool: row.get(2)?,
-        kind: row.get(3)?,
-        root_path: row.get(4)?,
-        manifest_path: row.get(5)?,
-        priority: row.get(6)?,
-        coverage_json: row.get(7)?,
-        install_command_json: row.get(8)?,
+        artifact_key: row.get(2)?,
+        tool: row.get(3)?,
+        kind: row.get(4)?,
+        root_path: row.get(5)?,
+        manifest_path: row.get(6)?,
+        priority: row.get(7)?,
+        coverage_json: row.get(8)?,
+        install_command_json: row.get(9)?,
     })
 }
 
@@ -1883,21 +1899,24 @@ fn map_package_binding_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PackageB
     Ok(PackageBindingRecord {
         id: row.get(0)?,
         package_id: row.get(1)?,
-        tool: row.get(2)?,
-        scope: row.get(3)?,
-        project_id: row.get(4)?,
-        surface_policy: row.get(5)?,
-        requested_components_json: row.get(6)?,
-        desired_enabled: row.get::<_, i32>(7)? != 0,
-        resolved_surface_id: row.get(8)?,
-        compatibility: row.get(9)?,
-        state: row.get(10)?,
-        target_ref: row.get(11)?,
-        applied_revision: row.get(12)?,
-        approved_plan_hash: row.get(13)?,
-        last_error: row.get(14)?,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
+        artifact_key: row.get(2)?,
+        tool: row.get(3)?,
+        scope: row.get(4)?,
+        project_id: row.get(5)?,
+        surface_policy: row.get(6)?,
+        requested_components_json: row.get(7)?,
+        desired_enabled: row.get::<_, i32>(8)? != 0,
+        resolved_surface_id: row.get(9)?,
+        compatibility: row.get(10)?,
+        state: row.get(11)?,
+        target_ref: row.get(12)?,
+        applied_revision: row.get(13)?,
+        approved_plan_hash: row.get(14)?,
+        last_error: row.get(15)?,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
+        ownership: row.get(18)?,
+        applied_surface_kind: row.get(19)?,
     })
 }
 

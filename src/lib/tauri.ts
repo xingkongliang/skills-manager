@@ -201,6 +201,7 @@ export type PackageComponentKind = "skill" | "rule" | "agent" | "command" | "hoo
 export interface PackageComponent {
   id: string;
   package_id: string;
+  artifact_key: string;
   kind: PackageComponentKind;
   name: string;
   relative_path: string;
@@ -213,6 +214,7 @@ export type PackageSurfaceKind = "native_plugin" | "host_bundle" | "portable_ski
 export interface PackageSurface {
   id: string;
   package_id: string;
+  artifact_key: string;
   tool: string;
   kind: PackageSurfaceKind;
   root_path: string;
@@ -225,9 +227,17 @@ export interface PackageSurface {
 export type PackageScope = "user" | "project_shared" | "project_local" | "managed";
 export type SurfacePolicy = "auto" | "native" | "portable" | "setup";
 
+export interface PackageArtifact {
+  key: string;
+  name: string;
+  root_path: string;
+  status: "available" | "missing";
+}
+
 export interface PackageBinding {
   id: string;
   package_id: string;
+  artifact_key: string;
   tool: string;
   scope: PackageScope;
   project_id: string | null;
@@ -243,10 +253,13 @@ export interface PackageBinding {
   last_error: string | null;
   created_at: number;
   updated_at: number;
+  ownership: "managed" | "adopted";
+  applied_surface_kind: PackageSurfaceKind | null;
 }
 
 export interface PackageDetails {
   package: PackageRecord;
+  artifacts: PackageArtifact[];
   components: PackageComponent[];
   surfaces: PackageSurface[];
   bindings: PackageBinding[];
@@ -261,6 +274,7 @@ export interface PlanOperation {
 
 export interface BindingPlan {
   binding_id: string;
+  artifact_key: string;
   package_name: string;
   package_revision: string;
   tool: string;
@@ -898,6 +912,7 @@ export const deletePackage = (packageId: string) =>
 
 export const createPackageBinding = (
   packageId: string,
+  artifactKey: string,
   tool: string,
   scope: PackageScope,
   projectId: string | null,
@@ -905,6 +920,7 @@ export const createPackageBinding = (
   requestedComponents: string[] = [],
 ) => invoke<BindingPlan>("create_package_binding", {
   packageId,
+  artifactKey,
   tool,
   scope,
   projectId,

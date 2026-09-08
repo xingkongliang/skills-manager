@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 8;
+const LATEST_VERSION: u32 = 11;
 
 /// Run all pending migrations on the database.
 ///
@@ -55,6 +55,9 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         5 => migrate_v5_to_v6(conn),
         6 => migrate_v6_to_v7(conn),
         7 => migrate_v7_to_v8(conn),
+        8 => migrate_v8_to_v9(conn),
+        9 => migrate_v9_to_v10(conn),
+        10 => migrate_v10_to_v11(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -381,6 +384,63 @@ fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
+    add_column_if_missing(
+        conn,
+        "package_bindings",
+        "ownership",
+        "TEXT NOT NULL DEFAULT 'managed' CHECK(ownership IN ('managed', 'adopted'))",
+    )
+}
+
+fn migrate_v9_to_v10(conn: &Connection) -> Result<()> {
+    add_column_if_missing(conn, "package_bindings", "applied_surface_kind", "TEXT")?;
+    conn.execute_batch(
+        "
+        UPDATE package_bindings
+        SET applied_surface_kind = (
+            SELECT kind FROM package_surfaces
+            WHERE package_surfaces.id = package_bindings.resolved_surface_id
+        )
+        WHERE applied_surface_kind IS NULL AND target_ref IS NOT NULL;
+        ",
+    )?;
+    Ok(())
+}
+
+fn migrate_v10_to_v11(conn: &Connection) -> Result<()> {
+    add_column_if_missing(
+        conn,
+        "package_components",
+        "artifact_key",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "package_surfaces",
+        "artifact_key",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "package_bindings",
+        "artifact_key",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    conn.execute_batch(
+        "
+        DROP INDEX IF EXISTS idx_package_bindings_identity;
+        CREATE UNIQUE INDEX idx_package_bindings_identity
+            ON package_bindings(package_id, artifact_key, tool, scope, IFNULL(project_id, ''));
+        CREATE INDEX IF NOT EXISTS idx_package_components_artifact
+            ON package_components(package_id, artifact_key);
+        CREATE INDEX IF NOT EXISTS idx_package_surfaces_artifact_tool
+            ON package_surfaces(package_id, artifact_key, tool);
+        ",
+    )?;
+    Ok(())
+}
+
 // ── Helpers ──
 
 fn add_column_if_missing(
@@ -453,6 +513,73 @@ mod tests {
         assert!(tables.contains(&"package_components".to_string()));
         assert!(tables.contains(&"package_surfaces".to_string()));
         assert!(tables.contains(&"package_bindings".to_string()));
+        assert!(has_column(&conn, "package_bindings", "ownership").unwrap());
+        assert!(has_column(&conn, "package_bindings", "applied_surface_kind").unwrap());
+        assert!(has_column(&conn, "package_components", "artifact_key").unwrap());
+        assert!(has_column(&conn, "package_surfaces", "artifact_key").unwrap());
+        assert!(has_column(&conn, "package_bindings", "artifact_key").unwrap());
+    }
+
+    #[test]
+    fn artifact_migration_preserves_installed_binding_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch("CREATE TABLE projects (id TEXT PRIMARY KEY);")
+            .unwrap();
+        migrate_v7_to_v8(&conn).unwrap();
+        migrate_v8_to_v9(&conn).unwrap();
+        migrate_v9_to_v10(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO packages (
+                id, name, source_url, resolved_revision, cache_path, created_at, updated_at
+             ) VALUES ('p1', 'Demo', 'https://example.com/demo.git', 'abc', '/tmp/p1', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO package_surfaces (
+                id, package_id, tool, kind, root_path, coverage_json
+             ) VALUES ('s1', 'p1', 'codex', 'native_plugin', '.', '[]')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO package_bindings (
+                id, package_id, tool, scope, resolved_surface_id, compatibility, state,
+                target_ref, applied_revision, approved_plan_hash, created_at, updated_at,
+                ownership, applied_surface_kind
+             ) VALUES (
+                'b1', 'p1', 'codex', 'user', 's1', 'full', 'installed',
+                '{\"target\":\"keep\"}', 'abc', 'hash', 1, 1, 'managed', 'native_plugin'
+             )",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 10).unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let row: (String, String, String, String, String) = conn
+            .query_row(
+                "SELECT artifact_key, target_ref, ownership, applied_surface_kind, state
+                 FROM package_bindings WHERE id = 'b1'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0, "");
+        assert_eq!(row.1, r#"{"target":"keep"}"#);
+        assert_eq!(row.2, "managed");
+        assert_eq!(row.3, "native_plugin");
+        assert_eq!(row.4, "installed");
     }
 
     #[test]
