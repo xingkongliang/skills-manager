@@ -11,8 +11,9 @@ export function useDragWindow() {
   const onMouseDown = useCallback<MouseEventHandler>((e) => {
     doubleClickPosition.current = null;
     if (e.button !== 0) return;
+    // Suppress WebKit text selection on every press, including double clicks.
+    e.preventDefault();
     if (e.detail === 1) {
-      e.preventDefault();
       void getCurrentWindow().startDragging().catch(console.error);
     } else if (e.detail === 2) {
       doubleClickPosition.current = { x: e.clientX, y: e.clientY };

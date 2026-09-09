@@ -38,7 +38,7 @@ export function Layout() {
       {/* Full-width top drag bar — spans sidebar + content, with bottom divider */}
       <div
         {...dragHandlers}
-        className="absolute inset-x-0 top-0 z-50 h-[28px] border-b border-border-subtle bg-bg-secondary"
+        className="absolute inset-x-0 top-0 z-50 h-[28px] select-none border-b border-border-subtle bg-bg-secondary"
       />
       <Sidebar />
       <div className="relative flex min-w-[600px] flex-1 flex-col overflow-hidden">
