@@ -10,7 +10,7 @@ import { useDragWindow } from "../hooks/useDragWindow";
 export function Layout() {
   const { t } = useTranslation();
   const { appError, refreshAppData } = useApp();
-  const onDrag = useDragWindow();
+  const dragHandlers = useDragWindow();
   const navigate = useNavigate();
 
   // Cmd+, to open Settings
@@ -37,7 +37,7 @@ export function Layout() {
     <div className="relative flex h-full w-full overflow-hidden bg-background text-primary">
       {/* Full-width top drag bar — spans sidebar + content, with bottom divider */}
       <div
-        onMouseDown={onDrag}
+        {...dragHandlers}
         className="absolute inset-x-0 top-0 z-50 h-[28px] border-b border-border-subtle bg-bg-secondary"
       />
       <Sidebar />
