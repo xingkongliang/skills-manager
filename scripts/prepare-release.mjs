@@ -23,6 +23,7 @@ const cargoLockPath = path.join(root, 'src-tauri', 'Cargo.lock');
 const enI18nPath = path.join(root, 'src', 'i18n', 'en.json');
 const zhI18nPath = path.join(root, 'src', 'i18n', 'zh.json');
 const zhTwI18nPath = path.join(root, 'src', 'i18n', 'zh-TW.json');
+const koI18nPath = path.join(root, 'src', 'i18n', 'ko.json');
 const changelogPath = path.join(root, 'CHANGELOG.md');
 const changelogZhPath = path.join(root, 'CHANGELOG-zh.md');
 
@@ -135,6 +136,7 @@ function main() {
   const en = readJson(enI18nPath);
   const zh = readJson(zhI18nPath);
   const zhTw = readJson(zhTwI18nPath);
+  const ko = readJson(koI18nPath);
   const changelog = fs.readFileSync(changelogPath, 'utf8');
   const changelogZh = fs.readFileSync(changelogZhPath, 'utf8');
 
@@ -148,6 +150,7 @@ function main() {
   updateSettingsVersion(en, nextVersion, 'src/i18n/en.json');
   updateSettingsVersion(zh, nextVersion, 'src/i18n/zh.json');
   updateSettingsVersion(zhTw, nextVersion, 'src/i18n/zh-TW.json');
+  updateSettingsVersion(ko, nextVersion, 'src/i18n/ko.json');
   const nextChangelog = ensureChangelogEntry(changelog, nextVersion);
   const nextChangelogZh = ensureChangelogEntry(changelogZh, nextVersion, { zh: true });
 
@@ -163,6 +166,7 @@ function main() {
   writeJson(enI18nPath, en);
   writeJson(zhI18nPath, zh);
   writeJson(zhTwI18nPath, zhTw);
+  writeJson(koI18nPath, ko);
   fs.writeFileSync(changelogPath, nextChangelog);
   fs.writeFileSync(changelogZhPath, nextChangelogZh);
 
@@ -179,6 +183,7 @@ function main() {
   console.log('- src/i18n/en.json');
   console.log('- src/i18n/zh.json');
   console.log('- src/i18n/zh-TW.json');
+  console.log('- src/i18n/ko.json');
   console.log(
     starOk
       ? '- assets/star-history.svg'
