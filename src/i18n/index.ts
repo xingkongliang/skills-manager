@@ -63,7 +63,9 @@ export const i18nReady = (async () => {
       en: { translation: en },
     },
     lng,
-    fallbackLng: "zh",
+    // zh-TW is a partial locale, so it still falls back to Simplified
+    // Chinese. Everything else falls back to English.
+    fallbackLng: { "zh-TW": ["zh"], default: ["en"] },
     interpolation: { escapeValue: false },
   });
 })();
