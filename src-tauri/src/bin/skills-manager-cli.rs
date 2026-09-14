@@ -3200,6 +3200,7 @@ mod tests {
             skills_dir: target_root.to_string_lossy().to_string(),
             project_relative_skills_dir: None,
             category: ToolCategory::Coding,
+            icon: None,
         };
         tool_service::set_custom_tools(&store, &[test_agent.clone()]).unwrap();
         store.set_setting("sync_mode", "copy").unwrap();

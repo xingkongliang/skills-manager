@@ -57,6 +57,7 @@ import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
 import { AgentIcon } from "../components/AgentIcon";
+import { AgentIconPicker } from "../components/AgentIconPicker";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import * as api from "../lib/tauri";
 import { applyTextSize } from "../lib/textScale";
@@ -201,7 +202,9 @@ export function Settings() {
   const [customName, setCustomName] = useState("");
   const [customPath, setCustomPath] = useState("");
   const [customProjectPath, setCustomProjectPath] = useState("");
+  const [customIcon, setCustomIcon] = useState<string | null>(null);
   const [addingCustom, setAddingCustom] = useState(false);
+  const [editingIconFor, setEditingIconFor] = useState<string | null>(null);
   const [showMoreAgents, setShowMoreAgents] = useState(false);
 
   const GITHUB_URL = "https://github.com/xingkongliang/skills-manager";
@@ -295,17 +298,40 @@ export function Settings() {
     const trimKey = generateCustomAgentKey(trimName);
     setAddingCustom(true);
     try {
-      await api.addCustomTool(trimKey, trimName, trimPath, trimProjectPath || undefined);
+      await api.addCustomTool(trimKey, trimName, trimPath, trimProjectPath || undefined, customIcon);
       await refreshTools();
       toast.success(t("settings.customAgentAdded"));
       setShowAddCustom(false);
       setCustomName("");
       setCustomPath("");
       setCustomProjectPath("");
+      setCustomIcon(null);
     } catch (e) {
       toast.error(String(e));
     } finally {
       setAddingCustom(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!editingIconFor) return;
+    const handlePointer = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-icon-picker-root]")) {
+        setEditingIconFor(null);
+      }
+    };
+    document.addEventListener("mousedown", handlePointer);
+    return () => document.removeEventListener("mousedown", handlePointer);
+  }, [editingIconFor]);
+
+  const handleChangeAgentIcon = async (key: string, icon: string | null) => {
+    try {
+      await api.setCustomToolIcon(key, icon);
+      await refreshTools();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setEditingIconFor(null);
     }
   };
 
@@ -841,11 +867,39 @@ export function Settings() {
     >
       <div className="flex items-start gap-2.5">
         {dragHandle}
-        <AgentIcon
-          agentKey={agent.key}
-          displayName={agent.display_name}
-          className="mt-px h-6 w-6 shrink-0 rounded-md"
-        />
+        {agent.is_custom ? (
+          <div className="relative mt-px shrink-0" data-icon-picker-root>
+            <button
+              type="button"
+              onClick={() =>
+                setEditingIconFor((current) => (current === agent.key ? null : agent.key))
+              }
+              title={t("settings.changeAgentIcon")}
+              className="outline-none"
+            >
+              <AgentIcon
+                agentKey={agent.key}
+                iconOverride={agent.icon}
+                displayName={agent.display_name}
+                className="h-6 w-6 rounded-md ring-offset-1 hover:ring-2 hover:ring-accent"
+              />
+            </button>
+            {editingIconFor === agent.key && (
+              <div className="absolute left-0 top-full z-10 mt-1 w-56 rounded-lg border border-border bg-surface p-1.5 shadow-lg">
+                <AgentIconPicker
+                  value={agent.icon}
+                  onChange={(icon) => void handleChangeAgentIcon(agent.key, icon)}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <AgentIcon
+            agentKey={agent.key}
+            displayName={agent.display_name}
+            className="mt-px h-6 w-6 shrink-0 rounded-md"
+          />
+        )}
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -1157,6 +1211,12 @@ export function Settings() {
                   {t("settings.projectSkillsPathDesc")}
                 </p>
               </div>
+              <AgentIconPicker
+                value={customIcon}
+                onChange={setCustomIcon}
+                label={t("settings.agentIcon")}
+                noneLabel={t("settings.noIcon")}
+              />
               <div className="flex justify-end">
                 <button
                   onClick={handleAddCustomAgent}

@@ -1002,6 +1002,7 @@ pub fn run() {
             commands::tools::set_custom_tool_project_path,
             commands::tools::reset_custom_tool_project_path,
             commands::tools::add_custom_tool,
+            commands::tools::set_custom_tool_icon,
             commands::tools::remove_custom_tool,
             // Skills
             commands::skills::get_managed_skills,
