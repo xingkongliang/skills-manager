@@ -183,6 +183,119 @@ export interface ProjectSkillDocument {
   content: string;
 }
 
+export interface PackageRecord {
+  id: string;
+  name: string;
+  source_url: string;
+  requested_revision: string | null;
+  resolved_revision: string;
+  cache_path: string;
+  manifest_kind: string;
+  status: "ready" | "invalid" | "update_available";
+  created_at: number;
+  updated_at: number;
+}
+
+export type PackageComponentKind = "skill" | "rule" | "agent" | "command" | "hook" | "mcp";
+
+export interface PackageComponent {
+  id: string;
+  package_id: string;
+  artifact_key: string;
+  kind: PackageComponentKind;
+  name: string;
+  relative_path: string;
+  host_hint: string | null;
+  required: boolean;
+}
+
+export type PackageSurfaceKind = "native_plugin" | "host_bundle" | "portable_skills" | "setup_script";
+
+export interface PackageSurface {
+  id: string;
+  package_id: string;
+  artifact_key: string;
+  tool: string;
+  kind: PackageSurfaceKind;
+  root_path: string;
+  manifest_path: string | null;
+  priority: number;
+  coverage_json: string;
+  install_command_json: string | null;
+}
+
+export type PackageScope = "user" | "project_shared" | "project_local" | "managed";
+export type SurfacePolicy = "auto" | "native" | "portable" | "setup";
+
+export interface PackageArtifact {
+  key: string;
+  name: string;
+  root_path: string;
+  status: "available" | "missing";
+}
+
+export interface PackageBinding {
+  id: string;
+  package_id: string;
+  artifact_key: string;
+  tool: string;
+  scope: PackageScope;
+  project_id: string | null;
+  surface_policy: SurfacePolicy;
+  requested_components_json: string;
+  desired_enabled: boolean;
+  resolved_surface_id: string | null;
+  compatibility: "full" | "partial" | "unsupported";
+  state: "not_applied" | "planned" | "installed" | "partial" | "drifted" | "failed";
+  target_ref: string | null;
+  applied_revision: string | null;
+  approved_plan_hash: string | null;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+  ownership: "managed" | "adopted";
+  applied_surface_kind: PackageSurfaceKind | null;
+}
+
+export interface PackageDetails {
+  package: PackageRecord;
+  artifacts: PackageArtifact[];
+  components: PackageComponent[];
+  surfaces: PackageSurface[];
+  bindings: PackageBinding[];
+}
+
+export interface PlanOperation {
+  kind: string;
+  description: string;
+  target: string;
+  command: string[] | null;
+}
+
+export interface BindingPlan {
+  binding_id: string;
+  artifact_key: string;
+  package_name: string;
+  package_revision: string;
+  tool: string;
+  scope: PackageScope;
+  compatibility: "full" | "partial" | "unsupported";
+  surface_id: string | null;
+  surface_kind: PackageSurfaceKind | null;
+  covered_components: string[];
+  missing_components: string[];
+  risk_items: string[];
+  operations: PlanOperation[];
+  plan_hash: string;
+  can_apply: boolean;
+}
+
+export interface ApplyPackageResult {
+  binding: PackageBinding;
+  plan: BindingPlan;
+  output: string | null;
+}
+
 // ── Tools ──
 
 export const getToolStatus = () => invoke<ToolInfo[]>("get_tool_status");
@@ -821,6 +934,52 @@ export const deleteProjectSkill = (projectId: string, skillRelativePath: string,
 
 export const slugifySkillNames = (names: string[]) =>
   invoke<string[]>("slugify_skill_names", { names });
+
+// ── Packages ──
+
+export const getPackages = () => invoke<PackageDetails[]>("get_packages");
+
+export const importGitPackage = (sourceUrl: string, requestedRevision?: string) =>
+  invoke<PackageDetails>("import_git_package", {
+    sourceUrl,
+    requestedRevision: requestedRevision?.trim() || null,
+  });
+
+export const updatePackage = (packageId: string) =>
+  invoke<PackageDetails>("update_package", { packageId });
+
+export const deletePackage = (packageId: string) =>
+  invoke<void>("delete_package", { packageId });
+
+export const createPackageBinding = (
+  packageId: string,
+  artifactKey: string,
+  tool: string,
+  scope: PackageScope,
+  projectId: string | null,
+  surfacePolicy: SurfacePolicy,
+  requestedComponents: string[] = [],
+) => invoke<BindingPlan>("create_package_binding", {
+  packageId,
+  artifactKey,
+  tool,
+  scope,
+  projectId,
+  surfacePolicy,
+  requestedComponents,
+});
+
+export const previewPackageBinding = (bindingId: string) =>
+  invoke<BindingPlan>("preview_package_binding", { bindingId });
+
+export const applyPackageBinding = (bindingId: string, approvedPlanHash: string) =>
+  invoke<ApplyPackageResult>("apply_package_binding", { bindingId, approvedPlanHash });
+
+export const removePackageBinding = (bindingId: string, forgetSetup = false) =>
+  invoke<void>("remove_package_binding", { bindingId, forgetSetup });
+
+export const syncProjectPackageManifest = (projectId: string) =>
+  invoke<BindingPlan[]>("sync_project_package_manifest", { projectId });
 
 // ── Agent Local Workspace ──
 

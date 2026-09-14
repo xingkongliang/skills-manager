@@ -1102,6 +1102,16 @@ pub fn run() {
             commands::projects::toggle_project_skill,
             commands::projects::delete_project_skill,
             commands::projects::slugify_skill_names,
+            // Packages
+            commands::packages::get_packages,
+            commands::packages::import_git_package,
+            commands::packages::update_package,
+            commands::packages::delete_package,
+            commands::packages::create_package_binding,
+            commands::packages::preview_package_binding,
+            commands::packages::apply_package_binding,
+            commands::packages::remove_package_binding,
+            commands::packages::sync_project_package_manifest,
             // Agent local workspace
             commands::agent_workspace::get_global_local_skills,
             commands::agent_workspace::get_global_local_skill_document,
