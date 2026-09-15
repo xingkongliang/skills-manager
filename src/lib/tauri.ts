@@ -447,6 +447,9 @@ export const getSettings = (key: string) =>
 export const setSettings = (key: string, value: string) =>
   invoke<void>("set_settings", { key, value });
 
+/** Settings key for per-tag colour overrides; mirrors `TAG_COLORS_KEY` in skill_store.rs. */
+export const TAG_COLORS_KEY = "tag_colors";
+
 export const getCentralRepoPath = () =>
   invoke<string>("get_central_repo_path");
 

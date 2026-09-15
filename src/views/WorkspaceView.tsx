@@ -31,7 +31,7 @@ import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectSkill } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
-import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
+import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER, useTagColors } from "../lib/skillTags";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 import { useMultiSelect } from "../hooks/useMultiSelect";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
@@ -243,6 +243,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const { agentKey } = useParams<{ agentKey?: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
+  useTagColors(); // re-render pills when a tag colour override changes
   const { tools, managedSkills, presets, refreshManagedSkills, refreshTools } = useApp();
 
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");

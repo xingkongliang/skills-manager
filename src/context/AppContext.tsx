@@ -5,6 +5,7 @@ import type { AppUpdateInfo, ManagedSkill, Project, Preset, ToolInfo } from "../
 import * as api from "../lib/tauri";
 import i18n from "../i18n";
 import { applyTextSize } from "../lib/textScale";
+import { loadTagColors } from "../lib/skillTags";
 import { toast } from "sonner";
 
 interface AppState {
@@ -201,6 +202,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (savedSize) {
         applyTextSize(savedSize);
       }
+      // Tag colour overrides; cosmetic, so failure is swallowed inside.
+      await loadTagColors();
     }
     init();
   }, [refreshAppData]);

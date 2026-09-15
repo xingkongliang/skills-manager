@@ -385,7 +385,10 @@
       "renameTag": "重新命名標籤",
       "deleteTag": "刪除標籤",
       "tagName": "標籤名稱",
-      "manageHint": "右鍵重新命名或刪除",
+      "color": "顏色",
+      "colorSwatch": "顏色 {{index}}",
+      "colorAuto": "恢復自動",
+      "manageHint": "右鍵更改顏色、重新命名或刪除",
       "tagRenamed": "標籤已重新命名",
       "tagDeleted": "標籤已刪除",
       "deleteConfirm": "確定從所有技能中移除標籤「{{tag}}」嗎？"

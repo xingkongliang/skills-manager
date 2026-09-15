@@ -10,6 +10,11 @@ use super::crypto;
 /// Settings keys whose values are encrypted at rest with AES-256-GCM.
 const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url"];
 
+/// Settings key holding the per-tag colour overrides as a JSON object of
+/// `tag -> palette index`. Tags absent from the map fall back to the UI's
+/// positional default, so the map only ever holds explicit user picks.
+pub const TAG_COLORS_KEY: &str = "tag_colors";
+
 pub struct SkillStore {
     conn: Mutex<Connection>,
     secret_key: [u8; 32],
@@ -1268,7 +1273,51 @@ impl SkillStore {
     /// ids of the affected skills so the caller can refresh their metadata.
     /// If a skill already has `new`, the rows are merged (no duplicate) thanks
     /// to `UPDATE OR IGNORE` followed by removing any leftover old rows.
+    /// Read the tag colour override map. A missing, empty, or unparsable
+    /// setting reads as an empty map rather than an error: colour is cosmetic
+    /// and must never block a tag operation.
+    pub fn get_tag_colors(&self) -> Result<std::collections::BTreeMap<String, u32>> {
+        let raw = self.get_setting(TAG_COLORS_KEY)?;
+        Ok(raw
+            .as_deref()
+            .and_then(|v| serde_json::from_str(v).ok())
+            .unwrap_or_default())
+    }
+
+    /// Persist the override map. An empty map clears the setting so the row
+    /// doesn't linger holding `{}`.
+    pub fn set_tag_colors(&self, colors: &std::collections::BTreeMap<String, u32>) -> Result<()> {
+        if colors.is_empty() {
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "DELETE FROM settings WHERE key = ?1",
+                params![TAG_COLORS_KEY],
+            )?;
+            return Ok(());
+        }
+        self.set_setting(TAG_COLORS_KEY, &serde_json::to_string(colors)?)
+    }
+
+    /// Move a colour override from `old` to `new` (rename) or drop it (`new`
+    /// is None). When `new` already has its own override it wins: the user
+    /// picked that colour for the surviving name, and a merge shouldn't
+    /// silently repaint it.
+    fn carry_tag_color(&self, old: &str, new: Option<&str>) -> Result<()> {
+        let mut colors = self.get_tag_colors()?;
+        let Some(color) = colors.remove(old) else {
+            return Ok(());
+        };
+        if let Some(new) = new {
+            colors.entry(new.to_string()).or_insert(color);
+        }
+        self.set_tag_colors(&colors)
+    }
+
     pub fn rename_tag(&self, old: &str, new: &str) -> Result<Vec<String>> {
+        // Runs before taking the connection lock: get/set_setting lock it too.
+        if old != new {
+            self.carry_tag_color(old, Some(new))?;
+        }
         let conn = self.conn.lock().unwrap();
         let affected: Vec<String> = {
             let mut stmt =
@@ -1296,6 +1345,8 @@ impl SkillStore {
     /// Globally remove a tag from every skill that carries it. Returns the ids
     /// of the affected skills so the caller can refresh their metadata.
     pub fn delete_tag(&self, name: &str) -> Result<Vec<String>> {
+        // Runs before taking the connection lock: get/set_setting lock it too.
+        self.carry_tag_color(name, None)?;
         let conn = self.conn.lock().unwrap();
         let affected: Vec<String> = {
             let mut stmt =
@@ -1613,5 +1664,88 @@ mod tag_tests {
         let map = store.get_tags_map().unwrap();
         assert_eq!(map.get("a").unwrap(), &vec!["keep".to_string()]);
         assert!(map.get("b").is_none());
+    }
+
+    fn colors(pairs: &[(&str, u32)]) -> std::collections::BTreeMap<String, u32> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn tag_colors_round_trip_and_clear() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        assert!(store.get_tag_colors().unwrap().is_empty());
+
+        store.set_tag_colors(&colors(&[("web", 3)])).unwrap();
+        assert_eq!(store.get_tag_colors().unwrap(), colors(&[("web", 3)]));
+
+        // Clearing removes the row entirely rather than storing "{}".
+        store.set_tag_colors(&colors(&[])).unwrap();
+        assert!(store.get_setting(TAG_COLORS_KEY).unwrap().is_none());
+    }
+
+    #[test]
+    fn tag_colors_garbage_setting_reads_as_empty() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        store.set_setting(TAG_COLORS_KEY, "not json").unwrap();
+        assert!(store.get_tag_colors().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rename_tag_carries_color_override() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        store.insert_skill(&skill("a")).unwrap();
+        store.set_tags_for_skill("a", &["old".into()]).unwrap();
+        store.set_tag_colors(&colors(&[("old", 5)])).unwrap();
+
+        store.rename_tag("old", "new").unwrap();
+        assert_eq!(store.get_tag_colors().unwrap(), colors(&[("new", 5)]));
+    }
+
+    #[test]
+    fn rename_tag_merge_keeps_target_color() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        store.insert_skill(&skill("a")).unwrap();
+        store
+            .set_tags_for_skill("a", &["old".into(), "new".into()])
+            .unwrap();
+        store
+            .set_tag_colors(&colors(&[("old", 5), ("new", 2)]))
+            .unwrap();
+
+        // Merging into an existing tag keeps the survivor's own colour.
+        store.rename_tag("old", "new").unwrap();
+        assert_eq!(store.get_tag_colors().unwrap(), colors(&[("new", 2)]));
+    }
+
+    #[test]
+    fn rename_tag_to_itself_keeps_color() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        store.insert_skill(&skill("a")).unwrap();
+        store.set_tags_for_skill("a", &["keep".into()]).unwrap();
+        store.set_tag_colors(&colors(&[("keep", 1)])).unwrap();
+
+        store.rename_tag("keep", "keep").unwrap();
+        assert_eq!(store.get_tag_colors().unwrap(), colors(&[("keep", 1)]));
+    }
+
+    #[test]
+    fn delete_tag_drops_color_override() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        store.insert_skill(&skill("a")).unwrap();
+        store
+            .set_tags_for_skill("a", &["drop".into(), "keep".into()])
+            .unwrap();
+        store
+            .set_tag_colors(&colors(&[("drop", 4), ("keep", 6)]))
+            .unwrap();
+
+        store.delete_tag("drop").unwrap();
+        assert_eq!(store.get_tag_colors().unwrap(), colors(&[("keep", 6)]));
     }
 }
