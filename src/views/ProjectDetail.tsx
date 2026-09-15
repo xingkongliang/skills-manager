@@ -198,6 +198,15 @@ export function ProjectDetail() {
   }, [loadSkills]);
 
   useEffect(() => {
+    setSearch("");
+    setFilterMode("all");
+    setTagFilters(new Set());
+    setDetailSkill(null);
+    setDocContent(null);
+    setCenterDocContent(null);
+  }, [id]);
+
+  useEffect(() => {
     let cancelled = false;
     const loadProjectAgentTargets = async () => {
       if (!id) return;
@@ -1075,6 +1084,7 @@ export function ProjectDetail() {
             presets={presets}
             managedSkills={managedSkills}
             agentKeys={presetBarAgentKeys}
+            statusMode="logical-skill"
             existsInWorkspace={presetSkillExistsInProject}
             onAddSkill={handleAddPresetSkillToProject}
             onRemoveSkill={handleRemovePresetSkillFromProject}
