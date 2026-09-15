@@ -25,6 +25,7 @@ import {
   getTagActiveColor,
   getTagColor,
   UNTAGGED_FILTER,
+  useTagColors,
 } from "../lib/skillTags";
 import { AgentIcon } from "./AgentIcon";
 import { SkillPickerRow } from "./SkillPickerRow";
@@ -70,6 +71,7 @@ export function AddSkillsSheet(props: Props) {
 
 function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Props) {
   const { t } = useTranslation();
+  useTagColors(); // re-render pills when a tag colour override changes
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
