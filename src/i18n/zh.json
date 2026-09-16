@@ -1094,5 +1094,17 @@
       "deletedLocalBatch": "已删除 {{count}} 个本地 Skill",
       "deleteLocalBatchFailed": "{{count}} 个本地 Skill 删除失败"
     }
+  },
+  "skillEditor": {
+    "edit": "编辑",
+    "saving": "保存中…",
+    "saved": "已保存 {{filename}}",
+    "unsaved": "未保存",
+    "discardTitle": "放弃修改？",
+    "discardMessage": "该技能文档有未保存的修改，关闭编辑器会丢弃这些修改。",
+    "discardConfirm": "放弃",
+    "conflictMessage": "自打开以来，磁盘上的这个文件已被改动 —— 可能是其他设备、同步或某个 Agent 重写了它。可以重新载入查看新版本，或用你的修改覆盖它。",
+    "conflictReload": "重新载入",
+    "conflictOverwrite": "仍然覆盖"
   }
 }

@@ -35,12 +35,19 @@ import { ToggleSwitch } from "../components/ToggleSwitch";
 import { ProjectAgentDots } from "../components/ProjectAgentDots";
 import { PresetBar } from "../components/PresetBar";
 import { SkillMarkdown } from "../components/SkillMarkdown";
+import { SkillDocumentEditor } from "../components/SkillDocumentEditor";
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import { enabledInstalledAgentKeys, getDefaultExportAgents } from "../lib/exportAgents";
 import { cn } from "../utils";
 import * as api from "../lib/tauri";
-import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
+import type {
+  ProjectSkill,
+  ManagedSkill,
+  ProjectAgentTarget,
+  ProjectSkillDocument,
+} from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 const projectLastUsedAgentsKey = (projectId: string) =>
@@ -137,7 +144,7 @@ export function ProjectDetail() {
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [detailSkill, setDetailSkill] = useState<ProjectSkillGroup | null>(null);
-  const [docContent, setDocContent] = useState<string | null>(null);
+  const [doc, setDoc] = useState<ProjectSkillDocument | null>(null);
   const [docLoading, setDocLoading] = useState(false);
   const [centerDocContent, setCenterDocContent] = useState<string | null>(null);
   const [centerDocLoading, setCenterDocLoading] = useState(false);
@@ -273,7 +280,7 @@ export function ProjectDetail() {
     const refreshed = groupedSkills.find((skill) => skill.id === detailSkill.id) ?? null;
     if (!refreshed) {
       setDetailSkill(null);
-      setDocContent(null);
+      setDoc(null);
       return;
     }
     if (refreshed !== detailSkill) {
@@ -486,7 +493,7 @@ export function ProjectDetail() {
 
   const handleOpenDetail = async (skill: ProjectSkillGroup) => {
     setDetailSkill(skill);
-    setDocContent(null);
+    setDoc(null);
     setDocLoading(true);
     setCenterDocContent(null);
     setCenterDocLoading(false);
@@ -503,14 +510,15 @@ export function ProjectDetail() {
     }
 
     try {
-      const doc = await api.getProjectSkillDocument(
-        id,
-        skill.primaryVariant.relative_path,
-        skill.primaryVariant.agent
+      setDoc(
+        await api.getProjectSkillDocument(
+          id,
+          skill.primaryVariant.relative_path,
+          skill.primaryVariant.agent
+        )
       );
-      setDocContent(doc.content);
     } catch {
-      setDocContent(null);
+      setDoc(null);
     } finally {
       setDocLoading(false);
     }
@@ -1523,8 +1531,10 @@ export function ProjectDetail() {
               : null
           }
           onToggleAgent={(agentKey, enabled) => handleToggleDetailAgent(detailSkill, agentKey, enabled)}
-          docContent={docContent}
+          doc={doc}
           docLoading={docLoading}
+          onDocSaved={setDoc}
+          projectId={id ?? ""}
           centerDocContent={centerDocContent}
           centerDocLoading={centerDocLoading}
           onClose={() => setDetailSkill(null)}
@@ -1589,8 +1599,10 @@ function ProjectSkillDetailPanel({
   targets,
   togglingAgent,
   onToggleAgent,
-  docContent,
+  doc,
   docLoading,
+  onDocSaved,
+  projectId,
   centerDocContent,
   centerDocLoading,
   onClose,
@@ -1599,15 +1611,42 @@ function ProjectSkillDetailPanel({
   targets: ProjectAgentTarget[];
   togglingAgent: string | null;
   onToggleAgent: (agentKey: string, enabled: boolean) => void;
-  docContent: string | null;
+  doc: ProjectSkillDocument | null;
   docLoading: boolean;
+  onDocSaved: (doc: ProjectSkillDocument) => void;
+  projectId: string;
   centerDocContent: string | null;
   centerDocLoading: boolean;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
   const [contentTab, setContentTab] = useState<"local" | "diff" | "center">("local");
+  const { onDirtyChange, requestClose, dialog: unsavedDialog } = useUnsavedChangesGuard(onClose);
   const supportsCenterDiff = skill.centerSkillIds.length > 0;
+
+  const reloadDocument = async () => {
+    const fresh = await api.getProjectSkillDocument(
+      projectId,
+      skill.primaryVariant.relative_path,
+      skill.primaryVariant.agent
+    );
+    onDocSaved(fresh);
+    return fresh;
+  };
+
+  const handleSaveDocument = async (content: string, expectedFingerprint: string | null) => {
+    const saved = await api.saveProjectSkillDocument(
+      projectId,
+      skill.primaryVariant.relative_path,
+      skill.primaryVariant.agent,
+      doc?.filename ?? "SKILL.md",
+      content,
+      expectedFingerprint
+    );
+    onDocSaved(saved);
+    return saved;
+  };
+
   const toggleItems: AgentToggleItem[] = targets.map((target) => {
     const variant = skill.variants.find((item) => item.agent === target.key);
     return {
@@ -1673,8 +1712,9 @@ function ProjectSkillDetailPanel({
       title={skill.name}
       description={skill.description ? <p className="line-clamp-3">{skill.description}</p> : undefined}
       meta={meta}
-      onClose={onClose}
+      onClose={requestClose}
     >
+      {unsavedDialog}
       <AgentToggleSection
         items={toggleItems}
         togglingKey={togglingAgent}
@@ -1710,8 +1750,8 @@ function ProjectSkillDetailPanel({
       {docLoading ? (
         <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
       ) : contentTab === "diff" ? (
-        docContent && centerDocContent ? (
-          <DocumentDiffViewer original={docContent} updated={centerDocContent} />
+        doc && centerDocContent ? (
+          <DocumentDiffViewer original={doc.content} updated={centerDocContent} />
         ) : centerDocLoading ? (
           <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
         ) : (
@@ -1725,10 +1765,13 @@ function ProjectSkillDetailPanel({
         ) : (
           <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
         )
-      ) : docContent ? (
-        <SkillMarkdown content={docContent} />
       ) : (
-        <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
+        <SkillDocumentEditor
+          document={doc}
+          onSave={handleSaveDocument}
+          onReload={reloadDocument}
+          onDirtyChange={onDirtyChange}
+        />
       )}
     </DetailSheet>
   );

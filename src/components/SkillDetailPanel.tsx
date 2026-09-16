@@ -13,6 +13,7 @@ import {
   getSkillDocument,
   getSourceSkillDocument,
   getSkillSourceDiff,
+  saveSkillDocument,
   type ManagedSkill,
   type Project,
   type SkillDocument,
@@ -24,6 +25,9 @@ import {
 import { SkillSourceDiffViewer } from "./SkillSourceDiffViewer";
 import { DetailSheet } from "./DetailSheet";
 import { SkillMarkdown } from "./SkillMarkdown";
+import { SkillDocumentEditor } from "./SkillDocumentEditor";
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
+import { useApp } from "../context/AppContext";
 import { AgentToggleSection, type AgentToggleItem } from "./AgentToggleSection";
 import { SkillProjectsSection } from "./SkillProjectsSection";
 import { SyncDots } from "./SyncDots";
@@ -95,6 +99,8 @@ function SkillDetailPanelContent({
   onProjectsChanged?: () => void;
 }) {
   const { t } = useTranslation();
+  const { refreshManagedSkills } = useApp();
+  const { onDirtyChange, requestClose, dialog: unsavedDialog } = useUnsavedChangesGuard(onClose);
   const [doc, setDoc] = useState<SkillDocument | null>(null);
   const [sourceDoc, setSourceDoc] = useState<SourceSkillDocument | null>(null);
   const [sourceDiff, setSourceDiff] = useState<SkillSourceDiff | null>(null);
@@ -181,6 +187,26 @@ function SkillDetailPanelContent({
       .then((diff) => setSourceDiff(diff))
       .catch(() => setSourceDiffFailed(true));
   }, [contentTab, supportsSourceDiff, skillId]);
+
+  const reloadDocument = async () => {
+    const fresh = await getSkillDocument(skillId);
+    setDoc(fresh);
+    return fresh;
+  };
+
+  const handleSaveDocument = async (content: string, expectedFingerprint: string | null) => {
+    const result = await saveSkillDocument(
+      skillId,
+      doc?.filename ?? "SKILL.md",
+      content,
+      expectedFingerprint
+    );
+    setDoc(result.document);
+    // The description on the card is read back out of the frontmatter, and a
+    // copy-mode agent target now holds the new text — refresh both.
+    await refreshManagedSkills();
+    return result.document;
+  };
 
   const sourceIcon = (type: string) => {
     switch (type) {
@@ -309,8 +335,9 @@ function SkillDetailPanelContent({
       title={skill.name}
       description={skill.description ? <p className="line-clamp-3">{skill.description}</p> : undefined}
       meta={meta}
-      onClose={onClose}
+      onClose={requestClose}
     >
+      {unsavedDialog}
       {toolToggles && onToggleTool && (
         <AgentToggleSection
           items={toggleItems}
@@ -378,10 +405,13 @@ function SkillDetailPanelContent({
         ) : (
           <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
         )
-      ) : activeDoc ? (
-        <SkillMarkdown content={activeDoc.content} />
       ) : (
-        <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
+        <SkillDocumentEditor
+          document={activeDoc}
+          onSave={handleSaveDocument}
+          onReload={reloadDocument}
+          onDirtyChange={onDirtyChange}
+        />
       )}
     </DetailSheet>
   );

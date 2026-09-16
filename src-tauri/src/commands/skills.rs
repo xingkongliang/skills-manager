@@ -16,6 +16,7 @@ use crate::core::{
     installer, path_guard,
     repo_lock::RepoLock,
     scanner,
+    skill_doc,
     skill_metadata::{self, is_valid_skill_dir},
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
     sync_engine, sync_metadata,
@@ -234,6 +235,18 @@ pub struct SkillDocumentDto {
     pub filename: String,
     pub content: String,
     pub central_path: String,
+    /// What the editor must send back to prove its edit started from this
+    /// text. See [`skill_doc::ensure_unchanged`].
+    pub fingerprint: String,
+}
+
+/// What a save hands back: the document as it now reads on disk, plus the
+/// skill row the edit touched, so the card and the editor refresh from the
+/// same write instead of a follow-up round trip.
+#[derive(Debug, Serialize)]
+pub struct SaveSkillDocumentResultDto {
+    pub document: SkillDocumentDto,
+    pub skill: ManagedSkillDto,
 }
 
 #[derive(Debug, Serialize)]
@@ -390,12 +403,94 @@ pub async fn get_skill_document(
 
         Ok(SkillDocumentDto {
             skill_id,
+            fingerprint: skill_doc::document_fingerprint(&content),
             filename,
             content,
             central_path: skill.central_path,
         })
     })
     .await?
+}
+
+#[tauri::command]
+pub async fn save_skill_document(
+    skill_id: String,
+    filename: String,
+    content: String,
+    expected_fingerprint: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<SaveSkillDocumentResultDto, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let skill = store
+            .get_skill_by_id(&skill_id)
+            .map_err(AppError::db)?
+            .ok_or_else(|| AppError::not_found("Skill not found"))?;
+
+        let filename = skill_doc::canonical_document_name(&filename)?;
+        skill_doc::validate_document_content(&content)?;
+
+        let skill_dir = PathBuf::from(&skill.central_path);
+        let path = find_skill_document_path(&skill_dir, filename)
+            .ok_or_else(|| AppError::not_found("No documentation file found"))?;
+
+        // Same lock the install and update paths take: an edit rewrites a file
+        // inside the central repo, and a backup commit running over a half
+        // written skill is exactly what the lock exists to prevent.
+        let _lock = RepoLock::acquire_foreground("edit skill document").map_err(AppError::db)?;
+        skill_doc::ensure_unchanged(&path, expected_fingerprint.as_deref())?;
+        skill_doc::write_document(&path, &content)?;
+        refresh_skill_after_edit(&store, &skill)?;
+
+        let (filename, content) = read_skill_document_from_dir(&skill_dir)?;
+        Ok(SaveSkillDocumentResultDto {
+            document: SkillDocumentDto {
+                skill_id: skill.id.clone(),
+                fingerprint: skill_doc::document_fingerprint(&content),
+                filename,
+                content,
+                central_path: skill.central_path.clone(),
+            },
+            skill: managed_skill_by_id(&store, &skill.id)?,
+        })
+    })
+    .await?
+}
+
+/// Re-derive everything the library stores *about* a skill from the files that
+/// were just edited: the description shown on the card, the content hash the
+/// update badge compares against, and the copies deployed to agents.
+///
+/// The name is read but not applied. A skill's name is its directory, and
+/// renaming that behind an editor save would move the library folder, break
+/// every symlinked agent target pointing at it, and orphan the source
+/// bindings — a rename is its own operation, not a side effect of typing.
+pub fn refresh_skill_after_edit(store: &SkillStore, skill: &SkillRecord) -> Result<(), AppError> {
+    let skill_dir = PathBuf::from(&skill.central_path);
+    let meta = skill_metadata::parse_skill_md(&skill_dir);
+    let content_hash = crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
+
+    store
+        .update_skill_after_edit(&skill.id, meta.description.as_deref(), Some(&content_hash))
+        .map_err(AppError::db)?;
+    resync_copy_targets(store, &skill.id)?;
+    sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+    Ok(())
+}
+
+/// The library skill whose directory contains `path`, if any.
+///
+/// A workspace edit can land inside the central repo — a symlink-synced skill
+/// has one copy, and the project view writes straight through to it. When that
+/// happens the library's own bookkeeping has to be refreshed too, or the card
+/// keeps showing the description and hash from before the edit.
+pub fn library_skill_containing(store: &SkillStore, path: &Path) -> Option<SkillRecord> {
+    let canonical = std::fs::canonicalize(path).ok()?;
+    store.get_all_skills().ok()?.into_iter().find(|skill| {
+        std::fs::canonicalize(&skill.central_path)
+            .map(|central| canonical.starts_with(&central))
+            .unwrap_or(false)
+    })
 }
 
 #[tauri::command]
@@ -676,32 +771,36 @@ pub async fn get_skill_source_diff(
 }
 
 fn read_skill_document_from_dir(dir: &Path) -> Result<(String, String), AppError> {
-    let candidates = [
-        "SKILL.md",
-        "skill.md",
-        "CLAUDE.md",
-        "claude.md",
-        "README.md",
-        "readme.md",
-    ];
-
-    for name in &candidates {
-        let path = dir.join(name);
-        if path.exists() {
-            let content = std::fs::read_to_string(&path)?;
-            return Ok((name.to_string(), content));
-        }
+    if let Ok(document) = skill_doc::read_document(dir, &[]) {
+        return Ok(document);
     }
 
     for e in WalkDir::new(dir).max_depth(4).into_iter().flatten() {
         let fname = e.file_name().to_string_lossy();
-        if candidates.contains(&fname.as_ref()) {
+        if skill_doc::DOCUMENT_CANDIDATES.contains(&fname.as_ref()) {
             let content = std::fs::read_to_string(e.path())?;
             return Ok((fname.to_string(), content));
         }
     }
 
     Err(AppError::not_found("No documentation file found"))
+}
+
+/// Path of the document `read_skill_document_from_dir` returned for `dir`,
+/// including the nested fallback — a save has to land on the same file the
+/// editor was handed, not on a top-level file that was never shown.
+fn find_skill_document_path(dir: &Path, filename: &str) -> Option<PathBuf> {
+    let direct = dir.join(filename);
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    WalkDir::new(dir)
+        .max_depth(4)
+        .into_iter()
+        .flatten()
+        .find(|entry| entry.file_type().is_file() && entry.file_name().to_string_lossy() == filename)
+        .map(|entry| entry.path().to_path_buf())
 }
 
 fn source_label_for_skill(skill: &SkillRecord) -> String {

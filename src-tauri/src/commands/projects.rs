@@ -8,7 +8,10 @@ use tauri::State;
 
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
 use crate::core::timing::should_log_first_or_slow;
-use crate::core::{error::AppError, installer, project_scanner, sync_engine, tool_adapters};
+use crate::core::{
+    error::AppError, installer, project_scanner, repo_lock::RepoLock, skill_doc, sync_engine,
+    tool_adapters,
+};
 
 #[derive(Serialize, Default)]
 pub struct SyncHealthDto {
@@ -39,6 +42,9 @@ pub struct ProjectSkillDocumentDto {
     pub skill_name: String,
     pub filename: String,
     pub content: String,
+    /// What the editor must send back to prove its edit started from this
+    /// text. See [`skill_doc::ensure_unchanged`].
+    pub fingerprint: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -736,6 +742,56 @@ pub async fn get_project_skills(
     .await?
 }
 
+/// Locate a workspace skill's directory plus the roots a symlinked document
+/// inside it may legally resolve to.
+///
+/// Shared by the read and the save so an editable document is exactly the one
+/// the panel displayed — a save that resolved paths its own way could write to
+/// a file the user never saw.
+fn resolve_workspace_skill_dir(
+    store: &SkillStore,
+    project_id: &str,
+    skill_relative_path: &str,
+    agent: &str,
+) -> Result<(PathBuf, Vec<PathBuf>), AppError> {
+    ensure_safe_skill_relative_path(skill_relative_path)?;
+
+    let record = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let (skills_root, disabled_root) = resolve_agent_skills_roots(store, &record, agent)
+        .ok_or_else(|| AppError::not_found(format!("Unknown workspace agent: {}", agent)))?;
+
+    let enabled_dir = skills_root.join(skill_relative_path);
+    let skill_dir = if enabled_dir.is_dir() {
+        ensure_dir_within_root(&enabled_dir, &skills_root)?;
+        enabled_dir
+    } else if let Some(disabled_root) = disabled_root.as_ref() {
+        let disabled = disabled_root.join(skill_relative_path);
+        if disabled.is_dir() {
+            ensure_dir_within_root(&disabled, disabled_root)?;
+            disabled
+        } else {
+            return Err(AppError::not_found("Skill directory not found"));
+        }
+    } else {
+        return Err(AppError::not_found("Skill directory not found"));
+    };
+
+    let mut allowed_roots: Vec<PathBuf> = vec![skills_root];
+    if let Some(disabled_root) = disabled_root {
+        allowed_roots.push(disabled_root);
+    }
+    // For project workspaces, also allow the project root itself.
+    if record.workspace_type != "linked" {
+        allowed_roots.push(PathBuf::from(&record.path));
+    }
+
+    Ok((skill_dir, allowed_roots))
+}
+
 #[tauri::command]
 pub async fn get_project_skill_document(
     project_id: String,
@@ -745,80 +801,83 @@ pub async fn get_project_skill_document(
 ) -> Result<ProjectSkillDocumentDto, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
+        let (skill_dir, allowed_roots) =
+            resolve_workspace_skill_dir(&store, &project_id, &skill_relative_path, &agent)?;
+        let (filename, content) = skill_doc::read_document(&skill_dir, &allowed_roots)?;
 
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
-            .ok_or_else(|| AppError::not_found(format!("Unknown workspace agent: {}", agent)))?;
-        let disabled_root_copy = disabled_root.clone();
-        let skill_dir = skills_root.join(&skill_relative_path);
-        let skill_dir = if skill_dir.is_dir() {
-            ensure_dir_within_root(&skill_dir, &skills_root)?;
-            skill_dir
-        } else if let Some(disabled_root) = disabled_root {
-            let disabled = disabled_root.join(&skill_relative_path);
-            if disabled.is_dir() {
-                ensure_dir_within_root(&disabled, &disabled_root)?;
-                disabled
-            } else {
-                return Err(AppError::not_found("Skill directory not found"));
-            }
-        } else {
-            return Err(AppError::not_found("Skill directory not found"));
-        };
-
-        // Collect all allowed roots for symlink target validation
-        let mut allowed_roots: Vec<PathBuf> = vec![skills_root.clone()];
-        if let Some(dr) = disabled_root_copy {
-            allowed_roots.push(dr);
-        }
-        // For project workspaces, also allow the project root itself
-        if record.workspace_type != "linked" {
-            allowed_roots.push(PathBuf::from(&record.path));
-        }
-
-        let candidates = ["SKILL.md", "skill.md", "CLAUDE.md", "README.md"];
-        for candidate in &candidates {
-            let file_path = skill_dir.join(candidate);
-            if !file_path.exists() {
-                continue;
-            }
-            // For symlinks, verify the resolved target stays within an allowed root
-            if let Ok(meta) = std::fs::symlink_metadata(&file_path) {
-                if meta.file_type().is_symlink() {
-                    let resolved = match std::fs::canonicalize(&file_path) {
-                        Ok(r) => r,
-                        Err(_) => continue, // broken symlink
-                    };
-                    let in_allowed_root = allowed_roots.iter().any(|root| {
-                        std::fs::canonicalize(root)
-                            .map(|canon| resolved.starts_with(&canon))
-                            .unwrap_or(false)
-                    });
-                    if !in_allowed_root {
-                        continue;
-                    }
-                }
-            }
-            if file_path.is_file() {
-                let content = std::fs::read_to_string(&file_path)?;
-                return Ok(ProjectSkillDocumentDto {
-                    skill_name: skill_relative_path,
-                    filename: candidate.to_string(),
-                    content,
-                });
-            }
-        }
-
-        Err(AppError::not_found(
-            "No document file found in skill directory",
-        ))
+        Ok(ProjectSkillDocumentDto {
+            skill_name: skill_relative_path,
+            fingerprint: skill_doc::document_fingerprint(&content),
+            filename,
+            content,
+        })
     })
     .await?
+}
+
+#[tauri::command]
+pub async fn save_project_skill_document(
+    project_id: String,
+    skill_relative_path: String,
+    agent: String,
+    filename: String,
+    content: String,
+    expected_fingerprint: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<ProjectSkillDocumentDto, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (skill_dir, allowed_roots) =
+            resolve_workspace_skill_dir(&store, &project_id, &skill_relative_path, &agent)?;
+        let filename = skill_doc::canonical_document_name(&filename)?;
+        skill_doc::validate_document_content(&content)?;
+
+        // Resolve the same way the read did — including its symlink check —
+        // so a save can only ever land on the document the panel displayed.
+        let path = skill_doc::find_document_path(&skill_dir, &allowed_roots)
+            .filter(|found| found.file_name().is_some_and(|name| name == filename))
+            .ok_or_else(|| AppError::not_found("No document file found in skill directory"))?;
+
+        write_workspace_document(&store, &path, &content, expected_fingerprint.as_deref())?;
+
+        let (filename, content) = skill_doc::read_document(&skill_dir, &allowed_roots)?;
+        Ok(ProjectSkillDocumentDto {
+            skill_name: skill_relative_path,
+            fingerprint: skill_doc::document_fingerprint(&content),
+            filename,
+            content,
+        })
+    })
+    .await?
+}
+
+/// Write an edited workspace document, then repair the library's bookkeeping
+/// if the write landed inside it (a symlink-synced skill has one copy, so
+/// editing it in a project edits the library file).
+///
+/// The library case takes the central-repo lock around both steps — the write
+/// and the metadata rewrite that follows it are one edit as far as a backup
+/// commit is concerned. A workspace-only write touches nothing the lock
+/// guards, so it does not pay for it.
+pub(crate) fn write_workspace_document(
+    store: &SkillStore,
+    path: &Path,
+    content: &str,
+    expected_fingerprint: Option<&str>,
+) -> Result<(), AppError> {
+    let library_skill = crate::commands::skills::library_skill_containing(store, path);
+
+    let Some(skill) = library_skill else {
+        skill_doc::ensure_unchanged(path, expected_fingerprint)?;
+        return skill_doc::write_document(path, content);
+    };
+
+    let _lock = RepoLock::acquire_foreground("edit skill document").map_err(AppError::db)?;
+    // Inside the lock: a check taken before it could be answered by a file
+    // that a backup restore then replaced.
+    skill_doc::ensure_unchanged(path, expected_fingerprint)?;
+    skill_doc::write_document(path, content)?;
+    crate::commands::skills::refresh_skill_after_edit(store, &skill)
 }
 
 #[tauri::command]
