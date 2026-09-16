@@ -30,6 +30,50 @@ import * as api from "../lib/tauri";
 import type { SyncHealth, ToolCategory, ToolInfo } from "../lib/tauri";
 import { getPresetIconOption } from "../lib/presetIcons";
 
+const SIDEBAR_WIDTH_STORAGE_KEY = "skills-manager:sidebar-width";
+const DEFAULT_SIDEBAR_WIDTH = 220;
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 420;
+const MAIN_CONTENT_MIN_WIDTH = 600;
+
+function clampSidebarWidth(width: number, maxWidth = MAX_SIDEBAR_WIDTH): number {
+  return Math.min(Math.max(Math.round(width), MIN_SIDEBAR_WIDTH), maxWidth);
+}
+
+function readStoredSidebarWidth(): number {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+    if (raw === null || raw.trim() === "") return DEFAULT_SIDEBAR_WIDTH;
+    const stored = Number(raw);
+    return Number.isFinite(stored) ? clampSidebarWidth(stored) : DEFAULT_SIDEBAR_WIDTH;
+  } catch {
+    return DEFAULT_SIDEBAR_WIDTH;
+  }
+}
+
+function persistSidebarWidth(width: number) {
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(clampSidebarWidth(width)));
+  } catch {
+    // localStorage may be unavailable; resizing still works for this session.
+  }
+}
+
+function getAppScale(): number {
+  const scale = Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue("--app-scale")
+  );
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+function getAvailableMaxSidebarWidth(): number {
+  const availableWidth = window.innerWidth / getAppScale() - MAIN_CONTENT_MIN_WIDTH;
+  return Math.max(
+    MIN_SIDEBAR_WIDTH,
+    Math.min(MAX_SIDEBAR_WIDTH, Math.floor(availableWidth))
+  );
+}
+
 function getSyncHealthIndicator(health: SyncHealth, skillCount: number): { color: string; title: string } | null {
   if (skillCount === 0) return null;
   if (health.diverged > 0) return { color: "bg-red-400", title: `${health.diverged} diverged` };
@@ -73,6 +117,16 @@ export function Sidebar() {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [globalWorkspaceOpen, setGlobalWorkspaceOpen] = useState(true);
   const [lobsterWorkspaceOpen, setLobsterWorkspaceOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(readStoredSidebarWidth);
+  const [availableMaxSidebarWidth, setAvailableMaxSidebarWidth] = useState(getAvailableMaxSidebarWidth);
+  const sidebarWidthRef = useRef(sidebarWidth);
+  const resizeDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    scale: number;
+  } | null>(null);
+  const effectiveSidebarWidth = Math.min(sidebarWidth, availableMaxSidebarWidth);
 
   const globalSkillsByAgent = useMemo(() => {
     const map: Record<string, number> = {};
@@ -86,6 +140,16 @@ export function Sidebar() {
 
   useEffect(() => { setOrderedPresets(presets); }, [presets]);
   useEffect(() => { setOrderedProjects(projects); }, [projects]);
+  useEffect(() => {
+    const updateAvailableWidth = () => setAvailableMaxSidebarWidth(getAvailableMaxSidebarWidth());
+    const observer = new ResizeObserver(updateAvailableWidth);
+    observer.observe(document.documentElement);
+    window.addEventListener("resize", updateAvailableWidth);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateAvailableWidth);
+    };
+  }, []);
   useEffect(() => {
     const stored = localStorage.getItem("skills-manager:tool-order");
     const storedOrder: string[] = stored ? JSON.parse(stored) : [];
@@ -162,6 +226,42 @@ export function Sidebar() {
       setOrderedCodingTools(reordered);
       localStorage.setItem("skills-manager:tool-order", JSON.stringify(reordered.map((t) => t.key)));
     }
+  };
+
+  const updateSidebarWidth = (width: number, maxWidth = availableMaxSidebarWidth) => {
+    const nextWidth = clampSidebarWidth(width, maxWidth);
+    sidebarWidthRef.current = nextWidth;
+    setSidebarWidth(nextWidth);
+    return nextWidth;
+  };
+
+  const handleResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    resizeDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: effectiveSidebarWidth,
+      scale: getAppScale(),
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleResizePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = resizeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const delta = (event.clientX - drag.startX) / drag.scale;
+    updateSidebarWidth(drag.startWidth + delta, getAvailableMaxSidebarWidth());
+  };
+
+  const finishSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = resizeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    resizeDragRef.current = null;
+    persistSidebarWidth(sidebarWidthRef.current);
   };
 
   const NAV_ITEMS = [
@@ -334,7 +434,7 @@ export function Sidebar() {
                                       isActive ? "border-accent/30 bg-accent/10" : "group-hover:border-border"
                                     )}
                                   />
-                                  <span className="flex-1 truncate">{tool.display_name}</span>
+                                  <span className="flex-1 truncate" title={tool.display_name}>{tool.display_name}</span>
                                   <span className="ml-auto flex h-[18px] w-[32px] shrink-0 items-center justify-end group-hover:hidden">
                                     {skillCount > 0 && (
                                       <span className={cn(
@@ -376,7 +476,10 @@ export function Sidebar() {
 
   return (
     <>
-      <div className="w-[220px] flex-shrink-0 bg-bg-secondary border-r border-border-subtle h-full flex flex-col select-none relative z-10">
+      <div
+        className="flex-shrink-0 bg-bg-secondary border-r border-border-subtle h-full flex flex-col select-none relative z-10"
+        style={{ width: effectiveSidebarWidth }}
+      >
         {/* Traffic-light safe zone */}
         <div className="h-[38px] shrink-0" />
         {/* App logo — sits below macOS window controls */}
@@ -476,7 +579,7 @@ export function Sidebar() {
                                   >
                                     <PresetIcon className="h-3 w-3" />
                                   </span>
-                                  <span className="flex-1 truncate">{preset.name}</span>
+                                  <span className="flex-1 truncate" title={preset.name}>{preset.name}</span>
                                   <span className="ml-auto flex h-[18px] w-[32px] shrink-0 items-center justify-end group-hover:hidden">
                                     {preset.skill_count > 0 && (
                                       <span
@@ -637,7 +740,7 @@ export function Sidebar() {
                                       ? <Link2 className="h-3 w-3" />
                                       : <FolderOpen className="h-3 w-3" />}
                                   </span>
-                                  <span className="flex-1 truncate">{project.name}</span>
+                                  <span className="flex-1 truncate" title={project.name}>{project.name}</span>
                                   <span className="ml-auto flex h-[18px] w-[52px] shrink-0 items-center justify-end gap-2 group-hover:hidden">
                                     {healthIndicator && (
                                       <span
@@ -730,6 +833,18 @@ export function Sidebar() {
               />
             )}
           </Link>
+        </div>
+
+        <div
+          aria-hidden="true"
+          title={t("sidebar.resize")}
+          onPointerDown={handleResizePointerDown}
+          onPointerMove={handleResizePointerMove}
+          onPointerUp={finishSidebarResize}
+          onPointerCancel={finishSidebarResize}
+          className="group absolute inset-y-0 -right-1 z-20 w-2 touch-none cursor-col-resize outline-none"
+        >
+          <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-accent/50" />
         </div>
       </div>
 
