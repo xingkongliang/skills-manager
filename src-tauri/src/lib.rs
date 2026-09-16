@@ -991,6 +991,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::window::titlebar_double_click,
             // Tools
             commands::tools::get_tool_status,
             commands::tools::set_tool_enabled,
