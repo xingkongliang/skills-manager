@@ -106,6 +106,54 @@ fn symlink_stays_within(path: &Path, allowed_roots: &[PathBuf]) -> bool {
     })
 }
 
+/// Reject a document whose frontmatter no longer parses.
+///
+/// A skill's frontmatter is how every agent learns the skill's name,
+/// description and — where the agent supports it — which model to run it on. A
+/// block that YAML cannot read makes the skill anonymous rather than broken:
+/// agents fall back to the directory name and the skill quietly stops being
+/// matched on its description. Catching it at the save is the only moment the
+/// person who broke it is still looking at it.
+pub fn validate_frontmatter(content: &str) -> Result<(), AppError> {
+    let Some(block) = frontmatter_block(content) else {
+        return Ok(());
+    };
+    if block.trim().is_empty() {
+        return Ok(());
+    }
+
+    let parsed: serde_yaml::Value = serde_yaml::from_str(block)
+        .map_err(|err| AppError::invalid_input(format!("{INVALID_FRONTMATTER}: {err}")))?;
+
+    if parsed.as_mapping().is_none() {
+        return Err(AppError::invalid_input(format!(
+            "{INVALID_FRONTMATTER}: frontmatter must be a set of `key: value` entries"
+        )));
+    }
+    Ok(())
+}
+
+/// Marker the frontend matches on to point the error at the frontmatter
+/// fields rather than showing it as a generic save failure.
+pub const INVALID_FRONTMATTER: &str = "invalid_frontmatter";
+
+/// The text between a document's opening and closing `---` fences.
+fn frontmatter_block(content: &str) -> Option<&str> {
+    let rest = content
+        .strip_prefix("---\r\n")
+        .or_else(|| content.strip_prefix("---\n"))?;
+
+    rest.match_indices("---")
+        .find(|(index, _)| {
+            // The closing fence has to own its line, or a `---` horizontal
+            // rule in the body would end the block early.
+            let starts_line = *index == 0 || rest[..*index].ends_with('\n');
+            let after = rest[index + 3..].trim_start_matches([' ', '\t']);
+            starts_line && (after.is_empty() || after.starts_with(['\n', '\r']))
+        })
+        .map(|(index, _)| &rest[..index])
+}
+
 /// Fingerprint of a document's text, line endings folded away.
 ///
 /// The editor sends back the fingerprint of what it loaded, so a save can tell
@@ -171,6 +219,7 @@ fn uses_crlf(content: &str) -> bool {
 /// reaches the backup queue.
 pub fn write_document(path: &Path, content: &str) -> Result<(), AppError> {
     validate_document_content(content)?;
+    validate_frontmatter(content)?;
 
     let existing = std::fs::read_to_string(path).unwrap_or_default();
     let body = match_line_endings(&existing, content);
@@ -316,6 +365,65 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             "line one\r\nline three\r\n"
+        );
+    }
+
+    #[test]
+    fn frontmatter_block_is_bounded_by_its_own_fences() {
+        assert_eq!(
+            frontmatter_block("---\nname: demo\n---\n# Title\n"),
+            Some("name: demo\n")
+        );
+        assert_eq!(
+            frontmatter_block("---\r\nname: demo\r\n---\r\nbody"),
+            Some("name: demo\r\n")
+        );
+        // No frontmatter at all, and a body whose own `---` must not be read
+        // as a closing fence for a block that never opened.
+        assert_eq!(frontmatter_block("# Title\n\n---\n\nmore"), None);
+    }
+
+    #[test]
+    fn a_thematic_break_in_the_body_does_not_end_the_block() {
+        // The first `---` after the opener closes the block; a rule further
+        // down the body must not be mistaken for it, or the "frontmatter"
+        // would swallow half the document and fail to parse.
+        let content = "---\nname: demo\n---\n\nintro\n\n---\n\noutro\n";
+        assert_eq!(frontmatter_block(content), Some("name: demo\n"));
+        assert!(validate_frontmatter(content).is_ok());
+    }
+
+    #[test]
+    fn valid_frontmatter_passes_including_a_model_field() {
+        assert!(validate_frontmatter("---\nname: demo\nmodel: opus\n---\nbody").is_ok());
+        assert!(validate_frontmatter("# no frontmatter here\n").is_ok());
+        assert!(validate_frontmatter("---\n---\nbody").is_ok());
+    }
+
+    #[test]
+    fn broken_frontmatter_is_refused_with_a_matchable_marker() {
+        let err = validate_frontmatter("---\nname: [unclosed\n---\nbody").unwrap_err();
+        assert!(err.message.contains(INVALID_FRONTMATTER));
+    }
+
+    #[test]
+    fn frontmatter_that_is_not_a_mapping_is_refused() {
+        // A list parses as valid YAML but leaves the skill with no readable
+        // name or description.
+        let err = validate_frontmatter("---\n- name: demo\n---\nbody").unwrap_err();
+        assert!(err.message.contains(INVALID_FRONTMATTER));
+    }
+
+    #[test]
+    fn write_document_refuses_to_store_broken_frontmatter() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("SKILL.md");
+        fs::write(&path, "---\nname: demo\n---\nbody\n").unwrap();
+
+        assert!(write_document(&path, "---\nname: \"unterminated\n---\nbody\n").is_err());
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "---\nname: demo\n---\nbody\n"
         );
     }
 

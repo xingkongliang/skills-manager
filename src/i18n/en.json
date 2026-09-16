@@ -1105,6 +1105,19 @@
     "discardConfirm": "Discard",
     "conflictMessage": "This file changed on disk since you opened it — another device, a sync, or an agent rewrote it. Reload to see the new version, or overwrite it with your edits.",
     "conflictReload": "Reload from disk",
-    "conflictOverwrite": "Overwrite anyway"
+    "conflictOverwrite": "Overwrite anyway",
+    "frontmatter": "Frontmatter",
+    "otherKeys": "also sets {{keys}}",
+    "multilineValue": "multi-line — edit below",
+    "rawFrontmatter": "Raw frontmatter (YAML)",
+    "rawFrontmatterPlaceholder": "name: my-skill\ndescription: What this skill does and when to use it",
+    "placeholder": {
+      "name": "my-skill",
+      "description": "What this skill does, and when an agent should reach for it",
+      "model": "inherit, opus, or a model id",
+      "allowed-tools": "Read, Grep, Bash",
+      "license": "MIT"
+    },
+    "invalidFrontmatter": "Frontmatter could not be saved — YAML says:"
   }
 }

@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { cn } from "../utils";
 import { getErrorMessage } from "../lib/error";
 import { SkillMarkdown } from "./SkillMarkdown";
+import { FrontmatterBadges, FrontmatterFields } from "./FrontmatterFields";
+import { joinDocument, splitDocument } from "../lib/frontmatter";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 /** The part of a document every workspace's detail panel has in common. */
@@ -20,6 +22,13 @@ export interface EditableDocument {
  * error they can do nothing with.
  */
 const CHANGED_ON_DISK = "document_changed_on_disk";
+
+/**
+ * Marker the backend returns when the frontmatter no longer parses. Shown
+ * beside the fields that caused it rather than as a toast that disappears
+ * before the user can read the YAML error in it.
+ */
+const INVALID_FRONTMATTER = "invalid_frontmatter";
 
 interface Props {
   document: EditableDocument | null;
@@ -52,11 +61,18 @@ export function SkillDocumentEditor({
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
+  const [frontmatterError, setFrontmatterError] = useState<string | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const content = document?.content ?? "";
   const dirty = editing && draft !== content;
+
+  // Frontmatter gets its own fields for a skill's own document, and for any
+  // other file that already carries a block. A plain README is left as plain
+  // markdown rather than being offered fields it has no use for.
+  const isSkillDocument = /^skill\.md$/i.test(document?.filename ?? "");
+  const showFrontmatter = isSkillDocument || splitDocument(draft).frontmatter !== null;
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -75,6 +91,7 @@ export function SkillDocumentEditor({
   const startEditing = useCallback(() => {
     setDraft(content);
     setConflict(false);
+    setFrontmatterError(null);
     setEditing(true);
   }, [content]);
 
@@ -85,6 +102,7 @@ export function SkillDocumentEditor({
   const stopEditing = useCallback(() => {
     setEditing(false);
     setConflict(false);
+    setFrontmatterError(null);
     setDiscardOpen(false);
   }, []);
 
@@ -96,12 +114,15 @@ export function SkillDocumentEditor({
         const saved = await onSave(draft, expectedFingerprint);
         setDraft(saved.content);
         setConflict(false);
+        setFrontmatterError(null);
         setEditing(false);
         toast.success(t("skillEditor.saved", { filename: saved.filename }));
       } catch (error: unknown) {
         const message = getErrorMessage(error, t("common.error"));
         if (message.includes(CHANGED_ON_DISK)) {
           setConflict(true);
+        } else if (message.includes(INVALID_FRONTMATTER)) {
+          setFrontmatterError(message.split(`${INVALID_FRONTMATTER}: `).pop() ?? message);
         } else {
           toast.error(message);
         }
@@ -220,20 +241,34 @@ export function SkillDocumentEditor({
       )}
 
       {editing ? (
-        <textarea
-          ref={textareaRef}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={handleKeyDown}
-          spellCheck={false}
-          className={cn(
-            "min-h-[460px] w-full resize-y rounded-xl border border-border-subtle bg-background px-4 py-3",
-            "font-mono text-[12.5px] leading-6 text-secondary outline-none",
-            "focus:border-accent-border"
+        <>
+          {showFrontmatter && (
+            <FrontmatterFields content={draft} onChange={setDraft} error={frontmatterError} />
           )}
-        />
+          <textarea
+            ref={textareaRef}
+            value={showFrontmatter ? splitDocument(draft).body : draft}
+            onChange={(event) =>
+              setDraft(
+                showFrontmatter
+                  ? joinDocument(splitDocument(draft).frontmatter, event.target.value)
+                  : event.target.value
+              )
+            }
+            onKeyDown={handleKeyDown}
+            spellCheck={false}
+            className={cn(
+              "min-h-[380px] w-full resize-y rounded-xl border border-border-subtle bg-background px-4 py-3",
+              "font-mono text-[12.5px] leading-6 text-secondary outline-none",
+              "focus:border-accent-border"
+            )}
+          />
+        </>
       ) : (
-        <SkillMarkdown content={content} />
+        <>
+          <FrontmatterBadges content={content} />
+          <SkillMarkdown content={content} />
+        </>
       )}
 
       <ConfirmDialog
