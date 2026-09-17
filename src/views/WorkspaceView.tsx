@@ -25,6 +25,7 @@ import { useApp } from "../context/AppContext";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PresetBar } from "../components/PresetBar";
 import { AgentIcon } from "../components/AgentIcon";
+import { SkillSortButton } from "../components/SkillSortButton";
 import { DetailSheet } from "../components/DetailSheet";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
@@ -32,6 +33,7 @@ import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectSkill } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
+import { sortSkillsByName } from "../lib/skillSort";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 import { useMultiSelect } from "../hooks/useMultiSelect";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
@@ -243,7 +245,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const { agentKey } = useParams<{ agentKey?: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { tools, managedSkills, presets, refreshManagedSkills, refreshTools } = useApp();
+  const { tools, managedSkills, presets, refreshManagedSkills, refreshTools, skillSortMode } = useApp();
 
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [search, setSearch] = useState("");
@@ -441,37 +443,41 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
 
   const visibleLocalSkills = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return localSkills
-      .filter((skill) => {
-        if (q) {
-          const matchesQuery =
-            skill.name.toLowerCase().includes(q) ||
-            skill.dir_name.toLowerCase().includes(q) ||
-            (skill.description || "").toLowerCase().includes(q);
-          if (!matchesQuery) return false;
-        }
-        if (tagFilters.size > 0) {
-          const wantUntagged = tagFilters.has(UNTAGGED_FILTER);
-          const matchUntagged = wantUntagged && skill.tags.length === 0;
-          const matchTag = skill.tags.some((tag) => tagFilters.has(tag));
-          if (!matchUntagged && !matchTag) return false;
-        }
-        return true;
-      })
-      .sort((a, b) => {
-        const priority: Record<ProjectSkill["sync_status"], number> = {
-          project_only: 0,
-          project_newer: 1,
-          diverged: 2,
-          center_newer: 3,
-          in_sync: 4,
-        };
-        return (
-          priority[a.sync_status] - priority[b.sync_status] ||
-          a.name.localeCompare(b.name)
-        );
-      });
-  }, [localSkills, search, tagFilters]);
+    const filtered = localSkills.filter((skill) => {
+      if (q) {
+        const matchesQuery =
+          skill.name.toLowerCase().includes(q) ||
+          skill.dir_name.toLowerCase().includes(q) ||
+          (skill.description || "").toLowerCase().includes(q);
+        if (!matchesQuery) return false;
+      }
+      if (tagFilters.size > 0) {
+        const wantUntagged = tagFilters.has(UNTAGGED_FILTER);
+        const matchUntagged = wantUntagged && skill.tags.length === 0;
+        const matchTag = skill.tags.some((tag) => tagFilters.has(tag));
+        if (!matchUntagged && !matchTag) return false;
+      }
+      return true;
+    });
+
+    if (skillSortMode !== "none") {
+      return sortSkillsByName(filtered, (s) => s.name, skillSortMode);
+    }
+
+    return filtered.sort((a, b) => {
+      const priority: Record<ProjectSkill["sync_status"], number> = {
+        project_only: 0,
+        project_newer: 1,
+        diverged: 2,
+        center_newer: 3,
+        in_sync: 4,
+      };
+      return (
+        priority[a.sync_status] - priority[b.sync_status] ||
+        a.name.localeCompare(b.name)
+      );
+    });
+  }, [localSkills, search, tagFilters, skillSortMode]);
 
   const inSyncLocalCount = useMemo(
     () => localSkills.filter((skill) => skill.sync_status === "in_sync").length,
@@ -946,6 +952,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
               >
                 <LayoutGrid className="h-4 w-4" />
               </button>
+              <SkillSortButton />
               <button
                 onClick={() => setViewMode("list")}
                 className={cn(
@@ -1305,4 +1312,3 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     </div>
   );
 }
-

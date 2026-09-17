@@ -38,12 +38,14 @@ import { TagRenameDialog } from "../components/TagRenameDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
+import { SkillSortButton } from "../components/SkillSortButton";
 import { BatchSyncAgentDialog } from "../components/BatchSyncAgentDialog";
 import { SyncDots } from "../components/SyncDots";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { CardActionMenu } from "../components/CardActionMenu";
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
+import { sortSkillsByName } from "../lib/skillSort";
 import type {
   ManagedSkill,
   ToolInfo,
@@ -148,6 +150,7 @@ export function MySkills() {
     closeSkillDetail,
     projects,
     refreshProjects,
+    skillSortMode,
   } = useApp();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
@@ -308,6 +311,16 @@ export function MySkills() {
       return true;
     });
 
+    // A–Z / Z–A: ignore preset enabled-first grouping and custom drag order,
+    // and show a pure dictionary-order list instead.
+    if (skillSortMode !== "none") {
+      return sortSkillsByName(
+        result,
+        (s) => skillDisplayNames.get(s.id) || s.name,
+        skillSortMode
+      );
+    }
+
     // Always sort enabled skills first; within enabled group, use custom sort order
     if (viewedPreset) {
       result.sort((a, b) => {
@@ -325,7 +338,7 @@ export function MySkills() {
     }
 
     return result;
-  }, [skills, skillDisplayNames, search, sourceFilters, tagFilters, filterMode, viewedPreset, presetSkillOrder]);
+  }, [skills, skillDisplayNames, search, sourceFilters, tagFilters, filterMode, viewedPreset, presetSkillOrder, skillSortMode]);
 
   const {
     isMultiSelect, setIsMultiSelect,
@@ -388,7 +401,7 @@ export function MySkills() {
     [filtered, viewedPreset]
   );
 
-  const canDrag = !!viewedPreset;
+  const canDrag = !!viewedPreset && skillSortMode === "none";
 
   const refreshGitStatus = useCallback(async () => {
     try {
@@ -1198,6 +1211,7 @@ export function MySkills() {
             >
               <LayoutGrid className="h-4 w-4" />
             </button>
+            <SkillSortButton />
             <button
               onClick={() => setViewMode("list")}
               className={cn(
