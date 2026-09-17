@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
 pub mod commands;
 pub mod core;
@@ -788,6 +789,12 @@ pub fn restart_app(app: &tauri::AppHandle) {
 
 fn teardown_before_exit(app: &tauri::AppHandle) {
     QUITTING.store(true, Ordering::SeqCst);
+    let _ = app.save_window_state(
+        StateFlags::SIZE
+            | StateFlags::POSITION
+            | StateFlags::MAXIMIZED
+            | StateFlags::FULLSCREEN,
+    );
     if let Some(w) = app.get_webview_window("main") {
         if let Err(err) = w.destroy() {
             log::error!("Failed to destroy main window while quitting: {err}");
@@ -822,6 +829,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    StateFlags::SIZE
+                        | StateFlags::POSITION
+                        | StateFlags::MAXIMIZED
+                        | StateFlags::FULLSCREEN,
+                )
+                .build(),
+        )
         .setup(move |app| {
             // Snapshot the builder->setup gap BEFORE doing any work in setup,
             // so the label reflects only the time Tauri spent constructing
@@ -978,8 +995,15 @@ pub fn run() {
                     api.prevent_close();
                 }
             });
+            let _ = win.restore_state(
+                StateFlags::SIZE
+                    | StateFlags::POSITION
+                    | StateFlags::MAXIMIZED
+                    | StateFlags::FULLSCREEN,
+            );
+            win.show()?;
             log::info!(
-                "startup: window handle + close hook in {} ms",
+                "startup: window handle + close hook + state restore in {} ms",
                 step.elapsed().as_millis()
             );
 
