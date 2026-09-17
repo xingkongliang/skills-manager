@@ -1007,6 +1007,7 @@ pub fn run() {
             commands::skills::get_managed_skills,
             commands::skills::get_skills_for_preset,
             commands::skills::get_skill_document,
+            commands::skills::save_skill_document,
             commands::skills::get_source_skill_document,
             commands::skills::get_skill_source_diff,
             commands::skills::delete_managed_skill,
@@ -1095,6 +1096,7 @@ pub fn run() {
             commands::projects::get_project_agent_targets,
             commands::projects::get_project_skills,
             commands::projects::get_project_skill_document,
+            commands::projects::save_project_skill_document,
             commands::projects::import_project_skill_to_center,
             commands::projects::export_skill_to_project,
             commands::projects::update_project_skill_to_center,
@@ -1105,6 +1107,7 @@ pub fn run() {
             // Agent local workspace
             commands::agent_workspace::get_global_local_skills,
             commands::agent_workspace::get_global_local_skill_document,
+            commands::agent_workspace::save_global_local_skill_document,
             commands::agent_workspace::import_global_local_skill_to_center,
             commands::agent_workspace::update_global_local_skill_from_center,
             commands::agent_workspace::delete_global_local_skill,

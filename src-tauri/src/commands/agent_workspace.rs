@@ -5,12 +5,12 @@ use tauri::State;
 
 use crate::commands::projects::{
     classify_sync_status, ensure_dir_within_root, ensure_safe_skill_relative_path,
-    source_ref_matches_skill_path, ProjectSkillDocumentDto,
+    source_ref_matches_skill_path, write_workspace_document, ProjectSkillDocumentDto,
 };
 use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
 use crate::core::{
-    content_hash, error::AppError, installer, project_scanner, scenario_service, sync_engine,
-    tool_adapters, tool_service,
+    content_hash, error::AppError, installer, project_scanner, scenario_service, skill_doc,
+    sync_engine, tool_adapters, tool_service,
 };
 
 fn target_path_equals_skill(target_path: &str, skill_path: &str) -> bool {
@@ -160,6 +160,24 @@ pub async fn get_global_local_skills(
     .await?
 }
 
+/// Locate an agent-global skill's directory plus the roots a symlinked
+/// document inside it may resolve to. Shared by the read and the save so the
+/// editable document is exactly the one the panel displayed.
+fn resolve_agent_skill_dir(
+    store: &SkillStore,
+    agent: &str,
+    skill_relative_path: &str,
+) -> Result<(PathBuf, Vec<PathBuf>), AppError> {
+    let adapter = adapter_for_agent(store, agent)?;
+    ensure_safe_skill_relative_path(skill_relative_path)?;
+
+    let skills_root = adapter.skills_dir();
+    let skill_dir = skills_root.join(skill_relative_path);
+    ensure_agent_skill_path(&skill_dir, &skills_root)?;
+
+    Ok((skill_dir, vec![skills_root]))
+}
+
 #[tauri::command]
 pub async fn get_global_local_skill_document(
     store: State<'_, Arc<SkillStore>>,
@@ -168,49 +186,49 @@ pub async fn get_global_local_skill_document(
 ) -> Result<ProjectSkillDocumentDto, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let adapter = adapter_for_agent(&store, &agent)?;
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
+        let (skill_dir, allowed_roots) =
+            resolve_agent_skill_dir(&store, &agent, &skill_relative_path)?;
+        let (filename, content) = skill_doc::read_document(&skill_dir, &allowed_roots)?;
 
-        let skills_root = adapter.skills_dir();
-        let skill_dir = skills_root.join(&skill_relative_path);
-        ensure_agent_skill_path(&skill_dir, &skills_root)?;
+        Ok(ProjectSkillDocumentDto {
+            skill_name: skill_relative_path,
+            fingerprint: skill_doc::document_fingerprint(&content),
+            filename,
+            content,
+        })
+    })
+    .await?
+}
 
-        let allowed_roots = vec![skills_root];
-        let candidates = ["SKILL.md", "skill.md", "CLAUDE.md", "README.md"];
-        for candidate in &candidates {
-            let file_path = skill_dir.join(candidate);
-            if !file_path.exists() {
-                continue;
-            }
-            if let Ok(meta) = std::fs::symlink_metadata(&file_path) {
-                if meta.file_type().is_symlink() {
-                    let resolved = match std::fs::canonicalize(&file_path) {
-                        Ok(path) => path,
-                        Err(_) => continue,
-                    };
-                    let in_allowed_root = allowed_roots.iter().any(|root| {
-                        std::fs::canonicalize(root)
-                            .map(|canon| resolved.starts_with(&canon))
-                            .unwrap_or(false)
-                    });
-                    if !in_allowed_root {
-                        continue;
-                    }
-                }
-            }
-            if file_path.is_file() {
-                let content = std::fs::read_to_string(&file_path)?;
-                return Ok(ProjectSkillDocumentDto {
-                    skill_name: skill_relative_path,
-                    filename: candidate.to_string(),
-                    content,
-                });
-            }
-        }
+#[tauri::command]
+pub async fn save_global_local_skill_document(
+    store: State<'_, Arc<SkillStore>>,
+    agent: String,
+    skill_relative_path: String,
+    filename: String,
+    content: String,
+    expected_fingerprint: Option<String>,
+) -> Result<ProjectSkillDocumentDto, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (skill_dir, allowed_roots) =
+            resolve_agent_skill_dir(&store, &agent, &skill_relative_path)?;
+        let filename = skill_doc::canonical_document_name(&filename)?;
+        skill_doc::validate_document_content(&content)?;
 
-        Err(AppError::not_found(
-            "No document file found in skill directory",
-        ))
+        let path = skill_doc::find_document_path(&skill_dir, &allowed_roots)
+            .filter(|found| found.file_name().is_some_and(|name| name == filename))
+            .ok_or_else(|| AppError::not_found("No document file found in skill directory"))?;
+
+        write_workspace_document(&store, &path, &content, expected_fingerprint.as_deref())?;
+
+        let (filename, content) = skill_doc::read_document(&skill_dir, &allowed_roots)?;
+        Ok(ProjectSkillDocumentDto {
+            skill_name: skill_relative_path,
+            fingerprint: skill_doc::document_fingerprint(&content),
+            filename,
+            content,
+        })
     })
     .await?
 }
