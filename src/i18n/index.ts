@@ -4,9 +4,10 @@ import { getSettings } from "../lib/tauri";
 import zh from "./zh.json";
 import zhTW from "./zh-TW.json";
 import en from "./en.json";
+import ko from "./ko.json";
 
 const LANGUAGE_STORAGE_KEY = "language";
-const SUPPORTED_LANGUAGES = ["zh", "zh-TW", "en"] as const;
+const SUPPORTED_LANGUAGES = ["zh", "zh-TW", "en", "ko"] as const;
 type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
 function isSupportedLanguage(lang: string | null): lang is SupportedLanguage {
@@ -61,9 +62,12 @@ export const i18nReady = (async () => {
       zh: { translation: zh },
       "zh-TW": { translation: zhTW },
       en: { translation: en },
+      ko: { translation: ko },
     },
     lng,
-    fallbackLng: "zh",
+    // Korean falls back to English before Chinese: a key added to en.json but not
+    // yet translated should surface in a language a Korean reader can act on.
+    fallbackLng: { ko: ["en", "zh"], default: ["zh"] },
     interpolation: { escapeValue: false },
   });
 })();
