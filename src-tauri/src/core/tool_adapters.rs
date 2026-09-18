@@ -56,6 +56,10 @@ pub struct CustomToolDef {
     pub project_relative_skills_dir: Option<String>,
     #[serde(default)]
     pub category: ToolCategory,
+    /// Key into the bundled agent icon set (see `src/lib/agentIcons.ts`),
+    /// e.g. "cursor". `None` falls back to the generic globe icon.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 impl ToolAdapter {
@@ -1065,6 +1069,7 @@ mod tests {
                 skills_dir: tmp.path().join("legacy-skills").to_string_lossy().into_owned(),
                 project_relative_skills_dir: Some(".legacy/skills".to_string()),
                 category: ToolCategory::Lobster,
+                icon: None,
             },
             CustomToolDef {
                 key: "custom_agent".to_string(),
@@ -1072,6 +1077,7 @@ mod tests {
                 skills_dir: custom_skills.to_string_lossy().into_owned(),
                 project_relative_skills_dir: Some(custom_project_path.to_string()),
                 category: ToolCategory::Lobster,
+                icon: None,
             },
         ];
         store
