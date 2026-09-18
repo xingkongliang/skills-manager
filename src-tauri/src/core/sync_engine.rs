@@ -496,6 +496,30 @@ pub fn remove_recorded_target(target: &Path, recorded_mode: &str) -> Result<bool
     Ok(true)
 }
 
+/// Row-driven removal for cleanup paths: remove only while the disk still
+/// matches the record, and report a preserved replacement instead of falling
+/// back to [`remove_target`]. Every caller that deletes what a `skill_targets`
+/// row points at should go through here (or [`remove_recorded_target`]) — a
+/// row is a statement about the past, never proof that whatever is on disk is
+/// ours (#363 expectation 5, #435).
+pub fn remove_recorded_target_or_warn(target: &Path, recorded_mode: &str) -> bool {
+    match remove_recorded_target(target, recorded_mode) {
+        Ok(true) => true,
+        Ok(false) => {
+            log::warn!(
+                "Preserving {}: no longer matches its recorded {recorded_mode} deployment; \
+                 removing the record only",
+                target.display()
+            );
+            false
+        }
+        Err(e) => {
+            log::warn!("Failed to remove sync target {}: {e}", target.display());
+            false
+        }
+    }
+}
+
 /// Whether what is at `target` is still consistent with a deployment recorded
 /// as `recorded_mode`. `false` means something else took the path over, which
 /// is why an undeploy may leave a path behind on purpose.
