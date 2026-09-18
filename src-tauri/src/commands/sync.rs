@@ -45,6 +45,26 @@ fn sync_skill_to_tool_internal(
     )
 }
 
+/// The disk-side half of turning a preset toggle off for one tool: the
+/// `skill_targets` record always goes, while whatever is at the recorded path
+/// is only removed when it still matches what we deployed (#435).
+fn unsync_skill_for_tool_in_preset(
+    store: &SkillStore,
+    skill_id: &str,
+    tool: &str,
+) -> Result<(), AppError> {
+    let targets = store
+        .get_targets_for_skill(skill_id)
+        .map_err(AppError::db)?;
+    if let Some(target) = targets.iter().find(|target| target.tool == tool) {
+        sync_engine::remove_recorded_target_or_warn(
+            &PathBuf::from(&target.target_path),
+            &target.mode,
+        );
+    }
+    store.delete_target(skill_id, tool).map_err(AppError::db)
+}
+
 #[tauri::command]
 pub async fn sync_skill_to_tool(
     app: AppHandle,
@@ -310,16 +330,7 @@ pub async fn set_skill_tool_toggle(
             if enabled {
                 sync_skill_to_tool_internal(&store, &skill_id, &tool)?;
             } else {
-                let targets = store
-                    .get_targets_for_skill(&skill_id)
-                    .map_err(AppError::db)?;
-                if let Some(target) = targets.iter().find(|target| target.tool == tool) {
-                    // Safe because the app currently guarantees a single active scenario.
-                    sync_engine::remove_target(&PathBuf::from(&target.target_path)).ok();
-                }
-                store
-                    .delete_target(&skill_id, &tool)
-                    .map_err(AppError::db)?;
+                unsync_skill_for_tool_in_preset(&store, &skill_id, &tool)?;
             }
         }
 
@@ -529,6 +540,44 @@ mod tests {
             fs::read_to_string(target.join("mine.txt")).unwrap(),
             "DO_NOT_OVERWRITE"
         );
+    }
+
+    /// #435: unchecking a skill for one tool in the active preset used to
+    /// delete whatever sat at the recorded path. A real directory that
+    /// replaced our symlink is the user's — preserve it and drop only the
+    /// record.
+    #[test]
+    fn preset_unsync_preserves_user_content_that_replaced_a_recorded_link() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let target = tmp.path().join("agent-skills").join("my-skill");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("mine.txt"), "DO_NOT_OVERWRITE").unwrap();
+        store
+            .insert_skill(&sample_skill("s1", "my-skill", &tmp.path().join("central")))
+            .unwrap();
+        store
+            .insert_target(&crate::core::skill_store::SkillTargetRecord {
+                id: "t1".to_string(),
+                skill_id: "s1".to_string(),
+                tool: "agent_a".to_string(),
+                target_path: target.to_string_lossy().to_string(),
+                mode: "symlink".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: None,
+            })
+            .unwrap();
+
+        unsync_skill_for_tool_in_preset(&store, "s1", "agent_a").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(target.join("mine.txt")).unwrap(),
+            "DO_NOT_OVERWRITE",
+            "the user's directory must survive the uncheck"
+        );
+        assert!(store.get_targets_for_skill("s1").unwrap().is_empty());
     }
 
     #[test]

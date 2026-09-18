@@ -42,7 +42,10 @@ fn sync_active_scenario_to_tool(store: &SkillStore, tool_key: &str) {
 fn unsync_all_for_tool(store: &SkillStore, tool_key: &str) {
     let targets = store.get_all_targets().unwrap_or_default();
     for target in targets.iter().filter(|t| t.tool == tool_key) {
-        sync_engine::remove_target(&PathBuf::from(&target.target_path)).ok();
+        sync_engine::remove_recorded_target_or_warn(
+            &PathBuf::from(&target.target_path),
+            &target.mode,
+        );
         store.delete_target(&target.skill_id, tool_key).ok();
     }
 }
@@ -424,11 +427,7 @@ pub async fn remove_custom_tool(
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         // Remove synced targets for this tool
-        let targets = store.get_all_targets().unwrap_or_default();
-        for target in targets.iter().filter(|t| t.tool == key) {
-            crate::core::sync_engine::remove_target(&PathBuf::from(&target.target_path)).ok();
-            store.delete_target(&target.skill_id, &key).ok();
-        }
+        unsync_all_for_tool(&store, &key);
         // Remove from custom_tools list
         let mut customs = get_custom_tools(&store);
         customs.retain(|c| c.key != key);
@@ -452,7 +451,7 @@ pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::skill_store::{ScenarioRecord, SkillRecord};
+    use crate::core::skill_store::{ScenarioRecord, SkillRecord, SkillTargetRecord};
     use std::fs;
     use tempfile::tempdir;
 
@@ -648,5 +647,98 @@ mod tests {
         assert!(targets.iter().any(|target| {
             target.skill_id == "second" && target.target_path.ends_with("skill123-2")
         }));
+    }
+
+    /// Insert a minimal skill row (the `skill_targets` foreign key needs it)
+    /// plus one target row pointing at `target_path`.
+    fn insert_skill_and_target(
+        store: &SkillStore,
+        target_path: &std::path::Path,
+        tool: &str,
+        mode: &str,
+    ) {
+        store
+            .insert_skill(&SkillRecord {
+                id: "s1".to_string(),
+                name: "my-skill".to_string(),
+                description: None,
+                source_type: "import".to_string(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: "unused".to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: 1,
+                updated_at: 1,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+        store
+            .insert_target(&SkillTargetRecord {
+                id: "t1".to_string(),
+                skill_id: "s1".to_string(),
+                tool: tool.to_string(),
+                target_path: target_path.to_string_lossy().to_string(),
+                mode: mode.to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: None,
+            })
+            .unwrap();
+    }
+
+    /// #435: a `skill_targets` row is a statement about the past. When the
+    /// user replaced our symlink with a real directory of their own,
+    /// disabling the tool must preserve it — the row only authorizes
+    /// removing what still looks like what we deployed.
+    #[test]
+    fn disabling_a_tool_preserves_user_content_that_replaced_a_recorded_link() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let target = tmp.path().join("agent-skills").join("my-skill");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("mine.txt"), "DO_NOT_OVERWRITE").unwrap();
+        insert_skill_and_target(&store, &target, "test_agent", "symlink");
+
+        unsync_all_for_tool(&store, "test_agent");
+
+        assert_eq!(
+            fs::read_to_string(target.join("mine.txt")).unwrap(),
+            "DO_NOT_OVERWRITE",
+            "the user's directory must survive the disable"
+        );
+        assert!(
+            store.get_targets_for_skill("s1").unwrap().is_empty(),
+            "the stale record must not survive the disable"
+        );
+    }
+
+    /// A copy-mode row still vouches for a real directory — that is what a
+    /// copy deployment is — so disabling the tool removes it. Guards #435's
+    /// fix against overcorrecting into refusing every real directory.
+    #[test]
+    fn disabling_a_tool_still_removes_a_recorded_copy_deployment() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let target = tmp.path().join("agent-skills").join("my-skill");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("SKILL.md"), "---\nname: my-skill\n---\n").unwrap();
+        insert_skill_and_target(&store, &target, "test_agent", "copy");
+
+        unsync_all_for_tool(&store, "test_agent");
+
+        assert!(
+            !target.exists(),
+            "a recorded copy deployment is ours to remove"
+        );
+        assert!(store.get_targets_for_skill("s1").unwrap().is_empty());
     }
 }
