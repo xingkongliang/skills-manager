@@ -415,7 +415,10 @@
       "renameTag": "Rename tag",
       "deleteTag": "Delete tag",
       "tagName": "Tag name",
-      "manageHint": "Right-click to rename or delete",
+      "color": "Color",
+      "colorSwatch": "Color {{index}}",
+      "colorAuto": "Reset to automatic",
+      "manageHint": "Right-click to recolor, rename, or delete",
       "tagRenamed": "Tag renamed",
       "tagDeleted": "Tag deleted",
       "deleteConfirm": "Remove the tag \"{{tag}}\" from all skills?"
