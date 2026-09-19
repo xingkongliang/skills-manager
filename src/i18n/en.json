@@ -1098,5 +1098,17 @@
       "deletedLocalBatch": "{{count}} local skills deleted",
       "deleteLocalBatchFailed": "{{count}} local skills failed to delete"
     }
+  },
+  "skillEditor": {
+    "edit": "Edit",
+    "saving": "Saving…",
+    "saved": "Saved {{filename}}",
+    "unsaved": "Unsaved",
+    "discardTitle": "Discard changes?",
+    "discardMessage": "This skill document has unsaved edits. Closing the editor throws them away.",
+    "discardConfirm": "Discard",
+    "conflictMessage": "This file changed on disk since you opened it — another device, a sync, or an agent rewrote it. Reload to see the new version, or overwrite it with your edits.",
+    "conflictReload": "Reload from disk",
+    "conflictOverwrite": "Overwrite anyway"
   }
 }

@@ -1014,5 +1014,17 @@
       "deletedLocalBatch": "已刪除 {{count}} 個本機 Skill",
       "deleteLocalBatchFailed": "{{count}} 個本機 Skill 刪除失敗"
     }
+  },
+  "skillEditor": {
+    "edit": "編輯",
+    "saving": "儲存中…",
+    "saved": "已儲存 {{filename}}",
+    "unsaved": "未儲存",
+    "discardTitle": "放棄變更？",
+    "discardMessage": "此技能文件有未儲存的變更，關閉編輯器會捨棄這些變更。",
+    "discardConfirm": "放棄",
+    "conflictMessage": "自開啟以來，磁碟上的這個檔案已被改動 —— 可能是其他裝置、同步或某個 Agent 重寫了它。可以重新載入查看新版本，或用你的變更覆寫它。",
+    "conflictReload": "重新載入",
+    "conflictOverwrite": "仍然覆寫"
   }
 }

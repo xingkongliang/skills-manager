@@ -64,6 +64,13 @@ export interface SkillDocument {
   filename: string;
   content: string;
   central_path: string;
+  /** Sent back on save to prove the edit started from this text. */
+  fingerprint: string;
+}
+
+export interface SaveSkillDocumentResult {
+  document: SkillDocument;
+  skill: ManagedSkill;
 }
 
 export interface SourceSkillDocument {
@@ -181,6 +188,8 @@ export interface ProjectSkillDocument {
   skill_name: string;
   filename: string;
   content: string;
+  /** Sent back on save to prove the edit started from this text. */
+  fingerprint: string;
 }
 
 // ── Tools ──
@@ -244,6 +253,25 @@ export const getSkillsForPreset = (presetId: string) =>
 
 export const getSkillDocument = (skillId: string) =>
   invoke<SkillDocument>("get_skill_document", { skillId });
+
+/**
+ * Write an edited document back to the central library.
+ *
+ * `expectedFingerprint` is the one that came with the document; pass `null`
+ * only to deliberately overwrite a file that changed underneath the editor.
+ */
+export const saveSkillDocument = (
+  skillId: string,
+  filename: string,
+  content: string,
+  expectedFingerprint: string | null
+) =>
+  invoke<SaveSkillDocumentResult>("save_skill_document", {
+    skillId,
+    filename,
+    content,
+    expectedFingerprint,
+  });
 
 export const getSourceSkillDocument = (skillId: string) =>
   invoke<SourceSkillDocument>("get_source_skill_document", { skillId });
@@ -801,6 +829,23 @@ export const getProjectSkills = (projectId: string) =>
 export const getProjectSkillDocument = (projectId: string, skillRelativePath: string, agent: string) =>
   invoke<ProjectSkillDocument>("get_project_skill_document", { projectId, skillRelativePath, agent });
 
+export const saveProjectSkillDocument = (
+  projectId: string,
+  skillRelativePath: string,
+  agent: string,
+  filename: string,
+  content: string,
+  expectedFingerprint: string | null
+) =>
+  invoke<ProjectSkillDocument>("save_project_skill_document", {
+    projectId,
+    skillRelativePath,
+    agent,
+    filename,
+    content,
+    expectedFingerprint,
+  });
+
 export const importProjectSkillToCenter = (projectId: string, skillRelativePath: string, agent: string) =>
   invoke<void>("import_project_skill_to_center", { projectId, skillRelativePath, agent });
 
@@ -829,6 +874,21 @@ export const getGlobalLocalSkills = (agent: string) =>
 
 export const getGlobalLocalSkillDocument = (agent: string, skillRelativePath: string) =>
   invoke<ProjectSkillDocument>("get_global_local_skill_document", { agent, skillRelativePath });
+
+export const saveGlobalLocalSkillDocument = (
+  agent: string,
+  skillRelativePath: string,
+  filename: string,
+  content: string,
+  expectedFingerprint: string | null
+) =>
+  invoke<ProjectSkillDocument>("save_global_local_skill_document", {
+    agent,
+    skillRelativePath,
+    filename,
+    content,
+    expectedFingerprint,
+  });
 
 export const importGlobalLocalSkillToCenter = (agent: string, skillRelativePath: string) =>
   invoke<void>("import_global_local_skill_to_center", { agent, skillRelativePath });

@@ -27,6 +27,8 @@ import { PresetBar } from "../components/PresetBar";
 import { AgentIcon } from "../components/AgentIcon";
 import { DetailSheet } from "../components/DetailSheet";
 import { SkillMarkdown } from "../components/SkillMarkdown";
+import { SkillDocumentEditor } from "../components/SkillDocumentEditor";
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectSkill } from "../lib/tauri";
@@ -254,7 +256,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const [localSkillsLoading, setLocalSkillsLoading] = useState(false);
   const [localActionKey, setLocalActionKey] = useState<string | null>(null);
   const [localDetailSkill, setLocalDetailSkill] = useState<ProjectSkill | null>(null);
-  const [localDocContent, setLocalDocContent] = useState<string | null>(null);
+  const [localDoc, setLocalDoc] = useState<api.ProjectSkillDocument | null>(null);
   const [localCenterDocContent, setLocalCenterDocContent] = useState<string | null>(null);
   const [localDocLoading, setLocalDocLoading] = useState(false);
   const [localCenterDocLoading, setLocalCenterDocLoading] = useState(false);
@@ -667,7 +669,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       localDetailRequestRef.current = requestId;
       setLocalDetailSkill(skill);
       setLocalContentTab("local");
-      setLocalDocContent(null);
+      setLocalDoc(null);
       setLocalCenterDocContent(null);
       setLocalDocLoading(true);
       setLocalCenterDocLoading(!!skill.center_skill_id);
@@ -675,10 +677,10 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       api
         .getGlobalLocalSkillDocument(currentTool.key, skill.relative_path)
         .then((doc) => {
-          if (localDetailRequestRef.current === requestId) setLocalDocContent(doc.content);
+          if (localDetailRequestRef.current === requestId) setLocalDoc(doc);
         })
         .catch(() => {
-          if (localDetailRequestRef.current === requestId) setLocalDocContent(null);
+          if (localDetailRequestRef.current === requestId) setLocalDoc(null);
         })
         .finally(() => {
           if (localDetailRequestRef.current === requestId) setLocalDocLoading(false);
@@ -699,6 +701,44 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       }
     },
     [currentTool]
+  );
+
+  const closeLocalDetail = useCallback(() => setLocalDetailSkill(null), []);
+  const {
+    onDirtyChange: onLocalDocDirtyChange,
+    requestClose: requestLocalDetailClose,
+    dialog: localUnsavedDialog,
+  } = useUnsavedChangesGuard(closeLocalDetail);
+
+  const reloadLocalDocument = useCallback(async () => {
+    if (!currentTool || !localDetailSkill) return null;
+    const fresh = await api.getGlobalLocalSkillDocument(
+      currentTool.key,
+      localDetailSkill.relative_path
+    );
+    setLocalDoc(fresh);
+    return fresh;
+  }, [currentTool, localDetailSkill]);
+
+  const handleSaveLocalDocument = useCallback(
+    async (content: string, expectedFingerprint: string | null) => {
+      if (!currentTool || !localDetailSkill) {
+        throw new Error(t("common.error"));
+      }
+      const saved = await api.saveGlobalLocalSkillDocument(
+        currentTool.key,
+        localDetailSkill.relative_path,
+        localDoc?.filename ?? "SKILL.md",
+        content,
+        expectedFingerprint
+      );
+      setLocalDoc(saved);
+      // The card's sync status is a content comparison against the library —
+      // an edit can flip it, so re-read the list rather than leave it stale.
+      await loadLocalSkills();
+      return saved;
+    },
+    [currentTool, loadLocalSkills, localDetailSkill, localDoc, t]
   );
 
   const existsInGlobal = useCallback(
@@ -1188,8 +1228,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             </div>
           ) : null
         }
-        onClose={() => setLocalDetailSkill(null)}
+        onClose={requestLocalDetailClose}
       >
+        {localUnsavedDialog}
         {localDetailSkill?.center_skill_id && (
           <div className="mb-4 flex flex-wrap items-center gap-2">
             {(["local", "diff", "center"] as const).map((tab) => (
@@ -1218,8 +1259,8 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         {localDocLoading ? (
           <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
         ) : localContentTab === "diff" ? (
-          localDocContent && localCenterDocContent ? (
-            <DocumentDiffViewer original={localDocContent} updated={localCenterDocContent} />
+          localDoc && localCenterDocContent ? (
+            <DocumentDiffViewer original={localDoc.content} updated={localCenterDocContent} />
           ) : localCenterDocLoading ? (
             <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
           ) : (
@@ -1233,10 +1274,13 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           ) : (
             <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
           )
-        ) : localDocContent ? (
-          <SkillMarkdown content={localDocContent} />
         ) : (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
+          <SkillDocumentEditor
+            document={localDoc}
+            onSave={handleSaveLocalDocument}
+            onReload={reloadLocalDocument}
+            onDirtyChange={onLocalDocDirtyChange}
+          />
         )}
       </DetailSheet>
 
