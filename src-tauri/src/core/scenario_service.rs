@@ -708,12 +708,18 @@ pub fn sync_active_scenario_to_tool(store: &SkillStore, tool_key: &str) {
 /// real directory that has no `skill_targets` row — that directory is the very
 /// thing the user asked us to take over. Ordinary deployment must never do
 /// that, so the two intents cannot share a code path (#363).
+///
+/// The adopted directory is named by the caller rather than derived from the
+/// skill name: a name-derived target is a flat `<skills_dir>/<name>`, which on
+/// agents that nest skills by category (Hermes) can be a *different*
+/// directory — a category folder that shares the skill's name — and adopting
+/// it would delete it (#436).
 #[derive(Debug, Clone, Copy)]
-pub enum DeployIntent {
+pub enum DeployIntent<'a> {
     /// Ordinary deployment: replace only what our own records vouch for.
     Managed,
-    /// The user explicitly asked us to take over whatever is at this path.
-    AdoptExisting,
+    /// The user explicitly asked us to take over the directory at `target`.
+    AdoptExisting { target: &'a Path },
 }
 
 /// Re-point every `source_ref` that names `target` at the referring skill's own
@@ -808,13 +814,18 @@ pub fn sync_single_skill_to_tool(
         .ok_or_else(|| AppError::not_found("Skill not found"))?;
 
     let source = PathBuf::from(&skill.central_path);
-    let target = adapter
-        .skills_dir()
-        .join(sync_engine::target_dir_name(&source, &skill.name));
+    let target = match intent {
+        DeployIntent::Managed => adapter
+            .skills_dir()
+            .join(sync_engine::target_dir_name(&source, &skill.name)),
+        // The caller names the directory it was asked to adopt; re-deriving it
+        // from the skill name would ignore the agent's category layout (#436).
+        DeployIntent::AdoptExisting { target } => target.to_path_buf(),
+    };
     let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
     let mode = sync_engine::sync_mode_for_tool(tool, configured_mode.as_deref());
     let recorded_mode = match intent {
-        DeployIntent::AdoptExisting => None,
+        DeployIntent::AdoptExisting { .. } => None,
         DeployIntent::Managed => store
             .get_targets_for_skill(skill_id)
             .unwrap_or_default()
@@ -825,10 +836,10 @@ pub fn sync_single_skill_to_tool(
             .map(|existing| existing.mode),
     };
     let policy = match intent {
-        DeployIntent::AdoptExisting => sync_engine::ReplacePolicy::UserConfirmed,
+        DeployIntent::AdoptExisting { .. } => sync_engine::ReplacePolicy::UserConfirmed,
         DeployIntent::Managed => replace_policy(recorded_mode.as_deref()),
     };
-    if matches!(intent, DeployIntent::AdoptExisting) {
+    if matches!(intent, DeployIntent::AdoptExisting { .. }) {
         // The directory at `target` may still be the import source of the very
         // skill being deployed (or of a sibling record): re-point those at
         // central BEFORE the replacement, so a failure partway through the

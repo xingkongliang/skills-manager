@@ -278,12 +278,16 @@ fn import_agent_local_skill_to_center(
         // sync_engine owns the on-disk artifact, so later unsync/scenario-sync
         // touch only that managed artifact, never the user's source.
         // AdoptExisting: the directory being replaced is the very one the user
-        // asked us to take over, and it has no target row yet (#363).
+        // asked us to take over, and it has no target row yet (#363) — named
+        // explicitly, because on category-nested agents (Hermes) the skill's
+        // own directory is not `<skills_dir>/<name>` (#436).
         scenario_service::sync_single_skill_to_tool(
             store,
             &existing.id,
             agent,
-            scenario_service::DeployIntent::AdoptExisting,
+            scenario_service::DeployIntent::AdoptExisting {
+                target: &source_path,
+            },
         )?;
         return Ok(());
     }
@@ -325,7 +329,9 @@ fn import_agent_local_skill_to_center(
         store,
         &skill_record.id,
         agent,
-        scenario_service::DeployIntent::AdoptExisting,
+        scenario_service::DeployIntent::AdoptExisting {
+            target: &source_path,
+        },
     ) {
         let _ = store.delete_skill(&skill_record.id);
         return Err(err);
@@ -540,12 +546,14 @@ pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
 
             // AdoptExisting: this repairs a target row that was never written,
             // so no record vouches for the directory. The hash equality check
-            // above is what makes overwriting it safe.
+            // above is what makes overwriting it safe. The adopted directory is
+            // the one the scan found, which for category-nested agents is not
+            // `<skills_dir>/<name>` (#436).
             match scenario_service::sync_single_skill_to_tool(
                 store,
                 &matched.id,
                 &adapter.key,
-                scenario_service::DeployIntent::AdoptExisting,
+                scenario_service::DeployIntent::AdoptExisting { target: local_path },
             ) {
                 Ok(()) => {
                     repaired += 1;
@@ -770,6 +778,74 @@ mod tests {
         assert!(meta.file_type().is_symlink());
         assert_eq!(
             std::fs::canonicalize(&skill_dir).unwrap(),
+            std::fs::canonicalize(&skills[0].central_path).unwrap()
+        );
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    /// #436: on an agent that nests skills by category (Hermes), the selected
+    /// skill's directory is not `<skills_dir>/<name>`. The import must adopt the
+    /// directory the user picked — never the flat name, which can be a category
+    /// folder holding other skills.
+    #[test]
+    fn importing_nested_skill_adopts_its_own_directory_not_a_name_collision() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(temp.path().join("center")));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        let skills_root = temp.path().join("hermes-skills");
+        // The skill the user selects, nested under its category.
+        let nested_skill = skills_root.join("software-development").join("github");
+        std::fs::create_dir_all(&nested_skill).unwrap();
+        std::fs::write(
+            nested_skill.join("SKILL.md"),
+            "---\nname: github\ndescription: Nested test skill\n---\n",
+        )
+        .unwrap();
+        // A category directory that shares the skill's name: the flat target
+        // `<skills_root>/github` resolves to it and adoption would take these
+        // skills with it.
+        let category_dir = skills_root.join("github");
+        let category_skill = category_dir.join("github-auth");
+        std::fs::create_dir_all(&category_skill).unwrap();
+        std::fs::write(
+            category_skill.join("SKILL.md"),
+            "---\nname: github-auth\ndescription: Unrelated sibling\n---\n",
+        )
+        .unwrap();
+
+        // Hermes is the built-in recursive-scan adapter; point it at this tree.
+        store
+            .set_setting(
+                "custom_tool_paths",
+                &serde_json::json!({ "hermes": skills_root.to_string_lossy() }).to_string(),
+            )
+            .unwrap();
+
+        import_agent_local_skill_to_center(&store, "hermes", "software-development/github")
+            .unwrap();
+
+        // The managed target is the selected directory, not the name collision.
+        let skills = store.get_all_skills().unwrap();
+        assert_eq!(skills.len(), 1);
+        let targets = store.get_all_targets().unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].target_path, nested_skill.to_string_lossy());
+
+        // The category directory and the skill inside it are untouched.
+        let category_meta = std::fs::symlink_metadata(&category_dir).unwrap();
+        assert!(!category_meta.file_type().is_symlink());
+        assert!(category_skill.join("SKILL.md").exists());
+
+        // The selected directory is now a managed deployment of the center copy.
+        let nested_meta = std::fs::symlink_metadata(&nested_skill).unwrap();
+        assert!(nested_meta.file_type().is_symlink());
+        assert_eq!(
+            std::fs::canonicalize(&nested_skill).unwrap(),
             std::fs::canonicalize(&skills[0].central_path).unwrap()
         );
 
