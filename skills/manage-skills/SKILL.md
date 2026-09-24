@@ -297,6 +297,69 @@ The no-`--agent` defaults intentionally differ: deploy targets all installed, en
 
 Preset create/update/delete and add-skill/remove-skill are organization-only CLI operations. They never deploy or undeploy agent files implicitly.
 
+## Projects
+
+Link an existing project directory to Skills Manager so it appears in the desktop app's Projects area:
+
+```bash
+"$SM" projects add "/path/to/project"
+"$SM" --json projects list
+```
+
+`projects add` requires an existing directory. It stores the canonical path in the app's shared database and creates `.claude/skills` and `.claude/skills-disabled` under that directory when needed. Project commands always use the app database; `--skills-root` does not redirect them. If the path is already linked, add reports the existing project instead of creating a duplicate; use `projects list` to inspect it.
+
+Linking a project only registers it with Skills Manager. It does not install, deploy, or attach any skill. Use the project commands below to manage project-local copies.
+
+### Project skill and preset copies
+
+Add central-library skills to a linked project with an explicit target agent:
+
+```bash
+"$SM" projects add-skill "/path/to/project" react-best-practices --agent codex
+"$SM" projects add-preset "/path/to/project" "Web Dev" --agent codex --agent claude_code
+```
+
+`--agent` is mandatory for every add. Each target agent must be enabled and
+installed for that project. Adds copy the current central skill content into the
+project and never overwrite an existing project copy; the report marks it
+`skipped` instead. Adding a preset copies its current member skills only. It
+does not create a project-to-preset relationship, so later preset edits do not
+change the project automatically.
+
+Remove only project-local copies. `remove-skill` takes a path relative to the
+selected agent's skills root; it does not resolve a central skill name or ID.
+For example, `react-best-practices` below means that exact project directory
+under the agent's skills root. Use the `relative_path` shown by a preset preview
+when removing a preset member individually. Preview first, inspect the report,
+then repeat with `--yes` to apply the same request:
+
+```bash
+"$SM" projects remove-skill "/path/to/project" react-best-practices --agent codex --dry-run
+"$SM" projects remove-skill "/path/to/project" react-best-practices --agent codex --yes
+
+"$SM" projects remove-preset "/path/to/project" "Web Dev" --agent codex --dry-run
+"$SM" projects remove-preset "/path/to/project" "Web Dev" --agent codex --yes
+```
+
+Removal leaves central-library copies untouched. A known agent can still be
+cleaned up when it is now disabled or uninstalled. Removing a preset removes
+the project copies of its current member skills even when another preset also
+contains those skills; there is no shared project-preset relationship to retain.
+
+For batch commands, add `--json` when inspecting programmatically. Read the
+`added`, `removed`, `skipped`, and `failed` arrays (and `would_remove` for a
+dry run). On a nonzero `PROJECT_BATCH_PARTIAL_FAILURE`, those arrays remain in
+`details.report`, including completed operations; inspect that report before
+deciding whether any retry is appropriate.
+
+To unlink a project, pass its ID, exact name, or path:
+
+```bash
+"$SM" projects remove "/path/to/project"
+```
+
+Only run `projects remove` when the user asked to unlink it. Removal deletes the project record from the app database and keeps the project directory, skill folders, and files. If multiple projects share a name, use the ID or path instead.
+
 ## Health check
 
 When sync misbehaves or a command errors in a confusing way:
@@ -329,6 +392,13 @@ Use `agents disable <agent>` when the user wants the whole Agent integration tur
 ```
 
 The `preset_ids`, `presets`, `deployed_to`, `tags`, and `source_type` fields are usually the most informative. The legacy `enabled` field is not deployment state.
+
+### "Link this project to Skills Manager"
+
+1. Use the project path the user provided and run `projects add <path>`.
+2. If it reports that the project is already linked, run `projects list` and report the existing entry.
+3. Otherwise, confirm the new entry with `projects list` or the successful add result.
+4. Explain that the link makes the project available in the app's Projects area; the user can manage/attach project skills there. The link itself does not deploy skills.
 
 ### "Pull in the skills already installed in my agent directories"
 

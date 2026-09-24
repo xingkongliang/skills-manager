@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -9,7 +9,7 @@ use tauri::State;
 
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
 use crate::core::timing::should_log_first_or_slow;
-use crate::core::{error::AppError, installer, project_scanner, sync_engine, tool_adapters};
+use crate::core::{error::AppError, installer, project_scanner, sync_engine};
 
 #[derive(Serialize, Default)]
 pub struct SyncHealthDto {
@@ -52,67 +52,18 @@ pub struct ProjectAgentTargetDto {
 }
 
 fn agent_skill_configs(store: &SkillStore) -> Vec<project_scanner::AgentSkillConfig> {
-    let mut grouped: Vec<(String, Vec<(String, String)>)> = Vec::new();
-    for adapter in tool_adapters::all_tool_adapters(store) {
-        let project_dir = adapter.project_relative_skills_dir().to_string();
-        if project_dir.is_empty() {
-            continue;
-        }
-        if let Some((_, agents)) = grouped.iter_mut().find(|(dir, _)| *dir == project_dir) {
-            agents.push((adapter.key, adapter.display_name));
-        } else {
-            grouped.push((project_dir, vec![(adapter.key, adapter.display_name)]));
-        }
-    }
-
-    grouped
-        .into_iter()
-        .filter_map(|(relative_skills_dir, agents)| {
-            let (key, first_display_name) = agents.first()?.clone();
-            let display_name = if agents.len() == 1 {
-                first_display_name
-            } else {
-                agents
-                    .into_iter()
-                    .map(|(_, display_name)| display_name)
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            };
-            Some(project_scanner::AgentSkillConfig {
-                key,
-                display_name,
-                relative_skills_dir,
-            })
-        })
-        .collect()
+    crate::core::project_skill_service::project_agent_configs(store)
 }
 
 fn linked_workspace_agent_key(rec: &ProjectRecord) -> String {
-    rec.linked_agent_key
-        .clone()
-        .unwrap_or_else(|| slugify_skill_dir_name(&rec.name))
-}
-
-fn linked_workspace_agent_name(rec: &ProjectRecord) -> String {
-    rec.linked_agent_name
-        .clone()
-        .unwrap_or_else(|| rec.name.clone())
+    crate::core::project_skill_service::linked_workspace_agent(rec).0
 }
 
 fn read_workspace_skills(
     rec: &ProjectRecord,
     configs: &[project_scanner::AgentSkillConfig],
 ) -> Vec<project_scanner::ProjectSkillInfo> {
-    if rec.workspace_type == "linked" {
-        return project_scanner::read_linked_workspace_skills(
-            Path::new(&rec.path),
-            rec.disabled_path.as_deref().map(Path::new),
-            &linked_workspace_agent_key(rec),
-            &linked_workspace_agent_name(rec),
-            true,
-        );
-    }
-    project_scanner::read_project_skills(Path::new(&rec.path), configs)
+    crate::core::project_skill_service::read_workspace_skills(rec, configs)
 }
 
 /// Resolve the enabled and disabled skills root directories for a given agent in a workspace.
@@ -121,59 +72,22 @@ fn resolve_agent_skills_roots(
     rec: &ProjectRecord,
     agent: &str,
 ) -> Option<(PathBuf, Option<PathBuf>)> {
-    if rec.workspace_type == "linked" {
-        if linked_workspace_agent_key(rec) != agent {
-            return None;
-        }
-        return Some((
-            PathBuf::from(&rec.path),
-            rec.disabled_path.as_ref().map(PathBuf::from),
-        ));
-    }
-
-    let adapter = tool_adapters::all_tool_adapters(store)
-        .into_iter()
-        .find(|adapter| adapter.key == agent)?;
-    let project_dir = adapter.project_relative_skills_dir();
-    let skills_root = Path::new(&rec.path).join(project_dir);
-    let disabled_root = Path::new(&rec.path).join(format!("{}-disabled", project_dir));
-    Some((skills_root, Some(disabled_root)))
+    crate::core::project_skill_service::resolve_agent_skills_roots(store, rec, agent)
 }
 
 fn project_agent_targets_for_record(
     store: &SkillStore,
     rec: &ProjectRecord,
 ) -> Vec<ProjectAgentTargetDto> {
-    if rec.workspace_type == "linked" {
-        return vec![ProjectAgentTargetDto {
-            key: linked_workspace_agent_key(rec),
-            display_name: linked_workspace_agent_name(rec),
-            enabled: true,
-            installed: true,
-            is_custom: false,
-        }];
-    }
-
-    let disabled_tools: std::collections::HashSet<String> = store
-        .get_setting("disabled_tools")
-        .ok()
-        .flatten()
-        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+    crate::core::project_skill_service::list_project_agent_targets(store, &rec.id)
         .unwrap_or_default()
         .into_iter()
-        .collect();
-
-    agent_skill_configs(store)
-        .into_iter()
-        .map(|config| {
-            let adapter = tool_adapters::find_adapter_with_store(store, &config.key);
-            ProjectAgentTargetDto {
-                enabled: !disabled_tools.contains(&config.key),
-                installed: adapter.as_ref().map(|a| a.is_installed()).unwrap_or(false),
-                is_custom: adapter.as_ref().map(|a| a.is_custom).unwrap_or(false),
-                key: config.key,
-                display_name: config.display_name,
-            }
+        .map(|target| ProjectAgentTargetDto {
+            key: target.key,
+            display_name: target.display_name,
+            enabled: target.enabled,
+            installed: target.installed,
+            is_custom: target.is_custom,
         })
         .collect()
 }
@@ -241,43 +155,11 @@ fn sync_status_priority(status: &str) -> u8 {
 }
 
 pub(crate) fn ensure_safe_skill_relative_path(skill_relative_path: &str) -> Result<(), AppError> {
-    if skill_relative_path.trim().is_empty() {
-        return Err(AppError::invalid_input("Invalid skill directory path"));
-    }
-    let mut saw_component = false;
-    for component in Path::new(skill_relative_path).components() {
-        if !matches!(component, Component::Normal(_)) {
-            return Err(AppError::invalid_input("Invalid skill directory path"));
-        }
-        saw_component = true;
-    }
-    if !saw_component {
-        return Err(AppError::invalid_input("Invalid skill directory path"));
-    }
-    Ok(())
+    crate::core::project_skill_service::ensure_safe_skill_relative_path(skill_relative_path)
 }
 
 pub(crate) fn ensure_dir_within_root(path: &Path, root: &Path) -> Result<(), AppError> {
-    // First check that the lexical path (before symlink resolution) is under root.
-    // This ensures the link itself lives where expected.
-    let abs_path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let abs_root = if root.is_absolute() {
-        root.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(root)
-    };
-    if !abs_path.starts_with(&abs_root) {
-        return Err(AppError::invalid_input("Invalid skill directory path"));
-    }
-    Ok(())
-}
-
-fn remove_workspace_skill_target(path: &Path) -> Result<(), AppError> {
-    sync_engine::remove_target(path).map_err(AppError::io)
+    crate::core::project_skill_service::ensure_dir_within_root(path, root)
 }
 
 // Walks upward from `start`, removing each empty directory until reaching
@@ -413,24 +295,7 @@ fn ensure_distinct_linked_workspace_roots(
 }
 
 pub(crate) fn slugify_skill_dir_name(name: &str) -> String {
-    let mut out = String::new();
-    let mut prev_dash = false;
-    for ch in name.chars().flat_map(|c| c.to_lowercase()) {
-        let valid = ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.';
-        if valid {
-            out.push(ch);
-            prev_dash = false;
-        } else if !prev_dash {
-            out.push('-');
-            prev_dash = true;
-        }
-    }
-    let trimmed = out.trim_matches(|c| c == '-' || c == '_' || c == '.');
-    if trimmed.is_empty() {
-        "skill".to_string()
-    } else {
-        trimmed.to_string()
-    }
+    crate::core::project_skill_service::slugify_skill_dir_name(name)
 }
 
 pub(crate) fn source_ref_matches_skill_path(
@@ -438,107 +303,20 @@ pub(crate) fn source_ref_matches_skill_path(
     skill_canonical: Option<&PathBuf>,
     managed: &SkillRecord,
 ) -> bool {
-    let Some(source_ref) = managed.source_ref.as_deref() else {
-        return false;
-    };
-    if source_ref == skill_path {
-        return true;
-    }
-    let Some(skill_canonical) = skill_canonical else {
-        return false;
-    };
-    let Ok(source_canonical) = std::fs::canonicalize(source_ref) else {
-        return false;
-    };
-    source_canonical == *skill_canonical
+    crate::core::project_skill_service::source_ref_matches_skill_path(
+        skill_path,
+        skill_canonical.map(|path| path.as_path()),
+        managed,
+    )
 }
 
 pub(crate) fn find_best_center_match<'a>(
     skill: &project_scanner::ProjectSkillInfo,
     all_managed: &'a [SkillRecord],
 ) -> Option<&'a SkillRecord> {
-    let skill_hash = skill.content_hash.as_deref();
-    let canonical_skill_path = std::fs::canonicalize(&skill.path).ok();
-
-    // source_ref is the strongest direct link there is.
-    if let Some(managed) = all_managed.iter().find(|managed| {
-        source_ref_matches_skill_path(&skill.path, canonical_skill_path.as_ref(), managed)
-    }) {
-        return Some(managed);
-    }
-
-    // A content hash that names exactly one library skill outranks any
-    // directory or name evidence: it says the two directories hold the same
-    // bytes, while a directory name only says they were once called the same
-    // thing. An export written under a slugified name can land on a directory
-    // that now reads as a *different* skill (a library holding both
-    // "Code Review" and "code-review" exports the first as `code-review`),
-    // and this match also decides where an import writes back — binding the
-    // wrong row there overwrites the other skill.
-    //
-    // Only a unique hash qualifies. Several skills sharing one hash is the
-    // arbitrary-pick this fix exists to remove, and those fall through to the
-    // directory and name layers below.
-    if let Some(hash) = skill_hash {
-        let mut by_hash = all_managed
-            .iter()
-            .filter(|managed| managed.content_hash.as_deref() == Some(hash));
-        if let Some(first) = by_hash.next() {
-            if by_hash.next().is_none() {
-                return Some(first);
-            }
-        }
-    }
-
-    // The central directory name is steadier than the frontmatter name:
-    // several skills shipped from one repo can share the latter.
-    let by_central_dir: Vec<&SkillRecord> = all_managed
-        .iter()
-        .filter(|managed| {
-            Path::new(&managed.central_path)
-                .file_name()
-                .map(|name| name.to_string_lossy().eq_ignore_ascii_case(&skill.dir_name))
-                .unwrap_or(false)
-        })
-        .collect();
-    if let Some(managed) = unique_center_match(&by_central_dir, skill_hash) {
-        return Some(managed);
-    }
-
-    // Covers the ordinary skill whose name and directory agree.
-    let by_name: Vec<&SkillRecord> = all_managed
-        .iter()
-        .filter(|managed| {
-            slugify_skill_dir_name(&managed.name).eq_ignore_ascii_case(&skill.dir_name)
-        })
-        .collect();
-    if let Some(managed) = unique_center_match(&by_name, skill_hash) {
-        return Some(managed);
-    }
-
-    None
+    crate::core::project_skill_service::find_best_center_match(skill, all_managed)
 }
 
-/// Pick the one skill among candidates sharing an identity signal,
-/// disambiguating by content hash when the signal alone leaves several.
-fn unique_center_match<'a>(
-    candidates: &[&'a SkillRecord],
-    skill_hash: Option<&str>,
-) -> Option<&'a SkillRecord> {
-    match candidates.len() {
-        0 => None,
-        1 => Some(candidates[0]),
-        _ => {
-            let hash = skill_hash?;
-            let mut filtered = candidates
-                .iter()
-                .copied()
-                .filter(|managed| managed.content_hash.as_deref() == Some(hash));
-            let first = filtered.next()?;
-            filtered.next().is_none().then_some(first)
-        }
-    }
-}
 
 pub(crate) fn classify_sync_status(
     skill: &project_scanner::ProjectSkillInfo,
@@ -623,38 +401,7 @@ pub async fn add_project(
 ) -> Result<ProjectDto, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let project_path = Path::new(&path);
-        if !project_path.is_dir() {
-            return Err(AppError::invalid_input("Directory does not exist"));
-        }
-        let claude_dir = project_path.join(".claude");
-        let skills_dir = claude_dir.join("skills");
-        let disabled_dir = claude_dir.join("skills-disabled");
-
-        // Support initializing an empty project directory as a managed project.
-        std::fs::create_dir_all(&skills_dir)?;
-        std::fs::create_dir_all(&disabled_dir)?;
-
-        let name = project_path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let now = chrono::Utc::now().timestamp_millis();
-        let record = ProjectRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            name,
-            path: path.clone(),
-            workspace_type: "project".to_string(),
-            linked_agent_key: None,
-            linked_agent_name: None,
-            disabled_path: None,
-            sort_order: 0,
-            created_at: now,
-            updated_at: now,
-        };
-
-        store.insert_project(&record).map_err(AppError::db)?;
+        let record = crate::core::project_service::add_project(&store, Path::new(&path))?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
         let configs = agent_skill_configs(&store);
         Ok(project_to_dto(&record, &all_managed, &configs))
@@ -1094,7 +841,6 @@ pub async fn export_skill_to_project(
             }
         }
 
-        let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
         // Two agents can resolve to the same project skills root, in which case
         // the second pass would find the directory the first just wrote and
         // refuse it. The artifact is already correct, so skip instead.
@@ -1106,18 +852,20 @@ pub async fn export_skill_to_project(
             if !written.insert(target_dir.clone()) {
                 continue;
             }
-            std::fs::create_dir_all(&skills_root)?;
-            let mode = sync_engine::sync_mode_for_tool(agent_key, configured_mode.as_deref());
-            // NoClobber: the loop above already refused every pre-existing
-            // target, so nothing here should need replacing. Belt and braces —
-            // `exists()` misses dangling links and is racy against this write.
-            sync_engine::sync_skill(
-                &source,
-                &target_dir,
-                mode,
-                sync_engine::ReplacePolicy::NoClobber,
-            )
-            .map_err(AppError::io)?;
+            match crate::core::project_skill_service::add_skill_to_project(
+                &store,
+                &project_id,
+                &skill_id,
+                agent_key,
+            )? {
+                crate::core::project_skill_service::AddProjectSkillOutcome::Added(_) => {}
+                crate::core::project_skill_service::AddProjectSkillOutcome::AlreadyPresent(_) => {
+                    return Err(AppError::invalid_input(format!(
+                        "Skill \"{}\" already exists in this workspace for agent {}",
+                        skill.name, agent_key
+                    )));
+                }
+            }
         }
 
         Ok(())
@@ -1232,34 +980,12 @@ pub async fn delete_project_skill(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
-
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
-            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
-        let skills_dir = skills_root.join(&skill_relative_path);
-        let disabled_dir = disabled_root
-            .as_ref()
-            .map(|root| root.join(&skill_relative_path));
-
-        let (target, target_root) = if skills_dir.is_dir() {
-            (skills_dir, skills_root)
-        } else if let Some(disabled_dir) = disabled_dir.filter(|path| path.is_dir()) {
-            (
-                disabled_dir,
-                disabled_root.expect("present when disabled_dir exists"),
-            )
-        } else {
-            return Err(AppError::not_found("Skill directory not found"));
-        };
-
-        ensure_dir_within_root(&target, &target_root)?;
-        remove_workspace_skill_target(&target)?;
-        Ok(())
+        crate::core::project_skill_service::remove_skill_from_project(
+            &store,
+            &project_id,
+            &skill_relative_path,
+            &agent,
+        )
     })
     .await?
 }
@@ -1268,8 +994,9 @@ pub async fn delete_project_skill(
 mod tests {
     use super::{
         classify_sync_status, ensure_distinct_linked_workspace_roots, find_best_center_match,
-        project_to_dto, remove_workspace_skill_target, set_project_skill_enabled_state,
+        project_to_dto, set_project_skill_enabled_state,
     };
+    use crate::core::project_skill_service::remove_workspace_skill_target;
     use crate::core::content_hash;
     use crate::core::error::ErrorKind;
     use crate::core::project_scanner::{AgentSkillConfig, ProjectSkillInfo};

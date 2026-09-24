@@ -1,13 +1,20 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use app_lib::commands::{presets as preset_cmd, skills as cmd, tools as tool_cmd};
 use app_lib::core::{
-    app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
-    installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
-    skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
+    app_state,
+    audit_log::AuditDraft,
+    central_repo,
+    error::{AppError, ErrorKind},
+    git_backup, git_fetcher, installer, merge,
+    repo_lock::RepoLock,
+    scenario_service, skill_metadata,
+    skill_store::SkillStore,
+    skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
 };
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -29,10 +36,80 @@ enum Commands {
     Repo(RepoArgs),
     #[command(name = "agents", visible_alias = "tools")]
     Tools(ToolsArgs),
+    Projects(ProjectsArgs),
     Skills(SkillsArgs),
     #[command(alias = "scenarios")]
     Presets(PresetArgs),
     Git(GitArgs),
+}
+
+#[derive(Args, Debug)]
+struct ProjectsArgs {
+    #[command(subcommand)]
+    command: ProjectsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum ProjectsCommand {
+    /// Link an existing project directory to the desktop app.
+    Add { path: PathBuf },
+    /// List linked projects in the app database.
+    List,
+    /// Remove a project link only; project files are kept.
+    Remove {
+        /// Project ID, exact name, or path.
+        project_ref: String,
+    },
+    /// Copy one or more central skills into the project for selected agents.
+    AddSkill {
+        project_ref: String,
+        skill_ref: String,
+        #[arg(long = "agent", value_name = "AGENT", required = true)]
+        agents: Vec<String>,
+    },
+    /// Copy every skill in a preset into the project for selected agents.
+    AddPreset {
+        project_ref: String,
+        preset_ref: String,
+        #[arg(long = "agent", value_name = "AGENT", required = true)]
+        agents: Vec<String>,
+    },
+    /// Remove one project-local skill from selected agents.
+    RemoveSkill(RemoveProjectSkillArgs),
+    /// Remove project-local copies of every skill in a preset.
+    RemovePreset(RemoveProjectPresetArgs),
+}
+
+#[derive(Args, Debug)]
+#[group(required = true, multiple = false)]
+struct ProjectRemoveSafetyArgs {
+    /// Preview exact project paths without deleting files.
+    #[arg(long)]
+    dry_run: bool,
+    /// Confirm deleting the selected project copies.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoveProjectSkillArgs {
+    project_ref: String,
+    /// Path relative to the selected agent's skills root.
+    skill_relative_path: String,
+    #[arg(long = "agent", value_name = "AGENT", required = true)]
+    agents: Vec<String>,
+    #[command(flatten)]
+    safety: ProjectRemoveSafetyArgs,
+}
+
+#[derive(Args, Debug)]
+struct RemoveProjectPresetArgs {
+    project_ref: String,
+    preset_ref: String,
+    #[arg(long = "agent", value_name = "AGENT", required = true)]
+    agents: Vec<String>,
+    #[command(flatten)]
+    safety: ProjectRemoveSafetyArgs,
 }
 
 #[derive(Args, Debug)]
@@ -687,7 +764,8 @@ fn main() {
 }
 
 fn run(cli: Cli) -> anyhow::Result<()> {
-    if let Some(skills_root) = &cli.skills_root {
+    let is_projects_command = matches!(&cli.command, Commands::Projects(_));
+    if let Some(skills_root) = cli.skills_root.as_ref().filter(|_| !is_projects_command) {
         let base = central_repo::external_base_dir(skills_root);
         central_repo::set_runtime_base_dir_override(Some(base));
         central_repo::set_runtime_skills_dir_override(Some(skills_root.clone()));
@@ -698,6 +776,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Commands::Repo(args) => run_repo(args, &store, cli.json),
         Commands::Tools(args) => run_tools(args, &store, cli.json),
+        Commands::Projects(args) => run_projects(args, &store, cli.json),
         Commands::Skills(args) => run_skills(args, &store, cli.json),
         Commands::Presets(args) => run_presets(args, &store, cli.json),
         Commands::Git(args) => run_git(args, &store, cli.skills_root.is_some(), cli.json),
@@ -721,6 +800,797 @@ fn run_repo(args: RepoArgs, store: &SkillStore, json: bool) -> anyhow::Result<()
         }
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+struct ProjectListEntry {
+    id: String,
+    name: String,
+    path: String,
+    workspace_type: String,
+    skill_count: usize,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProjectActionItem {
+    project_id: String,
+    project_name: String,
+    action: String,
+    skill_id: Option<String>,
+    skill_name: String,
+    agent: String,
+    relative_path: String,
+    path: String,
+    outcome: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProjectActionFailure {
+    project_id: String,
+    project_name: String,
+    action: String,
+    skill_id: Option<String>,
+    skill_name: String,
+    agent: String,
+    relative_path: String,
+    path: Option<String>,
+    message: String,
+    outcome: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProjectBatchReport {
+    ok: bool,
+    project_id: String,
+    project_name: String,
+    action: String,
+    added: Vec<ProjectActionItem>,
+    removed: Vec<ProjectActionItem>,
+    skipped: Vec<ProjectActionItem>,
+    failed: Vec<ProjectActionFailure>,
+    would_remove: Vec<ProjectActionItem>,
+}
+
+#[derive(Debug)]
+struct ProjectBatchFailure {
+    report: ProjectBatchReport,
+}
+
+impl std::fmt::Display for ProjectBatchFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} project target(s) failed during {}",
+            self.report.failed.len(),
+            self.report.action
+        )
+    }
+}
+
+impl std::error::Error for ProjectBatchFailure {}
+
+impl ProjectBatchReport {
+    fn new(project: &app_lib::core::skill_store::ProjectRecord, action: &str) -> Self {
+        Self {
+            ok: true,
+            project_id: project.id.clone(),
+            project_name: project.name.clone(),
+            action: action.to_string(),
+            added: Vec::new(),
+            removed: Vec::new(),
+            skipped: Vec::new(),
+            failed: Vec::new(),
+            would_remove: Vec::new(),
+        }
+    }
+}
+
+fn project_action_item(
+    report: &ProjectBatchReport,
+    variant: app_lib::core::project_skill_service::ProjectSkillVariant,
+    outcome: &str,
+) -> ProjectActionItem {
+    ProjectActionItem {
+        project_id: report.project_id.clone(),
+        project_name: report.project_name.clone(),
+        action: report.action.clone(),
+        skill_id: variant.skill_id,
+        skill_name: variant.skill_name,
+        agent: variant.agent,
+        relative_path: variant.relative_path,
+        path: variant.absolute_path.to_string_lossy().into_owned(),
+        outcome: outcome.to_string(),
+    }
+}
+
+fn project_action_failure(
+    report: &ProjectBatchReport,
+    skill_id: Option<String>,
+    skill_name: String,
+    agent: String,
+    relative_path: String,
+    path: Option<String>,
+    message: String,
+) -> ProjectActionFailure {
+    ProjectActionFailure {
+        project_id: report.project_id.clone(),
+        project_name: report.project_name.clone(),
+        action: report.action.clone(),
+        skill_id,
+        skill_name,
+        agent,
+        relative_path,
+        path,
+        message,
+        outcome: "failed".to_string(),
+    }
+}
+
+fn project_action_not_found(
+    report: &ProjectBatchReport,
+    skill_relative_path: String,
+    agent: String,
+) -> ProjectActionItem {
+    ProjectActionItem {
+        project_id: report.project_id.clone(),
+        project_name: report.project_name.clone(),
+        action: report.action.clone(),
+        skill_id: None,
+        skill_name: Path::new(&skill_relative_path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| skill_relative_path.clone()),
+        agent,
+        relative_path: skill_relative_path,
+        path: String::new(),
+        outcome: "not_found".to_string(),
+    }
+}
+
+struct ProjectAgentValidationFailure {
+    agent: String,
+    message: String,
+    path: Option<String>,
+}
+
+struct ProjectAgentValidation {
+    valid_agents: Vec<String>,
+    failures: Vec<ProjectAgentValidationFailure>,
+}
+
+fn validate_project_agents(
+    store: &SkillStore,
+    project: &app_lib::core::skill_store::ProjectRecord,
+    agents: &[String],
+    require_available: bool,
+    relative_path: &str,
+) -> anyhow::Result<ProjectAgentValidation> {
+    let targets =
+        app_lib::core::project_skill_service::list_project_agent_targets(store, &project.id)
+            .map_err(map_app_err)?;
+    let mut valid_agents = Vec::new();
+    let mut failures = Vec::new();
+    for agent_key in agents {
+        if valid_agents.contains(agent_key)
+            || failures
+                .iter()
+                .any(|failure: &ProjectAgentValidationFailure| failure.agent == *agent_key)
+        {
+            continue;
+        }
+        let Some(target) = targets.iter().find(|target| target.key == *agent_key) else {
+            failures.push(ProjectAgentValidationFailure {
+                agent: agent_key.clone(),
+                message: format!("unknown project agent: {agent_key}"),
+                path: None,
+            });
+            continue;
+        };
+        let path = Some(
+            target
+                .skills_root
+                .join(relative_path)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        if require_available && !target.enabled {
+            failures.push(ProjectAgentValidationFailure {
+                agent: agent_key.clone(),
+                message: format!("project agent is disabled: {agent_key}"),
+                path,
+            });
+        } else if require_available && !target.installed {
+            failures.push(ProjectAgentValidationFailure {
+                agent: agent_key.clone(),
+                message: format!("project agent is not installed: {agent_key}"),
+                path,
+            });
+        } else {
+            valid_agents.push(agent_key.clone());
+        }
+    }
+    if valid_agents.is_empty() && failures.is_empty() {
+        bail!("at least one --agent must be provided");
+    }
+    Ok(ProjectAgentValidation {
+        valid_agents,
+        failures,
+    })
+}
+
+fn add_validation_failures(
+    report: &mut ProjectBatchReport,
+    failures: Vec<ProjectAgentValidationFailure>,
+    skill_id: Option<String>,
+    skill_name: String,
+    relative_path: String,
+) {
+    for failure in failures {
+        report.failed.push(project_action_failure(
+            report,
+            skill_id.clone(),
+            skill_name.clone(),
+            failure.agent,
+            relative_path.clone(),
+            failure.path,
+            failure.message,
+        ));
+    }
+}
+
+fn finish_project_batch(mut report: ProjectBatchReport, json: bool) -> anyhow::Result<()> {
+    report.ok = report.failed.is_empty();
+    if !report.ok {
+        if !json {
+            print_project_batch(&report);
+        }
+        return Err(anyhow::Error::new(ProjectBatchFailure { report }));
+    }
+    if json {
+        print_json(&report, true);
+    } else {
+        print_project_batch(&report);
+    }
+    Ok(())
+}
+
+fn print_project_batch(report: &ProjectBatchReport) {
+    println!("{}", render_project_batch(report));
+}
+
+fn render_project_batch(report: &ProjectBatchReport) -> String {
+    let mut lines = vec![format!(
+        "{} project '{}' — added {}, removed {}, skipped {}, failed {}, preview {}",
+        report.action,
+        report.project_name,
+        report.added.len(),
+        report.removed.len(),
+        report.skipped.len(),
+        report.failed.len(),
+        report.would_remove.len()
+    )];
+    for item in report
+        .added
+        .iter()
+        .chain(report.removed.iter())
+        .chain(report.skipped.iter())
+        .chain(report.would_remove.iter())
+    {
+        lines.push(format!(
+            "  {} {} [{}] {}",
+            item.outcome, item.skill_name, item.agent, item.path
+        ));
+    }
+    for failure in &report.failed {
+        lines.push(format!(
+            "  FAILED {} [{}] {}: {}",
+            failure.skill_name, failure.agent, failure.relative_path, failure.message
+        ));
+    }
+    lines.join("\n")
+}
+
+fn run_projects(args: ProjectsArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> {
+    match args.command {
+        ProjectsCommand::Add { path } => {
+            let record =
+                app_lib::core::project_service::add_project(store, &path).map_err(map_app_err)?;
+            if json {
+                print_json(&record, true);
+            } else {
+                println!("Linked project '{}' at {}", record.name, record.path);
+            }
+        }
+        ProjectsCommand::List => {
+            let projects = list_project_entries(store).map_err(map_app_err)?;
+            if json {
+                print_json(&projects, true);
+            } else if projects.is_empty() {
+                println!("No projects linked.");
+            } else {
+                for project in projects {
+                    println!(
+                        "{}  {}  [{} skills]  id: {}",
+                        project.name, project.path, project.skill_count, project.id
+                    );
+                }
+            }
+        }
+        ProjectsCommand::Remove { project_ref } => {
+            let projects = store
+                .get_all_projects()
+                .map_err(AppError::db)
+                .map_err(map_app_err)?;
+            let removed = resolve_project_reference(&projects, &project_ref)?;
+            store
+                .delete_project(&removed.id)
+                .map_err(AppError::db)
+                .map_err(map_app_err)?;
+            if json {
+                print_json(&removed, true);
+            } else {
+                println!(
+                    "Unlinked project '{}' at {}. Project files were kept.",
+                    removed.name, removed.path
+                );
+            }
+        }
+        ProjectsCommand::AddSkill {
+            project_ref,
+            skill_ref,
+            agents,
+        } => {
+            let project = resolve_cli_project(store, &project_ref)?;
+            let skill = resolve_skill(store, &skill_ref)?;
+            let relative_path = app_lib::core::sync_engine::target_dir_name(
+                Path::new(&skill.central_path),
+                &skill.name,
+            );
+            let validation =
+                validate_project_agents(store, &project, &agents, true, &relative_path)?;
+            let mut report = ProjectBatchReport::new(&project, "add_skill");
+            add_validation_failures(
+                &mut report,
+                validation.failures,
+                Some(skill.id.clone()),
+                skill.name.clone(),
+                relative_path.clone(),
+            );
+            for agent in validation.valid_agents {
+                match app_lib::core::project_skill_service::add_skill_to_project(
+                    store,
+                    &project.id,
+                    &skill.id,
+                    &agent,
+                ) {
+                    Ok(app_lib::core::project_skill_service::AddProjectSkillOutcome::Added(
+                        variant,
+                    )) => report.added.push(project_action_item(&report, variant, "added")),
+                    Ok(
+                        app_lib::core::project_skill_service::AddProjectSkillOutcome::AlreadyPresent(
+                            variant,
+                        ),
+                    ) => report
+                        .skipped
+                        .push(project_action_item(&report, variant, "already_present")),
+                    Err(error) => report.failed.push(project_action_failure(
+                        &report,
+                        Some(skill.id.clone()),
+                        skill.name.clone(),
+                        agent,
+                        relative_path.clone(),
+                        None,
+                        error.to_string(),
+                    )),
+                }
+            }
+            finish_project_batch(report, json)?;
+        }
+        ProjectsCommand::AddPreset {
+            project_ref,
+            preset_ref,
+            agents,
+        } => {
+            let project = resolve_cli_project(store, &project_ref)?;
+            let preset = resolve_scenario(store, &preset_ref)?;
+            let skills = store.get_skills_for_scenario(&preset.id)?;
+            let validation = validate_project_agents(store, &project, &agents, true, "")?;
+            let existing = app_lib::core::project_skill_service::scan_project_skill_variants(
+                store,
+                &project.id,
+            )
+            .map_err(map_app_err)?;
+            let mut report = ProjectBatchReport::new(&project, "add_preset");
+
+            for skill in skills {
+                let relative_path = app_lib::core::sync_engine::target_dir_name(
+                    Path::new(&skill.central_path),
+                    &skill.name,
+                );
+                add_validation_failures(
+                    &mut report,
+                    validation
+                        .failures
+                        .iter()
+                        .map(|failure| ProjectAgentValidationFailure {
+                            agent: failure.agent.clone(),
+                            message: failure.message.clone(),
+                            path: failure.path.clone(),
+                        })
+                        .collect(),
+                    Some(skill.id.clone()),
+                    skill.name.clone(),
+                    relative_path.clone(),
+                );
+                for agent in &validation.valid_agents {
+                    if let Some(variant) = existing.iter().find(|variant| {
+                        variant.skill_id.as_deref() == Some(skill.id.as_str())
+                            && variant.agent == *agent
+                    }) {
+                        report.skipped.push(project_action_item(
+                            &report,
+                            variant.clone(),
+                            "already_present",
+                        ));
+                        continue;
+                    }
+                    match app_lib::core::project_skill_service::add_skill_to_project(
+                        store,
+                        &project.id,
+                        &skill.id,
+                        agent,
+                    ) {
+                        Ok(app_lib::core::project_skill_service::AddProjectSkillOutcome::Added(
+                            variant,
+                        )) => report.added.push(project_action_item(&report, variant, "added")),
+                        Ok(app_lib::core::project_skill_service::AddProjectSkillOutcome::AlreadyPresent(
+                            variant,
+                        )) => report.skipped.push(project_action_item(
+                            &report,
+                            variant,
+                            "already_present",
+                        )),
+                        Err(error) => report.failed.push(project_action_failure(
+                            &report,
+                            Some(skill.id.clone()),
+                            skill.name.clone(),
+                            agent.clone(),
+                            relative_path.clone(),
+                            project_agent_target_path(store, &project, agent, &relative_path),
+                            error.to_string(),
+                        )),
+                    }
+                }
+            }
+            finish_project_batch(report, json)?;
+        }
+        ProjectsCommand::RemoveSkill(args) => {
+            let project = resolve_cli_project(store, &args.project_ref)?;
+            let validation = validate_project_agents(
+                store,
+                &project,
+                &args.agents,
+                false,
+                &args.skill_relative_path,
+            )?;
+            let mut report = ProjectBatchReport::new(&project, "remove_skill");
+            add_validation_failures(
+                &mut report,
+                validation.failures,
+                None,
+                args.skill_relative_path.clone(),
+                args.skill_relative_path.clone(),
+            );
+            for agent in validation.valid_agents {
+                match app_lib::core::project_skill_service::preview_remove_skill_from_project(
+                    store,
+                    &project.id,
+                    &args.skill_relative_path,
+                    &agent,
+                ) {
+                    Ok(variant) if args.safety.dry_run => {
+                        report.would_remove.push(project_action_item(
+                            &report,
+                            variant,
+                            "would_remove",
+                        ));
+                    }
+                    Ok(variant) => {
+                        match app_lib::core::project_skill_service::remove_skill_from_project(
+                            store,
+                            &project.id,
+                            &args.skill_relative_path,
+                            &agent,
+                        ) {
+                            Ok(()) => report
+                                .removed
+                                .push(project_action_item(&report, variant, "removed")),
+                            Err(error) => report.failed.push(project_action_failure(
+                                &report,
+                                variant.skill_id,
+                                variant.skill_name,
+                                agent,
+                                args.skill_relative_path.clone(),
+                                Some(variant.absolute_path.to_string_lossy().into_owned()),
+                                error.to_string(),
+                            )),
+                        }
+                    }
+                    Err(error) if matches!(error.kind, ErrorKind::NotFound) => report.skipped.push(
+                        project_action_not_found(&report, args.skill_relative_path.clone(), agent),
+                    ),
+                    Err(error) => report.failed.push(project_action_failure(
+                        &report,
+                        None,
+                        args.skill_relative_path.clone(),
+                        agent,
+                        args.skill_relative_path.clone(),
+                        None,
+                        error.to_string(),
+                    )),
+                }
+            }
+            finish_project_batch(report, json)?;
+        }
+        ProjectsCommand::RemovePreset(args) => {
+            let project = resolve_cli_project(store, &args.project_ref)?;
+            let preset = resolve_scenario(store, &args.preset_ref)?;
+            let skills = store.get_skills_for_scenario(&preset.id)?;
+            let validation = validate_project_agents(store, &project, &args.agents, false, "")?;
+            let variants = app_lib::core::project_skill_service::scan_project_skill_variants(
+                store,
+                &project.id,
+            )
+            .map_err(map_app_err)?;
+            let mut report = ProjectBatchReport::new(&project, "remove_preset");
+
+            for skill in skills {
+                let fallback_path = app_lib::core::sync_engine::target_dir_name(
+                    Path::new(&skill.central_path),
+                    &skill.name,
+                );
+                add_validation_failures(
+                    &mut report,
+                    validation
+                        .failures
+                        .iter()
+                        .map(|failure| ProjectAgentValidationFailure {
+                            agent: failure.agent.clone(),
+                            message: failure.message.clone(),
+                            path: failure.path.clone(),
+                        })
+                        .collect(),
+                    Some(skill.id.clone()),
+                    skill.name.clone(),
+                    fallback_path.clone(),
+                );
+                for agent in &validation.valid_agents {
+                    let Some(variant) = variants
+                        .iter()
+                        .find(|variant| {
+                            variant.skill_id.as_deref() == Some(skill.id.as_str())
+                                && variant.agent == *agent
+                        })
+                        .cloned()
+                    else {
+                        report.skipped.push(project_action_not_found(
+                            &report,
+                            fallback_path.clone(),
+                            agent.clone(),
+                        ));
+                        continue;
+                    };
+                    if args.safety.dry_run {
+                        report.would_remove.push(project_action_item(
+                            &report,
+                            variant,
+                            "would_remove",
+                        ));
+                        continue;
+                    }
+                    match app_lib::core::project_skill_service::remove_skill_from_project(
+                        store,
+                        &project.id,
+                        &variant.relative_path,
+                        agent,
+                    ) {
+                        Ok(()) => report
+                            .removed
+                            .push(project_action_item(&report, variant, "removed")),
+                        Err(error) => report.failed.push(project_action_failure(
+                            &report,
+                            variant.skill_id,
+                            variant.skill_name,
+                            agent.clone(),
+                            variant.relative_path,
+                            Some(variant.absolute_path.to_string_lossy().into_owned()),
+                            error.to_string(),
+                        )),
+                    }
+                }
+            }
+            finish_project_batch(report, json)?;
+        }
+    }
+    Ok(())
+}
+
+fn project_agent_target_path(
+    store: &SkillStore,
+    project: &app_lib::core::skill_store::ProjectRecord,
+    agent: &str,
+    relative_path: &str,
+) -> Option<String> {
+    app_lib::core::project_skill_service::list_project_agent_targets(store, &project.id)
+        .ok()?
+        .into_iter()
+        .find(|target| target.key == agent)
+        .map(|target| {
+            target
+                .skills_root
+                .join(relative_path)
+                .to_string_lossy()
+                .into_owned()
+        })
+}
+
+fn resolve_cli_project(
+    store: &SkillStore,
+    reference: &str,
+) -> anyhow::Result<app_lib::core::skill_store::ProjectRecord> {
+    let projects = store
+        .get_all_projects()
+        .map_err(AppError::db)
+        .map_err(map_app_err)?;
+    resolve_project_reference(&projects, reference)
+}
+
+fn list_project_entries(store: &SkillStore) -> Result<Vec<ProjectListEntry>, AppError> {
+    let records = store.get_all_projects().map_err(AppError::db)?;
+    let configs = project_agent_configs(store);
+    Ok(records
+        .into_iter()
+        .map(|record| {
+            let skills = if record.workspace_type == "linked" {
+                app_lib::core::project_scanner::read_linked_workspace_skills(
+                    Path::new(&record.path),
+                    record.disabled_path.as_deref().map(Path::new),
+                    record.linked_agent_key.as_deref().unwrap_or(&record.name),
+                    record.linked_agent_name.as_deref().unwrap_or(&record.name),
+                    true,
+                )
+            } else {
+                app_lib::core::project_scanner::read_project_skills(
+                    Path::new(&record.path),
+                    &configs,
+                )
+            };
+            let skill_count = skills
+                .iter()
+                .map(|skill| skill.relative_path.to_lowercase())
+                .collect::<HashSet<_>>()
+                .len();
+            ProjectListEntry {
+                id: record.id,
+                name: record.name,
+                path: record.path,
+                workspace_type: record.workspace_type,
+                skill_count,
+                created_at: record.created_at,
+                updated_at: record.updated_at,
+            }
+        })
+        .collect())
+}
+
+fn project_agent_configs(
+    store: &SkillStore,
+) -> Vec<app_lib::core::project_scanner::AgentSkillConfig> {
+    let mut grouped: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for adapter in tool_adapters::all_tool_adapters(store) {
+        let relative_skills_dir = adapter.project_relative_skills_dir().to_string();
+        if relative_skills_dir.is_empty() {
+            continue;
+        }
+        if let Some((_, agents)) = grouped
+            .iter_mut()
+            .find(|(dir, _)| *dir == relative_skills_dir)
+        {
+            agents.push((adapter.key, adapter.display_name));
+        } else {
+            grouped.push((
+                relative_skills_dir,
+                vec![(adapter.key, adapter.display_name)],
+            ));
+        }
+    }
+
+    grouped
+        .into_iter()
+        .filter_map(|(relative_skills_dir, agents)| {
+            let (key, first_display_name) = agents.first()?.clone();
+            let display_name = if agents.len() == 1 {
+                first_display_name
+            } else {
+                agents
+                    .into_iter()
+                    .map(|(_, display_name)| display_name)
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            };
+            Some(app_lib::core::project_scanner::AgentSkillConfig {
+                key,
+                display_name,
+                relative_skills_dir,
+            })
+        })
+        .collect()
+}
+
+fn resolve_project_reference(
+    projects: &[app_lib::core::skill_store::ProjectRecord],
+    reference: &str,
+) -> anyhow::Result<app_lib::core::skill_store::ProjectRecord> {
+    if let Some(project) = projects.iter().find(|project| project.id == reference) {
+        return Ok(project.clone());
+    }
+
+    let canonical_reference = Path::new(reference).canonicalize().ok();
+    let path_matches: Vec<_> = projects
+        .iter()
+        .filter(|project| {
+            project.path == reference
+                || canonical_reference.as_ref().is_some_and(|canonical| {
+                    Path::new(&project.path)
+                        .canonicalize()
+                        .map(|path| &path == canonical)
+                        .unwrap_or(false)
+                })
+        })
+        .collect();
+    match path_matches.as_slice() {
+        [project] => return Ok((*project).clone()),
+        [] => {}
+        candidates => {
+            let details = candidates
+                .iter()
+                .map(|project| {
+                    format!(
+                        "{} (id: {}, path: {})",
+                        project.name, project.id, project.path
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            bail!("Project path '{reference}' is ambiguous; use an ID. Candidates: {details}");
+        }
+    }
+
+    let matches: Vec<_> = projects
+        .iter()
+        .filter(|project| project.name == reference)
+        .collect();
+    match matches.as_slice() {
+        [project] => Ok((*project).clone()),
+        [] => bail!("No project matches '{reference}'"),
+        candidates => {
+            let details = candidates
+                .iter()
+                .map(|project| {
+                    format!(
+                        "{} (id: {}, path: {})",
+                        project.name, project.id, project.path
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            bail!(
+                "Project name '{reference}' is ambiguous; use an ID or path. Candidates: {details}"
+            )
+        }
+    }
 }
 
 fn repo_status(store: &SkillStore) -> RepoStatus {
@@ -1686,7 +2556,13 @@ fn run_update(
     for skill in targets {
         let report = match skill.source_type.as_str() {
             "git" | "skillssh" => {
-                match cmd::update_git_skill_internal(store, &skill.id, proxy_url.as_deref(), None, None) {
+                match cmd::update_git_skill_internal(
+                    store,
+                    &skill.id,
+                    proxy_url.as_deref(),
+                    None,
+                    None,
+                ) {
                     Ok(r) => UpdateReport {
                         skill_id: skill.id.clone(),
                         name: skill.name.clone(),
@@ -1709,28 +2585,30 @@ fn run_update(
                     },
                 }
             }
-            "local" | "import" => match cmd::reimport_local_skill_internal(store, &skill.id, None) {
-                Ok(r) => UpdateReport {
-                    skill_id: skill.id.clone(),
-                    name: skill.name.clone(),
-                    source_type: skill.source_type.clone(),
-                    refreshed: r.pending_removals.is_empty(),
-                    error: None,
-                    held_back_removals: r
-                        .pending_removals
-                        .iter()
-                        .map(|p| format!("{}: {}", p.location, p.path))
-                        .collect(),
-                },
-                Err(e) => UpdateReport {
-                    skill_id: skill.id.clone(),
-                    name: skill.name.clone(),
-                    source_type: skill.source_type.clone(),
-                    refreshed: false,
-                    error: Some(e.message.clone()),
-                    held_back_removals: Vec::new(),
-                },
-            },
+            "local" | "import" => {
+                match cmd::reimport_local_skill_internal(store, &skill.id, None) {
+                    Ok(r) => UpdateReport {
+                        skill_id: skill.id.clone(),
+                        name: skill.name.clone(),
+                        source_type: skill.source_type.clone(),
+                        refreshed: r.pending_removals.is_empty(),
+                        error: None,
+                        held_back_removals: r
+                            .pending_removals
+                            .iter()
+                            .map(|p| format!("{}: {}", p.location, p.path))
+                            .collect(),
+                    },
+                    Err(e) => UpdateReport {
+                        skill_id: skill.id.clone(),
+                        name: skill.name.clone(),
+                        source_type: skill.source_type.clone(),
+                        refreshed: false,
+                        error: Some(e.message.clone()),
+                        held_back_removals: Vec::new(),
+                    },
+                }
+            }
             other => UpdateReport {
                 skill_id: skill.id.clone(),
                 name: skill.name.clone(),
@@ -3008,6 +3886,15 @@ fn run_git(
 /// an agent can say which directory is blocking and offer the way out (#363).
 fn error_envelope(err: &anyhow::Error) -> serde_json::Value {
     let message = format!("{err:#}");
+    if let Some(batch_failure) = err.downcast_ref::<ProjectBatchFailure>() {
+        return serde_json::json!({
+            "ok": false,
+            "code": "PROJECT_BATCH_PARTIAL_FAILURE",
+            "message": message.clone(),
+            "error": message,
+            "details": { "report": &batch_failure.report },
+        });
+    }
     match err.downcast_ref::<AppError>() {
         Some(app_err) if app_err.details.is_some() => {
             let mut value = serde_json::to_value(app_err).unwrap();
@@ -3080,8 +3967,65 @@ mod tests {
         assert!(envelope.get("details").is_none());
     }
 
+    #[test]
+    fn a_partial_project_operation_keeps_its_report_in_the_json_envelope() {
+        let tmp = tempdir().unwrap();
+        let project = test_project("p1", "repo", &tmp.path().join("repo"));
+        let mut report = ProjectBatchReport::new(&project, "add_skill");
+        report.ok = false;
+        report.added.push(ProjectActionItem {
+            project_id: project.id.clone(),
+            project_name: project.name.clone(),
+            action: "add_skill".to_string(),
+            skill_id: Some("skill-1".to_string()),
+            skill_name: "demo".to_string(),
+            agent: "codex".to_string(),
+            relative_path: "demo".to_string(),
+            path: "/repo/.codex/skills/demo".to_string(),
+            outcome: "added".to_string(),
+        });
+        report.skipped.push(project_action_not_found(
+            &report,
+            "missing".to_string(),
+            "claude_code".to_string(),
+        ));
+        report.failed.push(project_action_failure(
+            &report,
+            Some("skill-1".to_string()),
+            "demo".to_string(),
+            "codex".to_string(),
+            "demo".to_string(),
+            Some("/repo/.codex/skills/demo".to_string()),
+            "target is not a managed deployment".to_string(),
+        ));
+
+        let envelope = error_envelope(&anyhow::Error::new(ProjectBatchFailure {
+            report: report.clone(),
+        }));
+
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(envelope["code"], "PROJECT_BATCH_PARTIAL_FAILURE");
+        assert_eq!(envelope["details"]["report"]["failed"][0]["agent"], "codex");
+        assert_eq!(
+            envelope["details"]["report"]["failed"][0]["message"],
+            "target is not a managed deployment"
+        );
+        assert_eq!(
+            envelope["details"]["report"]["added"][0]["outcome"],
+            "added"
+        );
+        assert_eq!(
+            envelope["details"]["report"]["skipped"][0]["outcome"],
+            "not_found"
+        );
+        let rendered = render_project_batch(&report);
+        assert!(rendered.contains("added demo"));
+        assert!(rendered.contains("not_found missing"));
+        assert!(rendered.contains("FAILED demo"));
+    }
+
     use super::*;
-    use app_lib::core::skill_store::{ScenarioRecord, SkillRecord};
+    use app_lib::core::skill_store::{ProjectRecord, ScenarioRecord, SkillRecord};
     use app_lib::core::tool_adapters::{CustomToolDef, ToolCategory};
     use std::fs;
     use tempfile::tempdir;
@@ -3177,6 +4121,794 @@ mod tests {
                 }
             }) if reference == "Web Dev" && agents == vec!["codex"]
         ));
+    }
+
+    #[test]
+    fn parses_project_commands_and_global_json_flag() {
+        let add =
+            Cli::try_parse_from(["skills-manager-cli", "--json", "projects", "add", "./repo"])
+                .unwrap();
+        assert!(add.json);
+        assert!(matches!(
+            add.command,
+            Commands::Projects(ProjectsArgs {
+                command: ProjectsCommand::Add { path }
+            }) if path == Path::new("./repo")
+        ));
+
+        let list = Cli::try_parse_from(["skills-manager-cli", "projects", "list"]).unwrap();
+        assert!(matches!(
+            list.command,
+            Commands::Projects(ProjectsArgs {
+                command: ProjectsCommand::List
+            })
+        ));
+
+        let remove =
+            Cli::try_parse_from(["skills-manager-cli", "projects", "remove", "my-project"])
+                .unwrap();
+        assert!(matches!(
+            remove.command,
+            Commands::Projects(ProjectsArgs {
+                command: ProjectsCommand::Remove { project_ref }
+            }) if project_ref == "my-project"
+        ));
+    }
+
+    #[test]
+    fn parses_project_skill_commands_and_remove_safety() {
+        let add = Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "add-skill",
+            "repo",
+            "demo",
+            "--agent",
+            "codex",
+            "--agent",
+            "claude_code",
+        ])
+        .unwrap();
+        assert!(matches!(
+            add.command,
+            Commands::Projects(ProjectsArgs {
+                command: ProjectsCommand::AddSkill {
+                    project_ref,
+                    skill_ref,
+                    agents,
+                }
+            }) if project_ref == "repo"
+                && skill_ref == "demo"
+                && agents == vec!["codex", "claude_code"]
+        ));
+
+        let dry_run = Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "remove-skill",
+            "repo",
+            "demo",
+            "--agent",
+            "codex",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            dry_run.command,
+            Commands::Projects(ProjectsArgs {
+                command: ProjectsCommand::RemoveSkill(args)
+            }) if args.project_ref == "repo"
+                && args.skill_relative_path == "demo"
+                && args.agents == vec!["codex"]
+                && args.safety.dry_run
+                && !args.safety.yes
+        ));
+
+        let confirmed = Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "remove-skill",
+            "repo",
+            "demo",
+            "--agent",
+            "codex",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            confirmed.command,
+            Commands::Projects(ProjectsArgs {
+                command: ProjectsCommand::RemoveSkill(args)
+            }) if args.safety.yes && !args.safety.dry_run
+        ));
+
+        assert!(Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "add-skill",
+            "repo",
+            "demo",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "remove-skill",
+            "repo",
+            "demo",
+            "--agent",
+            "codex",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "remove-skill",
+            "repo",
+            "demo",
+            "--agent",
+            "codex",
+            "--dry-run",
+            "--yes",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn parses_project_preset_commands_and_remove_safety() {
+        let add = Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "add-preset",
+            "repo",
+            "current",
+            "--agent",
+            "codex",
+        ])
+        .unwrap();
+        assert!(matches!(
+            add.command,
+            Commands::Projects(ProjectsArgs { command: ProjectsCommand::AddPreset { project_ref, preset_ref, agents } })
+                if project_ref == "repo" && preset_ref == "current" && agents == vec!["codex"]
+        ));
+
+        let dry_run = Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "remove-preset",
+            "repo",
+            "web",
+            "--agent",
+            "codex",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(
+            matches!(dry_run.command, Commands::Projects(ProjectsArgs { command: ProjectsCommand::RemovePreset(args) }) if args.safety.dry_run && !args.safety.yes)
+        );
+        let confirmed = Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "remove-preset",
+            "repo",
+            "web",
+            "--agent",
+            "codex",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(
+            matches!(confirmed.command, Commands::Projects(ProjectsArgs { command: ProjectsCommand::RemovePreset(args) }) if args.safety.yes && !args.safety.dry_run)
+        );
+
+        assert!(Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "add-preset",
+            "repo",
+            "web"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "skills-manager-cli",
+            "projects",
+            "remove-preset",
+            "repo",
+            "web",
+            "--agent",
+            "codex",
+        ])
+        .is_err());
+    }
+
+    fn setup_project_skill_cli(
+        tmp: &tempfile::TempDir,
+    ) -> (SkillStore, ProjectRecord, PathBuf, PathBuf, PathBuf) {
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        let first_global_root = tmp.path().join("first-global-skills");
+        let second_global_root = tmp.path().join("second-global-skills");
+        fs::create_dir_all(&first_global_root).unwrap();
+        fs::create_dir_all(&second_global_root).unwrap();
+        tool_service::set_custom_tools(
+            &store,
+            &[
+                CustomToolDef {
+                    key: "first_agent".to_string(),
+                    display_name: "First Agent".to_string(),
+                    skills_dir: first_global_root.to_string_lossy().into_owned(),
+                    project_relative_skills_dir: Some(".first/skills".to_string()),
+                    category: ToolCategory::Coding,
+                },
+                CustomToolDef {
+                    key: "second_agent".to_string(),
+                    display_name: "Second Agent".to_string(),
+                    skills_dir: second_global_root.to_string_lossy().into_owned(),
+                    project_relative_skills_dir: Some(".second/skills".to_string()),
+                    category: ToolCategory::Coding,
+                },
+            ],
+        )
+        .unwrap();
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        let project_root = tmp.path().join("repo");
+        fs::create_dir(&project_root).unwrap();
+        let project = app_lib::core::project_service::add_project(&store, &project_root).unwrap();
+        let central_path = tmp.path().join("central/demo");
+        fs::create_dir_all(&central_path).unwrap();
+        fs::write(central_path.join("SKILL.md"), "central skill").unwrap();
+        store
+            .insert_skill(&SkillRecord {
+                id: "skill-demo".to_string(),
+                name: "demo".to_string(),
+                description: Some("test skill".to_string()),
+                source_type: "local".to_string(),
+                source_ref: Some(central_path.to_string_lossy().into_owned()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: central_path.to_string_lossy().into_owned(),
+                content_hash: None,
+                enabled: true,
+                created_at: 1,
+                updated_at: 1,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+        (
+            store,
+            project,
+            central_path,
+            project_root.join(".first/skills"),
+            project_root.join(".second/skills"),
+        )
+    }
+
+    #[test]
+    fn projects_add_skill_preserves_existing_target_and_reports_outcomes() {
+        let tmp = tempdir().unwrap();
+        let (store, project, _central_path, first_target, second_target) =
+            setup_project_skill_cli(&tmp);
+        app_lib::core::project_skill_service::add_skill_to_project(
+            &store,
+            &project.id,
+            "skill-demo",
+            "first_agent",
+        )
+        .unwrap();
+        fs::write(first_target.join("demo/SKILL.md"), "local edit").unwrap();
+
+        run_projects(
+            ProjectsArgs {
+                command: ProjectsCommand::AddSkill {
+                    project_ref: project.id.clone(),
+                    skill_ref: "skill-demo".to_string(),
+                    agents: vec!["first_agent".to_string(), "second_agent".to_string()],
+                },
+            },
+            &store,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(first_target.join("demo/SKILL.md")).unwrap(),
+            "local edit"
+        );
+        assert_eq!(
+            fs::read_to_string(second_target.join("demo/SKILL.md")).unwrap(),
+            "central skill"
+        );
+
+        let mut report = ProjectBatchReport::new(&project, "add_skill");
+        let existing = app_lib::core::project_skill_service::preview_remove_skill_from_project(
+            &store,
+            &project.id,
+            "demo",
+            "first_agent",
+        )
+        .unwrap();
+        let added = app_lib::core::project_skill_service::preview_remove_skill_from_project(
+            &store,
+            &project.id,
+            "demo",
+            "second_agent",
+        )
+        .unwrap();
+        report
+            .skipped
+            .push(project_action_item(&report, existing, "already_present"));
+        report
+            .added
+            .push(project_action_item(&report, added, "added"));
+        let rendered = render_project_batch(&report);
+        assert!(rendered.contains("already_present demo"));
+        assert!(rendered.contains("added demo"));
+        assert!(rendered.contains("first_agent"));
+        assert!(rendered.contains("second_agent"));
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["skipped"][0]["outcome"],
+            "already_present"
+        );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["added"][0]["outcome"],
+            "added"
+        );
+    }
+
+    #[test]
+    fn projects_add_skill_continues_after_invalid_agent_and_returns_batch_envelope() {
+        let tmp = tempdir().unwrap();
+        let (store, project, _central_path, first_target, second_target) =
+            setup_project_skill_cli(&tmp);
+        store
+            .set_setting("disabled_tools", r#"["first_agent"]"#)
+            .unwrap();
+
+        let error = run_projects(
+            ProjectsArgs {
+                command: ProjectsCommand::AddSkill {
+                    project_ref: project.id.clone(),
+                    skill_ref: "skill-demo".to_string(),
+                    agents: vec!["first_agent".to_string(), "second_agent".to_string()],
+                },
+            },
+            &store,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(!first_target.join("demo").exists());
+        assert_eq!(
+            fs::read_to_string(second_target.join("demo/SKILL.md")).unwrap(),
+            "central skill"
+        );
+        let envelope = error_envelope(&error);
+        let expected_disabled_path = Path::new(&project.path)
+            .join(".first/skills/demo")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(envelope["code"], "PROJECT_BATCH_PARTIAL_FAILURE");
+        assert_eq!(
+            envelope["details"]["report"]["added"][0]["agent"],
+            "second_agent"
+        );
+        assert_eq!(
+            envelope["details"]["report"]["failed"][0]["agent"],
+            "first_agent"
+        );
+        assert_eq!(
+            envelope["details"]["report"]["failed"][0]["path"],
+            expected_disabled_path
+        );
+    }
+
+    #[test]
+    fn projects_preset_batches_preserve_order_partial_results_and_project_only_removals() {
+        let tmp = tempdir().unwrap();
+        let (store, project, central_path, first_target, second_target) =
+            setup_project_skill_cli(&tmp);
+        let missing_source = tmp.path().join("central/broken");
+        store
+            .insert_skill(&SkillRecord {
+                id: "skill-broken".to_string(),
+                name: "broken".to_string(),
+                description: None,
+                source_type: "local".to_string(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: missing_source.to_string_lossy().into_owned(),
+                content_hash: None,
+                enabled: true,
+                created_at: 2,
+                updated_at: 2,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+        store
+            .insert_scenario(&ScenarioRecord {
+                id: "preset-main".to_string(),
+                name: "Main".to_string(),
+                description: None,
+                icon: None,
+                sort_order: 0,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        store
+            .add_skill_to_scenario("preset-main", "skill-demo")
+            .unwrap();
+        store
+            .add_skill_to_scenario("preset-main", "skill-broken")
+            .unwrap();
+        store
+            .reorder_scenario_skills(
+                "preset-main",
+                &["skill-demo".to_string(), "skill-broken".to_string()],
+            )
+            .unwrap();
+        store
+            .insert_scenario(&ScenarioRecord {
+                id: "preset-overlap".to_string(),
+                name: "Overlap".to_string(),
+                description: None,
+                icon: None,
+                sort_order: 1,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        store
+            .add_skill_to_scenario("preset-overlap", "skill-demo")
+            .unwrap();
+        app_lib::core::project_skill_service::add_skill_to_project(
+            &store,
+            &project.id,
+            "skill-demo",
+            "first_agent",
+        )
+        .unwrap();
+        fs::write(first_target.join("demo/SKILL.md"), "existing copy").unwrap();
+
+        let error = run_projects(
+            ProjectsArgs {
+                command: ProjectsCommand::AddPreset {
+                    project_ref: project.id.clone(),
+                    preset_ref: "preset-main".to_string(),
+                    agents: vec!["first_agent".to_string(), "second_agent".to_string()],
+                },
+            },
+            &store,
+            true,
+        )
+        .unwrap_err();
+        let report = &error_envelope(&error)["details"]["report"];
+        assert_eq!(report["skipped"][0]["agent"], "first_agent");
+        assert_eq!(report["added"][0]["agent"], "second_agent");
+        assert_eq!(report["failed"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            fs::read_to_string(first_target.join("demo/SKILL.md")).unwrap(),
+            "existing copy"
+        );
+        assert_eq!(
+            fs::read_to_string(second_target.join("demo/SKILL.md")).unwrap(),
+            "central skill"
+        );
+        fs::create_dir_all(second_target.join("nested")).unwrap();
+        fs::rename(
+            second_target.join("demo"),
+            second_target.join("nested/demo"),
+        )
+        .unwrap();
+
+        let dry_run_error = run_projects(
+            ProjectsArgs {
+                command: ProjectsCommand::RemovePreset(RemoveProjectPresetArgs {
+                    project_ref: project.id.clone(),
+                    preset_ref: "preset-main".to_string(),
+                    agents: vec![
+                        "first_agent".to_string(),
+                        "second_agent".to_string(),
+                        "unknown_agent".to_string(),
+                    ],
+                    safety: ProjectRemoveSafetyArgs {
+                        dry_run: true,
+                        yes: false,
+                    },
+                }),
+            },
+            &store,
+            true,
+        )
+        .unwrap_err();
+        let would_remove = &error_envelope(&dry_run_error)["details"]["report"]["would_remove"];
+        assert_eq!(would_remove[0]["agent"], "first_agent");
+        assert_eq!(would_remove[0]["relative_path"], "demo");
+        assert_eq!(would_remove[1]["agent"], "second_agent");
+        assert_eq!(would_remove[1]["relative_path"], "nested/demo");
+        assert!(first_target.join("demo").is_dir());
+        assert!(second_target.join("nested/demo").is_dir());
+
+        store
+            .set_setting("disabled_tools", r#"["first_agent"]"#)
+            .unwrap();
+        run_projects(
+            ProjectsArgs {
+                command: ProjectsCommand::RemovePreset(RemoveProjectPresetArgs {
+                    project_ref: project.id.clone(),
+                    preset_ref: "preset-main".to_string(),
+                    agents: vec!["first_agent".to_string(), "second_agent".to_string()],
+                    safety: ProjectRemoveSafetyArgs {
+                        dry_run: false,
+                        yes: true,
+                    },
+                }),
+            },
+            &store,
+            false,
+        )
+        .unwrap();
+        assert!(!first_target.join("demo").exists());
+        assert!(!second_target.join("nested/demo").exists());
+        assert!(central_path.is_dir());
+        assert!(central_path.join("SKILL.md").is_file());
+    }
+
+    #[test]
+    fn projects_remove_skill_dry_run_reports_exact_preview_and_fails_for_invalid_target() {
+        let tmp = tempdir().unwrap();
+        let (store, project, _central_path, first_target, _) = setup_project_skill_cli(&tmp);
+        app_lib::core::project_skill_service::add_skill_to_project(
+            &store,
+            &project.id,
+            "skill-demo",
+            "first_agent",
+        )
+        .unwrap();
+
+        let error = run_projects(
+            ProjectsArgs {
+                command: ProjectsCommand::RemoveSkill(RemoveProjectSkillArgs {
+                    project_ref: project.id.clone(),
+                    skill_relative_path: "demo".to_string(),
+                    agents: vec!["first_agent".to_string(), "unknown_agent".to_string()],
+                    safety: ProjectRemoveSafetyArgs {
+                        dry_run: true,
+                        yes: false,
+                    },
+                }),
+            },
+            &store,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(first_target.join("demo").is_dir());
+        let envelope = error_envelope(&error);
+        let expected_preview_path = fs::canonicalize(first_target.join("demo"))
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(envelope["code"], "PROJECT_BATCH_PARTIAL_FAILURE");
+        assert_eq!(
+            envelope["details"]["report"]["would_remove"][0]["outcome"],
+            "would_remove"
+        );
+        assert_eq!(
+            envelope["details"]["report"]["would_remove"][0]["path"],
+            expected_preview_path
+        );
+        assert_eq!(
+            envelope["details"]["report"]["failed"][0]["agent"],
+            "unknown_agent"
+        );
+    }
+
+    #[test]
+    fn projects_remove_skill_dry_run_preserves_copy_and_yes_removes_only_project_copy() {
+        let tmp = tempdir().unwrap();
+        let (store, project, central_path, first_target, _) = setup_project_skill_cli(&tmp);
+        app_lib::core::project_skill_service::add_skill_to_project(
+            &store,
+            &project.id,
+            "skill-demo",
+            "first_agent",
+        )
+        .unwrap();
+
+        let dry_run = ProjectsArgs {
+            command: ProjectsCommand::RemoveSkill(RemoveProjectSkillArgs {
+                project_ref: project.id.clone(),
+                skill_relative_path: "demo".to_string(),
+                agents: vec!["first_agent".to_string()],
+                safety: ProjectRemoveSafetyArgs {
+                    dry_run: true,
+                    yes: false,
+                },
+            }),
+        };
+        run_projects(dry_run, &store, false).unwrap();
+        assert!(first_target.join("demo").is_dir());
+
+        let missing_dry_run = ProjectsArgs {
+            command: ProjectsCommand::RemoveSkill(RemoveProjectSkillArgs {
+                project_ref: project.id.clone(),
+                skill_relative_path: "missing".to_string(),
+                agents: vec!["first_agent".to_string()],
+                safety: ProjectRemoveSafetyArgs {
+                    dry_run: true,
+                    yes: false,
+                },
+            }),
+        };
+        run_projects(missing_dry_run, &store, false).unwrap();
+
+        let confirmed = ProjectsArgs {
+            command: ProjectsCommand::RemoveSkill(RemoveProjectSkillArgs {
+                project_ref: project.id.clone(),
+                skill_relative_path: "demo".to_string(),
+                agents: vec!["first_agent".to_string()],
+                safety: ProjectRemoveSafetyArgs {
+                    dry_run: false,
+                    yes: true,
+                },
+            }),
+        };
+        run_projects(confirmed, &store, false).unwrap();
+        assert!(!first_target.join("demo").exists());
+        assert!(central_path.is_dir());
+    }
+
+    fn test_project(id: &str, name: &str, path: &Path) -> ProjectRecord {
+        ProjectRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            path: path.to_string_lossy().into_owned(),
+            workspace_type: "project".to_string(),
+            linked_agent_key: None,
+            linked_agent_name: None,
+            disabled_path: None,
+            sort_order: 0,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn project_reference_resolution_prefers_id_then_path_then_unique_name() {
+        let tmp = tempdir().unwrap();
+        let alpha = test_project("id-a", "alpha", &tmp.path().join("alpha"));
+        let beta = test_project("alpha", "beta", &tmp.path().join("beta"));
+        let projects = vec![alpha.clone(), beta.clone()];
+
+        assert_eq!(
+            resolve_project_reference(&projects, "alpha").unwrap().id,
+            "alpha"
+        );
+        assert_eq!(
+            resolve_project_reference(&projects, &alpha.path)
+                .unwrap()
+                .id,
+            "id-a"
+        );
+        assert_eq!(
+            resolve_project_reference(&projects, "beta").unwrap().id,
+            "alpha"
+        );
+    }
+
+    #[test]
+    fn project_reference_resolution_rejects_ambiguous_names_and_missing_refs() {
+        let tmp = tempdir().unwrap();
+        let alpha = test_project("id-a", "alpha", &tmp.path().join("one/alpha"));
+        let other_alpha = test_project("id-b", "alpha", &tmp.path().join("two/alpha"));
+
+        let error =
+            resolve_project_reference(&[alpha.clone(), other_alpha.clone()], "alpha").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("ambiguous"));
+        assert!(message.contains("id-a"));
+        assert!(message.contains("id-b"));
+        assert!(resolve_project_reference(&[alpha], "missing").is_err());
+    }
+
+    #[test]
+    fn project_list_is_empty_then_reports_skill_count_and_json_metadata() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        assert!(list_project_entries(&store).unwrap().is_empty());
+
+        let project_path = tmp.path().join("repo");
+        fs::create_dir_all(project_path.join(".claude/skills/demo")).unwrap();
+        fs::write(
+            project_path.join(".claude/skills/demo/SKILL.md"),
+            "---\nname: demo\ndescription: test\n---\n",
+        )
+        .unwrap();
+        let project = app_lib::core::project_service::add_project(&store, &project_path).unwrap();
+
+        let listed = list_project_entries(&store).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, project.id);
+        assert_eq!(listed[0].skill_count, 1);
+        let json = serde_json::to_value(&listed[0]).unwrap();
+        assert_eq!(json["name"], "repo");
+        assert_eq!(json["skill_count"], 1);
+        assert!(json["created_at"].is_number());
+    }
+
+    #[test]
+    fn project_list_preserves_store_order() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        let mut later = test_project("id-later", "later", &tmp.path().join("later"));
+        later.sort_order = 1;
+        later.created_at = 1;
+        let mut earlier = test_project("id-earlier", "earlier", &tmp.path().join("earlier"));
+        earlier.sort_order = 0;
+        earlier.created_at = 2;
+        store.insert_project(&later).unwrap();
+        store.insert_project(&earlier).unwrap();
+
+        let listed = list_project_entries(&store).unwrap();
+
+        assert_eq!(
+            listed
+                .iter()
+                .map(|project| project.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id-earlier", "id-later"]
+        );
+    }
+
+    #[test]
+    fn duplicate_project_add_uses_existing_cli_error_envelope() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        let project_path = tmp.path().join("repo");
+        fs::create_dir(&project_path).unwrap();
+        app_lib::core::project_service::add_project(&store, &project_path).unwrap();
+
+        let error = app_lib::core::project_service::add_project(&store, &project_path).unwrap_err();
+        let envelope = error_envelope(&map_app_err(error));
+
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(envelope["code"], "COMMAND_FAILED");
+        assert!(envelope["message"]
+            .as_str()
+            .unwrap()
+            .contains("already linked"));
+    }
+
+    #[test]
+    fn removing_project_record_leaves_project_files_intact() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        let project_path = tmp.path().join("repo");
+        fs::create_dir(&project_path).unwrap();
+        let project = app_lib::core::project_service::add_project(&store, &project_path).unwrap();
+
+        let resolved =
+            resolve_project_reference(&store.get_all_projects().unwrap(), &project.id).unwrap();
+        store.delete_project(&resolved.id).unwrap();
+
+        assert!(store.get_all_projects().unwrap().is_empty());
+        assert!(project_path.is_dir());
+        assert!(project_path.join(".claude/skills").is_dir());
+        assert!(project_path.join(".claude/skills-disabled").is_dir());
     }
 
     #[test]
