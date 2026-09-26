@@ -16,9 +16,11 @@ import {
   Link2,
   ChevronDown,
   ChevronRight,
+  Loader2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { CreatePresetDialog } from "./CreatePresetDialog";
@@ -29,6 +31,8 @@ import { AgentIcon } from "./AgentIcon";
 import * as api from "../lib/tauri";
 import type { SyncHealth, ToolCategory, ToolInfo } from "../lib/tauri";
 import { getPresetIconOption } from "../lib/presetIcons";
+
+const CAN_INSTALL_IN_APP = navigator.userAgent.includes("Windows") || navigator.userAgent.includes("Mac");
 
 function getSyncHealthIndicator(health: SyncHealth, skillCount: number): { color: string; title: string } | null {
   if (skillCount === 0) return null;
@@ -48,7 +52,7 @@ export function Sidebar() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
-  const { presets, viewedPreset, setViewedPresetId, refreshPresets, refreshManagedSkills, projects, refreshProjects, tools, managedSkills, appUpdate } = useApp();
+  const { presets, viewedPreset, setViewedPresetId, refreshPresets, refreshManagedSkills, projects, refreshProjects, tools, managedSkills, appUpdate, appUpdateInstalling, installAppUpdate } = useApp();
   const [showCreate, setShowCreate] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; icon?: string | null } | null>(null);
@@ -234,6 +238,14 @@ export function Sidebar() {
       navigate("/");
     }
     toast.success(t("project.removed"));
+  };
+
+  const handleSidebarUpdate = async () => {
+    if (CAN_INSTALL_IN_APP) {
+      await installAppUpdate();
+    } else if (appUpdate) {
+      openUrl(appUpdate.release_url).catch(() => {});
+    }
   };
 
   // Renders one workspace category section (Global Workspace for coding agents,
@@ -705,31 +717,38 @@ export function Sidebar() {
 
         {/* Settings */}
         <div className="p-2.5 border-t border-border-subtle shrink-0">
-          <Link
-            to="/settings"
+          <div
             className={cn(
-              "flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-sm font-medium transition-colors outline-none",
+              "flex items-center gap-1 rounded-md px-2.5 py-[5px] text-sm transition-colors",
               location.pathname === "/settings"
                 ? "bg-surface-active text-primary"
                 : "text-tertiary hover:text-secondary hover:bg-surface-hover"
             )}
           >
-            <Settings
-              className={cn(
-                "w-4 h-4 shrink-0",
-                location.pathname === "/settings" ? "text-accent" : "text-muted"
-              )}
-            />
-            {t("sidebar.settings")}
-            {/* A newer app version exists. Amber = "有更新" per the UI spec;
-                the dot only points at Settings, where the user decides. */}
-            {appUpdate?.has_update && (
-              <span
-                className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
-                title={t("settings.updateAvailable", { version: appUpdate.latest_version })}
+            <Link to="/settings" className="flex min-w-0 flex-1 items-center gap-2.5 font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent">
+              <Settings
+                className={cn(
+                  "h-4 w-4 shrink-0",
+                  location.pathname === "/settings" ? "text-accent" : "text-muted"
+                )}
               />
+              <span className="truncate">{t("sidebar.settings")}</span>
+            </Link>
+            {appUpdate?.has_update && (
+              <button
+                type="button"
+                onClick={handleSidebarUpdate}
+                disabled={appUpdateInstalling}
+                className="sidebar-update-button inline-flex h-7 shrink-0 items-center justify-center rounded-full bg-accent px-3 text-[12px] font-semibold text-white transition-colors hover:bg-accent-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-60"
+                title={t("settings.updateAvailable", { version: appUpdate.latest_version })}
+                aria-label={t(CAN_INSTALL_IN_APP ? "settings.installUpdate" : "settings.download")}
+              >
+                {appUpdateInstalling
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : t(CAN_INSTALL_IN_APP ? "settings.updateShort" : "settings.download")}
+              </button>
             )}
-          </Link>
+          </div>
         </div>
       </div>
 

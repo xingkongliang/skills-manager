@@ -675,8 +675,7 @@ pub async fn app_exit(app: tauri::AppHandle) {
 }
 
 /// Relaunch the app so a freshly installed update takes effect. Only ever
-/// invoked from an explicit user confirmation — the updater never restarts on
-/// its own.
+/// invoked after the user confirms an update and installation completes.
 ///
 /// Scheduled onto the main thread for the same reason `app_exit` is: the
 /// teardown destroys the main window before the process goes away.

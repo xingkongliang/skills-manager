@@ -76,6 +76,11 @@
   }
 }
 
+@keyframes sidebar-update-glow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--color-accent-border); }
+  50% { box-shadow: 0 0 0 4px transparent; }
+}
+
 @layer components {
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
@@ -95,6 +100,16 @@
 
   .app-page-header {
     @apply border-b border-border-subtle pb-4;
+  }
+
+  .sidebar-update-button {
+    animation: sidebar-update-glow 2.4s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar-update-button {
+      animation: none;
+    }
   }
 
   .app-page-title {

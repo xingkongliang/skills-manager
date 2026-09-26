@@ -1,11 +1,35 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { check as checkUpdater } from "@tauri-apps/plugin-updater";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import type { AppUpdateInfo, ManagedSkill, Project, Preset, ToolInfo } from "../lib/tauri";
 import * as api from "../lib/tauri";
 import i18n from "../i18n";
 import { applyTextSize } from "../lib/textScale";
+import { visibleAppUpdate } from "../lib/appUpdateState";
 import { toast } from "sonner";
+
+type AppUpdateProgress = { percent: number; stage: "preparing" | "downloading" | "installing" | "restarting" };
+
+function UpdateProgressDialog({ progress }: { progress: AppUpdateProgress }) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-6" role="status" aria-live="polite">
+      <div className="w-full max-w-sm rounded-xl border border-border bg-surface p-6 shadow-2xl">
+        <h2 className="text-base font-semibold text-primary">{i18n.t("settings.updateProgressTitle")}</h2>
+        <p className="mt-2 text-sm text-secondary">{i18n.t(`settings.updateStage.${progress.stage}`)}</p>
+        <div className="mt-5 flex items-center justify-between text-xs text-muted">
+          <span>{i18n.t("settings.updateProgress")}</span>
+          <span>{progress.percent}%</span>
+        </div>
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-hover" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent} aria-label={i18n.t("settings.updateProgress")}>
+          <div className="h-full rounded-full bg-accent transition-[width] duration-200" style={{ width: `${progress.percent}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface AppState {
   presets: Preset[];
@@ -20,10 +44,11 @@ interface AppState {
   appError: string | null;
   helpOpen: boolean;
   detailSkillId: string | null;
-  /** Result of the last app-version check. Notification only: installing an
-   *  update is always started by the user from Settings. */
+  /** Result of the last app-version check. Installation always requires user confirmation. */
   appUpdate: AppUpdateInfo | null;
+  appUpdateInstalling: boolean;
   refreshAppUpdate: () => Promise<AppUpdateInfo>;
+  installAppUpdate: () => Promise<void>;
   refreshAppData: () => Promise<void>;
   refreshPresets: () => Promise<void>;
   refreshTools: () => Promise<void>;
@@ -63,8 +88,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [helpOpen, setHelpOpen] = useState(false);
   const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
+  const [appUpdateInstalling, setAppUpdateInstalling] = useState(false);
+  const [appUpdateProgress, setAppUpdateProgress] = useState<AppUpdateProgress | null>(null);
   const autoCheckInFlightRef = useRef(false);
   const appUpdateCheckedRef = useRef(false);
+  const installedAppVersionRef = useRef<string | null>(null);
   const lastUpdateNotificationRef = useRef<string | null>(null);
   const lastActivePresetIdRef = useRef<string | null>(null);
 
@@ -287,12 +316,81 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshAppUpdate = useCallback(async () => {
     const info = await api.checkAppUpdate();
-    setAppUpdate(info);
-    return info;
+    const visibleInfo = visibleAppUpdate(info, installedAppVersionRef.current);
+    setAppUpdate(visibleInfo);
+    return visibleInfo;
+  }, []);
+
+  const markAppUpdateInstalled = useCallback((version: string) => {
+    installedAppVersionRef.current = version;
+    setAppUpdate((info) => info ? { ...info, has_update: false } : null);
+  }, []);
+
+  const performAppUpdate = useCallback(async () => {
+    setAppUpdateInstalling(true);
+    setAppUpdateProgress({ percent: 0, stage: "preparing" });
+    let restartRequested = false;
+    let installed = false;
+    try {
+      const blocker = await api.updateInstallBlocker();
+      if (blocker) {
+        toast.error(i18n.t("settings.updateRelocate"));
+        return;
+      }
+      const proxy = (await api.getSettings("proxy_url")) || undefined;
+      const update = await checkUpdater(proxy ? { proxy } : undefined);
+      if (!update) {
+        toast.success(i18n.t("settings.noUpdate"));
+        return;
+      }
+      let totalBytes = 0;
+      let downloadedBytes = 0;
+      setAppUpdateProgress({ percent: 0, stage: "downloading" });
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          totalBytes = event.data.contentLength ?? 0;
+          downloadedBytes = 0;
+        } else if (event.event === "Progress") {
+          downloadedBytes += event.data.chunkLength;
+          if (totalBytes > 0) {
+            setAppUpdateProgress({ percent: Math.min(95, Math.round(downloadedBytes / totalBytes * 95)), stage: "downloading" });
+          }
+        } else {
+          setAppUpdateProgress({ percent: 95, stage: "installing" });
+        }
+      });
+      setAppUpdateProgress({ percent: 100, stage: "installing" });
+      markAppUpdateInstalled(update.version);
+      installed = true;
+      setAppUpdateProgress({ percent: 100, stage: "restarting" });
+      await api.restartApp();
+      restartRequested = true;
+    } catch (err) {
+      console.error("In-app update failed:", err);
+      if (installed) {
+        toast.error(i18n.t("settings.restartError"));
+        toast.success(i18n.t("settings.restartToApply"), {
+          duration: Infinity,
+          action: { label: i18n.t("settings.restartNow"), onClick: () => { api.restartApp().catch(console.error); } },
+        });
+        return;
+      }
+      toast.error(i18n.t("settings.updateError"));
+      if (appUpdate?.release_url) {
+        await openUrl(appUpdate.release_url);
+      }
+    } finally {
+      setAppUpdateInstalling(false);
+      if (!restartRequested) setAppUpdateProgress(null);
+    }
+  }, [appUpdate, markAppUpdateInstalled]);
+
+  const installAppUpdate = useCallback(async () => {
+    setUpdateConfirmOpen(true);
   }, []);
 
   // Check for a newer app version on startup. This only ever *notifies* — the
-  // download and install stay behind the button in Settings, so the user
+  // download and install stay behind a user-triggered update button, so the user
   // decides whether to take an update. Deliberately unlike the skill
   // auto-update above, which has an opt-in "apply automatically" setting.
   //
@@ -450,7 +548,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         helpOpen,
         detailSkillId,
         appUpdate,
+        appUpdateInstalling,
         refreshAppUpdate,
+        installAppUpdate,
         refreshAppData,
         refreshPresets,
         refreshTools,
@@ -466,6 +566,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }}
     >
       {children}
+      <ConfirmDialog
+        open={updateConfirmOpen}
+        title={i18n.t("settings.installUpdate")}
+        message={i18n.t("settings.updateConfirm")}
+        confirmLabel={i18n.t("settings.installUpdate")}
+        tone="warning"
+        onClose={() => setUpdateConfirmOpen(false)}
+        onConfirm={async () => {
+          setUpdateConfirmOpen(false);
+          void performAppUpdate();
+        }}
+      />
+      {appUpdateProgress && <UpdateProgressDialog progress={appUpdateProgress} />}
     </AppContext.Provider>
   );
 }
