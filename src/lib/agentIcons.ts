@@ -72,3 +72,8 @@ export function agentIconNeedsDarkInvert(agentKey: string): boolean {
 export function hasAgentIcon(agentKey: string): boolean {
   return Boolean(AGENT_ICON_FILES[agentKey]);
 }
+
+/** All icon keys available for a user to pick from (e.g. for a custom agent). */
+export function listAgentIconKeys(): string[] {
+  return Object.keys(AGENT_ICON_FILES).sort((a, b) => a.localeCompare(b));
+}

@@ -328,6 +328,7 @@ export function Sidebar() {
                                 >
                                   <AgentIcon
                                     agentKey={tool.key}
+                                    iconOverride={tool.icon}
                                     displayName={tool.display_name}
                                     className={cn(
                                       "h-[20px] w-[20px] rounded border transition-colors",

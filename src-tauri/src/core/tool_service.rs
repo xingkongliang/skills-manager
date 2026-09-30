@@ -19,6 +19,9 @@ pub struct ToolInfo {
     pub project_relative_skills_dir: Option<String>,
     pub has_project_path_override: bool,
     pub category: ToolCategory,
+    /// Icon key for custom agents (see `CustomToolDef::icon`). `None` for
+    /// built-in tools, which are keyed by `key` instead.
+    pub icon: Option<String>,
 }
 
 pub fn get_disabled_tools(store: &SkillStore) -> Vec<String> {
@@ -199,6 +202,20 @@ pub fn set_custom_tools(store: &SkillStore, custom_tools: &[CustomToolDef]) -> R
         .map_err(AppError::db)
 }
 
+pub fn set_custom_tool_icon(
+    store: &SkillStore,
+    key: &str,
+    icon: Option<String>,
+) -> Result<(), AppError> {
+    let mut customs = get_custom_tools(store);
+    let tool = customs
+        .iter_mut()
+        .find(|ct| ct.key == key)
+        .ok_or_else(|| AppError::not_found(format!("Unknown custom agent: {key}")))?;
+    tool.icon = icon;
+    set_custom_tools(store, &customs)
+}
+
 pub fn normalize_skills_dir_input(path: &str) -> Result<String, AppError> {
     let raw = path.trim();
     if raw.is_empty() {
@@ -252,6 +269,10 @@ pub fn normalize_project_relative_skills_dir_input(path: &str) -> Result<Option<
 pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
     let disabled = disabled_tools_set(store);
     let project_overrides = get_custom_tool_project_paths(store);
+    let custom_icons: HashMap<String, Option<String>> = get_custom_tools(store)
+        .into_iter()
+        .map(|ct| (ct.key, ct.icon))
+        .collect();
     let infos: Vec<ToolInfo> = tool_adapters::all_tool_adapters(store)
         .into_iter()
         .map(|adapter| ToolInfo {
@@ -275,6 +296,7 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
             has_project_path_override: !adapter.is_custom
                 && project_overrides.contains_key(&adapter.key),
             category: adapter.category,
+            icon: custom_icons.get(&adapter.key).cloned().flatten(),
         })
         .collect();
 
@@ -526,6 +548,7 @@ mod tests {
                     skills_dir: legacy_skills.to_string_lossy().into_owned(),
                     project_relative_skills_dir: Some(".legacy/skills".to_string()),
                     category: ToolCategory::Lobster,
+                    icon: None,
                 },
                 CustomToolDef {
                     key: "custom_agent".to_string(),
@@ -533,6 +556,7 @@ mod tests {
                     skills_dir: tmp.path().join("custom-skills").to_string_lossy().into_owned(),
                     project_relative_skills_dir: Some(".custom/skills".to_string()),
                     category: ToolCategory::Lobster,
+                    icon: None,
                 },
             ],
         )
@@ -558,6 +582,7 @@ mod tests {
                 skills_dir: legacy_skills.to_string_lossy().into_owned(),
                 project_relative_skills_dir: Some(".legacy/skills".to_string()),
                 category: ToolCategory::Lobster,
+                icon: None,
             }],
         )
         .unwrap();

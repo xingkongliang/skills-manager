@@ -31,6 +31,7 @@ pub struct ToolInfoDto {
     pub project_relative_skills_dir: Option<String>,
     pub has_project_path_override: bool,
     pub category: ToolCategory,
+    pub icon: Option<String>,
 }
 
 /// Sync active scenario skills to a single tool.
@@ -90,6 +91,7 @@ pub async fn get_tool_status(
                 project_relative_skills_dir: info.project_relative_skills_dir,
                 has_project_path_override: info.has_project_path_override,
                 category: info.category,
+                icon: info.icon,
             })
             .collect();
         let elapsed_ms = start.elapsed().as_millis();
@@ -388,6 +390,7 @@ pub async fn add_custom_tool(
     display_name: String,
     skills_dir: String,
     project_relative_skills_dir: Option<String>,
+    icon: Option<String>,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
@@ -398,6 +401,9 @@ pub async fn add_custom_tool(
         let project_relative_skills_dir = normalize_project_relative_skills_dir_input(
             project_relative_skills_dir.as_deref().unwrap_or_default(),
         )?;
+        let icon = icon
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         if key.is_empty() || display_name.is_empty() || skills_dir.is_empty() {
             return Err(AppError::invalid_input(
                 "Agent key, name and skills path are required",
@@ -418,10 +424,27 @@ pub async fn add_custom_tool(
             skills_dir,
             project_relative_skills_dir,
             category: Default::default(),
+            icon,
         });
         set_custom_tools(&store, &customs)?;
         reconcile_tool_sync_after_path_change(&store, &key);
         Ok(())
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn set_custom_tool_icon(
+    key: String,
+    icon: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let icon = icon
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        tool_service::set_custom_tool_icon(&store, &key, icon)
     })
     .await?
 }
@@ -476,6 +499,7 @@ mod tests {
             skills_dir: "/tmp/whatever-they-had".to_string(),
             project_relative_skills_dir: Some(".old/skills".to_string()),
             category: ToolCategory::Coding,
+            icon: None,
         }];
         store
             .set_setting("custom_tools", &serde_json::to_string(&customs).unwrap())
@@ -591,6 +615,7 @@ mod tests {
             skills_dir: target_base.to_string_lossy().to_string(),
             project_relative_skills_dir: None,
             category: Default::default(),
+            icon: None,
         }];
         store
             .set_setting(
