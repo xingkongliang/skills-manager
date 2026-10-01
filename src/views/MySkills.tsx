@@ -43,7 +43,16 @@ import { SyncDots } from "../components/SyncDots";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { CardActionMenu } from "../components/CardActionMenu";
 import * as api from "../lib/tauri";
-import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
+import {
+  getTagActiveColor,
+  getTagColor,
+  getTagColorIndex,
+  pruneStaleTagFilters,
+  setTagColor,
+  TAG_SWATCH_CLASSES,
+  UNTAGGED_FILTER,
+  useTagColors,
+} from "../lib/skillTags";
 import type {
   ManagedSkill,
   ToolInfo,
@@ -135,6 +144,7 @@ function centralDirName(skill: ManagedSkill) {
 
 export function MySkills() {
   const { t } = useTranslation();
+  const tagColors = useTagColors();
   const navigate = useNavigate();
   const {
     viewedPreset,
@@ -953,6 +963,14 @@ export function MySkills() {
     }
   };
 
+  const handleSetTagColor = async (tag: string, index: number | null) => {
+    try {
+      await setTagColor(tag, index);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    }
+  };
+
   const getTagOptions = (skill: ManagedSkill, keyword: string) => {
     const needle = keyword.trim().toLowerCase();
     return allTags.filter((tag) => {
@@ -1273,7 +1291,7 @@ export function MySkills() {
                     setTagMenu({
                       tag,
                       x: Math.min(e.clientX, window.innerWidth - 160),
-                      y: Math.min(e.clientY, window.innerHeight - 90),
+                      y: Math.min(e.clientY, window.innerHeight - 130),
                     });
                   }}
                   title={t("mySkills.tags.manageHint")}
@@ -1944,6 +1962,45 @@ export function MySkills() {
             className="fixed z-50 min-w-[140px] overflow-hidden rounded-lg border border-border bg-surface py-1 shadow-2xl"
             style={{ top: tagMenu.y, left: tagMenu.x }}
           >
+            <div className="px-3 pb-1.5 pt-1">
+              <div className="mb-1.5 text-[11px] font-medium text-muted">
+                {t("mySkills.tags.color")}
+              </div>
+              <div className="flex items-center gap-1.5">
+                {TAG_SWATCH_CLASSES.map((swatch, index) => {
+                  const current = getTagColorIndex(tagMenu.tag, allTags) === index;
+                  return (
+                    <button
+                      key={swatch}
+                      type="button"
+                      aria-label={t("mySkills.tags.colorSwatch", { index: index + 1 })}
+                      onClick={() => {
+                        handleSetTagColor(tagMenu.tag, index);
+                        setTagMenu(null);
+                      }}
+                      className={cn(
+                        "h-4 w-4 rounded-full transition-transform hover:scale-110",
+                        swatch,
+                        current && "ring-2 ring-primary ring-offset-1 ring-offset-surface"
+                      )}
+                    />
+                  );
+                })}
+              </div>
+              {tagColors[tagMenu.tag] !== undefined && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSetTagColor(tagMenu.tag, null);
+                    setTagMenu(null);
+                  }}
+                  className="mt-1.5 text-[11px] text-tertiary hover:text-secondary"
+                >
+                  {t("mySkills.tags.colorAuto")}
+                </button>
+              )}
+            </div>
+            <div className="my-1 border-t border-border" />
             <button
               onClick={() => {
                 setTagToRename(tagMenu.tag);
