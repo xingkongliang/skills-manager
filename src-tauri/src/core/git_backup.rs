@@ -1869,6 +1869,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         init_repo_unlocked(dir, "Device A").unwrap();
+        // The host's global ignore rules must not exclude this test's .bin fixture.
+        run_git_checked(dir, &["config", "--local", "core.excludesFile", ""]).unwrap();
 
         // A skill committed while small stays tracked even after growing
         // past the limit — untracking would propagate as a deletion.
