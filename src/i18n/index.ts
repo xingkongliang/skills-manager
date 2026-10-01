@@ -4,9 +4,10 @@ import { getSettings } from "../lib/tauri";
 import zh from "./zh.json";
 import zhTW from "./zh-TW.json";
 import en from "./en.json";
+import es from "./es.json";
 
 const LANGUAGE_STORAGE_KEY = "language";
-const SUPPORTED_LANGUAGES = ["zh", "zh-TW", "en"] as const;
+const SUPPORTED_LANGUAGES = ["zh", "zh-TW", "en", "es"] as const;
 type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
 function isSupportedLanguage(lang: string | null): lang is SupportedLanguage {
@@ -42,6 +43,7 @@ function detectLanguage(): SupportedLanguage {
       return /hant|-(tw|hk|mo)\b/.test(lower) ? "zh-TW" : "zh";
     }
     if (isPrimary(lower, "en")) return "en";
+    if (isPrimary(lower, "es")) return "es";
   }
 
   return "en";
@@ -61,6 +63,7 @@ export const i18nReady = (async () => {
       zh: { translation: zh },
       "zh-TW": { translation: zhTW },
       en: { translation: en },
+      es: { translation: es },
     },
     lng,
     // zh-TW is a partial locale, so it still falls back to Simplified
