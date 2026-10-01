@@ -792,6 +792,10 @@ export const addLinkedWorkspace = (name: string, path: string, disabledPath?: st
 export const removeProject = (id: string) =>
   invoke<void>("remove_project", { id });
 
+/** Shows a workspace's folder in the OS file manager, selecting the folder. */
+export const revealProjectFolder = (projectId: string) =>
+  invoke<void>("reveal_project_folder", { projectId });
+
 export const scanProjects = (root: string) =>
   invoke<string[]>("scan_projects", { root });
 

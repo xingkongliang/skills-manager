@@ -2,7 +2,7 @@ import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
 
-const IS_MACOS = navigator.userAgent.includes("Mac");
+import { IS_MACOS } from "../lib/platform";
 
 interface DetailSheetProps {
   open: boolean;

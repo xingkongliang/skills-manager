@@ -618,20 +618,7 @@ fn open_skills_folder_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     tauri::async_runtime::spawn_blocking(move || {
         let repo_path = core::central_repo::base_dir();
 
-        #[cfg(target_os = "macos")]
-        let mut cmd = std::process::Command::new("open");
-        #[cfg(target_os = "windows")]
-        let mut cmd = {
-            let mut c = std::process::Command::new("explorer");
-            use std::os::windows::process::CommandExt;
-            c.creation_flags(0x08000000);
-            c
-        };
-        #[cfg(target_os = "linux")]
-        let mut cmd = std::process::Command::new("xdg-open");
-
-        let status = cmd.arg(&repo_path).status();
-        match status {
+        match core::file_manager::open_dir(&repo_path) {
             Ok(_status) => {
                 #[cfg(not(target_os = "windows"))]
                 if !_status.success() {
@@ -1092,6 +1079,7 @@ pub fn run() {
             commands::projects::add_project,
             commands::projects::add_linked_workspace,
             commands::projects::remove_project,
+            commands::projects::reveal_project_folder,
             commands::projects::scan_projects,
             commands::projects::get_project_agent_targets,
             commands::projects::get_project_skills,

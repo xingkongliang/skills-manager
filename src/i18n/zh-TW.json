@@ -796,6 +796,13 @@
     "created": "Preset 已建立",
     "switched": "已切換到「{{name}}」"
   },
+  "platform": {
+    "fileManager": {
+      "finder": "Finder",
+      "explorer": "檔案總管",
+      "linux": "檔案管理員"
+    }
+  },
   "project": {
     "title": "專案 Skills",
     "path": "專案路徑",
@@ -830,7 +837,6 @@
     "addSelected": "新增選取（{{count}}）",
     "selectAll": "全選",
     "deselectAll": "取消全選",
-    "openInFinder": "開啟目錄",
     "skillFiles": "檔案",
     "importToCenter": "更新中心",
     "importFromCenter": "更新專案",
@@ -915,7 +921,8 @@
     "batchEditTags": "標籤 ({{count}})",
     "batchTagsUpdated": "已更新 {{count}} 個中心 Skill 的標籤",
     "batchTagsFailed": "{{count}} 個中心 Skill 標籤更新失敗",
-    "batchTagScopeNote": "標籤儲存在中央技能庫，改動會影響所有使用這個 Skill 的專案。只屬於本專案的本機 Skill 不會被修改。"
+    "batchTagScopeNote": "標籤儲存在中央技能庫，改動會影響所有使用這個 Skill 的專案。只屬於本專案的本機 Skill 不會被修改。",
+    "revealInFileManager": "在{{app}}中開啟"
   },
   "presetActions": {
     "button": "套用 Preset",

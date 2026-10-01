@@ -42,6 +42,7 @@ import { cn } from "../utils";
 import * as api from "../lib/tauri";
 import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { useRevealProjectFolder } from "../hooks/useRevealProjectFolder";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 const projectLastUsedAgentsKey = (projectId: string) =>
   `project_last_used_export_agents:${projectId}`;
@@ -128,6 +129,7 @@ export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const { label: revealLabel, reveal: revealProjectFolder } = useRevealProjectFolder();
   const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
   const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
@@ -905,7 +907,17 @@ export function ProjectDetail() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 flex-[1_1_260px]">
             <h1 className="app-page-title flex items-center gap-2.5">
-              <FolderOpen className="h-5 w-5 text-accent" />
+              <span
+                title={revealLabel}
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void revealProjectFolder(project.id);
+                }}
+                className="flex cursor-pointer items-center"
+              >
+                <FolderOpen className="h-5 w-5 text-accent" />
+              </span>
               {project.name}
               <span className="app-badge">{groupedSkills.length}</span>
             </h1>

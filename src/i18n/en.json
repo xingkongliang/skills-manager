@@ -869,6 +869,13 @@
     "created": "Preset created",
     "switched": "Switched to \"{{name}}\""
   },
+  "platform": {
+    "fileManager": {
+      "finder": "Finder",
+      "explorer": "File Explorer",
+      "linux": "File Manager"
+    }
+  },
   "project": {
     "title": "Project Skills",
     "path": "Project Path",
@@ -903,7 +910,6 @@
     "addSelected": "Add Selected ({{count}})",
     "selectAll": "Select All",
     "deselectAll": "Deselect All",
-    "openInFinder": "Open Directory",
     "skillFiles": "Files",
     "importToCenter": "Update Center",
     "importFromCenter": "Add Skill",
@@ -999,7 +1005,8 @@
     "batchEditTags": "Tags ({{count}})",
     "batchTagsUpdated": "Tags updated for {{count}} center skills",
     "batchTagsFailed": "{{count}} center skills failed to update tags",
-    "batchTagScopeNote": "Tags live in the central library, so edits affect every project using these skills. Project-only local skills are left untouched."
+    "batchTagScopeNote": "Tags live in the central library, so edits affect every project using these skills. Project-only local skills are left untouched.",
+    "revealInFileManager": "Open in {{app}}"
   },
   "presetActions": {
     "button": "Apply Preset",
