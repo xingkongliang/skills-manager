@@ -13,7 +13,8 @@
     "newPreset": "新建 Preset",
     "projects": "项目工作区",
     "addProject": "关联项目",
-    "settings": "设置"
+    "settings": "设置",
+    "resize": "调整侧边栏宽度"
   },
   "help": {
     "eyebrow": "操作指南",
