@@ -55,13 +55,34 @@ pub struct ReimportSkillResult {
     pub removal_approval: Option<String>,
 }
 
-/// Where a path about to be removed lives.
+/// A path a replacement would take away, and where it lives.
 #[derive(Debug, Clone, Serialize)]
 pub struct PendingRemoval {
     /// [`LIBRARY_LOCATION`], or the key of the agent whose deployed copy holds
     /// it. The user needs to know which directory to go and rescue.
     pub location: String,
     pub path: String,
+    pub kind: PendingRemovalKind,
+}
+
+/// How a replacement takes a path away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingRemovalKind {
+    /// The new version does not have it. See [`crate::core::removals::removed_paths`].
+    Removed,
+    /// The user changed it and the new version writes over it. See
+    /// [`crate::core::removals::overwritten_paths`].
+    Overwritten,
+}
+
+impl PendingRemovalKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Removed => "removed",
+            Self::Overwritten => "overwritten",
+        }
+    }
 }
 
 /// `PendingRemoval::location` for the central library, as opposed to an agent's
@@ -89,21 +110,51 @@ enum UpdateOutcome {
 /// Compared against the *staged* tree rather than the source it came from: the
 /// installer drops `.git` and every symlink, so anything else would report a
 /// path as surviving that the swap goes on to remove.
+///
+/// `baseline` is the installed revision's files, prepared as the installer
+/// prepares a library copy (see [`InstalledBaseline`]). With it, files the user
+/// changed that the new version writes over are reported too; without one —
+/// a local source has no upstream revision, and a revision may not be
+/// fetchable — only removals are.
 pub(crate) fn pending_removals_for(
     store: &SkillStore,
     skill: &SkillRecord,
     staged: Option<&Path>,
+    baseline: Option<&Path>,
 ) -> Result<Vec<PendingRemoval>, AppError> {
+    fn check(
+        pending: &mut Vec<PendingRemoval>,
+        location: &str,
+        current: &Path,
+        replacement: &Path,
+        baseline: Option<&Path>,
+    ) -> Result<(), AppError> {
+        for path in crate::core::removals::removed_paths(current, replacement).map_err(AppError::io)? {
+            pending.push(PendingRemoval {
+                location: location.to_string(),
+                path,
+                kind: PendingRemovalKind::Removed,
+            });
+        }
+        if let Some(baseline) = baseline {
+            for path in crate::core::removals::overwritten_paths(current, baseline, replacement)
+                .map_err(AppError::io)?
+            {
+                pending.push(PendingRemoval {
+                    location: location.to_string(),
+                    path,
+                    kind: PendingRemovalKind::Overwritten,
+                });
+            }
+        }
+        Ok(())
+    }
+
     let library = Path::new(&skill.central_path);
     let mut pending = Vec::new();
 
     if let Some(staged) = staged {
-        for path in crate::core::removals::removed_paths(library, staged).map_err(AppError::io)? {
-            pending.push(PendingRemoval {
-                location: LIBRARY_LOCATION.to_string(),
-                path,
-            });
-        }
+        check(&mut pending, LIBRARY_LOCATION, library, staged, baseline)?;
     }
 
     let effective_new = staged.unwrap_or(library);
@@ -114,17 +165,128 @@ pub(crate) fn pending_removals_for(
         if target.mode != "copy" {
             continue;
         }
-        for path in
-            crate::core::removals::removed_paths(Path::new(&target.target_path), effective_new)
-                .map_err(AppError::io)?
-        {
-            pending.push(PendingRemoval {
-                location: target.tool.clone(),
-                path,
-            });
-        }
+        check(
+            &mut pending,
+            &target.tool,
+            Path::new(&target.target_path),
+            effective_new,
+            baseline,
+        )?;
     }
     Ok(pending)
+}
+
+/// The installed revision of a git-sourced skill, as a fixed reference for
+/// telling the user's edits from upstream's changes (#256).
+///
+/// It cannot be the library itself, nor its recorded `content_hash`: both follow
+/// whatever is on disk, and the hash is rewritten from disk on every re-index.
+/// The upstream files at `source_revision` do not drift.
+///
+/// Prepared by the installer, so it has exactly the shape a library copy of
+/// that revision had. Both directories are removed on drop.
+struct InstalledBaseline {
+    checkout: Option<PathBuf>,
+    prepared: PathBuf,
+}
+
+impl InstalledBaseline {
+    fn path(&self) -> &Path {
+        &self.prepared
+    }
+}
+
+impl Drop for InstalledBaseline {
+    fn drop(&mut self) {
+        let _ = remove_path_if_exists(&self.prepared);
+        if let Some(checkout) = &self.checkout {
+            git_fetcher::cleanup_temp(checkout);
+        }
+    }
+}
+
+/// Build the [`InstalledBaseline`] for an update, or `None` when there is none
+/// to be had: the skill predates recorded revisions, or the revision cannot be
+/// fetched (rewritten history, a server that will not serve a commit by id).
+/// The update then checks for removals alone, as it did before baselines
+/// existed — it is never blocked on one.
+///
+/// `checkout` and `checkout_skill_dir` are the update's own checkout at
+/// `remote_revision`. When nothing has moved upstream they already are the
+/// installed revision, and no fetch is needed.
+///
+/// Errs only on cancellation, which belongs to the whole update.
+fn installed_baseline(
+    skill: &SkillRecord,
+    git_source: &GitSkillSource,
+    checkout_skill_dir: &Path,
+    remote_revision: &str,
+    proxy_url: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<Option<InstalledBaseline>, AppError> {
+    let Some(installed_revision) = skill.source_revision.as_deref() else {
+        return Ok(None);
+    };
+
+    let fetched = if installed_revision == remote_revision {
+        None
+    } else {
+        match git_fetcher::checkout_commit_scoped(
+            &git_source.clone_url,
+            installed_revision,
+            git_source.subpath.as_deref(),
+            cancel,
+            proxy_url,
+        ) {
+            Ok(dir) => Some(dir),
+            Err(e) if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst)) => {
+                return Err(AppError::classify_git_error(e));
+            }
+            Err(e) => {
+                log::warn!(
+                    "no baseline for '{}' at {installed_revision}; checking removals only: {e:#}",
+                    skill.name
+                );
+                return Ok(None);
+            }
+        }
+    };
+
+    let source_dir = match &fetched {
+        None => checkout_skill_dir.to_path_buf(),
+        Some(dir) => match resolve_skill_dir(
+            dir,
+            git_source.subpath.as_deref(),
+            git_source.locator_skill_id.as_deref(),
+        ) {
+            Ok(found) => found,
+            Err(e) => {
+                git_fetcher::cleanup_temp(dir);
+                log::warn!(
+                    "no baseline for '{}': skill not found at {installed_revision}: {}",
+                    skill.name,
+                    e.message
+                );
+                return Ok(None);
+            }
+        },
+    };
+
+    let prepared = std::env::temp_dir().join(format!(
+        "skills-manager-baseline-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let baseline = InstalledBaseline {
+        checkout: fetched,
+        prepared,
+    };
+    match installer::install_skill_dir_to_destination(&source_dir, &skill.name, &baseline.prepared) {
+        Ok(_) => Ok(Some(baseline)),
+        Err(e) => {
+            log::warn!("no baseline for '{}': {e:#}", skill.name);
+            Ok(None)
+        }
+    }
 }
 
 /// A stable name for one exact set of removals at one exact revision.
@@ -134,7 +296,7 @@ fn removal_approval_token(revision: &str, pending: &[PendingRemoval]) -> String 
     hasher.update(revision.as_bytes());
     let mut rows: Vec<String> = pending
         .iter()
-        .map(|p| format!("{}\u{0}{}", p.location, p.path))
+        .map(|p| format!("{}\u{0}{}\u{0}{}", p.location, p.kind.as_str(), p.path))
         .collect();
     rows.sort();
     for row in rows {
@@ -1697,7 +1859,7 @@ pub async fn relink_local_skill_source(
             // Picking a new source says which source to follow. It does not say
             // to discard whatever has accumulated in the library since — same
             // replacement, same guard.
-            let pending = pending_removals_for(&store, &skill, Some(&staged_path))?;
+            let pending = pending_removals_for(&store, &skill, Some(&staged_path), None)?;
             let approval = removal_approval_token(&source_path, &pending);
             if !pending.is_empty() && approved_removals.as_deref() != Some(approval.as_str()) {
                 // Put back exactly what was there. Hardcoding a status loses
@@ -1934,6 +2096,22 @@ pub fn update_git_skill_internal(
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
         let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
         let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
+
+        // Only a replacement can overwrite anything: the library when its
+        // content changes, copy-mode deployments always (they are rebuilt).
+        // Fetched before the repo lock, which would otherwise hold off every
+        // other library operation for the length of a network round trip.
+        let has_copy_targets = store
+            .get_targets_for_skill(&skill.id)
+            .map_err(AppError::db)?
+            .iter()
+            .any(|target| target.mode == "copy");
+        let baseline = if content_changed || has_copy_targets {
+            installed_baseline(&skill, &git_source, &skill_dir, &remote_revision, proxy_url, cancel)?
+        } else {
+            None
+        };
+
         let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
 
         // Stage first, then compare. The tree that lands in the library is the
@@ -1954,7 +2132,12 @@ pub fn update_git_skill_internal(
         };
         let staged_guard = StagedPathGuard::new(&staged_path, install_result.is_some());
 
-        let pending = pending_removals_for(store, &skill, install_result.is_some().then_some(staged_path.as_path()))?;
+        let pending = pending_removals_for(
+            store,
+            &skill,
+            install_result.is_some().then_some(staged_path.as_path()),
+            baseline.as_ref().map(InstalledBaseline::path),
+        )?;
 
         // A confirmation answers one exact question: this revision, this list
         // as shown. It closes the window while the dialog is open — a push, or
@@ -2370,7 +2553,7 @@ pub fn reimport_local_skill_internal(
         // *source*, not about discarding whatever has accumulated in the
         // library since — and for a local skill the "update" button runs this,
         // so leaving it uncovered would guard one path and not its twin.
-        let pending = pending_removals_for(store, &skill, Some(&staged_path))?;
+        let pending = pending_removals_for(store, &skill, Some(&staged_path), None)?;
         // Bound to the set itself, not to a constant. A constant would match on
         // the approving call no matter what the recomputed list said, so a file
         // written while the dialog was open would be deleted having never been
@@ -3387,7 +3570,7 @@ mod tests {
         fs::write(staged.join("SKILL.md"), "v2").unwrap();
 
         let skill = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
-        let pending = pending_removals_for(&repo.store, &skill, Some(&staged)).unwrap();
+        let pending = pending_removals_for(&repo.store, &skill, Some(&staged), None).unwrap();
 
         let found: Vec<(String, String)> = pending
             .iter()
@@ -3434,7 +3617,7 @@ mod tests {
 
         let skill = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
         // `None` staged: the library is unchanged, and is itself the baseline.
-        let pending = pending_removals_for(&repo.store, &skill, None).unwrap();
+        let pending = pending_removals_for(&repo.store, &skill, None, None).unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].location, "cursor");
         assert_eq!(pending[0].path, "mine.txt");
@@ -3468,9 +3651,185 @@ mod tests {
             .unwrap();
 
         let skill = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
-        assert!(pending_removals_for(&repo.store, &skill, None)
+        assert!(pending_removals_for(&repo.store, &skill, None, None)
             .unwrap()
             .is_empty());
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(args)
+            .output()
+            .expect("git must be runnable");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn file_url(path: &Path) -> String {
+        let raw = path.display().to_string().replace('\\', "/");
+        if raw.starts_with('/') {
+            format!("file://{raw}")
+        } else {
+            format!("file:///{raw}")
+        }
+    }
+
+    /// An upstream repo holding `skills/demo` at two commits, and a skill
+    /// record installed from the first. The library copy starts identical to
+    /// that install. Returns `(upstream, first, second)`.
+    fn installed_from_upstream(repo: &TestRepo) -> (PathBuf, String, String) {
+        let upstream = repo._tmp.path().join("upstream");
+        let skill_src = upstream.join("skills/demo");
+        fs::create_dir_all(skill_src.join("templates")).unwrap();
+        fs::write(skill_src.join("SKILL.md"), "---\nname: demo\n---\nv1\n").unwrap();
+        fs::write(skill_src.join("templates/default.md"), "default v1\n").unwrap();
+        git(&upstream, &["init", "--quiet"]);
+        git(&upstream, &["config", "uploadpack.allowFilter", "true"]);
+        git(&upstream, &["add", "-A"]);
+        git(&upstream, &["commit", "--quiet", "-m", "v1"]);
+        let first = git(&upstream, &["rev-parse", "HEAD"]);
+
+        let central = central_repo::skills_dir().join("demo");
+        installer::install_skill_dir_to_destination(&skill_src, "demo", &central).unwrap();
+        let mut record = sample_skill("skill-1", "demo", &central);
+        record.source_type = "git".to_string();
+        record.source_ref = Some(file_url(&upstream));
+        record.source_subpath = Some("skills/demo".to_string());
+        record.source_revision = Some(first.clone());
+        repo.store.insert_skill(&record).unwrap();
+
+        fs::write(skill_src.join("SKILL.md"), "---\nname: demo\n---\nv2\n").unwrap();
+        fs::write(skill_src.join("templates/default.md"), "default v2\n").unwrap();
+        git(&upstream, &["commit", "--quiet", "-am", "v2"]);
+        let second = git(&upstream, &["rev-parse", "HEAD"]);
+        (upstream, first, second)
+    }
+
+    fn git_source_for(upstream: &Path) -> GitSkillSource {
+        GitSkillSource {
+            clone_url: file_url(upstream),
+            branch: None,
+            subpath: Some("skills/demo".to_string()),
+            locator_skill_id: None,
+        }
+    }
+
+    /// The remaining #256 gap, end to end below the network-facing entry point:
+    /// the installed revision is fetched as the baseline, so the user's edit to
+    /// a file the new version also ships is reported — and upstream's change to
+    /// a file the user never touched is not.
+    #[test]
+    fn an_edit_the_new_version_would_overwrite_is_reported_against_the_installed_revision() {
+        let repo = test_repo();
+        let (upstream, _first, second) = installed_from_upstream(&repo);
+        let central = central_repo::skills_dir().join("demo");
+        fs::write(central.join("templates/default.md"), "default v1, tuned by hand\n").unwrap();
+
+        // The update's own checkout and staged tree, at the new revision.
+        let staged = repo._tmp.path().join("staged");
+        installer::install_skill_dir_to_destination(&upstream.join("skills/demo"), "demo", &staged)
+            .unwrap();
+
+        let skill = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
+        let baseline = installed_baseline(
+            &skill,
+            &git_source_for(&upstream),
+            &upstream.join("skills/demo"),
+            &second,
+            None,
+            None,
+        )
+        .unwrap()
+        .expect("the installed revision is fetchable");
+        assert_eq!(
+            fs::read_to_string(baseline.path().join("templates/default.md")).unwrap(),
+            "default v1\n",
+            "the baseline is the installed revision, not the tip"
+        );
+
+        let pending =
+            pending_removals_for(&repo.store, &skill, Some(&staged), Some(baseline.path())).unwrap();
+        let found: Vec<(String, String, PendingRemovalKind)> = pending
+            .iter()
+            .map(|p| (p.location.clone(), p.path.clone(), p.kind))
+            .collect();
+        assert_eq!(
+            found,
+            vec![(
+                LIBRARY_LOCATION.to_string(),
+                "templates/default.md".to_string(),
+                PendingRemovalKind::Overwritten
+            )],
+            "only the edited file; SKILL.md changed upstream alone"
+        );
+
+        let prepared = baseline.path().to_path_buf();
+        drop(baseline);
+        assert!(!prepared.exists(), "the baseline cleans up after itself");
+    }
+
+    /// Nothing moved upstream: the update's checkout already is the installed
+    /// revision, and serves as the baseline without a fetch.
+    #[test]
+    fn an_unmoved_revision_uses_the_update_checkout_as_the_baseline() {
+        let repo = test_repo();
+        let (upstream, first, _second) = installed_from_upstream(&repo);
+        let skill = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
+
+        let checkout = repo._tmp.path().join("checkout-at-first");
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join("SKILL.md"), "---\nname: demo\n---\nfrom the checkout\n").unwrap();
+
+        // A URL nothing listens on: any fetch would fail and yield no baseline.
+        let mut source = git_source_for(&upstream);
+        source.clone_url = file_url(&repo._tmp.path().join("nowhere"));
+        let baseline = installed_baseline(&skill, &source, &checkout, &first, None, None)
+            .unwrap()
+            .expect("no fetch is needed");
+        assert_eq!(
+            fs::read_to_string(baseline.path().join("SKILL.md")).unwrap(),
+            "---\nname: demo\n---\nfrom the checkout\n"
+        );
+    }
+
+    /// No baseline is not a reason to block an update: the check falls back to
+    /// removals alone, as before baselines existed.
+    #[test]
+    fn an_unfetchable_or_unrecorded_revision_yields_no_baseline() {
+        let repo = test_repo();
+        let (upstream, _first, second) = installed_from_upstream(&repo);
+        let mut skill = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
+
+        skill.source_revision = Some("0".repeat(40));
+        assert!(installed_baseline(
+            &skill,
+            &git_source_for(&upstream),
+            &upstream.join("skills/demo"),
+            &second,
+            None,
+            None,
+        )
+        .unwrap()
+        .is_none());
+
+        skill.source_revision = None;
+        assert!(installed_baseline(
+            &skill,
+            &git_source_for(&upstream),
+            &upstream.join("skills/demo"),
+            &second,
+            None,
+            None,
+        )
+        .unwrap()
+        .is_none());
     }
 
     /// An approval answers one exact question: this revision, this list.
@@ -3479,12 +3838,18 @@ mod tests {
         let a = vec![PendingRemoval {
             location: LIBRARY_LOCATION.to_string(),
             path: "templates/mine.pptx".to_string(),
+            kind: PendingRemovalKind::Removed,
         }];
         let mut b = a.clone();
         b.push(PendingRemoval {
             location: LIBRARY_LOCATION.to_string(),
             path: "templates/another.pptx".to_string(),
+            kind: PendingRemovalKind::Removed,
         });
+        // Same path, but now it survives and only the user's edit to it goes:
+        // a different question, and approving one must not answer the other.
+        let mut c = a.clone();
+        c[0].kind = PendingRemovalKind::Overwritten;
 
         assert_eq!(
             removal_approval_token("rev1", &a),
@@ -3500,6 +3865,11 @@ mod tests {
             removal_approval_token("rev1", &a),
             removal_approval_token("rev1", &b),
             "the skill wrote another file while the dialog was open"
+        );
+        assert_ne!(
+            removal_approval_token("rev1", &a),
+            removal_approval_token("rev1", &c),
+            "a removal and an overwrite of the same path are different losses"
         );
     }
 
