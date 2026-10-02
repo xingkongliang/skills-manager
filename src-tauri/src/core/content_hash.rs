@@ -217,6 +217,12 @@ fn fold_crlf(content: &[u8]) -> Cow<'_, [u8]> {
     Cow::Owned(folded)
 }
 
+/// Whether two files hold the same content once CRLF is folded to LF in text —
+/// the per-file comparison [`hash_entries_eol_insensitive`] makes over a tree.
+pub fn same_content_eol_insensitive(a: &[u8], b: &[u8]) -> bool {
+    a == b || fold_crlf(a) == fold_crlf(b)
+}
+
 /// Hash the same content scope as [`hash_entries`], with CRLF folded to LF in
 /// text files.
 ///

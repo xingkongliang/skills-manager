@@ -1246,6 +1246,101 @@ pub fn checkout_revision(repo_dir: &Path, revision: &str) -> Result<()> {
     Ok(())
 }
 
+/// Check out one exact commit of `url` into a fresh temporary directory.
+///
+/// For reading a revision other than the one an install or update checkout is
+/// at: every clone here is `--depth 1` at a branch tip, so an earlier commit is
+/// never already present. This fetches the commit by id — which a server must be
+/// willing to serve (GitHub is; a server may refuse an id no ref points at) —
+/// narrowed to `subpath` the way [`clone_repo_ref_scoped`] narrows, and falling
+/// back to the whole tree when the narrow fetch is unavailable.
+///
+/// The result is detached from its promisor like every other checkout handed
+/// out of this module. Callers clean it up with [`cleanup_temp`].
+pub fn checkout_commit_scoped(
+    url: &str,
+    revision: &str,
+    subpath: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+) -> Result<PathBuf> {
+    if let Some(subpath) = sparse_pattern(subpath) {
+        match fetch_commit_into_temp(url, revision, Some(&subpath), cancel, proxy_url) {
+            Ok(dir) => return Ok(dir),
+            Err(e) if is_cancellation(&e) => return Err(e),
+            Err(e) => {
+                log::info!(
+                    "narrow fetch of '{subpath}' at {revision} from {url} unavailable, using the whole tree: {e}"
+                );
+            }
+        }
+    }
+    fetch_commit_into_temp(url, revision, None, cancel, proxy_url)
+}
+
+fn fetch_commit_into_temp(
+    url: &str,
+    revision: &str,
+    sparse: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+) -> Result<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("{CLONE_TEMP_PREFIX}{}", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        std::fs::create_dir_all(&dir)?;
+        let quiet = None;
+        run_git_watched_at(&dir, &["init", "--quiet"], None, cancel, &quiet)?;
+        run_git_watched_at(&dir, &["remote", "add", "origin", url], None, cancel, &quiet)?;
+        if let Some(sparse) = sparse {
+            // Registered before the fetch, so the checkout below may fetch the
+            // blobs it writes — and only those.
+            run_git_watched_at(&dir, &["config", "remote.origin.promisor", "true"], None, cancel, &quiet)?;
+            run_git_watched_at(
+                &dir,
+                &["config", "remote.origin.partialclonefilter", "blob:none"],
+                None,
+                cancel,
+                &quiet,
+            )?;
+            run_git_watched_at(
+                &dir,
+                &["fetch", "--depth", "1", "--filter=blob:none", "origin", revision],
+                proxy_url,
+                cancel,
+                &quiet,
+            )?;
+            run_git_watched_at(
+                &dir,
+                &["sparse-checkout", "set", "--cone", sparse],
+                proxy_url,
+                cancel,
+                &quiet,
+            )?;
+        } else {
+            run_git_watched_at(
+                &dir,
+                &["fetch", "--depth", "1", "origin", revision],
+                proxy_url,
+                cancel,
+                &quiet,
+            )?;
+        }
+        run_git_watched_at(&dir, &["checkout", "--detach", "FETCH_HEAD"], proxy_url, cancel, &quiet)?;
+        if let Some(sparse) = sparse {
+            if !sparse_checkout_holds_a_skill(&dir, sparse) {
+                bail!("'{sparse}' is not a skill directory at {revision} of {url}");
+            }
+        }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(e);
+    }
+    detach_from_promisor(&dir);
+    Ok(dir)
+}
+
 pub fn relative_subpath(repo_dir: &Path, skill_dir: &Path) -> Option<String> {
     let relative = skill_dir.strip_prefix(repo_dir).ok()?;
     if relative.as_os_str().is_empty() {
@@ -2597,6 +2692,71 @@ mod tests {
             fs::read_to_string(checkout.join("kept/f.txt")).unwrap(),
             "kept"
         );
+    }
+
+    /// An earlier commit is not in any `--depth 1` checkout, so reading the
+    /// installed revision has to fetch it by id. Served over `file://` from a
+    /// repo whose tip has since moved on, narrowed and whole.
+    #[test]
+    fn checks_out_an_earlier_commit_by_id_narrowed_and_whole() {
+        fn git(dir: &Path, args: &[&str]) -> String {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .output()
+                .expect("git must be runnable");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+        fn file_url(path: &Path) -> String {
+            let raw = path.display().to_string().replace('\\', "/");
+            if raw.starts_with('/') {
+                format!("file://{raw}")
+            } else {
+                format!("file:///{raw}")
+            }
+        }
+
+        let tmp = tempdir().unwrap();
+        let source = tmp.path().join("source");
+        fs::create_dir_all(source.join("skills/demo")).unwrap();
+        fs::create_dir_all(source.join("skills/other")).unwrap();
+        fs::write(source.join("skills/demo/SKILL.md"), "---\nname: demo\n---\nv1").unwrap();
+        fs::write(source.join("skills/other/SKILL.md"), "---\nname: other\n---\n").unwrap();
+        git(&source, &["init", "--quiet"]);
+        git(&source, &["config", "uploadpack.allowFilter", "true"]);
+        git(&source, &["add", "-A"]);
+        git(&source, &["commit", "--quiet", "-m", "v1"]);
+        let first = git(&source, &["rev-parse", "HEAD"]);
+        fs::write(source.join("skills/demo/SKILL.md"), "---\nname: demo\n---\nv2").unwrap();
+        git(&source, &["commit", "--quiet", "-am", "v2"]);
+        let url = file_url(&source);
+
+        let narrow = checkout_commit_scoped(&url, &first, Some("skills/demo"), None, None).unwrap();
+        assert_eq!(
+            fs::read_to_string(narrow.join("skills/demo/SKILL.md")).unwrap(),
+            "---\nname: demo\n---\nv1",
+            "the earlier commit, not the tip"
+        );
+        assert!(
+            !narrow.join("skills/other").exists(),
+            "narrowed to the requested skill"
+        );
+        cleanup_temp(&narrow);
+
+        let whole = checkout_commit_scoped(&url, &first, None, None, None).unwrap();
+        assert!(whole.join("skills/other/SKILL.md").is_file());
+        assert_eq!(
+            fs::read_to_string(whole.join("skills/demo/SKILL.md")).unwrap(),
+            "---\nname: demo\n---\nv1"
+        );
+        cleanup_temp(&whole);
     }
 
     // ── cache prune ──
