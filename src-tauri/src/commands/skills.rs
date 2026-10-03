@@ -1221,11 +1221,42 @@ pub async fn preview_git_install(
             })
         };
 
-        build_preview().inspect_err(|_e| {
+        let preview = build_preview().inspect_err(|_e| {
             git_fetcher::cleanup_temp(&temp_dir);
-        })
+        });
+        // Fetch metadata is the age signal the source cards show: record it
+        // only now that the preview demonstrably succeeded, and only for a
+        // refresh preview — see `note_custom_repo_fetch`.
+        if let Ok(result) = preview.as_ref() {
+            note_custom_repo_fetch(&store, refresh, &parsed.clone_url, result.skills.len());
+        }
+        preview
     })
     .await?
+}
+
+/// Record "when this source's content was last fetched from the network" on
+/// the matching custom-repo bookmark.
+///
+/// Gated on `refresh == Some(true)`: only an UpdateCache preview pulled from
+/// the remote just now moves the timestamp. A cache-first serve is by
+/// definition possibly-older content, so stamping it would lie about the age
+/// of what the user is looking at. Best-effort — a storage failure is logged
+/// and never surfaced to the (already successful) preview.
+fn note_custom_repo_fetch(
+    store: &SkillStore,
+    refresh: Option<bool>,
+    clone_url: &str,
+    skill_count: usize,
+) {
+    if refresh != Some(true) {
+        return;
+    }
+    if let Err(err) =
+        crate::core::custom_repos::note_fetch(store, clone_url, skill_count as u32)
+    {
+        log::warn!("Failed to record fetch metadata for custom repo {clone_url}: {err}");
+    }
 }
 
 /// Install selected skills from a previously cloned temp directory.
@@ -4432,5 +4463,29 @@ mod tests {
             "https://github.com/owner/repo",
             None
         ));
+    }
+
+    // ── custom repo fetch metadata (preview_git_install wiring) ──
+
+    #[test]
+    fn fetch_metadata_is_recorded_only_for_refresh_previews() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let record = crate::core::custom_repos::add(&store, "owner/repo").unwrap();
+
+        // Cache-first serves (cold expand, post-install re-scan) must not
+        // stamp the fields: their content is as old as the cache, and the
+        // timestamp means "last successful network fetch".
+        note_custom_repo_fetch(&store, None, &record.url, 7);
+        note_custom_repo_fetch(&store, Some(false), &record.url, 7);
+        let stored = crate::core::custom_repos::list(&store).unwrap();
+        assert_eq!(stored[0].last_fetch_at, None, "cache-first must not bump");
+        assert_eq!(stored[0].last_fetch_count, None, "cache-first must not bump");
+
+        // Only a refresh preview (UpdateCache) fetched from the remote just now.
+        note_custom_repo_fetch(&store, Some(true), &record.url, 7);
+        let stored = crate::core::custom_repos::list(&store).unwrap();
+        assert!(stored[0].last_fetch_at.unwrap() > 0);
+        assert_eq!(stored[0].last_fetch_count, Some(7));
     }
 }

@@ -29,6 +29,7 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
+  HardDrive,
 } from "lucide-react";
 import {
   DndContext,
@@ -58,6 +59,7 @@ import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
 import { AgentIcon } from "../components/AgentIcon";
 import { ToggleSwitch } from "../components/ToggleSwitch";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import * as api from "../lib/tauri";
 import { applyTextSize } from "../lib/textScale";
 import { getErrorMessage } from "../lib/error";
@@ -74,6 +76,20 @@ const IS_MACOS = navigator.userAgent.includes("Mac");
 const CAN_INSTALL_IN_APP = IS_WINDOWS || IS_MACOS;
 
 const RESTART_TOAST_ID = "app-update-restart";
+
+/** Human-readable byte size for the repo-cache readout ("512 MB", "1.2 GB"). */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded = value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${units[unit]}`;
+}
 
 interface SortableAgentCardProps {
   agentKey: string;
@@ -197,6 +213,11 @@ export function Settings() {
   const [customProjectPath, setCustomProjectPath] = useState("");
   const [addingCustom, setAddingCustom] = useState(false);
   const [showMoreAgents, setShowMoreAgents] = useState(false);
+  // Repository cache (Settings-only readout): loaded when Settings mounts,
+  // never at app startup — the size walk costs ~a second over a large cache.
+  const [repoCacheStats, setRepoCacheStats] = useState<api.RepoCacheStats | null>(null);
+  const [repoCacheLoading, setRepoCacheLoading] = useState(false);
+  const [clearRepoCacheOpen, setClearRepoCacheOpen] = useState(false);
 
   const GITHUB_URL = "https://github.com/xingkongliang/skills-manager";
   const WEBSITE_URL = "https://skillsmanager.dev";
@@ -319,6 +340,40 @@ export function Settings() {
     api.checkLastPanic().then(setLastPanic).catch(() => {});
     api.getCentralRepoWarnings().then(setRepoWarnings).catch(() => {});
   }, []);
+
+  const reloadRepoCacheStats = useCallback(() => {
+    setRepoCacheLoading(true);
+    api
+      .getRepoCacheStats()
+      .then(setRepoCacheStats)
+      .catch(() => {})
+      .finally(() => setRepoCacheLoading(false));
+  }, []);
+
+  // On-demand: this only runs when the user is actually looking at Settings.
+  useEffect(() => {
+    reloadRepoCacheStats();
+  }, [reloadRepoCacheStats]);
+
+  // Best-effort delete of every cached repository checkout. Slots held by a
+  // running install are kept and reported; the readout refreshes afterwards
+  // so the shown size always matches what is still on disk. Failures are
+  // caught here (not in ConfirmDialog, which rethrows) so the user always
+  // gets a toast instead of a silently stuck dialog.
+  const handleClearRepoCache = async () => {
+    let result: api.ClearRepoCacheResult;
+    try {
+      result = await api.clearRepoCache();
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+      return;
+    }
+    reloadRepoCacheStats();
+    toast.success(t("settings.repoCacheCleared", { size: formatBytes(result.freed_bytes) }));
+    if (result.remaining_slots > 0) {
+      toast.info(t("settings.repoCacheRemaining", { count: result.remaining_slots }));
+    }
+  };
 
   useEffect(() => {
     api.getSettings("sync_mode").then((v) => { if (v) setSyncMode(v); });
@@ -1354,6 +1409,39 @@ export function Settings() {
               </div>
             </div>
 
+            {/* Repo cache — persistent cloned-repository copies; size readout
+                plus a manual clear (installed skills are never touched). */}
+            <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-[14px] font-semibold text-primary">{t("settings.repoCache")}</h3>
+                <p className="mt-0.5 text-[12px] text-muted">{t("settings.repoCacheDesc")}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-background px-3 py-2 text-[13px] font-mono text-tertiary">
+                  <HardDrive className="w-3 h-3 text-muted" />
+                  {repoCacheLoading && !repoCacheStats ? (
+                    <Loader2 className="h-3 w-3 animate-spin text-muted" />
+                  ) : repoCacheStats ? (
+                    t("settings.repoCacheUsage", {
+                      size: formatBytes(repoCacheStats.total_bytes),
+                      count: repoCacheStats.slot_count,
+                    })
+                  ) : (
+                    "—"
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setClearRepoCacheOpen(true)}
+                  disabled={!repoCacheStats || repoCacheStats.total_bytes === 0}
+                  className={cn(actionButtonClass, "text-muted hover:text-secondary")}
+                >
+                  <Trash2 className="w-3 h-3" />
+                  {t("settings.repoCacheClear")}
+                </button>
+              </div>
+            </div>
+
             {/* Sync mode */}
             <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
               <div className="min-w-0 flex-1">
@@ -1875,6 +1963,16 @@ export function Settings() {
           </div>
         </section>
       </div>
+
+      <ConfirmDialog
+        open={clearRepoCacheOpen}
+        title={t("settings.repoCacheClearTitle")}
+        message={t("settings.repoCacheClearMessage")}
+        confirmLabel={t("settings.repoCacheClearConfirm")}
+        tone="warning"
+        onClose={() => setClearRepoCacheOpen(false)}
+        onConfirm={handleClearRepoCache}
+      />
     </div>
   );
 }

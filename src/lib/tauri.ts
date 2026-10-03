@@ -318,6 +318,13 @@ export interface CustomRepo {
   label: string;
   /** Unix milliseconds. */
   added_at: number;
+  /**
+   * Unix ms of the last successful network fetch (refresh scan). Null when
+   * never fetched — including records stored before the fields existed.
+   */
+  last_fetch_at: number | null;
+  /** Skill count that fetch saw; same lifecycle as `last_fetch_at`. */
+  last_fetch_count: number | null;
 }
 
 export const listCustomRepos = () =>
@@ -507,6 +514,32 @@ export const hideToTray = () => invoke<void>("hide_to_tray");
 
 export const openCentralRepoFolder = () =>
   invoke<void>("open_central_repo_folder");
+
+// ── Repository cache management (Settings) ──
+
+export interface RepoCacheStats {
+  total_bytes: number;
+  slot_count: number;
+}
+
+/**
+ * Size and slot count of the persistent git repository cache. Walks the whole
+ * cache server-side (~a second over a large cache), so load on demand rather
+ * than at startup.
+ */
+export const getRepoCacheStats = () =>
+  invoke<RepoCacheStats>("get_repo_cache_stats");
+
+export interface ClearRepoCacheResult {
+  /** Bytes actually deleted. */
+  freed_bytes: number;
+  /** Slots kept because an install held their lock; retry later to finish. */
+  remaining_slots: number;
+}
+
+/** Best-effort deletion of every cached repository checkout. */
+export const clearRepoCache = () =>
+  invoke<ClearRepoCacheResult>("clear_repo_cache");
 
 export interface AppUpdateInfo {
   has_update: boolean;

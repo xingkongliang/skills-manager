@@ -269,6 +269,93 @@ fn slot_stats(dir: &Path) -> (u64, std::time::SystemTime) {
     (size, newest)
 }
 
+/// Total size and slot count of the repository cache, for the Settings screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepoCacheUsage {
+    pub total_bytes: u64,
+    pub slot_count: u64,
+}
+
+/// Read-only walk of the cache `root`, sharing the pruner's `slot_stats` so
+/// the number shown in Settings is the same one eviction decisions use. A
+/// missing root is an empty cache, not an error.
+pub fn repo_cache_usage(root: &Path) -> RepoCacheUsage {
+    let mut usage = RepoCacheUsage {
+        total_bytes: 0,
+        slot_count: 0,
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return usage;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let (size, _) = slot_stats(&path);
+        usage.total_bytes = usage.total_bytes.saturating_add(size);
+        usage.slot_count += 1;
+    }
+    usage
+}
+
+/// Outcome of a best-effort cache clear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClearedRepoCache {
+    /// Bytes actually deleted.
+    pub freed_bytes: u64,
+    /// Slots still on disk afterwards (their lock was held by a running
+    /// install, or the delete failed) — reported so the UI can say the clear
+    /// was partial instead of silently showing a non-zero size as success.
+    pub remaining_slots: u64,
+}
+
+/// Remove every cache slot under `root`, best-effort.
+///
+/// Same locking rules as the pruner: a slot another install holds is skipped
+/// rather than waited for, and the lock *file* is left behind (see
+/// `prune_cache_root`). Nothing outside `root` is ever touched — the root is
+/// supplied by the caller as `cache_dir()/repos` and this function only ever
+/// descends into directories directly inside it.
+pub fn clear_repo_cache_root(root: &Path) -> ClearedRepoCache {
+    let mut cleared = ClearedRepoCache {
+        freed_bytes: 0,
+        remaining_slots: 0,
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return cleared;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let (size, _) = slot_stats(&path);
+        let lock_path = path.with_extension("lock");
+        let Ok(file) = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+        else {
+            cleared.remaining_slots += 1;
+            continue;
+        };
+        if file.try_lock_exclusive().is_err() {
+            cleared.remaining_slots += 1;
+            continue;
+        }
+        if std::fs::remove_dir_all(&path).is_ok() {
+            log::info!("cleared repo cache slot {}", path.display());
+            cleared.freed_bytes = cleared.freed_bytes.saturating_add(size);
+        } else {
+            cleared.remaining_slots += 1;
+        }
+    }
+    cleared
+}
+
 fn lock_repo_cache(
     cached_dir: &Path,
     on_progress: &Option<ProgressCallback>,
@@ -3347,5 +3434,71 @@ mod tests {
             "eviction moves on to the next candidate instead of giving up"
         );
         drop(held);
+    }
+
+    // ── cache usage / clear (Settings) ──
+
+    #[test]
+    fn cache_usage_counts_bytes_and_slots_only_in_directories() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        seed_cache_slot(root, "a", 1024, std::time::UNIX_EPOCH);
+        seed_cache_slot(root, "b-sparse", 2048, std::time::UNIX_EPOCH);
+        // Stray files at the root (lock files, logs) are not slots.
+        fs::write(root.join("a.lock"), b"lock").unwrap();
+
+        let usage = repo_cache_usage(root);
+
+        assert_eq!(usage.slot_count, 2);
+        assert_eq!(usage.total_bytes, 1024 + 2048, "stray root files are not slots");
+    }
+
+    #[test]
+    fn cache_usage_of_a_missing_root_is_empty_not_an_error() {
+        let tmp = tempdir().unwrap();
+        let usage = repo_cache_usage(&tmp.path().join("never-created"));
+        assert_eq!(
+            usage,
+            RepoCacheUsage {
+                total_bytes: 0,
+                slot_count: 0
+            }
+        );
+    }
+
+    #[test]
+    fn clearing_removes_free_slots_and_spares_held_ones() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("repos");
+        fs::create_dir_all(&root).unwrap();
+        seed_cache_slot(&root, "free", 2048, std::time::UNIX_EPOCH);
+        seed_cache_slot(&root, "held", 4096, std::time::UNIX_EPOCH);
+        // A sibling of the cache root must never be touched by a clear — only
+        // slots directly under the given root are candidates.
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), b"keep").unwrap();
+
+        let held = lock_repo_cache(&root.join("held"), &None).unwrap();
+
+        let cleared = clear_repo_cache_root(&root);
+
+        assert!(!root.join("free").exists(), "unheld slots are deleted");
+        assert!(
+            root.join("held").exists(),
+            "a slot a running install holds must survive a manual clear too"
+        );
+        assert_eq!(cleared.freed_bytes, 2048, "freed bytes count only what was deleted");
+        assert_eq!(cleared.remaining_slots, 1);
+        // And the lock files stay behind, exactly as pruning leaves them.
+        assert!(root.join("free.lock").exists());
+        assert!(outside.join("keep.txt").exists());
+        drop(held);
+
+        // A second clear, once the lock is released, finishes the job.
+        let cleared = clear_repo_cache_root(&root);
+        assert!(!root.join("held").exists());
+        assert_eq!(cleared.freed_bytes, 4096);
+        assert_eq!(cleared.remaining_slots, 0);
     }
 }

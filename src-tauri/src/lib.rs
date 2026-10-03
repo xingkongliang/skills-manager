@@ -1067,6 +1067,8 @@ pub fn run() {
             commands::settings::app_exit,
             commands::settings::restart_app,
             commands::settings::hide_to_tray,
+            commands::settings::get_repo_cache_stats,
+            commands::settings::clear_repo_cache,
             // Git Backup
             commands::git_backup::git_backup_fetch,
             commands::git_backup::git_backup_status,

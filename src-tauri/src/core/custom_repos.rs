@@ -25,6 +25,15 @@ pub struct CustomRepoRecord {
     pub label: String,
     /// Unix epoch milliseconds.
     pub added_at: i64,
+    /// Unix epoch milliseconds of the last *successful network fetch* of this
+    /// repository (a refresh preview). Absent while never fetched — including
+    /// every record stored before these fields existed, hence the serde
+    /// defaults: old JSON without them still parses as None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_fetch_at: Option<u64>,
+    /// Skill count that fetch saw. Same lifecycle as `last_fetch_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_fetch_count: Option<u32>,
 }
 
 /// All saved repositories, in insertion order.
@@ -47,6 +56,9 @@ pub fn add(store: &SkillStore, url: &str) -> Result<CustomRepoRecord, AppError> 
         url: canonical.clone(),
         label: derive_label(&canonical),
         added_at: now_millis(),
+        // New records have never been fetched — the first scan fills these in.
+        last_fetch_at: None,
+        last_fetch_count: None,
     };
     records.push(record.clone());
     write_records(store, &records)?;
@@ -64,6 +76,28 @@ pub fn remove(store: &SkillStore, id: &str) -> Result<(), AppError> {
             "Custom repository '{id}' not found"
         )));
     }
+    write_records(store, &records)
+}
+
+/// Record fetch metadata on the repository whose canonical URL matches `url`.
+///
+/// A best-effort annotation written after a refresh preview succeeded: the
+/// input is canonicalized with the same rule [`add`] uses, so any spelling of
+/// the repository finds the record. Invalid input and unknown URLs are no-op
+/// successes rather than errors — the scan the caller is annotating already
+/// succeeded, and failing it over bookkeeping would trade a working feature
+/// for a timestamp. Storage errors still propagate (a genuinely broken store
+/// is worth hearing about from somewhere louder).
+pub fn note_fetch(store: &SkillStore, url: &str, count: u32) -> Result<(), AppError> {
+    let Ok(canonical) = canonical_repo_url(url) else {
+        return Ok(());
+    };
+    let mut records = read_records(store)?;
+    let Some(record) = records.iter_mut().find(|record| record.url == canonical) else {
+        return Ok(());
+    };
+    record.last_fetch_at = Some(now_millis().max(0) as u64);
+    record.last_fetch_count = Some(count);
     write_records(store, &records)
 }
 
@@ -325,5 +359,67 @@ mod tests {
         let records = list(&store).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, record.id);
+    }
+
+    #[test]
+    fn records_stored_before_fetch_metadata_parse_with_none() {
+        let (_tmp, store) = test_store();
+        // The exact shape written by versions before `last_fetch_at` /
+        // `last_fetch_count` existed: no such keys at all.
+        let legacy = r#"[{"id":"legacy-1","url":"https://github.com/owner/old","label":"owner/old","added_at":1700000000000}]"#;
+        store.set_setting(CUSTOM_REPOS_SETTING_KEY, legacy).unwrap();
+
+        let records = list(&store).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].last_fetch_at, None);
+        assert_eq!(records[0].last_fetch_count, None);
+
+        // And the record is still fully usable: adding through the normal path
+        // round-trips it without losing the legacy fields.
+        add(&store, "owner/new").unwrap();
+        let records = list(&store).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].url, "https://github.com/owner/old");
+        assert_eq!(records[0].last_fetch_at, None);
+    }
+
+    #[test]
+    fn note_fetch_updates_the_matching_record_any_spelling() {
+        let (_tmp, store) = test_store();
+        let target = add(&store, "owner/target").unwrap();
+        let other = add(&store, "owner/other").unwrap();
+        // Never fetched: the baseline is absent, not zero.
+        assert_eq!(list(&store).unwrap()[0].last_fetch_at, None);
+
+        // The scan uses whatever URL form the user typed; note_fetch resolves
+        // it through the same canonicalization as add.
+        note_fetch(&store, "https://github.com/owner/target.git", 24).unwrap();
+
+        let records = list(&store).unwrap();
+        let updated = records.iter().find(|r| r.id == target.id).unwrap();
+        assert!(updated.last_fetch_at.unwrap() > 0);
+        assert_eq!(updated.last_fetch_count, Some(24));
+        let untouched = records.iter().find(|r| r.id == other.id).unwrap();
+        assert_eq!(untouched.last_fetch_at, None);
+        assert_eq!(untouched.last_fetch_count, None);
+
+        // A later fetch overwrites, not accumulates.
+        note_fetch(&store, "owner/target", 25).unwrap();
+        let updated = list(&store).unwrap()[0].clone();
+        assert_eq!(updated.last_fetch_count, Some(25));
+    }
+
+    #[test]
+    fn note_fetch_is_a_noop_for_unknown_or_invalid_urls() {
+        let (_tmp, store) = test_store();
+        add(&store, "owner/saved").unwrap();
+        let before = list(&store).unwrap();
+
+        // Unknown repository: nothing to annotate, still a success.
+        note_fetch(&store, "owner/never-added", 3).unwrap();
+        // Invalid input cannot be canonicalized — same best-effort contract.
+        note_fetch(&store, "not a url", 3).unwrap();
+
+        assert_eq!(list(&store).unwrap(), before);
     }
 }

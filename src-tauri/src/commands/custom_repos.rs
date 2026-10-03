@@ -11,6 +11,10 @@ pub struct CustomRepoDto {
     pub url: String,
     pub label: String,
     pub added_at: i64,
+    /// Unix ms of the last successful network fetch; null when never fetched
+    /// (mirrors the serde default on `CustomRepoRecord`).
+    pub last_fetch_at: Option<u64>,
+    pub last_fetch_count: Option<u32>,
 }
 
 fn custom_repo_dto(record: &CustomRepoRecord) -> CustomRepoDto {
@@ -19,6 +23,8 @@ fn custom_repo_dto(record: &CustomRepoRecord) -> CustomRepoDto {
         url: record.url.clone(),
         label: record.label.clone(),
         added_at: record.added_at,
+        last_fetch_at: record.last_fetch_at,
+        last_fetch_count: record.last_fetch_count,
     }
 }
 

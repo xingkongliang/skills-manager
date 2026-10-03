@@ -25,6 +25,7 @@ import {
   Calendar,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { toast } from "sonner";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
@@ -71,6 +72,20 @@ interface SourceScanState {
   tempDir: string | null;
   rows: SourceScanRow[];
   error: string | null;
+}
+
+/**
+ * "3 小时前"-style age of a unix-ms timestamp, shown on the source cards next
+ * to the fetch metadata (`last_fetch_at`). Only the number is computed here —
+ * the unit strings are i18n keys so each locale keeps its own granularity
+ * wording (min/hour/day).
+ */
+function relativeAge(ms: number, t: TFunction): string {
+  const minutes = Math.max(1, Math.floor((Date.now() - ms) / 60_000));
+  if (minutes < 60) return t("install.sources.ageMinutes", { count: minutes });
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t("install.sources.ageHours", { count: hours });
+  return t("install.sources.ageDays", { count: Math.floor(hours / 24) });
 }
 
 export function InstallSkills() {
@@ -749,8 +764,10 @@ export function InstallSkills() {
       );
       setExpanded((prev) => ({ ...prev, [added.id]: true }));
       // Adding is an explicit ask for this repo's current state — fetch, not
-      // a possibly warm cache from an earlier era of this URL.
-      scanSource(added, { refresh: true });
+      // a possibly warm cache from an earlier era of this URL. The scan also
+      // records fetch metadata (count + timestamp) server-side; reload the
+      // list once it lands so the card's badge/age reflect it.
+      void scanSource(added, { refresh: true }).then(() => loadSources());
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -776,6 +793,9 @@ export function InstallSkills() {
           t("install.sources.refreshAllErrors", { failed, total: sources.length }),
         );
       }
+      // Every successful scan bumped its fetch metadata server-side; reload
+      // so the cards' "N skills · x 小时前更新" reads the fresh timestamps.
+      await loadSources();
     } finally {
       setRefreshingAllSources(false);
     }
@@ -1886,9 +1906,20 @@ export function InstallSkills() {
                 // Session-only badge (PRD §四): shown whenever rows are
                 // rendered — including under a refresh that later failed,
                 // because the kept list is still what the user is looking at.
+                // Falls back to the persisted `last_fetch_count` so a
+                // restarted app still shows a count on collapsed cards.
                 const skillCount =
                   scan && !scan.loading && scan.rows.length > 0
                     ? scan.rows.length
+                    : source.last_fetch_count;
+                // Persisted "when was this content last fetched" — the age of
+                // what a cache-first expand will show (null before the first
+                // refresh scan ever succeeded).
+                const updatedAgo =
+                  source.last_fetch_at !== null
+                    ? t("install.sources.updatedAgo", {
+                        time: relativeAge(source.last_fetch_at, t),
+                      })
                     : null;
                 // Slim strip shown while a refresh runs over the
                 // still-rendered previous rows (non-destructive refresh).
@@ -1918,6 +1949,11 @@ export function InstallSkills() {
                         {skillCount !== null ? (
                           <span className="shrink-0 rounded-full border border-border-subtle bg-surface px-2 py-0.5 text-[13px] text-muted">
                             {t("install.sources.skillCount", { count: skillCount })}
+                          </span>
+                        ) : null}
+                        {updatedAgo !== null ? (
+                          <span className="shrink-0 text-[12px] text-faint">
+                            {updatedAgo}
                           </span>
                         ) : null}
                       </button>
@@ -1969,6 +2005,18 @@ export function InstallSkills() {
                         ) : (
                           <div>
                             {refreshingRow}
+                            {/* The visible list is a snapshot cloned from the
+                                local cache — mark it as one, with the age of
+                                the content (null = a pre-metadata source that
+                                was never refresh-scanned). */}
+                            <div className="flex items-center gap-1.5 border-b border-border-subtle px-4 py-2 text-[12px] text-faint">
+                              <Clock className="h-3 w-3" />
+                              {source.last_fetch_at !== null
+                                ? t("install.sources.snapshotChip", {
+                                    time: relativeAge(source.last_fetch_at, t),
+                                  })
+                                : t("install.sources.snapshotChipNoAge")}
+                            </div>
                             <div className="space-y-2 p-4">
                               {/* Refresh failure over a kept list — a
                                   non-blocking warning above the rows, not a
