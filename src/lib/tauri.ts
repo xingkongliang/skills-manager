@@ -273,6 +273,12 @@ export interface GitSkillPreview {
   rel_path: string;
   name: string;
   description: string | null;
+  /**
+   * True when an installed skill already records this repository URL and
+   * subpath. Informational only — the UI pre-deselects such rows; manually
+   * re-checking one means update/reinstall.
+   */
+  installed: boolean;
 }
 
 export interface GitPreviewResult {
@@ -293,6 +299,27 @@ export const confirmGitInstall = (repoUrl: string, tempDir: string, items: Skill
 
 export const cancelGitPreview = (tempDir: string) =>
   invoke<void>("cancel_git_preview", { tempDir });
+
+// ── Custom Skill Repos (persistent install sources) ──
+
+export interface CustomRepo {
+  id: string;
+  /** Normalized https clone URL — dedupe, scan and install all use it. */
+  url: string;
+  /** Derived "owner/repo" label. */
+  label: string;
+  /** Unix milliseconds. */
+  added_at: number;
+}
+
+export const listCustomRepos = () =>
+  invoke<CustomRepo[]>("list_custom_repos");
+
+export const addCustomRepo = (url: string) =>
+  invoke<CustomRepo>("add_custom_repo", { url });
+
+export const removeCustomRepo = (id: string) =>
+  invoke<void>("remove_custom_repo", { id });
 
 export const installFromSkillssh = (source: string, skillId: string) =>
   invoke<void>("install_from_skillssh", { source, skillId });
