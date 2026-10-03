@@ -56,3 +56,15 @@ pub async fn remove_custom_repo(
     tauri::async_runtime::spawn_blocking(move || custom_repos::remove(&store, &id))
         .await?
 }
+
+/// Escape hatch for a corrupted `custom_skill_repos` settings value, where
+/// list/add/remove all fail and a retry can never succeed: overwrite the list
+/// with a fresh empty one.
+#[tauri::command]
+pub async fn reset_custom_repos(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || custom_repos::reset(&store))
+        .await?
+}

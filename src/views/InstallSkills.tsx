@@ -60,7 +60,14 @@ interface SourceScanRow {
  */
 interface SourceScanState {
   loading: boolean;
-  /** Live temp dir from preview_git_install; null while loading or after an error (backend cleans up on failure). */
+  /**
+   * True while a refresh-scan runs on top of a still-rendered previous scan
+   * (design.md §3.3 non-destructive refresh): the old rows keep showing and
+   * install/select interactions pause so the temp-dir swap cannot race an
+   * install.
+   */
+  refreshing: boolean;
+  /** Live temp dir from preview_git_install; null while loading or after an error with no rows kept (backend cleans up on failure). */
   tempDir: string | null;
   rows: SourceScanRow[];
   error: string | null;
@@ -93,6 +100,7 @@ export function InstallSkills() {
   const [scans, setScans] = useState<Record<string, SourceScanState>>({});
   const [installingSourceId, setInstallingSourceId] = useState<string | null>(null);
   const [deleteSourceId, setDeleteSourceId] = useState<string | null>(null);
+  const [resetSourcesOpen, setResetSourcesOpen] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -554,22 +562,62 @@ export function InstallSkills() {
    * instead of serving its warm repository cache offline — true whenever the
    * user explicitly asks for current data (add, retry, refresh all); cold
    * expands and the post-install badge re-scan stay cache-first so they are
-   * instant. Returns whether the scan landed without an error state (a
-   * superseded scan counts as fine — a newer scan owns the state).
+   * instant. A refresh-scan is also NON-DESTRUCTIVE: the previous rows and
+   * their temp dir stay live and rendered until the new snapshot lands, so an
+   * offline refresh never blanks a working list — the failure surfaces as an
+   * inline warning above the kept rows instead. Cold scans keep the old
+   * clear-then-scan behaviour. Returns whether the scan landed without an
+   * error state (a superseded scan counts as fine — a newer scan owns the
+   * state).
    */
   const scanSource = useCallback(
     async (source: CustomRepo, opts?: { silent?: boolean; refresh?: boolean }) => {
-      // Cancel any previous scan's temp dir before starting a new one, so the
-      // overwritten state can never orphan a live temp directory.
-      clearScanState(source.id, true);
-      const gen = scanGenRef.current[source.id];
-      setScans((prev) => ({
-        ...prev,
-        [source.id]: { loading: true, tempDir: null, rows: [], error: null },
-      }));
-
       const silent = opts?.silent ?? false;
       const refresh = opts?.refresh ?? false;
+
+      if (refresh) {
+        // Supersede any in-flight scan WITHOUT dropping the rendered state:
+        // bump the generation so the loser cancels its own fresh temp dir,
+        // never the live old one, and only flip `refreshing` on.
+        scanGenRef.current[source.id] = (scanGenRef.current[source.id] ?? 0) + 1;
+        setScans((prev) => {
+          const existing = prev[source.id];
+          if (!existing || existing.loading || existing.rows.length === 0) {
+            // Nothing rendered to keep — behave like a cold scan (spinner),
+            // but preserve any live temp dir an empty-repo snapshot holds.
+            return {
+              ...prev,
+              [source.id]: {
+                loading: true,
+                refreshing: true,
+                tempDir: existing?.tempDir ?? null,
+                rows: [],
+                error: null,
+              },
+            };
+          }
+          return {
+            ...prev,
+            [source.id]: { ...existing, loading: false, refreshing: true, error: null },
+          };
+        });
+      } else {
+        // Cold scan: cancel any previous temp dir before starting a new one,
+        // so the overwritten state can never orphan a live temp directory.
+        clearScanState(source.id, true);
+        setScans((prev) => ({
+          ...prev,
+          [source.id]: {
+            loading: true,
+            refreshing: false,
+            tempDir: null,
+            rows: [],
+            error: null,
+          },
+        }));
+      }
+      const gen = scanGenRef.current[source.id];
+
       let toastId: number | string | undefined;
       let unlisten: (() => void) | null = null;
 
@@ -597,36 +645,69 @@ export function InstallSkills() {
           api.cancelGitPreview(preview.temp_dir).catch(() => {});
           return true;
         }
-        setScans((prev) => ({
-          ...prev,
-          [source.id]: {
-            loading: false,
-            tempDir: preview.temp_dir,
-            rows: preview.skills.map((s) => ({
-              rel_path: s.rel_path,
-              name: s.name,
-              description: s.description,
-              installed: s.installed,
-              // Installed rows start deselected; re-checking one means update.
-              selected: !s.installed,
-            })),
-            error: null,
-          },
-        }));
+        setScans((prev) => {
+          const previous = prev[source.id];
+          // A refresh is replacing a live snapshot — release its temp dir only
+          // now that the new one is landing; cancelling earlier would break
+          // the still-rendered list mid-refresh. (Cold scans already cleared,
+          // so `previous.tempDir` is null there and this no-ops.)
+          if (previous?.tempDir && previous.tempDir !== preview.temp_dir) {
+            api.cancelGitPreview(previous.tempDir).catch(() => {});
+          }
+          return {
+            ...prev,
+            [source.id]: {
+              loading: false,
+              refreshing: false,
+              tempDir: preview.temp_dir,
+              rows: preview.skills.map((s) => ({
+                rel_path: s.rel_path,
+                name: s.name,
+                description: s.description,
+                installed: s.installed,
+                // Installed rows start deselected; re-checking one means update.
+                selected: !s.installed,
+              })),
+              error: null,
+            },
+          };
+        });
         return true;
       } catch (error: unknown) {
         if (toastId !== undefined) toast.dismiss(toastId);
         if (scanGenRef.current[source.id] !== gen) return true;
-        // The backend cleans the temp dir itself on failure — keep tempDir null.
-        setScans((prev) => ({
-          ...prev,
-          [source.id]: {
-            loading: false,
-            tempDir: null,
-            rows: [],
-            error: getErrorMessage(error, t("common.error")),
-          },
-        }));
+        const message = getErrorMessage(error, t("common.error"));
+        setScans((prev) => {
+          const previous = prev[source.id];
+          if (refresh && previous && (previous.rows.length > 0 || previous.tempDir)) {
+            // Refresh failure over a live snapshot: keep the rows and temp
+            // dir — the list stays usable, installs keep working — and report
+            // the failure through `error` (rendered as an inline warning
+            // banner above the kept rows).
+            return {
+              ...prev,
+              [source.id]: {
+                loading: false,
+                refreshing: false,
+                tempDir: previous.tempDir,
+                rows: previous.rows,
+                error: message,
+              },
+            };
+          }
+          // Cold failure — the backend cleans the temp dir itself on error,
+          // so keep tempDir null and land today's full-card error state.
+          return {
+            ...prev,
+            [source.id]: {
+              loading: false,
+              refreshing: false,
+              tempDir: null,
+              rows: [],
+              error: message,
+            },
+          };
+        });
         return false;
       } finally {
         unlisten?.();
@@ -642,13 +723,15 @@ export function InstallSkills() {
     }
     setExpanded((prev) => ({ ...prev, [source.id]: true }));
     // Reuse a live scan result; rescan only when there is nothing to reuse
-    // (first expand of a cold source after restart/add, or retry after a
-    // failed scan). Collapsed sources keep their rows, so re-expand is
-    // instant with zero backend calls. A cold expand serves the warm
-    // repository cache offline; expanding over an error is a retry and asks
-    // the network for current data.
+    // (first expand of a cold source after restart/add, or a retry after a
+    // scan that produced no list at all). Collapsed sources keep their rows,
+    // so re-expand is instant with zero backend calls — including a kept list
+    // whose last refresh failed (that failure shows as an inline warning, not
+    // as a dead card). A cold expand serves the warm repository cache
+    // offline; expanding over an error is a retry and asks the network for
+    // current data.
     const scan = scans[source.id];
-    if (!scan || scan.error) {
+    if (!scan || (scan.error && scan.rows.length === 0)) {
       scanSource(source, { refresh: Boolean(scan?.error) });
     }
   }, [collapseSource, expanded, scanSource, scans]);
@@ -711,7 +794,9 @@ export function InstallSkills() {
 
   const installSelected = async (source: CustomRepo) => {
     const scan = scans[source.id];
-    if (!scan?.tempDir || installingSourceId) return;
+    // A running refresh owns the temp-dir swap — installing mid-refresh could
+    // confirm against a dir the refresh is about to cancel.
+    if (!scan?.tempDir || installingSourceId || scan.refreshing) return;
     const selected = scan.rows.filter((r) => r.selected);
     if (selected.length === 0) return;
     setInstallingSourceId(source.id);
@@ -759,6 +844,25 @@ export function InstallSkills() {
       clearScanState(id, true);
       await api.removeCustomRepo(id);
       setSources((prev) => prev.filter((s) => s.id !== id));
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    }
+  };
+
+  // Escape hatch for a corrupted sources list (design.md §4): when the saved
+  // JSON cannot be parsed, list/add/remove all fail and a retry can never
+  // succeed — the only way out is overwriting the list with a fresh empty
+  // one. Saved bookmarks are lost; installed skills are never touched.
+  const handleResetSources = async () => {
+    try {
+      await api.resetCustomRepos();
+      // The saved sources are gone — release their live preview temp dirs
+      // before dropping the cards (same ownership contract as delete).
+      for (const source of sources) {
+        clearScanState(source.id, true);
+      }
+      await loadSources();
+      toast.success(t("install.sources.resetDone"));
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     }
@@ -1713,7 +1817,14 @@ export function InstallSkills() {
                 <button
                   type="button"
                   onClick={handleRefreshAllSources}
-                  disabled={sources.length === 0 || refreshingAllSources}
+                  // Installing holds the other half of the install/refresh
+                  // exclusion: a refresh landing mid-install would cancel the
+                  // temp dir the install backend is still reading from.
+                  disabled={
+                    sources.length === 0 ||
+                    refreshingAllSources ||
+                    installingSourceId !== null
+                  }
                   className="app-button-secondary shrink-0 bg-background"
                   title={t("install.sources.refreshAll")}
                 >
@@ -1725,14 +1836,27 @@ export function InstallSkills() {
           </section>
 
           {sourcesError ? (
-            <StatusBanner
-              compact
-              title={t("common.requestFailed")}
-              description={sourcesError}
-              actionLabel={t("common.retry")}
-              onAction={loadSources}
-              tone="danger"
-            />
+            <div className="space-y-2">
+              <StatusBanner
+                compact
+                title={t("common.requestFailed")}
+                description={sourcesError}
+                actionLabel={t("common.retry")}
+                onAction={loadSources}
+                tone="danger"
+              />
+              {/* Corrupted-list escape hatch: retry alone can never fix an
+                  unreadable settings value, so offer the one action that can. */}
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setResetSourcesOpen(true)}
+                  className="text-[13px] font-medium text-muted underline-offset-2 transition-colors hover:text-secondary hover:underline"
+                >
+                  {t("install.sources.resetList")}
+                </button>
+              </div>
+            </div>
           ) : null}
 
           {sources.length === 0 && !sourcesError ? (
@@ -1753,12 +1877,27 @@ export function InstallSkills() {
                 const isOpen = !!expanded[source.id];
                 const scan = scans[source.id] ?? null;
                 const isInstalling = installingSourceId !== null;
+                // Install/selection pauses while a refresh runs so the
+                // temp-dir swap can never race an install.
+                const isBusy = isInstalling || !!scan?.refreshing;
                 const selectedCount = scan
                   ? scan.rows.filter((r) => r.selected).length
                   : 0;
-                // Session-only badge (PRD §四): shown once a scan succeeded.
+                // Session-only badge (PRD §四): shown whenever rows are
+                // rendered — including under a refresh that later failed,
+                // because the kept list is still what the user is looking at.
                 const skillCount =
-                  scan && !scan.loading && !scan.error ? scan.rows.length : null;
+                  scan && !scan.loading && scan.rows.length > 0
+                    ? scan.rows.length
+                    : null;
+                // Slim strip shown while a refresh runs over the
+                // still-rendered previous rows (non-destructive refresh).
+                const refreshingRow = scan?.refreshing ? (
+                  <div className="flex items-center gap-2 border-b border-border-subtle px-4 py-2 text-[12px] text-muted">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    {t("install.sources.refreshing")}
+                  </div>
+                ) : null;
 
                 return (
                   <section key={source.id} className="app-panel overflow-hidden">
@@ -1807,7 +1946,9 @@ export function InstallSkills() {
                               {t("install.sources.scanning")}
                             </span>
                           </div>
-                        ) : scan.error ? (
+                        ) : scan.error && scan.rows.length === 0 ? (
+                          // Cold failure (nothing to keep): today's full-card
+                          // error with retry.
                           <div className="p-4">
                             <StatusBanner
                               compact
@@ -1819,11 +1960,37 @@ export function InstallSkills() {
                             />
                           </div>
                         ) : scan.rows.length === 0 ? (
-                          <p className="px-4 py-10 text-center text-[13px] text-muted">
-                            {t("install.sources.emptyRepo")}
-                          </p>
+                          <div>
+                            {refreshingRow}
+                            <p className="px-4 py-10 text-center text-[13px] text-muted">
+                              {t("install.sources.emptyRepo")}
+                            </p>
+                          </div>
                         ) : (
-                          <div className="space-y-2 p-4">
+                          <div>
+                            {refreshingRow}
+                            <div className="space-y-2 p-4">
+                              {/* Refresh failure over a kept list — a
+                                  non-blocking warning above the rows, not a
+                                  replacement of the card. */}
+                              {scan.error ? (
+                                <StatusBanner
+                                  compact
+                                  title={t("install.sources.refreshFailed")}
+                                  description={scan.error}
+                                  actionLabel={t("common.retry")}
+                                  onAction={() => {
+                                    // Same install/refresh exclusion as the
+                                    // refresh-all button: a refresh landing
+                                    // mid-install would cancel the temp dir
+                                    // the install backend is still reading.
+                                    if (!isBusy) {
+                                      scanSource(source, { refresh: true });
+                                    }
+                                  }}
+                                  tone="warning"
+                                />
+                              ) : null}
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="flex items-center gap-2 text-[13px]">
                                 <button
@@ -1833,7 +2000,7 @@ export function InstallSkills() {
                                       rows.map((r) => ({ ...r, selected: true })),
                                     )
                                   }
-                                  disabled={isInstalling}
+                                  disabled={isBusy}
                                   className="text-accent-light hover:underline"
                                 >
                                   {t("install.sources.selectAll")}
@@ -1846,7 +2013,7 @@ export function InstallSkills() {
                                       rows.map((r) => ({ ...r, selected: false })),
                                     )
                                   }
-                                  disabled={isInstalling}
+                                  disabled={isBusy}
                                   className="text-muted hover:underline"
                                 >
                                   {t("install.sources.deselectAll")}
@@ -1855,7 +2022,7 @@ export function InstallSkills() {
                               <button
                                 type="button"
                                 onClick={() => installSelected(source)}
-                                disabled={isInstalling || selectedCount === 0}
+                                disabled={isBusy || selectedCount === 0}
                                 className="inline-flex items-center gap-1.5 rounded-lg border border-accent-border bg-accent-dark px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent disabled:opacity-50"
                               >
                                 {installingSourceId === source.id ? (
@@ -1883,7 +2050,7 @@ export function InstallSkills() {
                                   <input
                                     type="checkbox"
                                     checked={row.selected}
-                                    disabled={isInstalling}
+                                    disabled={isBusy}
                                     onChange={(e) =>
                                       updateScanRows(source.id, (rows) =>
                                         rows.map((r, i) =>
@@ -1909,7 +2076,7 @@ export function InstallSkills() {
                                             ),
                                           )
                                         }
-                                        disabled={!row.selected || isInstalling}
+                                        disabled={!row.selected || isBusy}
                                         placeholder={t("install.sources.namePlaceholder")}
                                         className="app-input min-w-0 flex-1 bg-background py-1 text-[13px]"
                                       />
@@ -1929,6 +2096,7 @@ export function InstallSkills() {
                                 </div>
                               ))}
                             </div>
+                          </div>
                           </div>
                         )}
                       </div>
@@ -1950,6 +2118,16 @@ export function InstallSkills() {
             onConfirm={() =>
               deleteSource ? handleRemoveSource() : Promise.resolve()
             }
+          />
+
+          <ConfirmDialog
+            open={resetSourcesOpen}
+            title={t("install.sources.resetTitle")}
+            message={t("install.sources.resetMessage")}
+            confirmLabel={t("install.sources.resetConfirm")}
+            tone="warning"
+            onClose={() => setResetSourcesOpen(false)}
+            onConfirm={handleResetSources}
           />
         </div>
       )}

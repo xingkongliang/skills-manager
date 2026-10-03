@@ -545,7 +545,14 @@
       "deleteConfirm": "Delete Source",
       "refreshAll": "Refresh all",
       "refreshAllDone": "Refreshed {{count}} source(s)",
-      "refreshAllErrors": "{{failed}} of {{total}} source(s) failed to refresh"
+      "refreshAllErrors": "{{failed}} of {{total}} source(s) failed to refresh",
+      "refreshing": "Refreshing source…",
+      "refreshFailed": "Refresh failed — showing the last saved copy",
+      "resetList": "Reset source list",
+      "resetTitle": "Reset the source list?",
+      "resetMessage": "The saved source list is unreadable, so it cannot be shown. Resetting clears the saved sources — re-add them afterwards. Skills already installed will not be uninstalled.",
+      "resetConfirm": "Reset Source List",
+      "resetDone": "Source list reset"
     },
     "scan": {
       "title": "Scan Local Skills",

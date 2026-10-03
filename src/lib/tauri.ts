@@ -329,6 +329,10 @@ export const addCustomRepo = (url: string) =>
 export const removeCustomRepo = (id: string) =>
   invoke<void>("remove_custom_repo", { id });
 
+/** Escape hatch for a corrupted sources list: overwrite it with an empty one. */
+export const resetCustomRepos = () =>
+  invoke<void>("reset_custom_repos");
+
 export const installFromSkillssh = (source: string, skillId: string) =>
   invoke<void>("install_from_skillssh", { source, skillId });
 

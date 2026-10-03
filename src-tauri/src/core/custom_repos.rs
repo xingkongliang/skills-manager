@@ -67,6 +67,20 @@ pub fn remove(store: &SkillStore, id: &str) -> Result<(), AppError> {
     write_records(store, &records)
 }
 
+/// Overwrite the saved repository list with a fresh empty one.
+///
+/// The escape hatch for a corrupted `custom_skill_repos` value: [`list`],
+/// [`add`] and [`remove`] all fail loudly (by design) while the stored JSON
+/// does not parse, so without this the UI could only offer a retry that can
+/// never succeed. This deliberately does NOT read the old value first —
+/// reading is exactly what is broken — so it works even then. Saved bookmarks
+/// are lost; installed skills are independent rows and are never touched.
+pub fn reset(store: &SkillStore) -> Result<(), AppError> {
+    store
+        .set_setting(CUSTOM_REPOS_SETTING_KEY, "[]")
+        .map_err(AppError::db)
+}
+
 fn read_records(store: &SkillStore) -> Result<Vec<CustomRepoRecord>, AppError> {
     let raw = store
         .get_setting(CUSTOM_REPOS_SETTING_KEY)
@@ -274,6 +288,29 @@ mod tests {
             store.get_setting(CUSTOM_REPOS_SETTING_KEY).unwrap().as_deref(),
             Some(poisoned)
         );
+    }
+
+    #[test]
+    fn reset_recovers_a_corrupted_list() {
+        let (_tmp, store) = test_store();
+        add(&store, "owner/saved").unwrap();
+        store
+            .set_setting(CUSTOM_REPOS_SETTING_KEY, "{not valid json")
+            .unwrap();
+
+        // While the value is poisoned every entry point fails — and a retry
+        // alone can never fix that, which is exactly why reset exists.
+        assert!(list(&store).is_err());
+        assert!(add(&store, "owner/other").is_err());
+
+        reset(&store).unwrap();
+        assert!(list(&store).unwrap().is_empty());
+
+        // The store is writable again.
+        let record = add(&store, "owner/after-reset").unwrap();
+        let records = list(&store).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, record.id);
     }
 
     #[test]

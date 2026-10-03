@@ -545,7 +545,14 @@
       "deleteConfirm": "删除来源",
       "refreshAll": "刷新全部",
       "refreshAllDone": "已刷新 {{count}} 个来源",
-      "refreshAllErrors": "{{total}} 个来源中 {{failed}} 个刷新失败"
+      "refreshAllErrors": "{{total}} 个来源中 {{failed}} 个刷新失败",
+      "refreshing": "正在刷新来源…",
+      "refreshFailed": "刷新失败，仍显示上次的内容",
+      "resetList": "重置来源列表",
+      "resetTitle": "重置来源列表？",
+      "resetMessage": "已保存的来源列表无法读取。重置会清空保存的来源，之后需要重新添加；已安装的技能不会被卸载。",
+      "resetConfirm": "重置来源列表",
+      "resetDone": "来源列表已重置"
     },
     "scan": {
       "title": "扫描本地 Skills 并导入",

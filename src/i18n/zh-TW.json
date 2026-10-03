@@ -502,7 +502,14 @@
       "deleteConfirm": "刪除來源",
       "refreshAll": "重新整理全部",
       "refreshAllDone": "已重新整理 {{count}} 個來源",
-      "refreshAllErrors": "{{total}} 個來源中 {{failed}} 個重新整理失敗"
+      "refreshAllErrors": "{{total}} 個來源中 {{failed}} 個重新整理失敗",
+      "refreshing": "正在重新整理來源…",
+      "refreshFailed": "重新整理失敗，仍顯示上次的內容",
+      "resetList": "重設來源列表",
+      "resetTitle": "重設來源列表？",
+      "resetMessage": "已儲存的來源列表無法讀取。重設會清空儲存的來源，之後需要重新新增；已安裝的技能不會被解除安裝。",
+      "resetConfirm": "重設來源列表",
+      "resetDone": "來源列表已重設"
     },
     "scan": {
       "title": "掃描本機 Skills 並匯入",

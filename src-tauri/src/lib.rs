@@ -1034,6 +1034,7 @@ pub fn run() {
             commands::custom_repos::list_custom_repos,
             commands::custom_repos::add_custom_repo,
             commands::custom_repos::remove_custom_repo,
+            commands::custom_repos::reset_custom_repos,
             // Sync
             commands::sync::sync_skill_to_tool,
             commands::sync::unsync_skill_from_tool,
