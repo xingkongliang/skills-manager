@@ -1115,9 +1115,17 @@ pub async fn install_from_skillssh(
 
 /// Clone a git repo and return a preview list of skills found, without installing.
 /// The caller must follow up with `confirm_git_install` using the returned `temp_dir`.
+///
+/// `refresh` picks the cache policy: `None`/`false` serves a warm repository
+/// cache fully offline ([`git_fetcher::FetchPolicy::CacheFirst`]) so expanding
+/// a saved source is instant, with the network reached only when the cache is
+/// missing/invalid. `true` forces the fetch-first policy so the preview shows
+/// the remote's current state — the frontend passes it for adding a source,
+/// error retries and "refresh all".
 #[tauri::command]
 pub async fn preview_git_install(
     repo_url: String,
+    refresh: Option<bool>,
     store: State<'_, Arc<SkillStore>>,
     cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
     app_handle: tauri::AppHandle,
@@ -1156,13 +1164,19 @@ pub async fn preview_git_install(
                 )
                 .ok();
         });
-        let temp_dir = git_fetcher::clone_repo_ref_scoped(
+        let policy = if refresh.unwrap_or(false) {
+            git_fetcher::FetchPolicy::UpdateCache
+        } else {
+            git_fetcher::FetchPolicy::CacheFirst
+        };
+        let temp_dir = git_fetcher::clone_repo_ref_scoped_with_policy(
             &parsed.clone_url,
             parsed.branch.as_deref(),
             parsed.subpath.as_deref(),
             Some(&cancel),
             proxy_url.as_deref(),
             Some(progress_cb),
+            policy,
         )
         .map_err(AppError::classify_git_error)?;
 

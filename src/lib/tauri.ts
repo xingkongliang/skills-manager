@@ -291,8 +291,16 @@ export interface SkillInstallItem {
   name: string;
 }
 
-export const previewGitInstall = (repoUrl: string) =>
-  invoke<GitPreviewResult>("preview_git_install", { repoUrl });
+/**
+ * Preview a repository's skills without installing.
+ *
+ * `refresh` picks the backend cache policy: false (default) serves a warm
+ * repository cache fully offline — expanding a previously scanned source is
+ * instant; true forces a network fetch so the preview reflects the remote's
+ * current state (add-source, error retry, "refresh all").
+ */
+export const previewGitInstall = (repoUrl: string, refresh?: boolean) =>
+  invoke<GitPreviewResult>("preview_git_install", { repoUrl, refresh: refresh ?? false });
 
 export const confirmGitInstall = (repoUrl: string, tempDir: string, items: SkillInstallItem[]) =>
   invoke<void>("confirm_git_install", { repoUrl, tempDir, items });

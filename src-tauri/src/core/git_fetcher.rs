@@ -22,6 +22,35 @@ pub const CLONE_TEMP_PREFIX: &str = "skills-manager-clone-";
 /// Callback type for reporting clone progress messages to the UI.
 pub type ProgressCallback = Box<dyn Fn(&str) + Send>;
 
+/// Whether serving a cached repository is allowed to touch the network.
+///
+/// [`FetchPolicy::UpdateCache`] is the behaviour every install, update and
+/// check path has always had: each use of a cached repository first runs an
+/// incremental `git fetch --depth 1`, so the cache is always current — at the
+/// price of a network round trip standing between the user and every clone,
+/// however warm the cache is.
+///
+/// [`FetchPolicy::CacheFirst`] serves the cache the moment it passes the
+/// local validations (`.git` present, remote URL unchanged) with **no fetch at
+/// all**; the network is reached only when the cache is missing or invalid and
+/// the caller falls back to a fresh clone. Repository *preview* (browsing a
+/// saved source in the install tab) uses this so expanding a previously
+/// scanned source is fully offline — the data shown is the snapshot from the
+/// last fetch, which is exactly what the explicit "refresh" paths are for.
+///
+/// Note for sparse (partial-clone) cache slots: the local `reset --hard`
+/// normalization that still runs under `CacheFirst` can lazily fetch missing
+/// blobs over the network. That is accepted — preview sources are plain
+/// repository URLs served from the full cache — and a reset failure simply
+/// falls through to the re-clone path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchPolicy {
+    /// Incremental `git fetch` on every use; the historic behaviour.
+    UpdateCache,
+    /// Skip the fetch when local validation passes; network only on a miss.
+    CacheFirst,
+}
+
 /// Create a `Command` for git that hides the console window on Windows.
 fn git_command() -> Command {
     #[allow(unused_mut)]
@@ -350,6 +379,11 @@ fn materialize_cached_repo(
 
 /// Try to update an existing cached repo via fetch + reset.
 /// Returns Ok(true) if the cache was reused, Ok(false) if it should be re-cloned.
+///
+/// Under [`FetchPolicy::CacheFirst`] the fetch is skipped entirely when the
+/// local validations pass (`.git` present, remote URL unchanged) — the cache is
+/// served as-is after its local `reset --hard` normalization, so a warm cache
+/// costs no network. See the enum's docs for the trade-offs.
 fn try_update_cached_repo(
     cached: &Path,
     url: &str,
@@ -357,6 +391,7 @@ fn try_update_cached_repo(
     proxy_url: Option<&str>,
     cancel: Option<&Arc<AtomicBool>>,
     on_progress: &Option<ProgressCallback>,
+    policy: FetchPolicy,
 ) -> Result<bool> {
     if !cached.join(".git").exists() {
         return Ok(false);
@@ -380,6 +415,13 @@ fn try_update_cached_repo(
         // URL changed — discard cache.
         let _ = std::fs::remove_dir_all(cached);
         return Ok(false);
+    }
+
+    if policy == FetchPolicy::CacheFirst {
+        // Warm and provably ours — serve it without touching the network. The
+        // reset below is local against a full cache, so the only work left is
+        // normalizing the worktree to the already-fetched HEAD.
+        return finish_cached_repo(cached, branch, proxy_url, cancel, policy);
     }
 
     if let Some(cb) = on_progress {
@@ -442,9 +484,23 @@ fn try_update_cached_repo(
         return Ok(false);
     }
 
+    finish_cached_repo(cached, branch, proxy_url, cancel, policy)
+}
+
+/// The tail shared by both policies: `reset --hard` the cached worktree onto
+/// its fetched HEAD so it is a clean checkout of what the cache holds, and
+/// report whether the cache is servable (`Ok(true)`) or should be re-cloned
+/// (`Ok(false)`).
+fn finish_cached_repo(
+    cached: &Path,
+    branch: Option<&str>,
+    proxy_url: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    policy: FetchPolicy,
+) -> Result<bool> {
     // Reset to the fetched HEAD. A branch has a remote-tracking ref, but a tag
     // does not — `origin/<tag>` is not a revision — so fall back to FETCH_HEAD,
-    // which the fetch above just wrote. Without the fallback a tag source never
+    // which the last fetch wrote. Without the fallback a tag source never
     // reuses its cache and silently re-clones on every check.
     let targets: Vec<String> = match branch {
         Some(b) => vec![format!("origin/{b}"), "FETCH_HEAD".to_string()],
@@ -453,7 +509,9 @@ fn try_update_cached_repo(
     // Against a full cache this reset is local and returns immediately. Against a
     // sparse cache it is a partial clone, so writing the worktree lazily fetches
     // the blobs it needs — which is why it runs under the same timeout and cancel
-    // flag as the fetch above instead of blocking forever on a dead network.
+    // flag as a fetch instead of blocking forever on a dead network. That lazy
+    // fetch is the one network step `CacheFirst` can still reach; see
+    // [`FetchPolicy`].
     let mut cancelled = false;
     let reset_ok = targets.iter().any(|target| {
         match run_git_watched_at(
@@ -470,17 +528,23 @@ fn try_update_cached_repo(
             }
         }
     });
-    // A cancellation is not a broken cache. Collapsed into `reset_ok == false` it
-    // reads as "every target failed", and the cache below gets deleted — so
-    // cancelling an install would silently cost the user the next full download.
-    // The fetch above already treats cancellation this way; so must this.
+    // A cancellation is not a broken cache. Collapsed into `reset_ok == false`
+    // it reads as "every target failed", and the UpdateCache branch below
+    // deletes the slot — so cancelling an install would silently cost the user
+    // the next full download. A fetch treats cancellation this way already; so
+    // must this.
     if cancelled {
         bail!("Installation cancelled");
     }
     match reset_ok {
         true => Ok(true),
         false => {
-            let _ = std::fs::remove_dir_all(cached);
+            if policy == FetchPolicy::UpdateCache {
+                let _ = std::fs::remove_dir_all(cached);
+            }
+            // CacheFirst leaves the slot on disk: the failure may be a lazy blob
+            // fetch that an explicit refresh can still recover from, and the
+            // caller's re-clone fall-through deletes the slot itself anyway.
             Ok(false)
         }
     }
@@ -586,6 +650,11 @@ pub fn clone_repo_ref_with_progress(
 ///
 /// Pass `None` for `subpath` whenever the caller needs to search the repository
 /// rather than read one known directory.
+///
+/// This entry point keeps the historic [`FetchPolicy::UpdateCache`] behaviour —
+/// every install, update and check depends on the cache being current. Callers
+/// that want to serve a warm cache offline (repository preview) use
+/// [`clone_repo_ref_scoped_with_policy`] instead.
 pub fn clone_repo_ref_scoped(
     url: &str,
     branch: Option<&str>,
@@ -594,8 +663,30 @@ pub fn clone_repo_ref_scoped(
     proxy_url: Option<&str>,
     on_progress: Option<ProgressCallback>,
 ) -> Result<PathBuf> {
+    clone_repo_ref_scoped_with_policy(
+        url,
+        branch,
+        subpath,
+        cancel,
+        proxy_url,
+        on_progress,
+        FetchPolicy::UpdateCache,
+    )
+}
+
+/// [`clone_repo_ref_scoped`] with an explicit [`FetchPolicy`] — the one knob
+/// repository preview needs to stay offline against a warm cache.
+pub fn clone_repo_ref_scoped_with_policy(
+    url: &str,
+    branch: Option<&str>,
+    subpath: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+    on_progress: Option<ProgressCallback>,
+    policy: FetchPolicy,
+) -> Result<PathBuf> {
     if let Some(subpath) = sparse_pattern(subpath) {
-        match clone_repo_sparse(url, branch, &subpath, cancel, proxy_url, &on_progress) {
+        match clone_repo_sparse(url, branch, &subpath, cancel, proxy_url, &on_progress, policy) {
             Ok(dir) => return Ok(dir),
             Err(e) if is_cancellation(&e) => return Err(e),
             Err(e) => {
@@ -606,7 +697,7 @@ pub fn clone_repo_ref_scoped(
         }
     }
 
-    clone_repo_full(url, branch, cancel, proxy_url, on_progress)
+    clone_repo_full(url, branch, cancel, proxy_url, on_progress, policy)
 }
 
 /// Whether an error is a user cancellation rather than a fault worth retrying
@@ -660,6 +751,7 @@ fn clone_repo_sparse(
     cancel: Option<&Arc<AtomicBool>>,
     proxy_url: Option<&str>,
     on_progress: &Option<ProgressCallback>,
+    policy: FetchPolicy,
 ) -> Result<PathBuf> {
     let cached_dir = repo_cache_dir_for(url, true);
     let _cache_lock = lock_repo_cache(&cached_dir, on_progress)?;
@@ -668,7 +760,15 @@ fn clone_repo_sparse(
     // expensive, and they are shared. The lock holds until this call's copy is
     // taken, so a later install re-scoping the worktree cannot disturb it.
     let reusable = cached_dir.exists()
-        && try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, on_progress)?;
+        && try_update_cached_repo(
+            &cached_dir,
+            url,
+            branch,
+            proxy_url,
+            cancel,
+            on_progress,
+            policy,
+        )?;
 
     if !reusable {
         let _ = std::fs::remove_dir_all(&cached_dir);
@@ -948,13 +1048,22 @@ fn clone_repo_full(
     cancel: Option<&Arc<AtomicBool>>,
     proxy_url: Option<&str>,
     on_progress: Option<ProgressCallback>,
+    policy: FetchPolicy,
 ) -> Result<PathBuf> {
     let cached_dir = repo_cache_dir(url);
     let _cache_lock = lock_repo_cache(&cached_dir, &on_progress)?;
 
     // Try cached repo first.
     if cached_dir.exists() {
-        match try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, &on_progress) {
+        match try_update_cached_repo(
+            &cached_dir,
+            url,
+            branch,
+            proxy_url,
+            cancel,
+            &on_progress,
+            policy,
+        ) {
             Ok(true) => return materialize_cached_repo(&cached_dir, cancel),
             Ok(false) => { /* cache invalid, fall through to clone */ }
             Err(e) => {
@@ -2570,17 +2679,6 @@ mod tests {
         // The filter is served by the *source* repo, so the switch belongs there.
         git(&source, &["config", "uploadpack.allowFilter", "true"]);
 
-        // `file://` needs forward slashes and, on Windows, a slash before the
-        // drive letter: `file:///C:/…` where unix wants `file:///tmp/…`.
-        fn file_url(path: &Path) -> String {
-            let raw = path.display().to_string().replace('\\', "/");
-            if raw.starts_with('/') {
-                format!("file://{raw}")
-            } else {
-                format!("file:///{raw}")
-            }
-        }
-
         let checkout = tmp.path().join("checkout");
         let source_url = file_url(&source);
         let cloned = Command::new("git")
@@ -2637,6 +2735,187 @@ mod tests {
             fs::read_to_string(checkout.join("kept/f.txt")).unwrap(),
             "kept"
         );
+    }
+
+    // ── fetch policy (offline, local origins) ──
+
+    /// `file://` needs forward slashes and, on Windows, a slash before the
+    /// drive letter: `file:///C:/…` where unix wants `file:///tmp/…`.
+    fn file_url(path: &Path) -> String {
+        let raw = path.display().to_string().replace('\\', "/");
+        if raw.starts_with('/') {
+            format!("file://{raw}")
+        } else {
+            format!("file:///{raw}")
+        }
+    }
+
+    /// Run git in `dir` and insist it succeeded — fixtures are meaningless if
+    /// a setup step quietly failed.
+    fn git_ok(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git must be runnable");
+        assert!(
+            out.status.success(),
+            "git {args:?} in {} failed: {}",
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn commit_all(repo: &Path, message: &str) {
+        git_ok(repo, &["add", "-A"]);
+        git_ok(
+            repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-m",
+                message,
+            ],
+        );
+    }
+
+    /// An origin repository holding one skill, addressed over `file://` so the
+    /// URL is stored verbatim in the cache's remote (a bare local path can be
+    /// rewritten by git, which would break the remote-equality check).
+    fn local_origin(tmp: &Path) -> PathBuf {
+        let origin = tmp.join("origin");
+        fs::create_dir_all(origin.join("skills/demo")).unwrap();
+        fs::write(
+            origin.join("skills/demo/SKILL.md"),
+            "---\nname: demo\n---",
+        )
+        .unwrap();
+        git_ok(&origin, &["init"]);
+        commit_all(&origin, "init");
+        origin
+    }
+
+    #[test]
+    fn cache_first_serves_a_warm_cache_with_the_origin_gone() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let origin = local_origin(tmp.path());
+        let url = file_url(&origin);
+
+        // Warm the cache while the origin still exists — cloning into a cold
+        // cache is the one network step CacheFirst permits.
+        let warm = clone_repo_ref_scoped(&url, None, None, None, None, None).unwrap();
+        cleanup_temp(&warm);
+        assert!(
+            repo_cache_dir(&url).exists(),
+            "the warm-up clone must fill the cache"
+        );
+
+        // Take the origin away: any fetch now fails, so whatever comes back
+        // can only have been served from the cache offline.
+        fs::remove_dir_all(&origin).unwrap();
+
+        let offline = clone_repo_ref_scoped_with_policy(
+            &url,
+            None,
+            None,
+            None,
+            None,
+            None,
+            FetchPolicy::CacheFirst,
+        )
+        .expect("a warm cache must serve a preview with no network");
+
+        assert!(offline.join("skills/demo/SKILL.md").is_file());
+        cleanup_temp(&offline);
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn cache_first_still_clones_when_the_cache_is_cold() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let origin = local_origin(tmp.path());
+        let url = file_url(&origin);
+
+        let checkout = clone_repo_ref_scoped_with_policy(
+            &url,
+            None,
+            None,
+            None,
+            None,
+            None,
+            FetchPolicy::CacheFirst,
+        )
+        .expect("a missing cache must fall back to the network");
+
+        assert!(checkout.join("skills/demo/SKILL.md").is_file());
+        assert!(
+            repo_cache_dir(&url).exists(),
+            "the clone must fill the cache so the next preview can be offline"
+        );
+        cleanup_temp(&checkout);
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn update_cache_fetches_new_commits_that_cache_first_reuses_without() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let origin = local_origin(tmp.path());
+        let url = file_url(&origin);
+
+        let warm = clone_repo_ref_scoped(&url, None, None, None, None, None).unwrap();
+        cleanup_temp(&warm);
+
+        // Upstream moves on after the cache was warmed.
+        fs::write(origin.join("later.txt"), "committed after the cache warmed").unwrap();
+        commit_all(&origin, "later");
+
+        // CacheFirst deliberately serves the valid-but-stale snapshot…
+        let cached_view = clone_repo_ref_scoped_with_policy(
+            &url,
+            None,
+            None,
+            None,
+            None,
+            None,
+            FetchPolicy::CacheFirst,
+        )
+        .unwrap();
+        assert!(
+            !cached_view.join("later.txt").exists(),
+            "cache-first must serve the cached snapshot without fetching"
+        );
+        cleanup_temp(&cached_view);
+
+        // …while UpdateCache fetches, so the new commit shows up.
+        let refreshed_view = clone_repo_ref_scoped_with_policy(
+            &url,
+            None,
+            None,
+            None,
+            None,
+            None,
+            FetchPolicy::UpdateCache,
+        )
+        .unwrap();
+        assert!(
+            refreshed_view.join("later.txt").exists(),
+            "update-cache must refresh a warm cache"
+        );
+        cleanup_temp(&refreshed_view);
+        central_repo::set_test_base_dir_override(None);
     }
 
     // ── cache prune ──

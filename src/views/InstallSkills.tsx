@@ -550,82 +550,90 @@ export function InstallSkills() {
    * Scan (or re-scan) one source. `opts.silent` suppresses the per-scan
    * toast — used by refresh-all and the post-install background re-scan,
    * which give their own aggregate feedback; first-load scans keep the
-   * toast. Returns whether the scan landed without an error state (a
+   * toast. `opts.refresh` forces the backend to fetch over the network
+   * instead of serving its warm repository cache offline — true whenever the
+   * user explicitly asks for current data (add, retry, refresh all); cold
+   * expands and the post-install badge re-scan stay cache-first so they are
+   * instant. Returns whether the scan landed without an error state (a
    * superseded scan counts as fine — a newer scan owns the state).
    */
-  const scanSource = useCallback(async (source: CustomRepo, opts?: { silent?: boolean }) => {
-    // Cancel any previous scan's temp dir before starting a new one, so the
-    // overwritten state can never orphan a live temp directory.
-    clearScanState(source.id, true);
-    const gen = scanGenRef.current[source.id];
-    setScans((prev) => ({
-      ...prev,
-      [source.id]: { loading: true, tempDir: null, rows: [], error: null },
-    }));
+  const scanSource = useCallback(
+    async (source: CustomRepo, opts?: { silent?: boolean; refresh?: boolean }) => {
+      // Cancel any previous scan's temp dir before starting a new one, so the
+      // overwritten state can never orphan a live temp directory.
+      clearScanState(source.id, true);
+      const gen = scanGenRef.current[source.id];
+      setScans((prev) => ({
+        ...prev,
+        [source.id]: { loading: true, tempDir: null, rows: [], error: null },
+      }));
 
-    const silent = opts?.silent ?? false;
-    let toastId: number | string | undefined;
-    let unlisten: (() => void) | null = null;
+      const silent = opts?.silent ?? false;
+      const refresh = opts?.refresh ?? false;
+      let toastId: number | string | undefined;
+      let unlisten: (() => void) | null = null;
 
-    try {
-      if (!silent) {
-        toastId = toast.loading(t("install.toast.cloning"));
-        unlisten = await listen<{ skill_id: string; phase: string; detail?: string }>(
-          "install-progress",
-          (event) => {
-            if (event.payload.skill_id !== source.url) return;
-            if (event.payload.phase === "cloning") {
-              const detail = event.payload.detail?.trim();
-              const msg = detail
-                ? `${t("install.toast.cloning")}\n${detail}`
-                : t("install.toast.cloning");
-              toast.loading(msg, { id: toastId });
-            }
-          }
-        );
-      }
-      const preview = await api.previewGitInstall(source.url);
-      if (toastId !== undefined) toast.dismiss(toastId);
-      if (scanGenRef.current[source.id] !== gen) {
-        // Superseded by a delete or newer scan — nobody owns this temp dir.
-        api.cancelGitPreview(preview.temp_dir).catch(() => {});
+      try {
+        if (!silent) {
+          toastId = toast.loading(t("install.toast.cloning"));
+          unlisten = await listen<{ skill_id: string; phase: string; detail?: string }>(
+            "install-progress",
+            (event) => {
+              if (event.payload.skill_id !== source.url) return;
+              if (event.payload.phase === "cloning") {
+                const detail = event.payload.detail?.trim();
+                const msg = detail
+                  ? `${t("install.toast.cloning")}\n${detail}`
+                  : t("install.toast.cloning");
+                toast.loading(msg, { id: toastId });
+              }
+            },
+          );
+        }
+        const preview = await api.previewGitInstall(source.url, refresh);
+        if (toastId !== undefined) toast.dismiss(toastId);
+        if (scanGenRef.current[source.id] !== gen) {
+          // Superseded by a delete or newer scan — nobody owns this temp dir.
+          api.cancelGitPreview(preview.temp_dir).catch(() => {});
+          return true;
+        }
+        setScans((prev) => ({
+          ...prev,
+          [source.id]: {
+            loading: false,
+            tempDir: preview.temp_dir,
+            rows: preview.skills.map((s) => ({
+              rel_path: s.rel_path,
+              name: s.name,
+              description: s.description,
+              installed: s.installed,
+              // Installed rows start deselected; re-checking one means update.
+              selected: !s.installed,
+            })),
+            error: null,
+          },
+        }));
         return true;
+      } catch (error: unknown) {
+        if (toastId !== undefined) toast.dismiss(toastId);
+        if (scanGenRef.current[source.id] !== gen) return true;
+        // The backend cleans the temp dir itself on failure — keep tempDir null.
+        setScans((prev) => ({
+          ...prev,
+          [source.id]: {
+            loading: false,
+            tempDir: null,
+            rows: [],
+            error: getErrorMessage(error, t("common.error")),
+          },
+        }));
+        return false;
+      } finally {
+        unlisten?.();
       }
-      setScans((prev) => ({
-        ...prev,
-        [source.id]: {
-          loading: false,
-          tempDir: preview.temp_dir,
-          rows: preview.skills.map((s) => ({
-            rel_path: s.rel_path,
-            name: s.name,
-            description: s.description,
-            installed: s.installed,
-            // Installed rows start deselected; re-checking one means update.
-            selected: !s.installed,
-          })),
-          error: null,
-        },
-      }));
-      return true;
-    } catch (error: unknown) {
-      if (toastId !== undefined) toast.dismiss(toastId);
-      if (scanGenRef.current[source.id] !== gen) return true;
-      // The backend cleans the temp dir itself on failure — keep tempDir null.
-      setScans((prev) => ({
-        ...prev,
-        [source.id]: {
-          loading: false,
-          tempDir: null,
-          rows: [],
-          error: getErrorMessage(error, t("common.error")),
-        },
-      }));
-      return false;
-    } finally {
-      unlisten?.();
-    }
-  }, [clearScanState, t]);
+    },
+    [clearScanState, t],
+  );
 
   const toggleSource = useCallback((source: CustomRepo) => {
     if (expanded[source.id]) {
@@ -636,10 +644,12 @@ export function InstallSkills() {
     // Reuse a live scan result; rescan only when there is nothing to reuse
     // (first expand of a cold source after restart/add, or retry after a
     // failed scan). Collapsed sources keep their rows, so re-expand is
-    // instant with zero backend calls.
+    // instant with zero backend calls. A cold expand serves the warm
+    // repository cache offline; expanding over an error is a retry and asks
+    // the network for current data.
     const scan = scans[source.id];
     if (!scan || scan.error) {
-      scanSource(source);
+      scanSource(source, { refresh: Boolean(scan?.error) });
     }
   }, [collapseSource, expanded, scanSource, scans]);
 
@@ -655,7 +665,9 @@ export function InstallSkills() {
         prev.some((s) => s.id === added.id) ? prev : [...prev, added],
       );
       setExpanded((prev) => ({ ...prev, [added.id]: true }));
-      scanSource(added);
+      // Adding is an explicit ask for this repo's current state — fetch, not
+      // a possibly warm cache from an earlier era of this URL.
+      scanSource(added, { refresh: true });
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -671,7 +683,7 @@ export function InstallSkills() {
     setRefreshingAllSources(true);
     try {
       const results = await Promise.allSettled(
-        sources.map((source) => scanSource(source, { silent: true })),
+        sources.map((source) => scanSource(source, { silent: true, refresh: true })),
       );
       const failed = results.filter((r) => r.status === "rejected" || !r.value).length;
       if (failed === 0) {
@@ -1802,7 +1814,7 @@ export function InstallSkills() {
                               title={t("common.requestFailed")}
                               description={scan.error}
                               actionLabel={t("common.retry")}
-                              onAction={() => scanSource(source)}
+                              onAction={() => scanSource(source, { refresh: true })}
                               tone="danger"
                             />
                           </div>
