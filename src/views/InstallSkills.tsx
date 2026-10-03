@@ -2005,18 +2005,6 @@ export function InstallSkills() {
                         ) : (
                           <div>
                             {refreshingRow}
-                            {/* The visible list is a snapshot cloned from the
-                                local cache — mark it as one, with the age of
-                                the content (null = a pre-metadata source that
-                                was never refresh-scanned). */}
-                            <div className="flex items-center gap-1.5 border-b border-border-subtle px-4 py-2 text-[12px] text-faint">
-                              <Clock className="h-3 w-3" />
-                              {source.last_fetch_at !== null
-                                ? t("install.sources.snapshotChip", {
-                                    time: relativeAge(source.last_fetch_at, t),
-                                  })
-                                : t("install.sources.snapshotChipNoAge")}
-                            </div>
                             <div className="space-y-2 p-4">
                               {/* Refresh failure over a kept list — a
                                   non-blocking warning above the rows, not a

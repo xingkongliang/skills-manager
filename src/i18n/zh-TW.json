@@ -494,8 +494,6 @@
       "ageMinutes": "{{count}} 分鐘前",
       "ageHours": "{{count}} 小時前",
       "ageDays": "{{count}} 天前",
-      "snapshotChip": "快取快照 · {{time}}",
-      "snapshotChipNoAge": "快取快照",
       "scanning": "正在掃描倉庫...",
       "emptyRepo": "該倉庫中未發現技能。",
       "selectAll": "全選",

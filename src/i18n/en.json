@@ -537,8 +537,6 @@
       "ageMinutes": "{{count}} min ago",
       "ageHours": "{{count}} h ago",
       "ageDays": "{{count}} d ago",
-      "snapshotChip": "Cached snapshot · {{time}}",
-      "snapshotChipNoAge": "Cached snapshot",
       "scanning": "Scanning repository...",
       "emptyRepo": "No skills found in this repository.",
       "selectAll": "Select All",
