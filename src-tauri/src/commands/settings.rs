@@ -811,7 +811,7 @@ pub struct RepoCacheStats {
 pub async fn get_repo_cache_stats() -> Result<RepoCacheStats, AppError> {
     tauri::async_runtime::spawn_blocking(|| {
         let usage = crate::core::git_fetcher::repo_cache_usage(
-            &central_repo::cache_dir().join("repos"),
+            &crate::core::git_fetcher::repo_cache_root(),
         );
         Ok(RepoCacheStats {
             total_bytes: usage.total_bytes,
@@ -839,7 +839,7 @@ pub struct ClearRepoCacheResult {
 pub async fn clear_repo_cache() -> Result<ClearRepoCacheResult, AppError> {
     tauri::async_runtime::spawn_blocking(|| {
         let cleared = crate::core::git_fetcher::clear_repo_cache_root(
-            &central_repo::cache_dir().join("repos"),
+            &crate::core::git_fetcher::repo_cache_root(),
         );
         Ok(ClearRepoCacheResult {
             freed_bytes: cleared.freed_bytes,

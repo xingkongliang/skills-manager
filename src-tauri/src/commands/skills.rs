@@ -1116,16 +1116,16 @@ pub async fn install_from_skillssh(
 /// Clone a git repo and return a preview list of skills found, without installing.
 /// The caller must follow up with `confirm_git_install` using the returned `temp_dir`.
 ///
-/// `refresh` picks the cache policy: `None`/`false` serves a warm repository
-/// cache fully offline ([`git_fetcher::FetchPolicy::CacheFirst`]) so expanding
-/// a saved source is instant, with the network reached only when the cache is
+/// `refresh` picks the cache policy: `false` serves a warm repository cache
+/// fully offline ([`git_fetcher::FetchPolicy::CacheFirst`]) so expanding a
+/// saved source is instant, with the network reached only when the cache is
 /// missing/invalid. `true` forces the fetch-first policy so the preview shows
 /// the remote's current state — the frontend passes it for adding a source,
 /// error retries and "refresh all".
 #[tauri::command]
 pub async fn preview_git_install(
     repo_url: String,
-    refresh: Option<bool>,
+    refresh: bool,
     store: State<'_, Arc<SkillStore>>,
     cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
     app_handle: tauri::AppHandle,
@@ -1164,7 +1164,7 @@ pub async fn preview_git_install(
                 )
                 .ok();
         });
-        let policy = if refresh.unwrap_or(false) {
+        let policy = if refresh {
             git_fetcher::FetchPolicy::UpdateCache
         } else {
             git_fetcher::FetchPolicy::CacheFirst
@@ -1238,18 +1238,13 @@ pub async fn preview_git_install(
 /// Record "when this source's content was last fetched from the network" on
 /// the matching custom-repo bookmark.
 ///
-/// Gated on `refresh == Some(true)`: only an UpdateCache preview pulled from
-/// the remote just now moves the timestamp. A cache-first serve is by
-/// definition possibly-older content, so stamping it would lie about the age
-/// of what the user is looking at. Best-effort — a storage failure is logged
-/// and never surfaced to the (already successful) preview.
-fn note_custom_repo_fetch(
-    store: &SkillStore,
-    refresh: Option<bool>,
-    clone_url: &str,
-    skill_count: usize,
-) {
-    if refresh != Some(true) {
+/// Gated on `refresh`: only an UpdateCache preview pulled from the remote
+/// just now moves the timestamp. A cache-first serve is by definition
+/// possibly-older content, so stamping it would lie about the age of what the
+/// user is looking at. Best-effort — a storage failure is logged and never
+/// surfaced to the (already successful) preview.
+fn note_custom_repo_fetch(store: &SkillStore, refresh: bool, clone_url: &str, skill_count: usize) {
+    if !refresh {
         return;
     }
     if let Err(err) =
@@ -4476,14 +4471,13 @@ mod tests {
         // Cache-first serves (cold expand, post-install re-scan) must not
         // stamp the fields: their content is as old as the cache, and the
         // timestamp means "last successful network fetch".
-        note_custom_repo_fetch(&store, None, &record.url, 7);
-        note_custom_repo_fetch(&store, Some(false), &record.url, 7);
+        note_custom_repo_fetch(&store, false, &record.url, 7);
         let stored = crate::core::custom_repos::list(&store).unwrap();
         assert_eq!(stored[0].last_fetch_at, None, "cache-first must not bump");
         assert_eq!(stored[0].last_fetch_count, None, "cache-first must not bump");
 
         // Only a refresh preview (UpdateCache) fetched from the remote just now.
-        note_custom_repo_fetch(&store, Some(true), &record.url, 7);
+        note_custom_repo_fetch(&store, true, &record.url, 7);
         let stored = crate::core::custom_repos::list(&store).unwrap();
         assert!(stored[0].last_fetch_at.unwrap() > 0);
         assert_eq!(stored[0].last_fetch_count, Some(7));

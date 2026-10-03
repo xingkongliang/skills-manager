@@ -143,6 +143,13 @@ fn repo_cache_dir(url: &str) -> PathBuf {
     repo_cache_dir_for(url, false)
 }
 
+/// The directory holding every repository cache slot. Slot lookup, pruning
+/// and the Settings readout/clear all go through this one definition, so
+/// they cannot drift onto different roots.
+pub fn repo_cache_root() -> PathBuf {
+    central_repo::cache_dir().join("repos")
+}
+
 /// Cache slot for a URL. A subpath-scoped checkout gets its own `-sparse` slot
 /// rather than sharing the full one, because the two are not interchangeable:
 /// the flows that need a whole tree (repo preview with no subpath, the skills.sh
@@ -160,7 +167,7 @@ fn repo_cache_dir_for(url: &str, sparse: bool) -> PathBuf {
     } else {
         short.to_string()
     };
-    central_repo::cache_dir().join("repos").join(name)
+    repo_cache_root().join(name)
 }
 
 /// Upper bound on the whole repo cache.
@@ -188,11 +195,7 @@ struct RepoCacheLock {
 /// it while someone waits on it would let two installs each hold a lock on a
 /// different inode for the same slot.
 fn prune_repo_cache(keep: &Path) {
-    prune_cache_root(
-        &central_repo::cache_dir().join("repos"),
-        keep,
-        REPO_CACHE_LIMIT_BYTES,
-    )
+    prune_cache_root(&repo_cache_root(), keep, REPO_CACHE_LIMIT_BYTES)
 }
 
 /// Takes its root and limit rather than reading them from the central config, so
@@ -1273,7 +1276,7 @@ fn clone_repo_full(
             Ok(false) => { /* cache invalid, fall through to clone */ }
             Err(e) => {
                 // Propagate cancellation.
-                if e.to_string().contains("cancelled") || e.to_string().contains("canceled") {
+                if is_cancellation(&e) {
                     return Err(e);
                 }
                 // Otherwise fall through to clone.
