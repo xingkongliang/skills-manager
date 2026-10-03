@@ -1258,10 +1258,16 @@ pub fn relative_subpath(repo_dir: &Path, skill_dir: &Path) -> Option<String> {
 fn normalize_url(url: &str) -> (String, Option<String>, Option<String>) {
     let trimmed = url.trim();
 
-    // Already a full URL
-    if trimmed.starts_with("http://")
-        || trimmed.starts_with("https://")
-        || trimmed.starts_with("git@")
+    // Already a full URL. The prefix check mirrors validate_git_url's
+    // allowlist: ssh:// is permitted there but was missing here (it fell into
+    // the shorthand branch below and came out as
+    // "https://github.com/ssh://..."), and the comparison must be
+    // case-insensitive because validate_git_url lowercases before checking.
+    let lower = trimmed.to_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("ssh://")
+        || lower.starts_with("git@")
     {
         if let Some((clone_url, branch, subpath)) = parse_github_tree_url(trimmed) {
             return (clone_url, Some(branch), subpath);
@@ -1269,9 +1275,12 @@ fn normalize_url(url: &str) -> (String, Option<String>, Option<String>) {
         return (trimmed.to_string(), None, None);
     }
 
-    // Shorthand: user/repo
+    // Shorthand: user/repo. Strip one trailing ".git" first — the validator
+    // explicitly accepts "user/repo.git", and appending ".git" unconditionally
+    // would expand it to "https://github.com/user/repo.git.git".
     if trimmed.contains('/') && !trimmed.contains(' ') {
-        return (format!("https://github.com/{}.git", trimmed), None, None);
+        let base = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+        return (format!("https://github.com/{base}.git"), None, None);
     }
 
     (trimmed.to_string(), None, None)
@@ -1677,6 +1686,37 @@ mod tests {
         let parsed = parse_git_source("http://gitlab.example.com/repo.git");
         assert_eq!(parsed.clone_url, "http://gitlab.example.com/repo.git");
         assert_eq!(parsed.branch, None);
+    }
+
+    #[test]
+    fn parses_shorthand_url_with_git_suffix() {
+        // validate_git_url explicitly accepts "user/repo.git"; it must not
+        // expand to "https://github.com/acme/skills.git.git".
+        let parsed = parse_git_source("acme/skills.git");
+        assert_eq!(parsed.clone_url, "https://github.com/acme/skills.git");
+        assert_eq!(parsed.branch, None);
+        assert_eq!(parsed.subpath, None);
+    }
+
+    #[test]
+    fn parses_ssh_scheme_url() {
+        // validate_git_url permits ssh://, so it must pass through instead of
+        // falling into the shorthand branch.
+        let parsed = parse_git_source("ssh://git@github.com/acme/skills.git");
+        assert_eq!(parsed.clone_url, "ssh://git@github.com/acme/skills.git");
+        assert_eq!(parsed.branch, None);
+        assert_eq!(parsed.subpath, None);
+    }
+
+    #[test]
+    fn scheme_comparison_is_case_insensitive() {
+        // validate_git_url lowercases before checking schemes, so an
+        // uppercase scheme is legal input and must not hit the shorthand
+        // branch either.
+        let parsed = parse_git_source("HTTPS://GitHub.com/acme/skills");
+        assert_eq!(parsed.clone_url, "HTTPS://GitHub.com/acme/skills");
+        assert_eq!(parsed.branch, None);
+        assert_eq!(parsed.subpath, None);
     }
 
     // ── find_skill_dir ──
