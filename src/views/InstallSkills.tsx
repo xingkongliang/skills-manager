@@ -88,6 +88,7 @@ export function InstallSkills() {
   const [sourcesError, setSourcesError] = useState<string | null>(null);
   const [sourceUrlInput, setSourceUrlInput] = useState("");
   const [addingSource, setAddingSource] = useState(false);
+  const [refreshingAllSources, setRefreshingAllSources] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [scans, setScans] = useState<Record<string, SourceScanState>>({});
   const [installingSourceId, setInstallingSourceId] = useState<string | null>(null);
@@ -129,7 +130,7 @@ export function InstallSkills() {
   const scansRef = useRef(scans);
   scansRef.current = scans;
   // Per-source scan generation counter: lets a late-resolving preview detect
-  // that it was superseded (collapse or a newer scan) and dispose its temp dir.
+  // that it was superseded (a delete or a newer scan) and dispose its temp dir.
   const scanGenRef = useRef<Record<string, number>>({});
 
   const goToSkill = useCallback((skillName: string) => {
@@ -506,9 +507,13 @@ export function InstallSkills() {
 
   // temp_dir lifecycle (design.md §3.4): every completed scan holds a real
   // on-disk temp directory. On unmount, cancel every one still outstanding —
-  // fire-and-forget because the component is going away.
+  // fire-and-forget because the component is going away. Also bump each
+  // source's scan generation so a preview that is still in flight resolves
+  // as superseded and cancels its own fresh temp dir (its setScans would
+  // land on a dead component otherwise, orphaning that dir).
   useEffect(() => () => {
-    for (const state of Object.values(scansRef.current)) {
+    for (const [id, state] of Object.entries(scansRef.current)) {
+      scanGenRef.current[id] = (scanGenRef.current[id] ?? 0) + 1;
       if (state.tempDir) {
         api.cancelGitPreview(state.tempDir).catch(() => {});
       }
@@ -534,12 +539,21 @@ export function InstallSkills() {
     });
   }, []);
 
+  // Collapsing keeps the scan state (rows + temp dir) so re-expanding is
+  // instant with zero backend calls (D2 feedback). The temp dir is released
+  // on delete / rescan / unmount instead — see design.md §3.4.
   const collapseSource = useCallback((id: string) => {
     setExpanded((prev) => ({ ...prev, [id]: false }));
-    clearScanState(id, true);
-  }, [clearScanState]);
+  }, []);
 
-  const scanSource = useCallback(async (source: CustomRepo) => {
+  /**
+   * Scan (or re-scan) one source. `opts.silent` suppresses the per-scan
+   * toast — used by refresh-all and the post-install background re-scan,
+   * which give their own aggregate feedback; first-load scans keep the
+   * toast. Returns whether the scan landed without an error state (a
+   * superseded scan counts as fine — a newer scan owns the state).
+   */
+  const scanSource = useCallback(async (source: CustomRepo, opts?: { silent?: boolean }) => {
     // Cancel any previous scan's temp dir before starting a new one, so the
     // overwritten state can never orphan a live temp directory.
     clearScanState(source.id, true);
@@ -549,29 +563,33 @@ export function InstallSkills() {
       [source.id]: { loading: true, tempDir: null, rows: [], error: null },
     }));
 
-    const toastId = toast.loading(t("install.toast.cloning"));
+    const silent = opts?.silent ?? false;
+    let toastId: number | string | undefined;
     let unlisten: (() => void) | null = null;
 
     try {
-      unlisten = await listen<{ skill_id: string; phase: string; detail?: string }>(
-        "install-progress",
-        (event) => {
-          if (event.payload.skill_id !== source.url) return;
-          if (event.payload.phase === "cloning") {
-            const detail = event.payload.detail?.trim();
-            const msg = detail
-              ? `${t("install.toast.cloning")}\n${detail}`
-              : t("install.toast.cloning");
-            toast.loading(msg, { id: toastId });
+      if (!silent) {
+        toastId = toast.loading(t("install.toast.cloning"));
+        unlisten = await listen<{ skill_id: string; phase: string; detail?: string }>(
+          "install-progress",
+          (event) => {
+            if (event.payload.skill_id !== source.url) return;
+            if (event.payload.phase === "cloning") {
+              const detail = event.payload.detail?.trim();
+              const msg = detail
+                ? `${t("install.toast.cloning")}\n${detail}`
+                : t("install.toast.cloning");
+              toast.loading(msg, { id: toastId });
+            }
           }
-        }
-      );
+        );
+      }
       const preview = await api.previewGitInstall(source.url);
-      toast.dismiss(toastId);
+      if (toastId !== undefined) toast.dismiss(toastId);
       if (scanGenRef.current[source.id] !== gen) {
-        // Superseded by a collapse or newer scan — nobody owns this temp dir.
+        // Superseded by a delete or newer scan — nobody owns this temp dir.
         api.cancelGitPreview(preview.temp_dir).catch(() => {});
-        return;
+        return true;
       }
       setScans((prev) => ({
         ...prev,
@@ -589,9 +607,10 @@ export function InstallSkills() {
           error: null,
         },
       }));
+      return true;
     } catch (error: unknown) {
-      toast.dismiss(toastId);
-      if (scanGenRef.current[source.id] !== gen) return;
+      if (toastId !== undefined) toast.dismiss(toastId);
+      if (scanGenRef.current[source.id] !== gen) return true;
       // The backend cleans the temp dir itself on failure — keep tempDir null.
       setScans((prev) => ({
         ...prev,
@@ -602,6 +621,7 @@ export function InstallSkills() {
           error: getErrorMessage(error, t("common.error")),
         },
       }));
+      return false;
     } finally {
       unlisten?.();
     }
@@ -614,7 +634,9 @@ export function InstallSkills() {
     }
     setExpanded((prev) => ({ ...prev, [source.id]: true }));
     // Reuse a live scan result; rescan only when there is nothing to reuse
-    // (collapse/install cleared the state, or the last scan failed).
+    // (first expand of a cold source after restart/add, or retry after a
+    // failed scan). Collapsed sources keep their rows, so re-expand is
+    // instant with zero backend calls.
     const scan = scans[source.id];
     if (!scan || scan.error) {
       scanSource(source);
@@ -641,6 +663,29 @@ export function InstallSkills() {
     }
   };
 
+  // Manual refresh (D2 feedback): re-scan every added source once, in
+  // parallel. Scans run silent; per-source failures land in each source's
+  // own error area and this handler gives the single aggregate toast.
+  const handleRefreshAllSources = async () => {
+    if (sources.length === 0 || refreshingAllSources) return;
+    setRefreshingAllSources(true);
+    try {
+      const results = await Promise.allSettled(
+        sources.map((source) => scanSource(source, { silent: true })),
+      );
+      const failed = results.filter((r) => r.status === "rejected" || !r.value).length;
+      if (failed === 0) {
+        toast.success(t("install.sources.refreshAllDone", { count: sources.length }));
+      } else {
+        toast.error(
+          t("install.sources.refreshAllErrors", { failed, total: sources.length }),
+        );
+      }
+    } finally {
+      setRefreshingAllSources(false);
+    }
+  };
+
   const updateScanRows = useCallback(
     (id: string, updater: (rows: SourceScanRow[]) => SourceScanRow[]) => {
       setScans((prev) => {
@@ -658,12 +703,14 @@ export function InstallSkills() {
     const selected = scan.rows.filter((r) => r.selected);
     if (selected.length === 0) return;
     setInstallingSourceId(source.id);
+    let installed = false;
     try {
       await api.confirmGitInstall(
         source.url,
         scan.tempDir,
         selected.map((r) => ({ rel_path: r.rel_path, name: r.name })),
       );
+      installed = true;
       const results = await Promise.allSettled([refreshPresets(), refreshManagedSkills()]);
       warnRejected(results, "post-install refresh");
       toast.success(
@@ -674,10 +721,17 @@ export function InstallSkills() {
     } finally {
       // confirm_git_install cleans the temp dir on success AND failure
       // ("Always clean up", skills.rs), so never cancel here — just drop the
-      // scan state and collapse; re-expanding rescans with fresh flags.
+      // scan state and collapse. After a successful install, run ONE silent
+      // background re-scan so installed badges/counts refresh exactly once
+      // per install action (not per expand). It starts only after confirm
+      // finished; the stale tempDir in the dropped state is dead and the
+      // fire-and-forget cancel inside scanSource is harmless.
       clearScanState(source.id, false);
       setExpanded((prev) => ({ ...prev, [source.id]: false }));
       setInstallingSourceId(null);
+      if (installed) {
+        scanSource(source, { silent: true });
+      }
     }
   };
 
@@ -687,8 +741,10 @@ export function InstallSkills() {
     if (!deleteSource) return;
     const { id } = deleteSource;
     try {
-      // Cancel any live preview temp dir and drop scan state first.
-      collapseSource(id);
+      // The source is going away — explicitly cancel its live preview temp
+      // dir and drop the scan state (collapse no longer clears; design.md
+      // §3.4 keeps the temp_dir ownership contract on delete).
+      clearScanState(id, true);
       await api.removeCustomRepo(id);
       setSources((prev) => prev.filter((s) => s.id !== id));
     } catch (error: unknown) {
@@ -1641,6 +1697,16 @@ export function InstallSkills() {
                     <Plus className="h-4 w-4" />
                   )}
                   {t("install.sources.add")}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRefreshAllSources}
+                  disabled={sources.length === 0 || refreshingAllSources}
+                  className="app-button-secondary shrink-0 bg-background"
+                  title={t("install.sources.refreshAll")}
+                >
+                  <RefreshCw className={cn("h-4 w-4", refreshingAllSources && "animate-spin")} />
+                  {t("install.sources.refreshAll")}
                 </button>
               </div>
             </div>

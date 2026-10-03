@@ -542,7 +542,10 @@
       "delete": "删除来源",
       "deleteTitle": "删除该来源？",
       "deleteMessage": "将从来源列表中移除“{{label}}”。删除来源不会卸载已从中安装的技能。",
-      "deleteConfirm": "删除来源"
+      "deleteConfirm": "删除来源",
+      "refreshAll": "刷新全部",
+      "refreshAllDone": "已刷新 {{count}} 个来源",
+      "refreshAllErrors": "{{total}} 个来源中 {{failed}} 个刷新失败"
     },
     "scan": {
       "title": "扫描本地 Skills 并导入",

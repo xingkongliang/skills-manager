@@ -499,7 +499,10 @@
       "delete": "刪除來源",
       "deleteTitle": "刪除該來源？",
       "deleteMessage": "將從來源列表中移除「{{label}}」。刪除來源不會解除安裝已從中安裝的技能。",
-      "deleteConfirm": "刪除來源"
+      "deleteConfirm": "刪除來源",
+      "refreshAll": "重新整理全部",
+      "refreshAllDone": "已重新整理 {{count}} 個來源",
+      "refreshAllErrors": "{{total}} 個來源中 {{failed}} 個重新整理失敗"
     },
     "scan": {
       "title": "掃描本機 Skills 並匯入",

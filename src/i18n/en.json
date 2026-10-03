@@ -542,7 +542,10 @@
       "delete": "Delete source",
       "deleteTitle": "Delete this source?",
       "deleteMessage": "\"{{label}}\" will be removed from your sources. Deleting a source does not uninstall skills already installed from it.",
-      "deleteConfirm": "Delete Source"
+      "deleteConfirm": "Delete Source",
+      "refreshAll": "Refresh all",
+      "refreshAllDone": "Refreshed {{count}} source(s)",
+      "refreshAllErrors": "{{failed}} of {{total}} source(s) failed to refresh"
     },
     "scan": {
       "title": "Scan Local Skills",
