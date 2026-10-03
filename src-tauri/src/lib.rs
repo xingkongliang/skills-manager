@@ -1030,6 +1030,11 @@ pub fn run() {
             commands::skills::delete_tag,
             commands::skills::cancel_install,
             commands::skills::batch_import_folder,
+            // Custom repos
+            commands::custom_repos::list_custom_repos,
+            commands::custom_repos::add_custom_repo,
+            commands::custom_repos::remove_custom_repo,
+            commands::custom_repos::reset_custom_repos,
             // Sync
             commands::sync::sync_skill_to_tool,
             commands::sync::unsync_skill_from_tool,
@@ -1062,6 +1067,8 @@ pub fn run() {
             commands::settings::app_exit,
             commands::settings::restart_app,
             commands::settings::hide_to_tray,
+            commands::settings::get_repo_cache_stats,
+            commands::settings::clear_repo_cache,
             // Git Backup
             commands::git_backup::git_backup_fetch,
             commands::git_backup::git_backup_status,

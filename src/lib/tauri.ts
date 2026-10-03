@@ -273,6 +273,12 @@ export interface GitSkillPreview {
   rel_path: string;
   name: string;
   description: string | null;
+  /**
+   * True when an installed skill already records this repository URL and
+   * subpath. Informational only — the UI pre-deselects such rows; manually
+   * re-checking one means update/reinstall.
+   */
+  installed: boolean;
 }
 
 export interface GitPreviewResult {
@@ -285,14 +291,54 @@ export interface SkillInstallItem {
   name: string;
 }
 
-export const previewGitInstall = (repoUrl: string) =>
-  invoke<GitPreviewResult>("preview_git_install", { repoUrl });
+/**
+ * Preview a repository's skills without installing.
+ *
+ * `refresh` picks the backend cache policy: false (default) serves a warm
+ * repository cache fully offline — expanding a previously scanned source is
+ * instant; true forces a network fetch so the preview reflects the remote's
+ * current state (add-source, error retry, "refresh all").
+ */
+export const previewGitInstall = (repoUrl: string, refresh?: boolean) =>
+  invoke<GitPreviewResult>("preview_git_install", { repoUrl, refresh: refresh ?? false });
 
 export const confirmGitInstall = (repoUrl: string, tempDir: string, items: SkillInstallItem[]) =>
   invoke<void>("confirm_git_install", { repoUrl, tempDir, items });
 
 export const cancelGitPreview = (tempDir: string) =>
   invoke<void>("cancel_git_preview", { tempDir });
+
+// ── Custom Skill Repos (persistent install sources) ──
+
+export interface CustomRepo {
+  id: string;
+  /** Normalized https clone URL — dedupe, scan and install all use it. */
+  url: string;
+  /** Derived "owner/repo" label. */
+  label: string;
+  /** Unix milliseconds. */
+  added_at: number;
+  /**
+   * Unix ms of the last successful network fetch (refresh scan). Null when
+   * never fetched — including records stored before the fields existed.
+   */
+  last_fetch_at: number | null;
+  /** Skill count that fetch saw; same lifecycle as `last_fetch_at`. */
+  last_fetch_count: number | null;
+}
+
+export const listCustomRepos = () =>
+  invoke<CustomRepo[]>("list_custom_repos");
+
+export const addCustomRepo = (url: string) =>
+  invoke<CustomRepo>("add_custom_repo", { url });
+
+export const removeCustomRepo = (id: string) =>
+  invoke<void>("remove_custom_repo", { id });
+
+/** Escape hatch for a corrupted sources list: overwrite it with an empty one. */
+export const resetCustomRepos = () =>
+  invoke<void>("reset_custom_repos");
 
 export const installFromSkillssh = (source: string, skillId: string) =>
   invoke<void>("install_from_skillssh", { source, skillId });
@@ -468,6 +514,32 @@ export const hideToTray = () => invoke<void>("hide_to_tray");
 
 export const openCentralRepoFolder = () =>
   invoke<void>("open_central_repo_folder");
+
+// ── Repository cache management (Settings) ──
+
+export interface RepoCacheStats {
+  total_bytes: number;
+  slot_count: number;
+}
+
+/**
+ * Size and slot count of the persistent git repository cache. Walks the whole
+ * cache server-side (~a second over a large cache), so load on demand rather
+ * than at startup.
+ */
+export const getRepoCacheStats = () =>
+  invoke<RepoCacheStats>("get_repo_cache_stats");
+
+export interface ClearRepoCacheResult {
+  /** Bytes actually deleted. */
+  freed_bytes: number;
+  /** Slots kept because an install held their lock; retry later to finish. */
+  remaining_slots: number;
+}
+
+/** Best-effort deletion of every cached repository checkout. */
+export const clearRepoCache = () =>
+  invoke<ClearRepoCacheResult>("clear_repo_cache");
 
 export interface AppUpdateInfo {
   has_update: boolean;

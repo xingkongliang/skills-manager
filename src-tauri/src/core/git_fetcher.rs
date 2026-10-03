@@ -1,5 +1,6 @@
 use crate::core::central_repo;
 use crate::core::git_credentials;
+use crate::core::log_sanitize;
 use crate::core::skill_metadata;
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
@@ -21,6 +22,35 @@ pub const CLONE_TEMP_PREFIX: &str = "skills-manager-clone-";
 
 /// Callback type for reporting clone progress messages to the UI.
 pub type ProgressCallback = Box<dyn Fn(&str) + Send>;
+
+/// Whether serving a cached repository is allowed to touch the network.
+///
+/// [`FetchPolicy::UpdateCache`] is the behaviour every install, update and
+/// check path has always had: each use of a cached repository first runs an
+/// incremental `git fetch --depth 1`, so the cache is always current — at the
+/// price of a network round trip standing between the user and every clone,
+/// however warm the cache is.
+///
+/// [`FetchPolicy::CacheFirst`] serves the cache the moment it passes the
+/// local validations (`.git` present, remote URL unchanged) with **no fetch at
+/// all**; the network is reached only when the cache is missing or invalid and
+/// the caller falls back to a fresh clone. Repository *preview* (browsing a
+/// saved source in the install tab) uses this so expanding a previously
+/// scanned source is fully offline — the data shown is the snapshot from the
+/// last fetch, which is exactly what the explicit "refresh" paths are for.
+///
+/// Note for sparse (partial-clone) cache slots: the local `reset --hard`
+/// normalization that still runs under `CacheFirst` can lazily fetch missing
+/// blobs over the network. That is accepted — preview sources are plain
+/// repository URLs served from the full cache — and a reset failure simply
+/// falls through to the re-clone path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchPolicy {
+    /// Incremental `git fetch` on every use; the historic behaviour.
+    UpdateCache,
+    /// Skip the fetch when local validation passes; network only on a miss.
+    CacheFirst,
+}
 
 /// Create a `Command` for git that hides the console window on Windows.
 fn git_command() -> Command {
@@ -113,6 +143,13 @@ fn repo_cache_dir(url: &str) -> PathBuf {
     repo_cache_dir_for(url, false)
 }
 
+/// The directory holding every repository cache slot. Slot lookup, pruning
+/// and the Settings readout/clear all go through this one definition, so
+/// they cannot drift onto different roots.
+pub fn repo_cache_root() -> PathBuf {
+    central_repo::cache_dir().join("repos")
+}
+
 /// Cache slot for a URL. A subpath-scoped checkout gets its own `-sparse` slot
 /// rather than sharing the full one, because the two are not interchangeable:
 /// the flows that need a whole tree (repo preview with no subpath, the skills.sh
@@ -130,7 +167,7 @@ fn repo_cache_dir_for(url: &str, sparse: bool) -> PathBuf {
     } else {
         short.to_string()
     };
-    central_repo::cache_dir().join("repos").join(name)
+    repo_cache_root().join(name)
 }
 
 /// Upper bound on the whole repo cache.
@@ -158,11 +195,7 @@ struct RepoCacheLock {
 /// it while someone waits on it would let two installs each hold a lock on a
 /// different inode for the same slot.
 fn prune_repo_cache(keep: &Path) {
-    prune_cache_root(
-        &central_repo::cache_dir().join("repos"),
-        keep,
-        REPO_CACHE_LIMIT_BYTES,
-    )
+    prune_cache_root(&repo_cache_root(), keep, REPO_CACHE_LIMIT_BYTES)
 }
 
 /// Takes its root and limit rather than reading them from the central config, so
@@ -237,6 +270,93 @@ fn slot_stats(dir: &Path) -> (u64, std::time::SystemTime) {
         }
     }
     (size, newest)
+}
+
+/// Total size and slot count of the repository cache, for the Settings screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepoCacheUsage {
+    pub total_bytes: u64,
+    pub slot_count: u64,
+}
+
+/// Read-only walk of the cache `root`, sharing the pruner's `slot_stats` so
+/// the number shown in Settings is the same one eviction decisions use. A
+/// missing root is an empty cache, not an error.
+pub fn repo_cache_usage(root: &Path) -> RepoCacheUsage {
+    let mut usage = RepoCacheUsage {
+        total_bytes: 0,
+        slot_count: 0,
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return usage;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let (size, _) = slot_stats(&path);
+        usage.total_bytes = usage.total_bytes.saturating_add(size);
+        usage.slot_count += 1;
+    }
+    usage
+}
+
+/// Outcome of a best-effort cache clear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClearedRepoCache {
+    /// Bytes actually deleted.
+    pub freed_bytes: u64,
+    /// Slots still on disk afterwards (their lock was held by a running
+    /// install, or the delete failed) — reported so the UI can say the clear
+    /// was partial instead of silently showing a non-zero size as success.
+    pub remaining_slots: u64,
+}
+
+/// Remove every cache slot under `root`, best-effort.
+///
+/// Same locking rules as the pruner: a slot another install holds is skipped
+/// rather than waited for, and the lock *file* is left behind (see
+/// `prune_cache_root`). Nothing outside `root` is ever touched — the root is
+/// supplied by the caller as `cache_dir()/repos` and this function only ever
+/// descends into directories directly inside it.
+pub fn clear_repo_cache_root(root: &Path) -> ClearedRepoCache {
+    let mut cleared = ClearedRepoCache {
+        freed_bytes: 0,
+        remaining_slots: 0,
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return cleared;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let (size, _) = slot_stats(&path);
+        let lock_path = path.with_extension("lock");
+        let Ok(file) = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+        else {
+            cleared.remaining_slots += 1;
+            continue;
+        };
+        if file.try_lock_exclusive().is_err() {
+            cleared.remaining_slots += 1;
+            continue;
+        }
+        if std::fs::remove_dir_all(&path).is_ok() {
+            log::info!("cleared repo cache slot {}", path.display());
+            cleared.freed_bytes = cleared.freed_bytes.saturating_add(size);
+        } else {
+            cleared.remaining_slots += 1;
+        }
+    }
+    cleared
 }
 
 fn lock_repo_cache(
@@ -348,8 +468,70 @@ fn materialize_cached_repo(
     }
 }
 
+/// Tell the user the cached snapshot is being served one refresh behind
+/// because the remote could not be reached.
+fn report_stale_cache_use(on_progress: &Option<ProgressCallback>) {
+    if let Some(cb) = on_progress {
+        cb("Couldn't refresh the cached repository — using the cached copy");
+    }
+}
+
+/// Git error fragments that mean "the remote could not be reached" rather
+/// than "this cache is broken". The first five mirror
+/// `AppError::classify_git_error` (core/error.rs), which drives the UI error
+/// kind for the same messages; the rest are transport chatter git only
+/// prints while talking to a remote. A failure that matches nothing here — a
+/// git lock left behind by a killed run, corrupt objects, expired
+/// credentials, a deleted or renamed repository — keeps its old
+/// discard-and-re-clone treatment, because re-cloning is the only thing that
+/// heals those, and serving a stale copy of a repo the server says is gone
+/// would hide the problem.
+const UNREACHABLE_REMOTE_MARKERS: &[&str] = &[
+    "connection refused",
+    "could not resolve host",
+    "failed to connect",
+    "connection timed out",
+    "network is unreachable",
+    "connection was reset",
+    "connection reset by peer",
+    "recv failure",
+    "send failure",
+    "ssl_read",
+    "ssl_write",
+    "gnutls_handshake",
+    "schannel",
+    "the remote end hung up",
+    "timed out",
+    "no route to host",
+    "network is down",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "empty reply from server",
+    "early eof",
+    "http2 framing",
+    // 5xx only — a dead proxy or an overloaded remote answers with these.
+    // 4xx ("repository not found", auth challenges) is deliberately absent,
+    // per the doc comment above.
+    "returned error: 5",
+];
+
+fn looks_like_unreachable_remote(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    UNREACHABLE_REMOTE_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
 /// Try to update an existing cached repo via fetch + reset.
-/// Returns Ok(true) if the cache was reused, Ok(false) if it should be re-cloned.
+/// Returns Ok(true) if the cache is usable — freshly refreshed, or left at its
+/// last synced snapshot because the remote could not be reached — and Ok(false)
+/// if it should be re-cloned (no cache, a different remote URL, or a fetch
+/// failure that does not look like an unreachable remote).
+///
+/// Under [`FetchPolicy::CacheFirst`] the fetch is skipped entirely when the
+/// local validations pass (`.git` present, remote URL unchanged) — the cache is
+/// served as-is after its local `reset --hard` normalization, so a warm cache
+/// costs no network. See the enum's docs for the trade-offs.
 fn try_update_cached_repo(
     cached: &Path,
     url: &str,
@@ -357,6 +539,7 @@ fn try_update_cached_repo(
     proxy_url: Option<&str>,
     cancel: Option<&Arc<AtomicBool>>,
     on_progress: &Option<ProgressCallback>,
+    policy: FetchPolicy,
 ) -> Result<bool> {
     if !cached.join(".git").exists() {
         return Ok(false);
@@ -382,6 +565,13 @@ fn try_update_cached_repo(
         return Ok(false);
     }
 
+    if policy == FetchPolicy::CacheFirst {
+        // Warm and provably ours — serve it without touching the network. The
+        // reset below is local against a full cache, so the only work left is
+        // normalizing the worktree to the already-fetched HEAD.
+        return finish_cached_repo(cached, branch, proxy_url, cancel, policy);
+    }
+
     if let Some(cb) = on_progress {
         cb("Updating cached repository…");
     }
@@ -402,7 +592,9 @@ fn try_update_cached_repo(
     if let Some(branch) = branch {
         fetch_cmd.arg(branch);
     }
-    fetch_cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    // stderr is captured (a failing fetch prints only a few lines) so the
+    // failure can be classified below; stdout stays dropped.
+    fetch_cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
     let child = fetch_cmd.spawn();
     if let Ok(mut child) = child {
@@ -416,7 +608,41 @@ fn try_update_cached_repo(
             match child.try_wait() {
                 Ok(Some(status)) => {
                     if !status.success() {
-                        // Fetch failed — discard cache and re-clone.
+                        let mut stderr_buf = String::new();
+                        if let Some(mut stderr) = child.stderr.take() {
+                            let _ = stderr.read_to_string(&mut stderr_buf);
+                        }
+                        if looks_like_unreachable_remote(&stderr_buf) {
+                            // The fetch failed before moving any ref or
+                            // worktree file, so the cache is still exactly the
+                            // snapshot the last successful refresh left behind
+                            // — and re-cloning over a dead network would only
+                            // destroy it. Serve the snapshot, one refresh
+                            // behind, through the shared local tail below.
+                            log::warn!(
+                                "{}",
+                                log_sanitize::sanitize(&format!(
+                                    "repo cache refresh failed for {url}, \
+                                     serving the cached copy: {}",
+                                    stderr_buf.lines().next().unwrap_or("").trim()
+                                ))
+                            );
+                            report_stale_cache_use(on_progress);
+                            return finish_cached_repo(cached, branch, proxy_url, cancel, policy);
+                        }
+                        // Anything else may be wrong with the cache itself — a
+                        // git lock left by a killed run, a corrupt object
+                        // store, expired credentials, a renamed repository.
+                        // Keep the old discard-and-re-clone behavior, because
+                        // re-cloning is the only thing that heals those.
+                        log::warn!(
+                            "{}",
+                            log_sanitize::sanitize(&format!(
+                                "repo cache refresh failed for {url} with a \
+                                 non-transport error, discarding the cache: {}",
+                                stderr_buf.lines().next().unwrap_or("").trim()
+                            ))
+                        );
                         let _ = std::fs::remove_dir_all(cached);
                         return Ok(false);
                     }
@@ -426,25 +652,63 @@ fn try_update_cached_repo(
                     if Instant::now() > deadline {
                         let _ = child.kill();
                         let _ = child.wait();
-                        let _ = std::fs::remove_dir_all(cached);
-                        return Ok(false);
+                        // A hung fetch is a transport problem in practice, and
+                        // a killed fetch has moved no ref and written no
+                        // worktree file — the same state the cancellation
+                        // branch above already relies on leaving behind. If
+                        // the kill left git locks in the cache, the reset in
+                        // the shared tail fails, classifies the slot as broken
+                        // and discards it — self-healing.
+                        log::warn!(
+                            "{}",
+                            log_sanitize::sanitize(&format!(
+                                "repo cache refresh timed out after \
+                                 {CLONE_TIMEOUT_SECS}s for {url}, serving the \
+                                 cached copy"
+                            ))
+                        );
+                        report_stale_cache_use(on_progress);
+                        return finish_cached_repo(cached, branch, proxy_url, cancel, policy);
                     }
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 Err(_) => {
+                    // Cannot even poll the child, so there is no stderr to
+                    // classify — fall back to the discard path, but kill the
+                    // child first so it cannot keep writing into the cache
+                    // mid-re-clone (the old code deleted the cache under a
+                    // possibly-running fetch instead).
+                    let _ = child.kill();
+                    let _ = child.wait();
                     let _ = std::fs::remove_dir_all(cached);
                     return Ok(false);
                 }
             }
         }
     } else {
+        // No fetch process at all, so there is no stderr to classify either —
+        // keep the discard-and-re-clone behavior.
         let _ = std::fs::remove_dir_all(cached);
         return Ok(false);
     }
 
+    finish_cached_repo(cached, branch, proxy_url, cancel, policy)
+}
+
+/// The tail shared by both policies: `reset --hard` the cached worktree onto
+/// its fetched HEAD so it is a clean checkout of what the cache holds, and
+/// report whether the cache is servable (`Ok(true)`) or should be re-cloned
+/// (`Ok(false)`).
+fn finish_cached_repo(
+    cached: &Path,
+    branch: Option<&str>,
+    proxy_url: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    policy: FetchPolicy,
+) -> Result<bool> {
     // Reset to the fetched HEAD. A branch has a remote-tracking ref, but a tag
     // does not — `origin/<tag>` is not a revision — so fall back to FETCH_HEAD,
-    // which the fetch above just wrote. Without the fallback a tag source never
+    // which the last fetch wrote. Without the fallback a tag source never
     // reuses its cache and silently re-clones on every check.
     let targets: Vec<String> = match branch {
         Some(b) => vec![format!("origin/{b}"), "FETCH_HEAD".to_string()],
@@ -453,7 +717,9 @@ fn try_update_cached_repo(
     // Against a full cache this reset is local and returns immediately. Against a
     // sparse cache it is a partial clone, so writing the worktree lazily fetches
     // the blobs it needs — which is why it runs under the same timeout and cancel
-    // flag as the fetch above instead of blocking forever on a dead network.
+    // flag as a fetch instead of blocking forever on a dead network. That lazy
+    // fetch is the one network step `CacheFirst` can still reach; see
+    // [`FetchPolicy`].
     let mut cancelled = false;
     let reset_ok = targets.iter().any(|target| {
         match run_git_watched_at(
@@ -470,17 +736,23 @@ fn try_update_cached_repo(
             }
         }
     });
-    // A cancellation is not a broken cache. Collapsed into `reset_ok == false` it
-    // reads as "every target failed", and the cache below gets deleted — so
-    // cancelling an install would silently cost the user the next full download.
-    // The fetch above already treats cancellation this way; so must this.
+    // A cancellation is not a broken cache. Collapsed into `reset_ok == false`
+    // it reads as "every target failed", and the UpdateCache branch below
+    // deletes the slot — so cancelling an install would silently cost the user
+    // the next full download. A fetch treats cancellation this way already; so
+    // must this.
     if cancelled {
         bail!("Installation cancelled");
     }
     match reset_ok {
         true => Ok(true),
         false => {
-            let _ = std::fs::remove_dir_all(cached);
+            if policy == FetchPolicy::UpdateCache {
+                let _ = std::fs::remove_dir_all(cached);
+            }
+            // CacheFirst leaves the slot on disk: the failure may be a lazy blob
+            // fetch that an explicit refresh can still recover from, and the
+            // caller's re-clone fall-through deletes the slot itself anyway.
             Ok(false)
         }
     }
@@ -586,6 +858,11 @@ pub fn clone_repo_ref_with_progress(
 ///
 /// Pass `None` for `subpath` whenever the caller needs to search the repository
 /// rather than read one known directory.
+///
+/// This entry point keeps the historic [`FetchPolicy::UpdateCache`] behaviour —
+/// every install, update and check depends on the cache being current. Callers
+/// that want to serve a warm cache offline (repository preview) use
+/// [`clone_repo_ref_scoped_with_policy`] instead.
 pub fn clone_repo_ref_scoped(
     url: &str,
     branch: Option<&str>,
@@ -594,8 +871,30 @@ pub fn clone_repo_ref_scoped(
     proxy_url: Option<&str>,
     on_progress: Option<ProgressCallback>,
 ) -> Result<PathBuf> {
+    clone_repo_ref_scoped_with_policy(
+        url,
+        branch,
+        subpath,
+        cancel,
+        proxy_url,
+        on_progress,
+        FetchPolicy::UpdateCache,
+    )
+}
+
+/// [`clone_repo_ref_scoped`] with an explicit [`FetchPolicy`] — the one knob
+/// repository preview needs to stay offline against a warm cache.
+pub fn clone_repo_ref_scoped_with_policy(
+    url: &str,
+    branch: Option<&str>,
+    subpath: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+    on_progress: Option<ProgressCallback>,
+    policy: FetchPolicy,
+) -> Result<PathBuf> {
     if let Some(subpath) = sparse_pattern(subpath) {
-        match clone_repo_sparse(url, branch, &subpath, cancel, proxy_url, &on_progress) {
+        match clone_repo_sparse(url, branch, &subpath, cancel, proxy_url, &on_progress, policy) {
             Ok(dir) => return Ok(dir),
             Err(e) if is_cancellation(&e) => return Err(e),
             Err(e) => {
@@ -606,7 +905,7 @@ pub fn clone_repo_ref_scoped(
         }
     }
 
-    clone_repo_full(url, branch, cancel, proxy_url, on_progress)
+    clone_repo_full(url, branch, cancel, proxy_url, on_progress, policy)
 }
 
 /// Whether an error is a user cancellation rather than a fault worth retrying
@@ -660,6 +959,7 @@ fn clone_repo_sparse(
     cancel: Option<&Arc<AtomicBool>>,
     proxy_url: Option<&str>,
     on_progress: &Option<ProgressCallback>,
+    policy: FetchPolicy,
 ) -> Result<PathBuf> {
     let cached_dir = repo_cache_dir_for(url, true);
     let _cache_lock = lock_repo_cache(&cached_dir, on_progress)?;
@@ -668,7 +968,15 @@ fn clone_repo_sparse(
     // expensive, and they are shared. The lock holds until this call's copy is
     // taken, so a later install re-scoping the worktree cannot disturb it.
     let reusable = cached_dir.exists()
-        && try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, on_progress)?;
+        && try_update_cached_repo(
+            &cached_dir,
+            url,
+            branch,
+            proxy_url,
+            cancel,
+            on_progress,
+            policy,
+        )?;
 
     if !reusable {
         let _ = std::fs::remove_dir_all(&cached_dir);
@@ -948,18 +1256,27 @@ fn clone_repo_full(
     cancel: Option<&Arc<AtomicBool>>,
     proxy_url: Option<&str>,
     on_progress: Option<ProgressCallback>,
+    policy: FetchPolicy,
 ) -> Result<PathBuf> {
     let cached_dir = repo_cache_dir(url);
     let _cache_lock = lock_repo_cache(&cached_dir, &on_progress)?;
 
     // Try cached repo first.
     if cached_dir.exists() {
-        match try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, &on_progress) {
+        match try_update_cached_repo(
+            &cached_dir,
+            url,
+            branch,
+            proxy_url,
+            cancel,
+            &on_progress,
+            policy,
+        ) {
             Ok(true) => return materialize_cached_repo(&cached_dir, cancel),
             Ok(false) => { /* cache invalid, fall through to clone */ }
             Err(e) => {
                 // Propagate cancellation.
-                if e.to_string().contains("cancelled") || e.to_string().contains("canceled") {
+                if is_cancellation(&e) {
                     return Err(e);
                 }
                 // Otherwise fall through to clone.
@@ -1258,10 +1575,16 @@ pub fn relative_subpath(repo_dir: &Path, skill_dir: &Path) -> Option<String> {
 fn normalize_url(url: &str) -> (String, Option<String>, Option<String>) {
     let trimmed = url.trim();
 
-    // Already a full URL
-    if trimmed.starts_with("http://")
-        || trimmed.starts_with("https://")
-        || trimmed.starts_with("git@")
+    // Already a full URL. The prefix check mirrors validate_git_url's
+    // allowlist: ssh:// is permitted there but was missing here (it fell into
+    // the shorthand branch below and came out as
+    // "https://github.com/ssh://..."), and the comparison must be
+    // case-insensitive because validate_git_url lowercases before checking.
+    let lower = trimmed.to_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("ssh://")
+        || lower.starts_with("git@")
     {
         if let Some((clone_url, branch, subpath)) = parse_github_tree_url(trimmed) {
             return (clone_url, Some(branch), subpath);
@@ -1269,9 +1592,12 @@ fn normalize_url(url: &str) -> (String, Option<String>, Option<String>) {
         return (trimmed.to_string(), None, None);
     }
 
-    // Shorthand: user/repo
+    // Shorthand: user/repo. Strip one trailing ".git" first — the validator
+    // explicitly accepts "user/repo.git", and appending ".git" unconditionally
+    // would expand it to "https://github.com/user/repo.git.git".
     if trimmed.contains('/') && !trimmed.contains(' ') {
-        return (format!("https://github.com/{}.git", trimmed), None, None);
+        let base = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+        return (format!("https://github.com/{base}.git"), None, None);
     }
 
     (trimmed.to_string(), None, None)
@@ -1677,6 +2003,37 @@ mod tests {
         let parsed = parse_git_source("http://gitlab.example.com/repo.git");
         assert_eq!(parsed.clone_url, "http://gitlab.example.com/repo.git");
         assert_eq!(parsed.branch, None);
+    }
+
+    #[test]
+    fn parses_shorthand_url_with_git_suffix() {
+        // validate_git_url explicitly accepts "user/repo.git"; it must not
+        // expand to "https://github.com/acme/skills.git.git".
+        let parsed = parse_git_source("acme/skills.git");
+        assert_eq!(parsed.clone_url, "https://github.com/acme/skills.git");
+        assert_eq!(parsed.branch, None);
+        assert_eq!(parsed.subpath, None);
+    }
+
+    #[test]
+    fn parses_ssh_scheme_url() {
+        // validate_git_url permits ssh://, so it must pass through instead of
+        // falling into the shorthand branch.
+        let parsed = parse_git_source("ssh://git@github.com/acme/skills.git");
+        assert_eq!(parsed.clone_url, "ssh://git@github.com/acme/skills.git");
+        assert_eq!(parsed.branch, None);
+        assert_eq!(parsed.subpath, None);
+    }
+
+    #[test]
+    fn scheme_comparison_is_case_insensitive() {
+        // validate_git_url lowercases before checking schemes, so an
+        // uppercase scheme is legal input and must not hit the shorthand
+        // branch either.
+        let parsed = parse_git_source("HTTPS://GitHub.com/acme/skills");
+        assert_eq!(parsed.clone_url, "HTTPS://GitHub.com/acme/skills");
+        assert_eq!(parsed.branch, None);
+        assert_eq!(parsed.subpath, None);
     }
 
     // ── find_skill_dir ──
@@ -2530,17 +2887,6 @@ mod tests {
         // The filter is served by the *source* repo, so the switch belongs there.
         git(&source, &["config", "uploadpack.allowFilter", "true"]);
 
-        // `file://` needs forward slashes and, on Windows, a slash before the
-        // drive letter: `file:///C:/…` where unix wants `file:///tmp/…`.
-        fn file_url(path: &Path) -> String {
-            let raw = path.display().to_string().replace('\\', "/");
-            if raw.starts_with('/') {
-                format!("file://{raw}")
-            } else {
-                format!("file:///{raw}")
-            }
-        }
-
         let checkout = tmp.path().join("checkout");
         let source_url = file_url(&source);
         let cloned = Command::new("git")
@@ -2597,6 +2943,386 @@ mod tests {
             fs::read_to_string(checkout.join("kept/f.txt")).unwrap(),
             "kept"
         );
+    }
+
+    // ── fetch policy (offline, local origins) ──
+
+    /// `file://` needs forward slashes and, on Windows, a slash before the
+    /// drive letter: `file:///C:/…` where unix wants `file:///tmp/…`.
+    fn file_url(path: &Path) -> String {
+        let raw = path.display().to_string().replace('\\', "/");
+        if raw.starts_with('/') {
+            format!("file://{raw}")
+        } else {
+            format!("file:///{raw}")
+        }
+    }
+
+    /// Run git in `dir` and insist it succeeded — fixtures are meaningless if
+    /// a setup step quietly failed.
+    fn git_ok(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git must be runnable");
+        assert!(
+            out.status.success(),
+            "git {args:?} in {} failed: {}",
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn commit_all(repo: &Path, message: &str) {
+        git_ok(repo, &["add", "-A"]);
+        git_ok(
+            repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-m",
+                message,
+            ],
+        );
+    }
+
+    /// An origin repository holding one skill, addressed over `file://` so the
+    /// URL is stored verbatim in the cache's remote (a bare local path can be
+    /// rewritten by git, which would break the remote-equality check).
+    fn local_origin(tmp: &Path) -> PathBuf {
+        let origin = tmp.join("origin");
+        fs::create_dir_all(origin.join("skills/demo")).unwrap();
+        fs::write(
+            origin.join("skills/demo/SKILL.md"),
+            "---\nname: demo\n---",
+        )
+        .unwrap();
+        git_ok(&origin, &["init"]);
+        commit_all(&origin, "init");
+        origin
+    }
+
+    #[test]
+    fn cache_first_serves_a_warm_cache_with_the_origin_gone() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let origin = local_origin(tmp.path());
+        let url = file_url(&origin);
+
+        // Warm the cache while the origin still exists — cloning into a cold
+        // cache is the one network step CacheFirst permits.
+        let warm = clone_repo_ref_scoped(&url, None, None, None, None, None).unwrap();
+        cleanup_temp(&warm);
+        assert!(
+            repo_cache_dir(&url).exists(),
+            "the warm-up clone must fill the cache"
+        );
+
+        // Take the origin away: any fetch now fails, so whatever comes back
+        // can only have been served from the cache offline.
+        fs::remove_dir_all(&origin).unwrap();
+
+        let offline = clone_repo_ref_scoped_with_policy(
+            &url,
+            None,
+            None,
+            None,
+            None,
+            None,
+            FetchPolicy::CacheFirst,
+        )
+        .expect("a warm cache must serve a preview with no network");
+
+        assert!(offline.join("skills/demo/SKILL.md").is_file());
+        cleanup_temp(&offline);
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn cache_first_still_clones_when_the_cache_is_cold() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let origin = local_origin(tmp.path());
+        let url = file_url(&origin);
+
+        let checkout = clone_repo_ref_scoped_with_policy(
+            &url,
+            None,
+            None,
+            None,
+            None,
+            None,
+            FetchPolicy::CacheFirst,
+        )
+        .expect("a missing cache must fall back to the network");
+
+        assert!(checkout.join("skills/demo/SKILL.md").is_file());
+        assert!(
+            repo_cache_dir(&url).exists(),
+            "the clone must fill the cache so the next preview can be offline"
+        );
+        cleanup_temp(&checkout);
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn update_cache_fetches_new_commits_that_cache_first_reuses_without() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let origin = local_origin(tmp.path());
+        let url = file_url(&origin);
+
+        let warm = clone_repo_ref_scoped(&url, None, None, None, None, None).unwrap();
+        cleanup_temp(&warm);
+
+        // Upstream moves on after the cache was warmed.
+        fs::write(origin.join("later.txt"), "committed after the cache warmed").unwrap();
+        commit_all(&origin, "later");
+
+        // CacheFirst deliberately serves the valid-but-stale snapshot…
+        let cached_view = clone_repo_ref_scoped_with_policy(
+            &url,
+            None,
+            None,
+            None,
+            None,
+            None,
+            FetchPolicy::CacheFirst,
+        )
+        .unwrap();
+        assert!(
+            !cached_view.join("later.txt").exists(),
+            "cache-first must serve the cached snapshot without fetching"
+        );
+        cleanup_temp(&cached_view);
+
+        // …while UpdateCache fetches, so the new commit shows up.
+        let refreshed_view = clone_repo_ref_scoped_with_policy(
+            &url,
+            None,
+            None,
+            None,
+            None,
+            None,
+            FetchPolicy::UpdateCache,
+        )
+        .unwrap();
+        assert!(
+            refreshed_view.join("later.txt").exists(),
+            "update-cache must refresh a warm cache"
+        );
+        cleanup_temp(&refreshed_view);
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    // ── unreachable remote: keep the cache (offline) ──
+
+    fn init_origin_repo(dir: &Path) {
+        fs::write(dir.join("SKILL.md"), "---\nname: demo\n---\n").unwrap();
+        git_ok(dir, &["init"]);
+        commit_all(dir, "init");
+    }
+
+    fn clone_fixture(origin: &Path, cached: &Path) {
+        git_ok(
+            origin.parent().unwrap(),
+            &[
+                // Windows checkouts otherwise turn the committed LF into CRLF.
+                // The `-c` covers this clone only; the config line below
+                // persists it, because the recovery phase's `reset --hard`
+                // rewrites the worktree under the machine's effective config.
+                "-c",
+                "core.autocrlf=false",
+                "clone",
+                origin.to_str().unwrap(),
+                cached.to_str().unwrap(),
+            ],
+        );
+        git_ok(cached, &["config", "core.autocrlf", "false"]);
+    }
+
+    fn set_remote_url(cached: &Path, url: &str) {
+        git_ok(cached, &["remote", "set-url", "origin", url]);
+    }
+
+    /// The URL to hand to `try_update_cached_repo` must be whatever git
+    /// stored, not the path we built: git may normalize separators on
+    /// Windows, and the update path only runs when the stored remote and the
+    /// requested URL compare equal.
+    fn remote_url(cached: &Path) -> String {
+        let out = git_command()
+            .arg("-C")
+            .arg(cached)
+            .args(["remote", "get-url", "origin"])
+            .output()
+            .expect("git must be runnable");
+        assert!(out.status.success(), "no origin remote in fixture");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// The keep-vs-discard decision rides entirely on stderr classification,
+    /// so both sides of the marker table need evidence: real transport
+    /// failures keep the cache, and everything a re-clone can heal (git locks
+    /// left by a killed run, auth, a deleted or renamed repo, corruption)
+    /// must not.
+    #[test]
+    fn unreachable_remote_markers_split_transport_from_local_failures() {
+        for unreachable in [
+            "fatal: unable to access 'https://github.com/acme/skills.git/': Could not resolve host: github.com",
+            "fatal: unable to access 'https://github.com/acme/skills.git/': Failed to connect to github.com port 443: Connection refused",
+            "fatal: unable to access 'https://github.com/acme/skills.git/': OpenSSL SSL_read: Connection was reset, errno 104",
+            "error: RPC failed; curl 56 Recv failure: Connection reset by peer",
+            "fatal: unable to access 'https://github.com/acme/skills.git/': The requested URL returned error: 502",
+            "fatal: unable to access 'https://github.com/acme/skills.git/': Empty reply from server",
+            "error: RPC failed; curl 16 Error in the HTTP2 framing layer",
+            "fatal: early EOF",
+            "schannel: next InitializeSecurityContext failed: Unknown error",
+            "fatal: the remote end hung up unexpectedly",
+            "ssh: connect to host github.com port 22: Connection refused",
+            "kex_exchange_identification: read: Connection reset by peer",
+        ] {
+            assert!(
+                looks_like_unreachable_remote(unreachable),
+                "should classify as unreachable: {unreachable}"
+            );
+        }
+        for local in [
+            "fatal: Unable to create '/acme/.git/shallow.lock': File exists.",
+            "Permission denied (publickey).\nfatal: Could not read from remote repository.",
+            "fatal: Authentication failed for 'https://github.com/acme/skills.git/'",
+            "fatal: unable to access 'https://github.com/acme/skills.git/': The requested URL returned error: 404",
+            "fatal: '/tmp/acme/origin' does not appear to be a git repository",
+            "fatal: couldn't find remote ref refs/heads/gone",
+            "fatal: bad object HEAD",
+        ] {
+            assert!(
+                !looks_like_unreachable_remote(local),
+                "should stay on the discard path: {local}"
+            );
+        }
+    }
+
+    /// A cache whose remote cannot be reached (offline, dead proxy, upstream
+    /// overloaded) must survive the failed refresh and be served one sync
+    /// behind: a failed fetch moves no ref and no worktree file, so deleting
+    /// it cost the user the next online run's full re-clone for nothing. Once
+    /// the remote is reachable again the kept cache must refresh normally —
+    /// that recovery is what keeps the stale serve from freezing in place.
+    #[test]
+    fn unreachable_remote_keeps_the_cache_reusable() {
+        let tmp = tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        let cached = tmp.path().join("cached");
+        fs::create_dir_all(&origin).unwrap();
+        init_origin_repo(&origin);
+        clone_fixture(&origin, &cached);
+        let origin_url = origin.to_string_lossy().to_string();
+
+        // Point the cache at a host that cannot resolve (`.invalid` is
+        // reserved by RFC 2606): an update attempt whose fetch cannot reach
+        // anything, on every platform, without depending on the network.
+        set_remote_url(&cached, "https://skills-manager-tests.invalid/acme/skills");
+        let stored_url = remote_url(&cached);
+
+        let notes = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let on_progress: Option<ProgressCallback> = {
+            let notes = Arc::clone(&notes);
+            Some(Box::new(move |msg: &str| {
+                notes.lock().unwrap().push(msg.to_string());
+            }))
+        };
+        let reused = try_update_cached_repo(
+            &cached,
+            &stored_url,
+            None,
+            None,
+            None,
+            &on_progress,
+            FetchPolicy::UpdateCache,
+        )
+        .unwrap();
+
+        assert!(reused, "the untouched snapshot must be served");
+        assert!(
+            cached.join(".git").exists(),
+            "the cache must survive the unreachable remote"
+        );
+        assert_eq!(
+            fs::read_to_string(cached.join("SKILL.md")).unwrap(),
+            "---\nname: demo\n---\n",
+            "the served snapshot must be the last synced content"
+        );
+        let notes_snapshot = notes.lock().unwrap().clone();
+        assert!(
+            notes_snapshot.iter().any(|m| m.contains("cached copy")),
+            "the stale-cache note must reach the user: {notes_snapshot:?}"
+        );
+
+        // Back online: point the cache at a reachable origin again — now
+        // holding a newer commit — and the kept cache must pick it up.
+        fs::write(
+            origin.join("SKILL.md"),
+            "---\nname: demo\nversion: 2\n---\n",
+        )
+        .unwrap();
+        commit_all(&origin, "second");
+        set_remote_url(&cached, &origin_url);
+        let stored_url = remote_url(&cached);
+
+        let refreshed = try_update_cached_repo(
+            &cached,
+            &stored_url,
+            None,
+            None,
+            None,
+            &None,
+            FetchPolicy::UpdateCache,
+        )
+        .unwrap();
+        assert!(refreshed, "a reachable origin must refresh the kept cache");
+        assert_eq!(
+            fs::read_to_string(cached.join("SKILL.md")).unwrap(),
+            "---\nname: demo\nversion: 2\n---\n",
+            "the refresh must move the cache to the new commit"
+        );
+    }
+
+    /// The one deletion that must stay: a cache fetched from a different
+    /// remote cannot serve as a snapshot of this one, so the URL-change branch
+    /// still discards it.
+    #[test]
+    fn url_change_still_discards_the_cache() {
+        let tmp = tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        let cached = tmp.path().join("cached");
+        fs::create_dir_all(&origin).unwrap();
+        init_origin_repo(&origin);
+        clone_fixture(&origin, &cached);
+
+        let reused = try_update_cached_repo(
+            &cached,
+            "https://github.com/acme/unrelated",
+            None,
+            None,
+            None,
+            &None,
+            FetchPolicy::UpdateCache,
+        )
+        .unwrap();
+
+        assert!(!reused, "a different remote makes the cache meaningless");
+        assert!(!cached.exists(), "the stale cache must be discarded");
     }
 
     // ── cache prune ──
@@ -2711,5 +3437,71 @@ mod tests {
             "eviction moves on to the next candidate instead of giving up"
         );
         drop(held);
+    }
+
+    // ── cache usage / clear (Settings) ──
+
+    #[test]
+    fn cache_usage_counts_bytes_and_slots_only_in_directories() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        seed_cache_slot(root, "a", 1024, std::time::UNIX_EPOCH);
+        seed_cache_slot(root, "b-sparse", 2048, std::time::UNIX_EPOCH);
+        // Stray files at the root (lock files, logs) are not slots.
+        fs::write(root.join("a.lock"), b"lock").unwrap();
+
+        let usage = repo_cache_usage(root);
+
+        assert_eq!(usage.slot_count, 2);
+        assert_eq!(usage.total_bytes, 1024 + 2048, "stray root files are not slots");
+    }
+
+    #[test]
+    fn cache_usage_of_a_missing_root_is_empty_not_an_error() {
+        let tmp = tempdir().unwrap();
+        let usage = repo_cache_usage(&tmp.path().join("never-created"));
+        assert_eq!(
+            usage,
+            RepoCacheUsage {
+                total_bytes: 0,
+                slot_count: 0
+            }
+        );
+    }
+
+    #[test]
+    fn clearing_removes_free_slots_and_spares_held_ones() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("repos");
+        fs::create_dir_all(&root).unwrap();
+        seed_cache_slot(&root, "free", 2048, std::time::UNIX_EPOCH);
+        seed_cache_slot(&root, "held", 4096, std::time::UNIX_EPOCH);
+        // A sibling of the cache root must never be touched by a clear — only
+        // slots directly under the given root are candidates.
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), b"keep").unwrap();
+
+        let held = lock_repo_cache(&root.join("held"), &None).unwrap();
+
+        let cleared = clear_repo_cache_root(&root);
+
+        assert!(!root.join("free").exists(), "unheld slots are deleted");
+        assert!(
+            root.join("held").exists(),
+            "a slot a running install holds must survive a manual clear too"
+        );
+        assert_eq!(cleared.freed_bytes, 2048, "freed bytes count only what was deleted");
+        assert_eq!(cleared.remaining_slots, 1);
+        // And the lock files stay behind, exactly as pruning leaves them.
+        assert!(root.join("free.lock").exists());
+        assert!(outside.join("keep.txt").exists());
+        drop(held);
+
+        // A second clear, once the lock is released, finishes the job.
+        let cleared = clear_repo_cache_root(&root);
+        assert!(!root.join("held").exists());
+        assert_eq!(cleared.freed_bytes, 4096);
+        assert_eq!(cleared.remaining_slots, 0);
     }
 }

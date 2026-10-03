@@ -788,3 +788,63 @@ fn version_gt(a: &str, b: &str) -> bool {
     let parse = |s: &str| -> Vec<u64> { s.split('.').filter_map(|p| p.parse().ok()).collect() };
     parse(a) > parse(b)
 }
+
+// ── Repository cache management (Settings) ──
+//
+// The persistent git repository cache (`cache/repos`, capped and pruned by
+// `git_fetcher::prune_repo_cache`) is otherwise invisible: nothing showed its
+// size, and the only way to shrink it was installing more repositories. These
+// two commands give Settings a readout and a manual clear.
+
+#[derive(serde::Serialize)]
+pub struct RepoCacheStats {
+    pub total_bytes: u64,
+    pub slot_count: u64,
+}
+
+/// Total size and slot count of the repository cache.
+///
+/// Walks every file under `cache/repos` (the pruner's own `slot_stats` walk is
+/// ~0.8s over a 569 MB cache), hence spawn_blocking — and why the frontend
+/// loads it on demand rather than at startup.
+#[tauri::command]
+pub async fn get_repo_cache_stats() -> Result<RepoCacheStats, AppError> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let usage = crate::core::git_fetcher::repo_cache_usage(
+            &crate::core::git_fetcher::repo_cache_root(),
+        );
+        Ok(RepoCacheStats {
+            total_bytes: usage.total_bytes,
+            slot_count: usage.slot_count,
+        })
+    })
+    .await?
+}
+
+#[derive(serde::Serialize)]
+pub struct ClearRepoCacheResult {
+    /// Bytes actually deleted by this call.
+    pub freed_bytes: u64,
+    /// Slots still on disk afterwards (held by a running install); clearing
+    /// them again later succeeds once the install finishes.
+    pub remaining_slots: u64,
+}
+
+/// Delete every repository cache slot under `cache/repos`, best-effort.
+///
+/// The root is fixed inside this call — the frontend cannot aim the delete at
+/// anything else. Cached repositories simply re-download on next use;
+/// installed skills live in the central repo and are never touched.
+#[tauri::command]
+pub async fn clear_repo_cache() -> Result<ClearRepoCacheResult, AppError> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let cleared = crate::core::git_fetcher::clear_repo_cache_root(
+            &crate::core::git_fetcher::repo_cache_root(),
+        );
+        Ok(ClearRepoCacheResult {
+            freed_bytes: cleared.freed_bytes,
+            remaining_slots: cleared.remaining_slots,
+        })
+    })
+    .await?
+}

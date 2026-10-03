@@ -1,0 +1,76 @@
+use std::sync::Arc;
+use tauri::State;
+
+use crate::core::custom_repos::{self, CustomRepoRecord};
+use crate::core::error::AppError;
+use crate::core::skill_store::SkillStore;
+
+#[derive(Debug, serde::Serialize)]
+pub struct CustomRepoDto {
+    pub id: String,
+    pub url: String,
+    pub label: String,
+    pub added_at: i64,
+    /// Unix ms of the last successful network fetch; null when never fetched
+    /// (mirrors the serde default on `CustomRepoRecord`).
+    pub last_fetch_at: Option<u64>,
+    pub last_fetch_count: Option<u32>,
+}
+
+fn custom_repo_dto(record: &CustomRepoRecord) -> CustomRepoDto {
+    CustomRepoDto {
+        id: record.id.clone(),
+        url: record.url.clone(),
+        label: record.label.clone(),
+        added_at: record.added_at,
+        last_fetch_at: record.last_fetch_at,
+        last_fetch_count: record.last_fetch_count,
+    }
+}
+
+#[tauri::command]
+pub async fn list_custom_repos(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<CustomRepoDto>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let records = custom_repos::list(&store)?;
+        Ok(records.iter().map(custom_repo_dto).collect())
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn add_custom_repo(
+    url: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<CustomRepoDto, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let record = custom_repos::add(&store, &url)?;
+        Ok(custom_repo_dto(&record))
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn remove_custom_repo(
+    id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || custom_repos::remove(&store, &id))
+        .await?
+}
+
+/// Escape hatch for a corrupted `custom_skill_repos` settings value, where
+/// list/add/remove all fail and a retry can never succeed: overwrite the list
+/// with a fresh empty one.
+#[tauri::command]
+pub async fn reset_custom_repos(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || custom_repos::reset(&store))
+        .await?
+}

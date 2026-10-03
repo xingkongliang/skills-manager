@@ -17,23 +17,26 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Search,
-  X,
+  Trash2,
   MoreHorizontal,
   Pencil,
   Calendar,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { toast } from "sonner";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import * as api from "../lib/tauri";
-import type { ScanResult, SkillsShSkill, BatchImportResult, GitPreviewResult } from "../lib/tauri";
+import type { ScanResult, SkillsShSkill, BatchImportResult, CustomRepo } from "../lib/tauri";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { StatusBanner } from "../components/StatusBanner";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { getErrorMessage, getErrorKind } from "../lib/error";
 
 const MARKET_PAGE_SIZE = 24;
@@ -41,6 +44,49 @@ const MARKET_SEARCH_STEP = 60;
 const MARKET_SEARCH_DEBOUNCE_MS = 450;
 const MARKET_SEARCH_CACHE_TTL_MS = 120_000;
 const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
+
+/** One skill row inside an expanded custom source (preview row + selection state). */
+interface SourceScanRow {
+  rel_path: string;
+  name: string;
+  description: string | null;
+  installed: boolean;
+  selected: boolean;
+}
+
+/**
+ * Scan state of one custom source (design.md §3.3). `tempDir` is a real
+ * on-disk temp directory owned by this state — see the temp_dir lifecycle
+ * rules in design.md §3.4 before changing how it is cleared.
+ */
+interface SourceScanState {
+  loading: boolean;
+  /**
+   * True while a refresh-scan runs on top of a still-rendered previous scan
+   * (design.md §3.3 non-destructive refresh): the old rows keep showing and
+   * install/select interactions pause so the temp-dir swap cannot race an
+   * install.
+   */
+  refreshing: boolean;
+  /** Live temp dir from preview_git_install; null while loading or after an error with no rows kept (backend cleans up on failure). */
+  tempDir: string | null;
+  rows: SourceScanRow[];
+  error: string | null;
+}
+
+/**
+ * "3 小时前"-style age of a unix-ms timestamp, shown on the source cards next
+ * to the fetch metadata (`last_fetch_at`). Only the number is computed here —
+ * the unit strings are i18n keys so each locale keeps its own granularity
+ * wording (min/hour/day).
+ */
+function relativeAge(ms: number, t: TFunction): string {
+  const minutes = Math.max(1, Math.floor((Date.now() - ms) / 60_000));
+  if (minutes < 60) return t("install.sources.ageMinutes", { count: minutes });
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t("install.sources.ageHours", { count: hours });
+  return t("install.sources.ageDays", { count: Math.floor(hours / 24) });
+}
 
 export function InstallSkills() {
   const { t } = useTranslation();
@@ -59,13 +105,17 @@ export function InstallSkills() {
   const [marketError, setMarketError] = useState<string | null>(null);
   const [marketReloadKey, setMarketReloadKey] = useState(0);
   const [installing, setInstalling] = useState<string | null>(null);
-  const [gitUrl, setGitUrl] = useState("");
-  const [gitLoading, setGitLoading] = useState(false);
-  const [gitCancelKey, setGitCancelKey] = useState<string | null>(null);
-  const [gitPreview, setGitPreview] = useState<GitPreviewResult | null>(null);
-  const [gitPreviewRepoUrl, setGitPreviewRepoUrl] = useState<string | null>(null);
-  const [gitSelections, setGitSelections] = useState<{ rel_path: string; name: string; description: string | null; selected: boolean }[]>([]);
-  const [gitConfirmLoading, setGitConfirmLoading] = useState(false);
+  // ── Custom sources (git tab) — view-local by design (design.md §3.3) ──
+  const [sources, setSources] = useState<CustomRepo[]>([]);
+  const [sourcesError, setSourcesError] = useState<string | null>(null);
+  const [sourceUrlInput, setSourceUrlInput] = useState("");
+  const [addingSource, setAddingSource] = useState(false);
+  const [refreshingAllSources, setRefreshingAllSources] = useState(false);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [scans, setScans] = useState<Record<string, SourceScanState>>({});
+  const [installingSourceId, setInstallingSourceId] = useState<string | null>(null);
+  const [deleteSourceId, setDeleteSourceId] = useState<string | null>(null);
+  const [resetSourcesOpen, setResetSourcesOpen] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -97,6 +147,14 @@ export function InstallSkills() {
 
   const managedSkillsRef = useRef(managedSkills);
   managedSkillsRef.current = managedSkills;
+
+  // Latest scan states for the unmount cleanup below (same ref pattern as
+  // managedSkillsRef above).
+  const scansRef = useRef(scans);
+  scansRef.current = scans;
+  // Per-source scan generation counter: lets a late-resolving preview detect
+  // that it was superseded (a delete or a newer scan) and dispose its temp dir.
+  const scanGenRef = useRef<Record<string, number>>({});
 
   const goToSkill = useCallback((skillName: string) => {
     // Use ref to get the latest managedSkills after refresh
@@ -141,15 +199,6 @@ export function InstallSkills() {
       }
     }
     return set;
-  }, [managedSkills]);
-
-  const findInstalledByGitUrl = useCallback((url: string) => {
-    const trimmed = url.trim().replace(/\.git$/, "").toLowerCase();
-    return managedSkills.find((s) => {
-      if (!s.source_ref) return false;
-      const ref = s.source_ref.replace(/\.git$/, "").toLowerCase();
-      return ref === trimmed || ref.endsWith("/" + trimmed.split("/").slice(-2).join("/"));
-    });
   }, [managedSkills]);
 
   useEffect(() => {
@@ -462,85 +511,380 @@ export function InstallSkills() {
     });
   };
 
-  const handleGitPreview = async () => {
-    if (!gitUrl.trim()) return;
-    setGitLoading(true);
-    const url = gitUrl.trim();
-    setGitCancelKey(url);
+  // ── Custom sources: load, scan, expand/collapse, install, delete ──
 
-    const toastId = toast.loading(t("install.toast.cloning"));
-    let unlisten: (() => void) | null = null;
-
+  const loadSources = useCallback(async () => {
     try {
-      unlisten = await listen<{ skill_id: string; phase: string; detail?: string }>(
-        "install-progress",
-        (event) => {
-          if (event.payload.skill_id !== url) return;
-          if (event.payload.phase === "cloning") {
-            const detail = event.payload.detail?.trim();
-            const msg = detail
-              ? `${t("install.toast.cloning")}\n${detail}`
-              : t("install.toast.cloning");
-            toast.loading(msg, { id: toastId });
-          }
-        }
-      );
-      const preview = await api.previewGitInstall(url);
-      toast.dismiss(toastId);
-      setGitPreview(preview);
-      setGitPreviewRepoUrl(url);
-      setGitSelections(preview.skills.map((s) => ({
-        rel_path: s.rel_path,
-        name: s.name,
-        description: s.description,
-        selected: true,
-      })));
+      const list = await api.listCustomRepos();
+      setSources(list);
+      setSourcesError(null);
     } catch (error: unknown) {
-      if (getErrorKind(error) === "cancelled") {
-        toast.info(t("install.toast.cancelled"), { id: toastId });
-      } else {
-        toast.error(getErrorMessage(error, t("common.error")), { id: toastId });
+      setSourcesError(getErrorMessage(error, t("common.error")));
+    }
+  }, [t]);
+
+  // Load persisted sources once on mount (design.md §3.3).
+  useEffect(() => {
+    loadSources();
+  }, [loadSources]);
+
+  // temp_dir lifecycle (design.md §3.4): every completed scan holds a real
+  // on-disk temp directory. On unmount, cancel every one still outstanding —
+  // fire-and-forget because the component is going away. Also bump each
+  // source's scan generation so a preview that is still in flight resolves
+  // as superseded and cancels its own fresh temp dir (its setScans would
+  // land on a dead component otherwise, orphaning that dir).
+  useEffect(() => () => {
+    for (const [id, state] of Object.entries(scansRef.current)) {
+      scanGenRef.current[id] = (scanGenRef.current[id] ?? 0) + 1;
+      if (state.tempDir) {
+        api.cancelGitPreview(state.tempDir).catch(() => {});
       }
-    } finally {
-      setGitLoading(false);
-      setGitCancelKey(null);
-      unlisten?.();
     }
-  };
+  }, []);
 
-  const handleGitPreviewClose = () => {
-    if (gitConfirmLoading) return;
-    if (gitPreview) {
-      api.cancelGitPreview(gitPreview.temp_dir).catch(() => {});
+  /**
+   * Drop a source's scan state. `cancelTemp` must be false after
+   * confirm_git_install (the backend always cleans the temp dir itself, on
+   * success and failure) and true when abandoning a live preview.
+   */
+  const clearScanState = useCallback((id: string, cancelTemp: boolean) => {
+    scanGenRef.current[id] = (scanGenRef.current[id] ?? 0) + 1;
+    setScans((prev) => {
+      const state = prev[id];
+      if (!state) return prev;
+      if (cancelTemp && state.tempDir) {
+        api.cancelGitPreview(state.tempDir).catch(() => {});
+      }
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  // Collapsing keeps the scan state (rows + temp dir) so re-expanding is
+  // instant with zero backend calls (D2 feedback). The temp dir is released
+  // on delete / rescan / unmount instead — see design.md §3.4.
+  const collapseSource = useCallback((id: string) => {
+    setExpanded((prev) => ({ ...prev, [id]: false }));
+  }, []);
+
+  /**
+   * Scan (or re-scan) one source. `opts.silent` suppresses the per-scan
+   * toast — used by refresh-all and the post-install background re-scan,
+   * which give their own aggregate feedback; first-load scans keep the
+   * toast. `opts.refresh` forces the backend to fetch over the network
+   * instead of serving its warm repository cache offline — true whenever the
+   * user explicitly asks for current data (add, retry, refresh all); cold
+   * expands and the post-install badge re-scan stay cache-first so they are
+   * instant. A refresh-scan is also NON-DESTRUCTIVE: the previous rows and
+   * their temp dir stay live and rendered until the new snapshot lands, so an
+   * offline refresh never blanks a working list — the failure surfaces as an
+   * inline warning above the kept rows instead. Cold scans keep the old
+   * clear-then-scan behaviour. Returns whether the scan landed without an
+   * error state (a superseded scan counts as fine — a newer scan owns the
+   * state).
+   */
+  const scanSource = useCallback(
+    async (source: CustomRepo, opts?: { silent?: boolean; refresh?: boolean }) => {
+      const silent = opts?.silent ?? false;
+      const refresh = opts?.refresh ?? false;
+
+      if (refresh) {
+        // Supersede any in-flight scan WITHOUT dropping the rendered state:
+        // bump the generation so the loser cancels its own fresh temp dir,
+        // never the live old one, and only flip `refreshing` on.
+        scanGenRef.current[source.id] = (scanGenRef.current[source.id] ?? 0) + 1;
+        setScans((prev) => {
+          const existing = prev[source.id];
+          if (!existing || existing.loading || existing.rows.length === 0) {
+            // Nothing rendered to keep — behave like a cold scan (spinner),
+            // but preserve any live temp dir an empty-repo snapshot holds.
+            return {
+              ...prev,
+              [source.id]: {
+                loading: true,
+                refreshing: true,
+                tempDir: existing?.tempDir ?? null,
+                rows: [],
+                error: null,
+              },
+            };
+          }
+          return {
+            ...prev,
+            [source.id]: { ...existing, loading: false, refreshing: true, error: null },
+          };
+        });
+      } else {
+        // Cold scan: cancel any previous temp dir before starting a new one,
+        // so the overwritten state can never orphan a live temp directory.
+        clearScanState(source.id, true);
+        setScans((prev) => ({
+          ...prev,
+          [source.id]: {
+            loading: true,
+            refreshing: false,
+            tempDir: null,
+            rows: [],
+            error: null,
+          },
+        }));
+      }
+      const gen = scanGenRef.current[source.id];
+
+      let toastId: number | string | undefined;
+      let unlisten: (() => void) | null = null;
+
+      try {
+        if (!silent) {
+          toastId = toast.loading(t("install.toast.cloning"));
+          unlisten = await listen<{ skill_id: string; phase: string; detail?: string }>(
+            "install-progress",
+            (event) => {
+              if (event.payload.skill_id !== source.url) return;
+              if (event.payload.phase === "cloning") {
+                const detail = event.payload.detail?.trim();
+                const msg = detail
+                  ? `${t("install.toast.cloning")}\n${detail}`
+                  : t("install.toast.cloning");
+                toast.loading(msg, { id: toastId });
+              }
+            },
+          );
+        }
+        const preview = await api.previewGitInstall(source.url, refresh);
+        if (toastId !== undefined) toast.dismiss(toastId);
+        if (scanGenRef.current[source.id] !== gen) {
+          // Superseded by a delete or newer scan — nobody owns this temp dir.
+          api.cancelGitPreview(preview.temp_dir).catch(() => {});
+          return true;
+        }
+        setScans((prev) => {
+          const previous = prev[source.id];
+          // A refresh is replacing a live snapshot — release its temp dir only
+          // now that the new one is landing; cancelling earlier would break
+          // the still-rendered list mid-refresh. (Cold scans already cleared,
+          // so `previous.tempDir` is null there and this no-ops.)
+          if (previous?.tempDir && previous.tempDir !== preview.temp_dir) {
+            api.cancelGitPreview(previous.tempDir).catch(() => {});
+          }
+          return {
+            ...prev,
+            [source.id]: {
+              loading: false,
+              refreshing: false,
+              tempDir: preview.temp_dir,
+              rows: preview.skills.map((s) => ({
+                rel_path: s.rel_path,
+                name: s.name,
+                description: s.description,
+                installed: s.installed,
+                // Installed rows start deselected; re-checking one means update.
+                selected: !s.installed,
+              })),
+              error: null,
+            },
+          };
+        });
+        return true;
+      } catch (error: unknown) {
+        if (toastId !== undefined) toast.dismiss(toastId);
+        if (scanGenRef.current[source.id] !== gen) return true;
+        const message = getErrorMessage(error, t("common.error"));
+        setScans((prev) => {
+          const previous = prev[source.id];
+          if (refresh && previous && (previous.rows.length > 0 || previous.tempDir)) {
+            // Refresh failure over a live snapshot: keep the rows and temp
+            // dir — the list stays usable, installs keep working — and report
+            // the failure through `error` (rendered as an inline warning
+            // banner above the kept rows).
+            return {
+              ...prev,
+              [source.id]: {
+                loading: false,
+                refreshing: false,
+                tempDir: previous.tempDir,
+                rows: previous.rows,
+                error: message,
+              },
+            };
+          }
+          // Cold failure — the backend cleans the temp dir itself on error,
+          // so keep tempDir null and land today's full-card error state.
+          return {
+            ...prev,
+            [source.id]: {
+              loading: false,
+              refreshing: false,
+              tempDir: null,
+              rows: [],
+              error: message,
+            },
+          };
+        });
+        return false;
+      } finally {
+        unlisten?.();
+      }
+    },
+    [clearScanState, t],
+  );
+
+  const toggleSource = useCallback((source: CustomRepo) => {
+    if (expanded[source.id]) {
+      collapseSource(source.id);
+      return;
     }
-    setGitPreview(null);
-    setGitPreviewRepoUrl(null);
-    setGitSelections([]);
-  };
+    setExpanded((prev) => ({ ...prev, [source.id]: true }));
+    // Reuse a live scan result; rescan only when there is nothing to reuse
+    // (first expand of a cold source after restart/add, or a retry after a
+    // scan that produced no list at all). Collapsed sources keep their rows,
+    // so re-expand is instant with zero backend calls — including a kept list
+    // whose last refresh failed (that failure shows as an inline warning, not
+    // as a dead card). A cold expand serves the warm repository cache
+    // offline; expanding over an error is a retry and asks the network for
+    // current data.
+    const scan = scans[source.id];
+    if (!scan || (scan.error && scan.rows.length === 0)) {
+      scanSource(source, { refresh: Boolean(scan?.error) });
+    }
+  }, [collapseSource, expanded, scanSource, scans]);
 
-  const handleGitConfirm = async () => {
-    if (!gitPreview) return;
-    const repoUrl = gitPreviewRepoUrl ?? gitUrl.trim();
-    if (!repoUrl) return;
-    const selected = gitSelections.filter((s) => s.selected);
-    if (selected.length === 0) return;
-    setGitConfirmLoading(true);
+  const handleAddSource = async () => {
+    const url = sourceUrlInput.trim();
+    if (!url || addingSource) return;
+    setAddingSource(true);
     try {
-      await api.confirmGitInstall(
-        repoUrl,
-        gitPreview.temp_dir,
-        selected.map((s) => ({ rel_path: s.rel_path, name: s.name }))
+      const added = await api.addCustomRepo(url);
+      setSourceUrlInput("");
+      // Duplicate adds resolve to the existing record — just expand it.
+      setSources((prev) =>
+        prev.some((s) => s.id === added.id) ? prev : [...prev, added],
       );
-      await Promise.all([refreshPresets(), refreshManagedSkills()]);
-      toast.success(t("install.toast.success", { name: selected.map((s) => s.name).join(", ") }));
-      setGitUrl("");
-      setGitPreview(null);
-      setGitPreviewRepoUrl(null);
-      setGitSelections([]);
+      setExpanded((prev) => ({ ...prev, [added.id]: true }));
+      // Adding is an explicit ask for this repo's current state — fetch, not
+      // a possibly warm cache from an earlier era of this URL. The scan also
+      // records fetch metadata (count + timestamp) server-side; reload the
+      // list once it lands so the card's badge/age reflect it.
+      void scanSource(added, { refresh: true }).then(() => loadSources());
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
-      setGitConfirmLoading(false);
+      setAddingSource(false);
+    }
+  };
+
+  // Manual refresh (D2 feedback): re-scan every added source once, in
+  // parallel. Scans run silent; per-source failures land in each source's
+  // own error area and this handler gives the single aggregate toast.
+  const handleRefreshAllSources = async () => {
+    if (sources.length === 0 || refreshingAllSources) return;
+    setRefreshingAllSources(true);
+    try {
+      const results = await Promise.allSettled(
+        sources.map((source) => scanSource(source, { silent: true, refresh: true })),
+      );
+      const failed = results.filter((r) => r.status === "rejected" || !r.value).length;
+      if (failed === 0) {
+        toast.success(t("install.sources.refreshAllDone", { count: sources.length }));
+      } else {
+        toast.error(
+          t("install.sources.refreshAllErrors", { failed, total: sources.length }),
+        );
+      }
+      // Every successful scan bumped its fetch metadata server-side; reload
+      // so the cards' "N skills · x 小时前更新" reads the fresh timestamps.
+      await loadSources();
+    } finally {
+      setRefreshingAllSources(false);
+    }
+  };
+
+  const updateScanRows = useCallback(
+    (id: string, updater: (rows: SourceScanRow[]) => SourceScanRow[]) => {
+      setScans((prev) => {
+        const state = prev[id];
+        if (!state) return prev;
+        return { ...prev, [id]: { ...state, rows: updater(state.rows) } };
+      });
+    },
+    [],
+  );
+
+  const installSelected = async (source: CustomRepo) => {
+    const scan = scans[source.id];
+    // A running refresh owns the temp-dir swap — installing mid-refresh could
+    // confirm against a dir the refresh is about to cancel.
+    if (!scan?.tempDir || installingSourceId || scan.refreshing) return;
+    const selected = scan.rows.filter((r) => r.selected);
+    if (selected.length === 0) return;
+    setInstallingSourceId(source.id);
+    let installed = false;
+    try {
+      await api.confirmGitInstall(
+        source.url,
+        scan.tempDir,
+        selected.map((r) => ({ rel_path: r.rel_path, name: r.name })),
+      );
+      installed = true;
+      const results = await Promise.allSettled([refreshPresets(), refreshManagedSkills()]);
+      warnRejected(results, "post-install refresh");
+      toast.success(
+        t("install.toast.success", { name: selected.map((r) => r.name).join(", ") }),
+      );
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      // confirm_git_install cleans the temp dir on success AND failure
+      // ("Always clean up", skills.rs), so never cancel here — just drop the
+      // scan state and collapse. After a successful install, run ONE silent
+      // background re-scan so installed badges/counts refresh exactly once
+      // per install action (not per expand). It starts only after confirm
+      // finished; the stale tempDir in the dropped state is dead and the
+      // fire-and-forget cancel inside scanSource is harmless.
+      clearScanState(source.id, false);
+      setExpanded((prev) => ({ ...prev, [source.id]: false }));
+      setInstallingSourceId(null);
+      if (installed) {
+        scanSource(source, { silent: true });
+      }
+    }
+  };
+
+  const deleteSource = sources.find((s) => s.id === deleteSourceId) ?? null;
+
+  const handleRemoveSource = async () => {
+    if (!deleteSource) return;
+    const { id } = deleteSource;
+    try {
+      // The source is going away — explicitly cancel its live preview temp
+      // dir and drop the scan state (collapse no longer clears; design.md
+      // §3.4 keeps the temp_dir ownership contract on delete).
+      clearScanState(id, true);
+      await api.removeCustomRepo(id);
+      setSources((prev) => prev.filter((s) => s.id !== id));
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    }
+  };
+
+  // Escape hatch for a corrupted sources list (design.md §4): when the saved
+  // JSON cannot be parsed, list/add/remove all fail and a retry can never
+  // succeed — the only way out is overwriting the list with a fresh empty
+  // one. Saved bookmarks are lost; installed skills are never touched.
+  const handleResetSources = async () => {
+    try {
+      await api.resetCustomRepos();
+      // The saved sources are gone — release their live preview temp dirs
+      // before dropping the cards (same ownership contract as delete).
+      for (const source of sources) {
+        clearScanState(source.id, true);
+      }
+      await loadSources();
+      toast.success(t("install.sources.resetDone"));
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
     }
   };
 
@@ -723,7 +1067,7 @@ export function InstallSkills() {
           {[
             { id: "market" as const, label: t("install.browseMarket"), icon: Box },
             { id: "local" as const, label: t("install.localInstall"), icon: UploadCloud },
-            { id: "git" as const, label: t("install.gitInstall"), icon: Github },
+            { id: "git" as const, label: t("install.sources.tab"), icon: Github },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -1446,182 +1790,381 @@ export function InstallSkills() {
       )}
 
       {activeTab === "git" && (
-        <div className="animate-in fade-in duration-300">
-          <div className="app-panel max-w-lg p-5">
-            <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-surface-hover">
-              <Github className="h-5 w-5 text-tertiary" />
-            </div>
-            <h2 className="mb-1 text-[14px] font-semibold text-primary">{t("install.gitTitle")}</h2>
-            <p className="mb-4 text-[13px] text-muted">{t("install.gitDesc")}</p>
-
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-[13px] font-medium text-tertiary">
-                  {t("install.repoUrl")}
-                </label>
+        <div className="space-y-4 pb-8 animate-in fade-in duration-300">
+          <section className="app-panel overflow-hidden">
+            <div className="px-4 py-3.5">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-hover">
+                  <Github className="h-5 w-5 text-tertiary" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-[14px] font-semibold text-primary">
+                    {t("install.sources.title")}
+                  </h2>
+                  <p className="mt-1 text-[13px] leading-5 text-muted">
+                    {t("install.sources.desc")}
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 flex gap-2">
                 <input
                   type="text"
-                  value={gitUrl}
-                  onChange={(e) => setGitUrl(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !gitLoading && gitUrl.trim()) handleGitPreview(); }}
-                  placeholder={t("install.repoUrlPlaceholder")}
-                  disabled={gitLoading}
-                  className="app-input w-full bg-background"
+                  value={sourceUrlInput}
+                  onChange={(e) => setSourceUrlInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleAddSource();
+                  }}
+                  placeholder={t("install.sources.urlPlaceholder")}
+                  disabled={addingSource}
+                  className="app-input min-w-0 flex-1 bg-background"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                 />
+                <button
+                  type="button"
+                  onClick={handleAddSource}
+                  disabled={!sourceUrlInput.trim() || addingSource}
+                  className="app-button-primary shrink-0"
+                >
+                  {addingSource ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Plus className="h-4 w-4" />
+                  )}
+                  {t("install.sources.add")}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRefreshAllSources}
+                  // Installing holds the other half of the install/refresh
+                  // exclusion: a refresh landing mid-install would cancel the
+                  // temp dir the install backend is still reading from.
+                  disabled={
+                    sources.length === 0 ||
+                    refreshingAllSources ||
+                    installingSourceId !== null
+                  }
+                  className="app-button-secondary shrink-0 bg-background"
+                  title={t("install.sources.refreshAll")}
+                >
+                  <RefreshCw className={cn("h-4 w-4", refreshingAllSources && "animate-spin")} />
+                  {t("install.sources.refreshAll")}
+                </button>
               </div>
-              {gitUrl.trim() && findInstalledByGitUrl(gitUrl) && (
-                <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-400">
-                  <Check className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    {t("install.gitAlreadyInstalled", { name: findInstalledByGitUrl(gitUrl)!.name })}
-                  </span>
-                </div>
-              )}
-              <div className="flex gap-2 pt-2">
-                {gitLoading ? (
-                  <button
-                    onClick={() => gitCancelKey && handleCancelInstall(gitCancelKey)}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-[13px] font-medium text-red-400 transition-colors hover:bg-red-500/20"
-                    disabled={!gitCancelKey}
-                  >
+            </div>
+          </section>
+
+          {sourcesError ? (
+            <div className="space-y-2">
+              <StatusBanner
+                compact
+                title={t("common.requestFailed")}
+                description={sourcesError}
+                actionLabel={t("common.retry")}
+                onAction={loadSources}
+                tone="danger"
+              />
+              {/* Corrupted-list escape hatch: retry alone can never fix an
+                  unreadable settings value, so offer the one action that can. */}
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setResetSourcesOpen(true)}
+                  className="text-[13px] font-medium text-muted underline-offset-2 transition-colors hover:text-secondary hover:underline"
+                >
+                  {t("install.sources.resetList")}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {sources.length === 0 && !sourcesError ? (
+            <div className="app-panel flex flex-col items-center justify-center rounded-2xl px-6 py-14 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-background text-muted">
+                <Github className="h-5 w-5" />
+              </div>
+              <h3 className="mt-4 text-[14px] font-semibold text-secondary">
+                {t("install.sources.emptyTitle")}
+              </h3>
+              <p className="mt-1 max-w-md text-[13px] text-muted">
+                {t("install.sources.emptyHint")}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {sources.map((source) => {
+                const isOpen = !!expanded[source.id];
+                const scan = scans[source.id] ?? null;
+                const isInstalling = installingSourceId !== null;
+                // Install/selection pauses while a refresh runs so the
+                // temp-dir swap can never race an install.
+                const isBusy = isInstalling || !!scan?.refreshing;
+                const selectedCount = scan
+                  ? scan.rows.filter((r) => r.selected).length
+                  : 0;
+                // Session-only badge (PRD §四): shown whenever rows are
+                // rendered — including under a refresh that later failed,
+                // because the kept list is still what the user is looking at.
+                // Falls back to the persisted `last_fetch_count` so a
+                // restarted app still shows a count on collapsed cards.
+                const skillCount =
+                  scan && !scan.loading && scan.rows.length > 0
+                    ? scan.rows.length
+                    : source.last_fetch_count;
+                // Persisted "when was this content last fetched" — the age of
+                // what a cache-first expand will show (null before the first
+                // refresh scan ever succeeded).
+                const updatedAgo =
+                  source.last_fetch_at !== null
+                    ? t("install.sources.updatedAgo", {
+                        time: relativeAge(source.last_fetch_at, t),
+                      })
+                    : null;
+                // Slim strip shown while a refresh runs over the
+                // still-rendered previous rows (non-destructive refresh).
+                const refreshingRow = scan?.refreshing ? (
+                  <div className="flex items-center gap-2 border-b border-border-subtle px-4 py-2 text-[12px] text-muted">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {t("install.cancel")}
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleGitPreview}
-                    disabled={!gitUrl.trim()}
-                    className={cn(
-                      "flex w-full",
-                      gitUrl.trim() && findInstalledByGitUrl(gitUrl)
-                        ? "app-button-secondary bg-background"
-                        : "app-button-primary"
-                    )}
-                  >
-                    <DownloadCloud className="h-3.5 w-3.5" />
-                    {gitUrl.trim() && findInstalledByGitUrl(gitUrl)
-                      ? t("install.gitReinstall")
-                      : t("install.installClone")}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Git preview / selection dialog */}
-      {gitPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-            onClick={handleGitPreviewClose}
-          />
-          <div className="relative w-full max-w-md rounded-xl border border-border bg-surface p-5 shadow-2xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-[14px] font-semibold text-primary">{t("install.gitPreview.title")}</h2>
-              <button
-                onClick={handleGitPreviewClose}
-                disabled={gitConfirmLoading}
-                className="rounded p-1 text-muted transition-colors hover:text-secondary"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <p className="mb-3 text-[13px] text-muted">{t("install.gitPreview.description")}</p>
-
-            {/* Select all / deselect all */}
-            <div className="mb-2 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setGitSelections((prev) => prev.map((s) => ({ ...s, selected: true })))}
-                disabled={gitConfirmLoading}
-                className="text-[13px] text-accent-light hover:underline"
-              >
-                {t("install.gitPreview.selectAll")}
-              </button>
-              <span className="text-faint">·</span>
-              <button
-                type="button"
-                onClick={() => setGitSelections((prev) => prev.map((s) => ({ ...s, selected: false })))}
-                disabled={gitConfirmLoading}
-                className="text-[13px] text-muted hover:underline"
-              >
-                {t("install.gitPreview.deselectAll")}
-              </button>
-            </div>
-
-            {gitSelections.length === 0 ? (
-              <p className="py-6 text-center text-[13px] text-muted">{t("install.gitPreview.empty")}</p>
-            ) : (
-              <div className="max-h-64 space-y-2 overflow-y-auto scrollbar-hide pr-1">
-                {gitSelections.map((item, idx) => (
-                  <div
-                    key={item.rel_path}
-                    className={cn(
-                      "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors",
-                      item.selected
-                        ? "border-accent-border bg-accent-bg/40"
-                        : "border-border-subtle bg-background opacity-50"
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={item.selected}
-                      disabled={gitConfirmLoading}
-                      onChange={(e) =>
-                        setGitSelections((prev) =>
-                          prev.map((s, i) => i === idx ? { ...s, selected: e.target.checked } : s)
-                        )
-                      }
-                      className="h-4 w-4 shrink-0 accent-accent"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <input
-                        type="text"
-                        value={item.name}
-                        onChange={(e) =>
-                          setGitSelections((prev) =>
-                            prev.map((s, i) => i === idx ? { ...s, name: e.target.value } : s)
-                          )
-                        }
-                        disabled={!item.selected || gitConfirmLoading}
-                        placeholder={t("install.gitPreview.namePlaceholder")}
-                        className="app-input w-full bg-background py-1 text-[13px]"
-                      />
-                      {item.description ? (
-                        <p className="mt-1 truncate text-[12px] text-muted">{item.description}</p>
-                      ) : null}
-                    </div>
+                    {t("install.sources.refreshing")}
                   </div>
-                ))}
-              </div>
-            )}
+                ) : null;
 
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={handleGitPreviewClose}
-                disabled={gitConfirmLoading}
-                className="px-3 py-1.5 text-[13px] font-medium text-muted hover:text-secondary transition-colors"
-              >
-                {t("common.cancel")}
-              </button>
-              <button
-                type="button"
-                onClick={handleGitConfirm}
-                disabled={gitConfirmLoading || gitSelections.every((s) => !s.selected)}
-                className="app-button-primary"
-              >
-                {gitConfirmLoading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <DownloadCloud className="h-3.5 w-3.5" />
-                )}
-                {t("install.gitPreview.confirm")}
-              </button>
+                return (
+                  <section key={source.id} className="app-panel overflow-hidden">
+                    <div className="flex items-center gap-3 px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => toggleSource(source)}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      >
+                        {isOpen ? (
+                          <ChevronDown className="h-4 w-4 shrink-0 text-muted" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 shrink-0 text-muted" />
+                        )}
+                        <span className="truncate text-[13px] font-semibold text-secondary">
+                          {source.label}
+                        </span>
+                        {skillCount !== null ? (
+                          <span className="shrink-0 rounded-full border border-border-subtle bg-surface px-2 py-0.5 text-[13px] text-muted">
+                            {t("install.sources.skillCount", { count: skillCount })}
+                          </span>
+                        ) : null}
+                        {updatedAgo !== null ? (
+                          <span className="shrink-0 text-[12px] text-faint">
+                            {updatedAgo}
+                          </span>
+                        ) : null}
+                      </button>
+                      <span
+                        className="hidden min-w-0 max-w-[320px] truncate text-[13px] text-muted lg:block"
+                        title={source.url}
+                      >
+                        {source.url}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteSourceId(source.id)}
+                        className="shrink-0 rounded p-1 text-muted transition-colors hover:bg-surface-hover hover:text-red-400"
+                        title={t("install.sources.delete")}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {isOpen ? (
+                      <div className="border-t border-border-subtle">
+                        {!scan || scan.loading ? (
+                          <div className="flex items-center justify-center gap-2.5 py-10 text-muted">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <span className="text-[13px]">
+                              {t("install.sources.scanning")}
+                            </span>
+                          </div>
+                        ) : scan.error && scan.rows.length === 0 ? (
+                          // Cold failure (nothing to keep): today's full-card
+                          // error with retry.
+                          <div className="p-4">
+                            <StatusBanner
+                              compact
+                              title={t("common.requestFailed")}
+                              description={scan.error}
+                              actionLabel={t("common.retry")}
+                              onAction={() => scanSource(source, { refresh: true })}
+                              tone="danger"
+                            />
+                          </div>
+                        ) : scan.rows.length === 0 ? (
+                          <div>
+                            {refreshingRow}
+                            <p className="px-4 py-10 text-center text-[13px] text-muted">
+                              {t("install.sources.emptyRepo")}
+                            </p>
+                          </div>
+                        ) : (
+                          <div>
+                            {refreshingRow}
+                            <div className="space-y-2 p-4">
+                              {/* Refresh failure over a kept list — a
+                                  non-blocking warning above the rows, not a
+                                  replacement of the card. */}
+                              {scan.error ? (
+                                <StatusBanner
+                                  compact
+                                  title={t("install.sources.refreshFailed")}
+                                  description={scan.error}
+                                  actionLabel={t("common.retry")}
+                                  onAction={() => {
+                                    // Same install/refresh exclusion as the
+                                    // refresh-all button: a refresh landing
+                                    // mid-install would cancel the temp dir
+                                    // the install backend is still reading.
+                                    if (!isBusy) {
+                                      scanSource(source, { refresh: true });
+                                    }
+                                  }}
+                                  tone="warning"
+                                />
+                              ) : null}
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 text-[13px]">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateScanRows(source.id, (rows) =>
+                                      rows.map((r) => ({ ...r, selected: true })),
+                                    )
+                                  }
+                                  disabled={isBusy}
+                                  className="text-accent-light hover:underline"
+                                >
+                                  {t("install.sources.selectAll")}
+                                </button>
+                                <span className="text-faint">·</span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateScanRows(source.id, (rows) =>
+                                      rows.map((r) => ({ ...r, selected: false })),
+                                    )
+                                  }
+                                  disabled={isBusy}
+                                  className="text-muted hover:underline"
+                                >
+                                  {t("install.sources.deselectAll")}
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => installSelected(source)}
+                                disabled={isBusy || selectedCount === 0}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-accent-border bg-accent-dark px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent disabled:opacity-50"
+                              >
+                                {installingSourceId === source.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <DownloadCloud className="h-3.5 w-3.5" />
+                                )}
+                                {t("install.sources.installSelected", {
+                                  count: selectedCount,
+                                })}
+                              </button>
+                            </div>
+
+                            <div className="space-y-2">
+                              {scan.rows.map((row, idx) => (
+                                <div
+                                  key={row.rel_path}
+                                  className={cn(
+                                    "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors",
+                                    row.selected
+                                      ? "border-accent-border bg-accent-bg/40"
+                                      : "border-border-subtle bg-background opacity-50",
+                                  )}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={row.selected}
+                                    disabled={isBusy}
+                                    onChange={(e) =>
+                                      updateScanRows(source.id, (rows) =>
+                                        rows.map((r, i) =>
+                                          i === idx
+                                            ? { ...r, selected: e.target.checked }
+                                            : r,
+                                        ),
+                                      )
+                                    }
+                                    className="h-4 w-4 shrink-0 accent-accent"
+                                  />
+                                  <div className="flex min-w-0 flex-1 flex-col">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <input
+                                        type="text"
+                                        value={row.name}
+                                        onChange={(e) =>
+                                          updateScanRows(source.id, (rows) =>
+                                            rows.map((r, i) =>
+                                              i === idx
+                                                ? { ...r, name: e.target.value }
+                                                : r,
+                                            ),
+                                          )
+                                        }
+                                        disabled={!row.selected || isBusy}
+                                        placeholder={t("install.sources.namePlaceholder")}
+                                        className="app-input min-w-0 flex-1 bg-background py-1 text-[13px]"
+                                      />
+                                      {row.installed ? (
+                                        <span className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[13px] leading-4 font-medium text-emerald-400">
+                                          <Check className="h-3 w-3" />
+                                          {t("install.installed")}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    {row.description ? (
+                                      <p className="mt-1 truncate text-[12px] text-muted">
+                                        {row.description}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </section>
+                );
+              })}
             </div>
-          </div>
+          )}
+
+          <ConfirmDialog
+            open={deleteSourceId !== null}
+            title={t("install.sources.deleteTitle")}
+            message={t("install.sources.deleteMessage", {
+              label: deleteSource?.label ?? "",
+            })}
+            confirmLabel={t("install.sources.deleteConfirm")}
+            onClose={() => setDeleteSourceId(null)}
+            onConfirm={() =>
+              deleteSource ? handleRemoveSource() : Promise.resolve()
+            }
+          />
+
+          <ConfirmDialog
+            open={resetSourcesOpen}
+            title={t("install.sources.resetTitle")}
+            message={t("install.sources.resetMessage")}
+            confirmLabel={t("install.sources.resetConfirm")}
+            tone="warning"
+            onClose={() => setResetSourcesOpen(false)}
+            onConfirm={handleResetSources}
+          />
         </div>
       )}
     </div>
