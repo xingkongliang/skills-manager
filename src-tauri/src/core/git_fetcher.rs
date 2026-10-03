@@ -1,5 +1,6 @@
 use crate::core::central_repo;
 use crate::core::git_credentials;
+use crate::core::log_sanitize;
 use crate::core::skill_metadata;
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
@@ -348,8 +349,65 @@ fn materialize_cached_repo(
     }
 }
 
+/// Tell the user the cached snapshot is being served one refresh behind
+/// because the remote could not be reached.
+fn report_stale_cache_use(on_progress: &Option<ProgressCallback>) {
+    if let Some(cb) = on_progress {
+        cb("Couldn't refresh the cached repository — using the cached copy");
+    }
+}
+
+/// Git error fragments that mean "the remote could not be reached" rather
+/// than "this cache is broken". The first five mirror
+/// `AppError::classify_git_error` (core/error.rs), which drives the UI error
+/// kind for the same messages; the rest are transport chatter git only
+/// prints while talking to a remote. A failure that matches nothing here — a
+/// git lock left behind by a killed run, corrupt objects, expired
+/// credentials, a deleted or renamed repository — keeps its old
+/// discard-and-re-clone treatment, because re-cloning is the only thing that
+/// heals those, and serving a stale copy of a repo the server says is gone
+/// would hide the problem.
+const UNREACHABLE_REMOTE_MARKERS: &[&str] = &[
+    "connection refused",
+    "could not resolve host",
+    "failed to connect",
+    "connection timed out",
+    "network is unreachable",
+    "connection was reset",
+    "connection reset by peer",
+    "recv failure",
+    "send failure",
+    "ssl_read",
+    "ssl_write",
+    "gnutls_handshake",
+    "schannel",
+    "the remote end hung up",
+    "timed out",
+    "no route to host",
+    "network is down",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "empty reply from server",
+    "early eof",
+    "http2 framing",
+    // 5xx only — a dead proxy or an overloaded remote answers with these.
+    // 4xx ("repository not found", auth challenges) is deliberately absent,
+    // per the doc comment above.
+    "returned error: 5",
+];
+
+fn looks_like_unreachable_remote(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    UNREACHABLE_REMOTE_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
 /// Try to update an existing cached repo via fetch + reset.
-/// Returns Ok(true) if the cache was reused, Ok(false) if it should be re-cloned.
+/// Returns Ok(true) if the cache is usable — freshly refreshed, or left at its
+/// last synced snapshot because the remote could not be reached — and Ok(false)
+/// if it should be re-cloned (no cache, a different remote URL, or a fetch
+/// failure that does not look like an unreachable remote).
 fn try_update_cached_repo(
     cached: &Path,
     url: &str,
@@ -402,7 +460,9 @@ fn try_update_cached_repo(
     if let Some(branch) = branch {
         fetch_cmd.arg(branch);
     }
-    fetch_cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    // stderr is captured (a failing fetch prints only a few lines) so the
+    // failure can be classified below; stdout stays dropped.
+    fetch_cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
     let child = fetch_cmd.spawn();
     if let Ok(mut child) = child {
@@ -416,7 +476,42 @@ fn try_update_cached_repo(
             match child.try_wait() {
                 Ok(Some(status)) => {
                     if !status.success() {
-                        // Fetch failed — discard cache and re-clone.
+                        let mut stderr_buf = String::new();
+                        if let Some(mut stderr) = child.stderr.take() {
+                            let _ = stderr.read_to_string(&mut stderr_buf);
+                        }
+                        if looks_like_unreachable_remote(&stderr_buf) {
+                            // The fetch failed before moving any ref or
+                            // worktree file, so the cache is still exactly the
+                            // snapshot the last successful refresh left behind
+                            // — and re-cloning over a dead network would only
+                            // destroy it (the proxy bug documented above was
+                            // this same pattern at larger scale). Serve the
+                            // snapshot, one refresh behind.
+                            log::warn!(
+                                "{}",
+                                log_sanitize::sanitize(&format!(
+                                    "repo cache refresh failed for {url}, \
+                                     serving the cached copy: {}",
+                                    stderr_buf.lines().next().unwrap_or("").trim()
+                                ))
+                            );
+                            report_stale_cache_use(on_progress);
+                            return Ok(true);
+                        }
+                        // Anything else may be wrong with the cache itself — a
+                        // git lock left by a killed run, a corrupt object
+                        // store, expired credentials, a renamed repository.
+                        // Keep the old discard-and-re-clone behavior, because
+                        // re-cloning is the only thing that heals those.
+                        log::warn!(
+                            "{}",
+                            log_sanitize::sanitize(&format!(
+                                "repo cache refresh failed for {url} with a \
+                                 non-transport error, discarding the cache: {}",
+                                stderr_buf.lines().next().unwrap_or("").trim()
+                            ))
+                        );
                         let _ = std::fs::remove_dir_all(cached);
                         return Ok(false);
                     }
@@ -426,18 +521,42 @@ fn try_update_cached_repo(
                     if Instant::now() > deadline {
                         let _ = child.kill();
                         let _ = child.wait();
-                        let _ = std::fs::remove_dir_all(cached);
-                        return Ok(false);
+                        // A hung fetch is a transport problem in practice, and
+                        // a killed fetch has moved no ref and written no
+                        // worktree file — the same state the cancellation
+                        // branch above already relies on leaving behind. If
+                        // the kill left git locks in the cache, the next
+                        // refresh classifies them as a local failure and
+                        // discards, self-healing.
+                        log::warn!(
+                            "{}",
+                            log_sanitize::sanitize(&format!(
+                                "repo cache refresh timed out after \
+                                 {CLONE_TIMEOUT_SECS}s for {url}, serving the \
+                                 cached copy"
+                            ))
+                        );
+                        report_stale_cache_use(on_progress);
+                        return Ok(true);
                     }
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 Err(_) => {
+                    // Cannot even poll the child, so there is no stderr to
+                    // classify — fall back to the discard path, but kill the
+                    // child first so it cannot keep writing into the cache
+                    // mid-re-clone (the old code deleted the cache under a
+                    // possibly-running fetch instead).
+                    let _ = child.kill();
+                    let _ = child.wait();
                     let _ = std::fs::remove_dir_all(cached);
                     return Ok(false);
                 }
             }
         }
     } else {
+        // No fetch process at all, so there is no stderr to classify either —
+        // keep the discard-and-re-clone behavior.
         let _ = std::fs::remove_dir_all(cached);
         return Ok(false);
     }
@@ -1615,6 +1734,7 @@ fn resolve_remote_revision_with_git(
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
     use tempfile::tempdir;
 
     // ── parse_git_source ──
@@ -2263,6 +2383,220 @@ mod tests {
         let err = run_git_watched_at(tmp.path(), &["status"], None, Some(&cancel), &None)
             .expect_err("a set cancel flag must abort the run");
         assert!(is_cancellation(&err), "got {err}");
+    }
+
+    // ── try_update_cached_repo ──
+
+    fn run_git_ok(dir: &Path, args: &[&str]) {
+        let mut cmd = git_command();
+        cmd.args(args).current_dir(dir);
+        let out = cmd.output().expect("git must be runnable");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn commit_all(dir: &Path, message: &str) {
+        run_git_ok(dir, &["add", "."]);
+        // CI runners have no git identity configured; keep it local to the commit.
+        run_git_ok(
+            dir,
+            &[
+                "-c",
+                "user.name=skills-manager-tests",
+                "-c",
+                "user.email=tests@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                message,
+            ],
+        );
+    }
+
+    fn init_origin_repo(dir: &Path) {
+        fs::write(dir.join("SKILL.md"), "---\nname: demo\n---\n").unwrap();
+        run_git_ok(dir, &["init", "--quiet"]);
+        commit_all(dir, "init");
+    }
+
+    fn clone_fixture(dir: &Path, origin: &Path, cached: &Path) {
+        run_git_ok(
+            dir,
+            &[
+                // Windows checkouts otherwise turn the committed LF into CRLF.
+                // The `-c` covers this clone only; the config line below
+                // persists it, because the recovery phase's `reset --hard`
+                // rewrites the worktree under the machine's effective config.
+                "-c",
+                "core.autocrlf=false",
+                "clone",
+                "--quiet",
+                origin.to_str().unwrap(),
+                cached.to_str().unwrap(),
+            ],
+        );
+        run_git_ok(cached, &["config", "core.autocrlf", "false"]);
+    }
+
+    fn set_remote_url(cached: &Path, url: &str) {
+        run_git_ok(cached, &["remote", "set-url", "origin", url]);
+    }
+
+    /// The URL to hand to `try_update_cached_repo` must be whatever git
+    /// stored, not the path we built: git may normalize separators on
+    /// Windows, and the update path only runs when the stored remote and the
+    /// requested URL compare equal.
+    fn remote_url(cached: &Path) -> String {
+        let out = git_command()
+            .arg("-C")
+            .arg(cached)
+            .args(["remote", "get-url", "origin"])
+            .output()
+            .expect("git must be runnable");
+        assert!(out.status.success(), "no origin remote in fixture");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// The keep-vs-discard decision rides entirely on stderr classification,
+    /// so both sides of the marker table need evidence: real transport
+    /// failures keep the cache, and everything a re-clone can heal (git locks
+    /// left by a killed run, auth, a deleted or renamed repo, corruption)
+    /// must not.
+    #[test]
+    fn unreachable_remote_markers_split_transport_from_local_failures() {
+        for unreachable in [
+            "fatal: unable to access 'https://github.com/acme/skills.git/': Could not resolve host: github.com",
+            "fatal: unable to access 'https://github.com/acme/skills.git/': Failed to connect to github.com port 443: Connection refused",
+            "fatal: unable to access 'https://github.com/acme/skills.git/': OpenSSL SSL_read: Connection was reset, errno 104",
+            "error: RPC failed; curl 56 Recv failure: Connection reset by peer",
+            "fatal: unable to access 'https://github.com/acme/skills.git/': The requested URL returned error: 502",
+            "fatal: unable to access 'https://github.com/acme/skills.git/': Empty reply from server",
+            "error: RPC failed; curl 16 Error in the HTTP2 framing layer",
+            "fatal: early EOF",
+            "schannel: next InitializeSecurityContext failed: Unknown error",
+            "fatal: the remote end hung up unexpectedly",
+            "ssh: connect to host github.com port 22: Connection refused",
+            "kex_exchange_identification: read: Connection reset by peer",
+        ] {
+            assert!(
+                looks_like_unreachable_remote(unreachable),
+                "should classify as unreachable: {unreachable}"
+            );
+        }
+        for local in [
+            "fatal: Unable to create '/acme/.git/shallow.lock': File exists.",
+            "Permission denied (publickey).\nfatal: Could not read from remote repository.",
+            "fatal: Authentication failed for 'https://github.com/acme/skills.git/'",
+            "fatal: unable to access 'https://github.com/acme/skills.git/': The requested URL returned error: 404",
+            "fatal: '/tmp/acme/origin' does not appear to be a git repository",
+            "fatal: couldn't find remote ref refs/heads/gone",
+            "fatal: bad object HEAD",
+        ] {
+            assert!(
+                !looks_like_unreachable_remote(local),
+                "should stay on the discard path: {local}"
+            );
+        }
+    }
+
+    /// A cache whose remote cannot be reached (offline, dead proxy, upstream
+    /// overloaded) must survive the failed refresh and be served one sync
+    /// behind: a failed fetch moves no ref and no worktree file, so deleting
+    /// it cost the user the next online run's full re-clone for nothing. Once
+    /// the remote is reachable again the kept cache must refresh normally —
+    /// that recovery is what keeps the stale serve from freezing in place.
+    #[test]
+    fn unreachable_remote_keeps_the_cache_reusable() {
+        let tmp = tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        let cached = tmp.path().join("cached");
+        fs::create_dir_all(&origin).unwrap();
+        init_origin_repo(&origin);
+        clone_fixture(tmp.path(), &origin, &cached);
+        let origin_url = origin.to_string_lossy().to_string();
+
+        // Point the cache at a host that cannot resolve (`.invalid` is
+        // reserved by RFC 2606): an update attempt whose fetch cannot reach
+        // anything, on every platform, without depending on the network.
+        set_remote_url(&cached, "https://skills-manager-tests.invalid/acme/skills");
+        let stored_url = remote_url(&cached);
+
+        let notes = Arc::new(Mutex::new(Vec::<String>::new()));
+        let on_progress: Option<ProgressCallback> = {
+            let notes = Arc::clone(&notes);
+            Some(Box::new(move |msg: &str| {
+                notes.lock().unwrap().push(msg.to_string());
+            }))
+        };
+        let reused =
+            try_update_cached_repo(&cached, &stored_url, None, None, None, &on_progress).unwrap();
+
+        assert!(reused, "the untouched snapshot must be served");
+        assert!(
+            cached.join(".git").exists(),
+            "the cache must survive the unreachable remote"
+        );
+        assert_eq!(
+            fs::read_to_string(cached.join("SKILL.md")).unwrap(),
+            "---\nname: demo\n---\n",
+            "the served snapshot must be the last synced content"
+        );
+        let notes_snapshot = notes.lock().unwrap().clone();
+        assert!(
+            notes_snapshot.iter().any(|m| m.contains("cached copy")),
+            "the stale-cache note must reach the user: {notes_snapshot:?}"
+        );
+
+        // Back online: point the cache at a reachable origin again — now
+        // holding a newer commit — and the kept cache must pick it up.
+        fs::create_dir_all(&origin).unwrap();
+        run_git_ok(&origin, &["init", "--quiet"]);
+        fs::write(
+            origin.join("SKILL.md"),
+            "---\nname: demo\nversion: 2\n---\n",
+        )
+        .unwrap();
+        commit_all(&origin, "second");
+        set_remote_url(&cached, &origin_url);
+        let stored_url = remote_url(&cached);
+
+        let refreshed =
+            try_update_cached_repo(&cached, &stored_url, None, None, None, &None).unwrap();
+        assert!(refreshed, "a reachable origin must refresh the kept cache");
+        assert_eq!(
+            fs::read_to_string(cached.join("SKILL.md")).unwrap(),
+            "---\nname: demo\nversion: 2\n---\n",
+            "the refresh must move the cache to the new commit"
+        );
+    }
+
+    /// The one deletion that must stay: a cache fetched from a different
+    /// remote cannot serve as a snapshot of this one, so the URL-change branch
+    /// still discards it.
+    #[test]
+    fn url_change_still_discards_the_cache() {
+        let tmp = tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        let cached = tmp.path().join("cached");
+        fs::create_dir_all(&origin).unwrap();
+        init_origin_repo(&origin);
+        clone_fixture(tmp.path(), &origin, &cached);
+
+        let reused = try_update_cached_repo(
+            &cached,
+            "https://github.com/acme/unrelated",
+            None,
+            None,
+            None,
+            &None,
+        )
+        .unwrap();
+
+        assert!(!reused, "a different remote makes the cache meaningless");
+        assert!(!cached.exists(), "the stale cache must be discarded");
     }
 
     #[test]
