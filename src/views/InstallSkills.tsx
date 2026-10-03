@@ -1817,28 +1817,35 @@ export function InstallSkills() {
                                     }
                                     className="h-4 w-4 shrink-0 accent-accent"
                                   />
-                                  <div className="flex min-w-0 flex-1 items-center gap-2">
-                                    <input
-                                      type="text"
-                                      value={row.name}
-                                      onChange={(e) =>
-                                        updateScanRows(source.id, (rows) =>
-                                          rows.map((r, i) =>
-                                            i === idx
-                                              ? { ...r, name: e.target.value }
-                                              : r,
-                                          ),
-                                        )
-                                      }
-                                      disabled={!row.selected || isInstalling}
-                                      placeholder={t("install.sources.namePlaceholder")}
-                                      className="app-input min-w-0 flex-1 bg-background py-1 text-[13px]"
-                                    />
-                                    {row.installed ? (
-                                      <span className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[13px] leading-4 font-medium text-emerald-400">
-                                        <Check className="h-3 w-3" />
-                                        {t("install.installed")}
-                                      </span>
+                                  <div className="flex min-w-0 flex-1 flex-col">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <input
+                                        type="text"
+                                        value={row.name}
+                                        onChange={(e) =>
+                                          updateScanRows(source.id, (rows) =>
+                                            rows.map((r, i) =>
+                                              i === idx
+                                                ? { ...r, name: e.target.value }
+                                                : r,
+                                            ),
+                                          )
+                                        }
+                                        disabled={!row.selected || isInstalling}
+                                        placeholder={t("install.sources.namePlaceholder")}
+                                        className="app-input min-w-0 flex-1 bg-background py-1 text-[13px]"
+                                      />
+                                      {row.installed ? (
+                                        <span className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[13px] leading-4 font-medium text-emerald-400">
+                                          <Check className="h-3 w-3" />
+                                          {t("install.installed")}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    {row.description ? (
+                                      <p className="mt-1 truncate text-[12px] text-muted">
+                                        {row.description}
+                                      </p>
                                     ) : null}
                                   </div>
                                 </div>
