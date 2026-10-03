@@ -98,33 +98,19 @@ fn write_records(store: &SkillStore, records: &[CustomRepoRecord]) -> Result<(),
 /// Canonicalize a user-supplied repository reference to the URL stored as the
 /// record's identity.
 ///
-/// `validate_git_url` gates the scheme, then `parse_git_source` resolves
-/// `owner/repo` shorthand and GitHub `tree/<branch>/<path>` URLs down to a
-/// repo-root clone URL (branch and subpath are dropped — a source always points
-/// at the whole repository). A trailing `.git` is removed so every spelling of
-/// one repository shares a single record.
+/// `validate_git_url` gates the input, then `parse_git_source` resolves
+/// `owner/repo` shorthand (with or without a trailing `.git`) and GitHub
+/// `tree/<branch>/<path>` URLs down to a repo-root clone URL — branch and
+/// subpath are dropped, since a source always points at the whole repository.
+/// The trailing `.git` is stripped afterwards so the shorthand expansion
+/// (`.../repo.git`) and a plain full URL (`.../repo`) of one repository share
+/// a single record.
 fn canonical_repo_url(input: &str) -> Result<String, AppError> {
     validate_git_url(input)
         .map_err(|err| AppError::invalid_input(format!("Invalid repository URL: {err}")))?;
 
     let trimmed = input.trim().trim_end_matches('/');
-    // Strip one trailing `.git` *before* parsing: parse_git_source's shorthand
-    // branch appends `.git` unconditionally, so `owner/repo.git` would expand
-    // to `https://github.com/owner/repo.git.git`.
-    let base = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-
-    // `ssh://` passes validate_git_url but would fall into parse_git_source's
-    // shorthand branch and be rewritten into a bogus github.com path; keep it
-    // verbatim instead.
-    let clone_url = if base.to_ascii_lowercase().starts_with("ssh://") {
-        base.to_string()
-    } else {
-        parse_git_source(base).clone_url
-    };
-
-    // Strip once more *after* parsing: the shorthand branch and tree-URL
-    // extraction both emit a `.git` suffix, and that spelling must agree with
-    // the stripped one.
+    let clone_url = parse_git_source(trimmed).clone_url;
     let clone_url = clone_url.trim_end_matches('/');
     Ok(clone_url
         .strip_suffix(".git")
