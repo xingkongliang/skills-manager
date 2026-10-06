@@ -123,15 +123,12 @@ pub async fn open_central_repo_folder() -> Result<(), AppError> {
         let status = file_manager::open_dir(&repo_path)
             .map_err(|e| AppError::io(format!("Failed to open folder: {e}")))?;
 
-        // Windows explorer.exe returns exit code 1 even on success
-        #[cfg(not(target_os = "windows"))]
-        if !status.success() {
+        if file_manager::exit_is_failure(status.success()) {
             return Err(AppError::io(format!(
                 "File manager exited with status: {status}"
             )));
         }
 
-        let _ = status;
         Ok(())
     })
     .await?

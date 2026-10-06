@@ -79,6 +79,21 @@ pub fn run(path: &Path, action: FileManagerAction) -> std::io::Result<ExitStatus
     command.args(args).status()
 }
 
+/// Whether a file manager's exit status means the open failed.
+///
+/// Windows `explorer.exe` exits non-zero even on success, so its status is
+/// never a failure; every other platform reports one with a non-zero status.
+/// Uses `cfg!` the way the command builder does, so the branch compiles (and is
+/// testable) on every platform.
+pub fn exit_is_failure(success: bool) -> bool {
+    if cfg!(target_os = "windows") {
+        let _ = success;
+        false
+    } else {
+        !success
+    }
+}
+
 /// Show a directory's contents in the file manager.
 pub fn open_dir(path: &Path) -> std::io::Result<ExitStatus> {
     run(path, FileManagerAction::OpenDir)
@@ -146,5 +161,13 @@ mod tests {
 
         assert!(!args.is_empty());
         assert!(args.iter().all(|arg| !arg.is_empty()), "{args:?}");
+    }
+
+    /// A clean exit is never a failure; a non-zero one is, except on Windows
+    /// where `explorer.exe` reports success with a non-zero code.
+    #[test]
+    fn a_nonzero_exit_is_a_failure_except_on_windows() {
+        assert!(!exit_is_failure(true));
+        assert_eq!(exit_is_failure(false), !cfg!(target_os = "windows"));
     }
 }

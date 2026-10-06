@@ -29,7 +29,6 @@ import { AgentIcon } from "./AgentIcon";
 import * as api from "../lib/tauri";
 import type { SyncHealth, ToolCategory, ToolInfo } from "../lib/tauri";
 import { getPresetIconOption } from "../lib/presetIcons";
-import { useRevealProjectFolder } from "../hooks/useRevealProjectFolder";
 
 function getSyncHealthIndicator(health: SyncHealth, skillCount: number): { color: string; title: string } | null {
   if (skillCount === 0) return null;
@@ -47,7 +46,6 @@ function getSyncHealthIndicator(health: SyncHealth, skillCount: number): { color
 
 export function Sidebar() {
   const { t } = useTranslation();
-  const { label: revealLabel, reveal: revealProjectFolder } = useRevealProjectFolder();
   const location = useLocation();
   const navigate = useNavigate();
   const { presets, viewedPreset, setViewedPresetId, refreshPresets, refreshManagedSkills, projects, refreshProjects, tools, managedSkills, appUpdate } = useApp();
@@ -626,18 +624,8 @@ export function Sidebar() {
                                   )}
                                 >
                                   <span
-                                    title={revealLabel}
-                                    onDoubleClick={(e) => {
-                                      // A single click still navigates: this badge
-                                      // sits inside the row's own button, so the
-                                      // double-click is an extra affordance
-                                      // rather than a replacement for it.
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      void revealProjectFolder(project.id);
-                                    }}
                                     className={cn(
-                                      "flex h-[20px] w-[20px] shrink-0 cursor-pointer items-center justify-center rounded border",
+                                      "flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded border",
                                       isActive
                                         ? project.workspace_type === "linked"
                                           ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"

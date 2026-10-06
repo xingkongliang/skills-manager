@@ -619,15 +619,10 @@ fn open_skills_folder_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         let repo_path = core::central_repo::base_dir();
 
         match core::file_manager::open_dir(&repo_path) {
-            Ok(_status) => {
-                #[cfg(not(target_os = "windows"))]
-                if !_status.success() {
-                    log::warn!(
-                        "Tray open folder: file manager exited with status: {}",
-                        _status
-                    );
-                }
+            Ok(status) if core::file_manager::exit_is_failure(status.success()) => {
+                log::warn!("Tray open folder: file manager exited with status: {status}");
             }
+            Ok(_) => {}
             Err(err) => log::warn!("Tray open folder failed: {err}"),
         }
         let _ = app_handle;

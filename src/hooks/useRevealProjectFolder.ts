@@ -8,8 +8,8 @@ import * as api from "../lib/tauri";
 /**
  * Shows a workspace's folder in the OS file manager.
  *
- * Shared by the sidebar and the project page so the two entry points cannot
- * drift: the same action has to be labelled, and fail, the same way in both.
+ * Used by the project page header. The label names the app the user actually
+ * sees, and a failure is reported to the user rather than swallowed.
  */
 export function useRevealProjectFolder() {
   const { t } = useTranslation();

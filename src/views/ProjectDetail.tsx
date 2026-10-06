@@ -907,17 +907,15 @@ export function ProjectDetail() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 flex-[1_1_260px]">
             <h1 className="app-page-title flex items-center gap-2.5">
-              <span
+              <button
+                type="button"
+                aria-label={revealLabel}
                 title={revealLabel}
-                onDoubleClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  void revealProjectFolder(project.id);
-                }}
-                className="flex cursor-pointer items-center"
+                onClick={() => void revealProjectFolder(project.id)}
+                className="flex cursor-pointer items-center rounded outline-none focus-visible:ring-2 focus-visible:ring-border"
               >
                 <FolderOpen className="h-5 w-5 text-accent" />
-              </span>
+              </button>
               {project.name}
               <span className="app-badge">{groupedSkills.length}</span>
             </h1>

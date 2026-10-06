@@ -747,7 +747,8 @@ pub async fn remove_project(store: State<'_, Arc<SkillStore>>, id: String) -> Re
         .await?
 }
 
-/// Show a workspace's folder in the OS file manager, with the folder selected.
+/// Show a workspace's folder in the OS file manager, selected where the
+/// platform can (Linux `xdg-open` opens the containing directory).
 ///
 /// The path is resolved from the id here instead of being accepted from the
 /// frontend, so a caller cannot ask the OS to open an arbitrary path. The
@@ -773,9 +774,14 @@ pub async fn reveal_project_folder(
             )));
         }
 
-        // explorer.exe exits non-zero even when it succeeds, so the status is
-        // deliberately discarded: only a failure to spawn is reportable.
-        file_manager::reveal_item(&path).map_err(AppError::io)?;
+        // explorer.exe exits non-zero even when it succeeds, so the platform
+        // branch is judged by `exit_is_failure` rather than checked here.
+        let status = file_manager::reveal_item(&path).map_err(AppError::io)?;
+        if file_manager::exit_is_failure(status.success()) {
+            return Err(AppError::io(format!(
+                "File manager exited with status: {status}"
+            )));
+        }
         Ok(())
     })
     .await?
