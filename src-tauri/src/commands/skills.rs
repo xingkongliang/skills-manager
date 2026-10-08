@@ -300,6 +300,10 @@ pub struct GitSkillPreview {
     /// subpath. Informational only — re-installing is allowed and acts as an
     /// update, so the frontend uses it to flag and pre-deselect the row.
     pub installed: bool,
+    /// Id of the installed skill behind `installed`, so the frontend can
+    /// target a removal without re-deriving the URL + subpath match. `None`
+    /// whenever `installed` is false.
+    pub installed_skill_id: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1202,15 +1206,17 @@ pub async fn preview_git_install(
                         .filter(|s| !s.trim().is_empty())
                         .unwrap_or_else(|| basename.clone());
                     let subpath = git_fetcher::relative_subpath(&temp_dir, dir);
+                    let matched = find_installed_preview_skill_id(
+                        &installed_skills,
+                        &parsed.clone_url,
+                        subpath.as_deref(),
+                    );
                     GitSkillPreview {
                         rel_path,
                         name,
                         description: meta.description,
-                        installed: is_preview_item_installed(
-                            &installed_skills,
-                            &parsed.clone_url,
-                            subpath.as_deref(),
-                        ),
+                        installed: matched.is_some(),
+                        installed_skill_id: matched.map(|skill| skill.id.clone()),
                     }
                 })
                 .collect();
@@ -2853,18 +2859,18 @@ pub fn skill_rel_key(skill_dir: &Path, dir: &Path) -> String {
     }
 }
 
-/// Whether a preview item corresponds to an already-installed git skill.
+/// The installed skill a preview item corresponds to, if any.
 ///
 /// The match keys are the same pair `confirm_git_install` records per item:
 /// `source_ref_resolved == repo_clone_url` and `source_subpath == item_subpath`.
 /// A `None` subpath (skill at the checkout root) only matches another `None`;
 /// non-git sources and records without a resolved URL never match.
-pub fn is_preview_item_installed(
-    skills: &[SkillRecord],
+pub fn find_installed_preview_skill_id<'a>(
+    skills: &'a [SkillRecord],
     repo_clone_url: &str,
     item_subpath: Option<&str>,
-) -> bool {
-    skills.iter().any(|skill| {
+) -> Option<&'a SkillRecord> {
+    skills.iter().find(|skill| {
         skill.source_type == "git"
             && skill.source_ref_resolved.as_deref() == Some(repo_clone_url)
             && skill.source_subpath.as_deref() == item_subpath
@@ -4359,37 +4365,42 @@ mod tests {
     }
 
     #[test]
-    fn is_preview_item_installed_matches_same_url_and_subpath() {
+    fn find_installed_preview_skill_id_matches_same_url_and_subpath() {
         let skills = vec![git_source_skill(
             "s1",
             "https://github.com/owner/repo",
             Some("skills/foo"),
         )];
 
-        assert!(is_preview_item_installed(
-            &skills,
-            "https://github.com/owner/repo",
-            Some("skills/foo")
-        ));
+        assert_eq!(
+            find_installed_preview_skill_id(
+                &skills,
+                "https://github.com/owner/repo",
+                Some("skills/foo")
+            )
+            .map(|skill| skill.id.as_str()),
+            Some("s1")
+        );
     }
 
     #[test]
-    fn is_preview_item_installed_requires_same_subpath() {
+    fn find_installed_preview_skill_id_requires_same_subpath() {
         let skills = vec![git_source_skill(
             "s1",
             "https://github.com/owner/repo",
             Some("skills/foo"),
         )];
 
-        assert!(!is_preview_item_installed(
+        assert!(find_installed_preview_skill_id(
             &skills,
             "https://github.com/owner/repo",
             Some("skills/bar")
-        ));
+        )
+        .is_none());
     }
 
     #[test]
-    fn is_preview_item_installed_requires_same_url() {
+    fn find_installed_preview_skill_id_requires_same_url() {
         let skills = vec![git_source_skill(
             "s1",
             "https://github.com/owner/repo",
@@ -4397,15 +4408,16 @@ mod tests {
         )];
 
         // A different spelling of the URL is a different key — no fuzzy matching.
-        assert!(!is_preview_item_installed(
+        assert!(find_installed_preview_skill_id(
             &skills,
             "https://github.com/owner/repo.git",
             Some("skills/foo")
-        ));
+        )
+        .is_none());
     }
 
     #[test]
-    fn is_preview_item_installed_none_subpath_never_matches_some() {
+    fn find_installed_preview_skill_id_none_subpath_never_matches_some() {
         let some_subpath = vec![git_source_skill(
             "s1",
             "https://github.com/owner/repo",
@@ -4413,51 +4425,53 @@ mod tests {
         )];
         let root_skill = vec![git_source_skill("s2", "https://github.com/owner/repo", None)];
 
-        assert!(!is_preview_item_installed(
+        assert!(find_installed_preview_skill_id(
             &some_subpath,
             "https://github.com/owner/repo",
             None
-        ));
-        assert!(!is_preview_item_installed(
+        )
+        .is_none());
+        assert!(find_installed_preview_skill_id(
             &root_skill,
             "https://github.com/owner/repo",
             Some("skills/foo")
-        ));
+        )
+        .is_none());
         // None matches None when the URL agrees.
-        assert!(is_preview_item_installed(
-            &root_skill,
-            "https://github.com/owner/repo",
-            None
-        ));
+        assert_eq!(
+            find_installed_preview_skill_id(&root_skill, "https://github.com/owner/repo", None)
+                .map(|skill| skill.id.as_str()),
+            Some("s2")
+        );
     }
 
     #[test]
-    fn is_preview_item_installed_ignores_non_git_and_unresolved_sources() {
+    fn find_installed_preview_skill_id_ignores_non_git_and_unresolved_sources() {
         // Same resolved URL + subpath, but installed from a local import —
         // never a git-preview match.
         let mut imported = git_source_skill("s1", "https://github.com/owner/repo", Some("x"));
         imported.source_type = "import".to_string();
-        assert!(!is_preview_item_installed(
+        assert!(find_installed_preview_skill_id(
             &[imported],
             "https://github.com/owner/repo",
             Some("x")
-        ));
+        )
+        .is_none());
 
         // Git source that never recorded a resolved clone URL.
         let mut unresolved = git_source_skill("s2", "https://github.com/owner/repo", Some("x"));
         unresolved.source_ref_resolved = None;
-        assert!(!is_preview_item_installed(
+        assert!(find_installed_preview_skill_id(
             &[unresolved],
             "https://github.com/owner/repo",
             Some("x")
-        ));
+        )
+        .is_none());
 
         // Empty list trivially matches nothing.
-        assert!(!is_preview_item_installed(
-            &[],
-            "https://github.com/owner/repo",
-            None
-        ));
+        assert!(
+            find_installed_preview_skill_id(&[], "https://github.com/owner/repo", None).is_none()
+        );
     }
 
     // ── custom repo fetch metadata (preview_git_install wiring) ──
