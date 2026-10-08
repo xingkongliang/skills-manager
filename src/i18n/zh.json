@@ -543,6 +543,18 @@
       "deselectAll": "取消全选",
       "namePlaceholder": "技能名称",
       "installSelected": "安装所选 ({{count}})",
+      "filters": {
+        "all": "全部",
+        "installed": "已安装",
+        "uninstalled": "未安装"
+      },
+      "removeSelected": "移除所选 ({{count}})",
+      "removeTitle": "移除已安装的技能？",
+      "removeMessage": "将移除 {{count}} 个已安装的技能：从各 Agent 卸载并删除中央库中的副本。",
+      "removeConfirm": "移除",
+      "removeSelectedDone": "已移除 {{count}} 个技能",
+      "removeSelectedFailed": "{{count}} 个技能移除失败",
+      "filterEmpty": "当前筛选下没有技能，切换筛选查看全部。",
       "delete": "删除来源",
       "deleteTitle": "删除该来源？",
       "deleteMessage": "将从来源列表中移除“{{label}}”。删除来源不会卸载已从中安装的技能。",

@@ -279,6 +279,8 @@ export interface GitSkillPreview {
    * re-checking one means update/reinstall.
    */
   installed: boolean;
+  /** Id of the installed skill behind `installed`; null when not installed. */
+  installed_skill_id: string | null;
 }
 
 export interface GitPreviewResult {

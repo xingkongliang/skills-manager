@@ -543,6 +543,18 @@
       "deselectAll": "Deselect All",
       "namePlaceholder": "Skill name",
       "installSelected": "Install Selected ({{count}})",
+      "filters": {
+        "all": "All",
+        "installed": "Installed",
+        "uninstalled": "Not installed"
+      },
+      "removeSelected": "Remove Selected ({{count}})",
+      "removeTitle": "Remove installed skills?",
+      "removeMessage": "This removes {{count}} installed skill(s): uninstalled from every agent and deleted from the central library.",
+      "removeConfirm": "Remove",
+      "removeSelectedDone": "Removed {{count}} skill(s)",
+      "removeSelectedFailed": "Failed to remove {{count}} skill(s)",
+      "filterEmpty": "No skills match the current filter. Switch the filter to see all rows.",
       "delete": "Delete source",
       "deleteTitle": "Delete this source?",
       "deleteMessage": "\"{{label}}\" will be removed from your sources. Deleting a source does not uninstall skills already installed from it.",

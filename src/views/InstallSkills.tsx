@@ -37,6 +37,11 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { StatusBanner } from "../components/StatusBanner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import {
+  SourceScanToolbar,
+  sourceRowMatchesFilter,
+  type SourceRowFilter,
+} from "../components/SourceScanToolbar";
 import { getErrorMessage, getErrorKind } from "../lib/error";
 
 const MARKET_PAGE_SIZE = 24;
@@ -51,6 +56,8 @@ interface SourceScanRow {
   name: string;
   description: string | null;
   installed: boolean;
+  /** Backend id of the installed skill behind `installed`; null when not installed. */
+  installed_skill_id: string | null;
   selected: boolean;
 }
 
@@ -114,6 +121,13 @@ export function InstallSkills() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [scans, setScans] = useState<Record<string, SourceScanState>>({});
   const [installingSourceId, setInstallingSourceId] = useState<string | null>(null);
+  // Mirrors installingSourceId: a batch removal holds every other row action.
+  const [removingSourceId, setRemovingSourceId] = useState<string | null>(null);
+  // Per-source row filter, session-scoped and kept OUT of SourceScanState on
+  // purpose: scan state is wholesale-replaced in 5+ places, while this must
+  // survive silent re-scans and collapse/re-expand (defaults to "all").
+  const [sourceRowFilters, setSourceRowFilters] = useState<Record<string, SourceRowFilter>>({});
+  const [removeConfirmSourceId, setRemoveConfirmSourceId] = useState<string | null>(null);
   const [deleteSourceId, setDeleteSourceId] = useState<string | null>(null);
   const [resetSourcesOpen, setResetSourcesOpen] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -680,6 +694,7 @@ export function InstallSkills() {
                 name: s.name,
                 description: s.description,
                 installed: s.installed,
+                installed_skill_id: s.installed_skill_id,
                 // Installed rows start deselected; re-checking one means update.
                 selected: !s.installed,
               })),
@@ -852,7 +867,67 @@ export function InstallSkills() {
     }
   };
 
+  /**
+   * Batch-remove the checked installed rows of one source. Removal only talks
+   * to the delete API — it never touches the scan temp dir — so unlike
+   * installSelected there is no tempDir guard here and no re-scan afterwards:
+   * successful rows are flipped in place (badge gone, deselected), leaving
+   * the temp dir live so the remaining checked rows can still be installed.
+   */
+  const handleRemoveSelected = async (source: CustomRepo) => {
+    const scan = scans[source.id];
+    if (!scan || removingSourceId || installingSourceId || scan.refreshing) return;
+    // Snapshot the targets up front: the id list drives both the API call
+    // and the in-place row updates, immune to row mutations in between.
+    const targets = scan.rows.filter(
+      (r) => r.selected && r.installed && r.installed_skill_id,
+    );
+    if (targets.length === 0) return;
+    setRemovingSourceId(source.id);
+    try {
+      const result = await api.deleteManagedSkills(
+        targets.flatMap((r) => (r.installed_skill_id ? [r.installed_skill_id] : [])),
+      );
+      // Flip only what the backend actually deleted — failed rows keep their
+      // badge and selection so the user can retry. Matching by id set (not by
+      // index) stays correct even if a re-scan landed a fresh snapshot meanwhile.
+      const failedIds = new Set(result.failed);
+      const deletedIds = new Set(
+        targets
+          .map((r) => r.installed_skill_id)
+          .filter((id): id is string => id !== null && !failedIds.has(id)),
+      );
+      updateScanRows(source.id, (rows) =>
+        rows.map((r) =>
+          r.installed_skill_id && deletedIds.has(r.installed_skill_id)
+            ? { ...r, installed: false, selected: false, installed_skill_id: null }
+            : r,
+        ),
+      );
+      if (result.deleted > 0) {
+        toast.success(t("install.sources.removeSelectedDone", { count: result.deleted }));
+      }
+      if (result.failed.length > 0) {
+        toast.error(t("install.sources.removeSelectedFailed", { count: result.failed.length }));
+      }
+      const results = await Promise.allSettled([refreshPresets(), refreshManagedSkills()]);
+      warnRejected(results, "post-remove refresh");
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      setRemovingSourceId(null);
+    }
+  };
+
   const deleteSource = sources.find((s) => s.id === deleteSourceId) ?? null;
+  const removeConfirmSource = sources.find((s) => s.id === removeConfirmSourceId) ?? null;
+  // What the remove-confirm dialog will list: checked installed rows with a
+  // backend id (same predicate as handleRemoveSelected collects).
+  const removeConfirmTargets = removeConfirmSource
+    ? (scans[removeConfirmSource.id]?.rows ?? []).filter(
+        (r) => r.selected && r.installed && r.installed_skill_id,
+      )
+    : [];
 
   const handleRemoveSource = async () => {
     if (!deleteSource) return;
@@ -1837,13 +1912,15 @@ export function InstallSkills() {
                 <button
                   type="button"
                   onClick={handleRefreshAllSources}
-                  // Installing holds the other half of the install/refresh
+                  // An install or removal holds the other half of the
                   // exclusion: a refresh landing mid-install would cancel the
-                  // temp dir the install backend is still reading from.
+                  // temp dir the install backend is still reading from, and
+                  // mid-remove it would race the in-place row updates.
                   disabled={
                     sources.length === 0 ||
                     refreshingAllSources ||
-                    installingSourceId !== null
+                    installingSourceId !== null ||
+                    removingSourceId !== null
                   }
                   className="app-button-secondary shrink-0 bg-background"
                   title={t("install.sources.refreshAll")}
@@ -1897,12 +1974,30 @@ export function InstallSkills() {
                 const isOpen = !!expanded[source.id];
                 const scan = scans[source.id] ?? null;
                 const isInstalling = installingSourceId !== null;
-                // Install/selection pauses while a refresh runs so the
-                // temp-dir swap can never race an install.
-                const isBusy = isInstalling || !!scan?.refreshing;
+                // Install/selection/removal pause while a refresh runs so the
+                // temp-dir swap can never race an install, and a removal can
+                // never race the in-place row updates.
+                const isBusy = isInstalling || removingSourceId !== null || !!scan?.refreshing;
                 const selectedCount = scan
                   ? scan.rows.filter((r) => r.selected).length
                   : 0;
+                // Checked rows that are installed AND hold a backend id — the
+                // "remove selected" count (plain `installed` alone would count
+                // rows whose id a stale snapshot already lost).
+                const removableCount = scan
+                  ? scan.rows.filter(
+                      (r) => r.selected && r.installed && r.installed_skill_id,
+                    ).length
+                  : 0;
+                const rowFilter = sourceRowFilters[source.id] ?? "all";
+                // Visible rows keep their index into the FULL rows array: the
+                // inline checkbox/rename updaters below target rows by that
+                // index, so filtering must not renumber them.
+                const visibleRows = scan
+                  ? scan.rows
+                      .map((row, idx) => ({ row, idx }))
+                      .filter(({ row }) => sourceRowMatchesFilter(row, rowFilter))
+                  : [];
                 // Session-only badge (PRD §四): shown whenever rows are
                 // rendered — including under a refresh that later failed,
                 // because the kept list is still what the user is looking at.
@@ -2027,110 +2122,106 @@ export function InstallSkills() {
                                   tone="warning"
                                 />
                               ) : null}
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="flex items-center gap-2 text-[13px]">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    updateScanRows(source.id, (rows) =>
-                                      rows.map((r) => ({ ...r, selected: true })),
-                                    )
-                                  }
-                                  disabled={isBusy}
-                                  className="text-accent-light hover:underline"
-                                >
-                                  {t("install.sources.selectAll")}
-                                </button>
-                                <span className="text-faint">·</span>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    updateScanRows(source.id, (rows) =>
-                                      rows.map((r) => ({ ...r, selected: false })),
-                                    )
-                                  }
-                                  disabled={isBusy}
-                                  className="text-muted hover:underline"
-                                >
-                                  {t("install.sources.deselectAll")}
-                                </button>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => installSelected(source)}
-                                disabled={isBusy || selectedCount === 0}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-accent-border bg-accent-dark px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent disabled:opacity-50"
-                              >
-                                {installingSourceId === source.id ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <DownloadCloud className="h-3.5 w-3.5" />
-                                )}
-                                {t("install.sources.installSelected", {
-                                  count: selectedCount,
-                                })}
-                              </button>
-                            </div>
+                            <SourceScanToolbar
+                              filter={rowFilter}
+                              onFilterChange={(filter) =>
+                                setSourceRowFilters((prev) => ({
+                                  ...prev,
+                                  [source.id]: filter,
+                                }))
+                              }
+                              selectedCount={selectedCount}
+                              removableCount={removableCount}
+                              busy={isBusy}
+                              installing={installingSourceId === source.id}
+                              removing={removingSourceId === source.id}
+                              onSelectAllVisible={() =>
+                                updateScanRows(source.id, (rows) =>
+                                  rows.map((r) =>
+                                    sourceRowMatchesFilter(r, rowFilter)
+                                      ? { ...r, selected: true }
+                                      : r,
+                                  ),
+                                )
+                              }
+                              onDeselectAllVisible={() =>
+                                updateScanRows(source.id, (rows) =>
+                                  rows.map((r) =>
+                                    sourceRowMatchesFilter(r, rowFilter)
+                                      ? { ...r, selected: false }
+                                      : r,
+                                  ),
+                                )
+                              }
+                              onInstallSelected={() => installSelected(source)}
+                              onRemoveSelected={() => setRemoveConfirmSourceId(source.id)}
+                            />
 
                             <div className="space-y-2">
-                              {scan.rows.map((row, idx) => (
-                                <div
-                                  key={row.rel_path}
-                                  className={cn(
-                                    "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors",
-                                    row.selected
-                                      ? "border-accent-border bg-accent-bg/40"
-                                      : "border-border-subtle bg-background opacity-50",
-                                  )}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={row.selected}
-                                    disabled={isBusy}
-                                    onChange={(e) =>
-                                      updateScanRows(source.id, (rows) =>
-                                        rows.map((r, i) =>
-                                          i === idx
-                                            ? { ...r, selected: e.target.checked }
-                                            : r,
-                                        ),
-                                      )
-                                    }
-                                    className="h-4 w-4 shrink-0 accent-accent"
-                                  />
-                                  <div className="flex min-w-0 flex-1 flex-col">
-                                    <div className="flex min-w-0 items-center gap-2">
-                                      <input
-                                        type="text"
-                                        value={row.name}
-                                        onChange={(e) =>
-                                          updateScanRows(source.id, (rows) =>
-                                            rows.map((r, i) =>
-                                              i === idx
-                                                ? { ...r, name: e.target.value }
-                                                : r,
-                                            ),
-                                          )
-                                        }
-                                        disabled={!row.selected || isBusy}
-                                        placeholder={t("install.sources.namePlaceholder")}
-                                        className="app-input min-w-0 flex-1 bg-background py-1 text-[13px]"
-                                      />
-                                      {row.installed ? (
-                                        <span className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[13px] leading-4 font-medium text-emerald-400">
-                                          <Check className="h-3 w-3" />
-                                          {t("install.installed")}
-                                        </span>
+                              {visibleRows.length === 0 ? (
+                                <p className="py-6 text-center text-[13px] text-muted">
+                                  {t("install.sources.filterEmpty")}
+                                </p>
+                              ) : (
+                                visibleRows.map(({ row, idx }) => (
+                                  <div
+                                    key={row.rel_path}
+                                    className={cn(
+                                      "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors",
+                                      row.selected
+                                        ? "border-accent-border bg-accent-bg/40"
+                                        : "border-border-subtle bg-background opacity-50",
+                                    )}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={row.selected}
+                                      disabled={isBusy}
+                                      onChange={(e) =>
+                                        updateScanRows(source.id, (rows) =>
+                                          rows.map((r, i) =>
+                                            i === idx
+                                              ? { ...r, selected: e.target.checked }
+                                              : r,
+                                          ),
+                                        )
+                                      }
+                                      className="h-4 w-4 shrink-0 accent-accent"
+                                    />
+                                    <div className="flex min-w-0 flex-1 flex-col">
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <input
+                                          type="text"
+                                          value={row.name}
+                                          onChange={(e) =>
+                                            updateScanRows(source.id, (rows) =>
+                                              rows.map((r, i) =>
+                                                i === idx
+                                                  ? { ...r, name: e.target.value }
+                                                  : r,
+                                              ),
+                                            )
+                                          }
+                                          disabled={!row.selected || isBusy}
+                                          placeholder={t("install.sources.namePlaceholder")}
+                                          className="app-input min-w-0 flex-1 bg-background py-1 text-[13px]"
+                                        />
+                                        {row.installed ? (
+                                          <span className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[13px] leading-4 font-medium text-emerald-400">
+                                            <Check className="h-3 w-3" />
+                                            {t("install.installed")}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                      {row.description ? (
+                                        <p className="mt-1 truncate text-[12px] text-muted">
+                                          {row.description}
+                                        </p>
                                       ) : null}
                                     </div>
-                                    {row.description ? (
-                                      <p className="mt-1 truncate text-[12px] text-muted">
-                                        {row.description}
-                                      </p>
-                                    ) : null}
                                   </div>
-                                </div>
-                              ))}
+                                ))
+                              )}
                             </div>
                           </div>
                           </div>
@@ -2164,6 +2255,22 @@ export function InstallSkills() {
             tone="warning"
             onClose={() => setResetSourcesOpen(false)}
             onConfirm={handleResetSources}
+          />
+
+          <ConfirmDialog
+            open={removeConfirmSourceId !== null}
+            title={t("install.sources.removeTitle")}
+            message={t("install.sources.removeMessage", {
+              count: removeConfirmTargets.length,
+            })}
+            details={removeConfirmTargets.map((r) => r.name)}
+            confirmLabel={t("install.sources.removeConfirm")}
+            onClose={() => setRemoveConfirmSourceId(null)}
+            onConfirm={() =>
+              removeConfirmSource
+                ? handleRemoveSelected(removeConfirmSource)
+                : Promise.resolve()
+            }
           />
         </div>
       )}
