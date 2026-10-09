@@ -389,7 +389,10 @@
       "alreadyUpToDate": "Skill content unchanged (version synced)",
       "removalTitle": "This update removes files",
       "removalMessage": "Updating {{name}} will remove {{count}} file(s) that the new version does not have. If any of them are yours, move them somewhere outside the skill folder first — nothing has changed yet.",
-      "removalConfirm": "Update anyway"
+      "removalConfirm": "Update anyway",
+      "overwriteTitle": "This update overwrites files you changed",
+      "overwriteMessage": "Updating {{name}} affects {{count}} file(s). Those marked as modified are files you changed that the new version also ships, and your changes will be replaced. The rest are not in the new version and will be removed. Copy anything you want to keep outside the skill folder first — nothing has changed yet.",
+      "overwrittenMark": " (modified — will be overwritten)"
     },
     "gitConfigEntry": "Sync Config",
     "filters": {
@@ -452,7 +455,7 @@
       "clickToRemove": "Click to mark for removal",
       "undoRemove": "Click to keep this tag"
     },
-    "batchHeldBack": "{{count}} skill(s) were left alone — updating them would remove files ({{names}}). Update them one at a time to see what.",
+    "batchHeldBack": "{{count}} skill(s) were left alone — updating them would remove or overwrite files ({{names}}). Update them one at a time to see what.",
     "batchSyncAgents": "Sync to agents ({{count}})",
     "batchSynced": "Synced {{count}} skill targets",
     "batchSyncFailed": "{{count}} targets failed to sync",

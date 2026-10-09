@@ -546,12 +546,23 @@ struct UpdateReport {
     refreshed: bool,
     error: Option<String>,
     /// Present when the update was held back because it would have removed
-    /// these paths (#256). Nothing changed, and the CLI offers no way to
-    /// accept: approving means seeing the list, which needs a person, so it
-    /// only exists in the app. A bare `refreshed: false` would read as
-    /// "already up to date".
+    /// these paths, or overwritten the user's edits to them (#256). Nothing
+    /// changed, and the CLI offers no way to accept: approving means seeing the
+    /// list, which needs a person, so it only exists in the app. A bare
+    /// `refreshed: false` would read as "already up to date".
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     held_back_removals: Vec<String>,
+}
+
+/// One line of [`UpdateReport::held_back_removals`]: where, what, and — for an
+/// edit the new version writes over — that it is the edit that goes, not the file.
+fn describe_pending_removal(p: &cmd::PendingRemoval) -> String {
+    match p.kind {
+        cmd::PendingRemovalKind::Removed => format!("{}: {}", p.location, p.path),
+        cmd::PendingRemovalKind::Overwritten => {
+            format!("{}: {} (modified; would be overwritten)", p.location, p.path)
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1751,7 +1762,7 @@ fn run_update(
                         held_back_removals: r
                             .pending_removals
                             .iter()
-                            .map(|p| format!("{}: {}", p.location, p.path))
+                            .map(describe_pending_removal)
                             .collect(),
                     },
                     Err(e) => UpdateReport {
@@ -1774,7 +1785,7 @@ fn run_update(
                     held_back_removals: r
                         .pending_removals
                         .iter()
-                        .map(|p| format!("{}: {}", p.location, p.path))
+                        .map(describe_pending_removal)
                         .collect(),
                 },
                 Err(e) => UpdateReport {

@@ -720,6 +720,8 @@ export function MySkills() {
      *  directory the user already chose instead of asking for it again. */
     relinkSource?: string;
   } | null>(null);
+  const pendingRemovalOverwrites =
+    pendingRemoval?.removals.some((r) => r.kind === "overwritten") ?? false;
 
   const handleUpdateAvailableSkills = async () => {
     const updatableSkills = skills.filter(
@@ -1875,16 +1877,28 @@ export function MySkills() {
       <ConfirmDialog
         open={pendingRemoval !== null}
         tone="warning"
-        title={t("mySkills.updateActions.removalTitle")}
-        message={t("mySkills.updateActions.removalMessage", {
-          name: pendingRemoval?.skill.name ?? "",
-          count: pendingRemoval?.removals.length ?? 0,
-        })}
+        title={t(
+          pendingRemovalOverwrites
+            ? "mySkills.updateActions.overwriteTitle"
+            : "mySkills.updateActions.removalTitle"
+        )}
+        message={t(
+          pendingRemovalOverwrites
+            ? "mySkills.updateActions.overwriteMessage"
+            : "mySkills.updateActions.removalMessage",
+          {
+            name: pendingRemoval?.skill.name ?? "",
+            count: pendingRemoval?.removals.length ?? 0,
+          }
+        )}
         // Every path, never a truncated sample: recognising one's own file is
         // the whole point, and it might be the twenty-first.
-        details={pendingRemoval?.removals.map((r) =>
-          r.location === "library" ? r.path : `${r.location}: ${r.path}`
-        )}
+        details={pendingRemoval?.removals.map((r) => {
+          const where = r.location === "library" ? r.path : `${r.location}: ${r.path}`;
+          return r.kind === "overwritten"
+            ? `${where}${t("mySkills.updateActions.overwrittenMark")}`
+            : where;
+        })}
         confirmLabel={t("mySkills.updateActions.removalConfirm")}
         onClose={() => setPendingRemoval(null)}
         onConfirm={async () => {
