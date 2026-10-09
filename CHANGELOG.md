@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Website-synced `skills.sh/site/<domain>/<skill>` URLs use public well-known discovery rather than invalid GitHub clones (#381).
+- Website downloads and archive extraction enforce digest, aggregate byte, entry and path budgets; unsafe paths, links, overwrite collisions and corrupt ZIPs fail before installation (#382). URL path shape is checked with a borrowed iterator without a temporary segment allocation. Deterministic backend ZIP/HTTP tests and isolated genuine Uizze CLI and native desktop URL preview/import were exercised. Website snapshots remain local-only, not Git-refreshable.
+
 ## [1.40.3] - 2026-10-02
 
 ### Release Overview

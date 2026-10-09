@@ -193,6 +193,7 @@ npm run cli -- skills show db
 npm run cli -- skills install ./my-skill
 npm run cli -- skills install https://github.com/foo/bar/tree/main/skills/baz
 npm run cli -- skills install vercel-labs/agent-skills@react-best-practices
+npm run cli -- skills install https://www.skills.sh/site/uizze.com/ui-radar # website-synced skill
 
 # Put it into the agents that should have it, then check
 npm run cli -- skills deploy react-best-practices --agent claude_code --agent codex
@@ -203,6 +204,19 @@ npm run cli -- skills check --all
 npm run cli -- skills update --all
 npm run cli -- skills adopt ~/.claude/skills --dry-run
 ```
+
+Website-synced `skills.sh/site/<domain>/<skill>` URLs use the publisher's
+well-known index, not GitHub cloning. SHA-256 digests are checked before
+archive extraction. Downloads are bounded to 50 MiB (aggregate for v1 file
+lists); ZIP output is bounded to 100 MiB and 4,096 entries. Both formats
+reject unsafe/special paths before writes: at most 512 UTF-8 bytes and 16
+components per path, 64 KiB of total paths and 16,384 total components.
+Links, special files and overwrite collisions are rejected; failed downloads
+discard their private staging directory instead of installing partial content.
+The desktop URL preview/import and CLI install both record `well-known`
+website snapshots, not Git or `skills.sh` repository sources. They are
+`local_only`: Git update checks, source diff and automatic refresh do not apply.
+Reinstall the website URL to fetch a newer snapshot.
 
 `--help` on any group or subcommand prints the full surface — the groups below
 each carry more than these examples show. `--dry-run` is available on selected
