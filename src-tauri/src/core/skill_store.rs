@@ -338,6 +338,30 @@ impl SkillStore {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Record an in-place edit of a skill's own files.
+    ///
+    /// Deliberately narrower than [`Self::update_skill_after_install`]: an edit
+    /// changes what the skill says, never where it came from, so the source
+    /// revisions and the update status are left exactly as they were. Writing
+    /// `NULL` over them here would untrack a git skill the moment someone
+    /// fixed a typo in it.
+    pub fn update_skill_after_edit(
+        &self,
+        id: &str,
+        description: Option<&str>,
+        content_hash: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE skills
+             SET description = ?1, content_hash = ?2, updated_at = ?3
+             WHERE id = ?4",
+            params![description, content_hash, now, id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_skill_after_install(
         &self,
         id: &str,
