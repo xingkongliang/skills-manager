@@ -9,8 +9,8 @@
     "lobsterAgents": "龙虾 Agent",
     "installSkills": "安装 Skills",
     "backup": "备份",
-    "presets": "Preset",
-    "newPreset": "新建 Preset",
+    "presets": "预设",
+    "newPreset": "新建预设",
     "projects": "项目工作区",
     "addProject": "关联项目",
     "settings": "设置"
@@ -18,15 +18,15 @@
   "help": {
     "eyebrow": "操作指南",
     "title": "快速上手 Skills Manager",
-    "description": "最快路径：安装 Skills → 打开全局工作区 → 点击 Preset 标签激活。按 ⌘K 可随时呼出命令面板。按需使用项目工作区、Git 备份和设置。",
+    "description": "最快路径：安装 Skills → 打开全局工作区 → 点击预设标签激活。按 ⌘K 可随时呼出命令面板。按需使用项目工作区、Git 备份和设置。",
     "items": {
       "workflows": {
         "title": "推荐工作流",
-        "description": "单 Agent 用户：安装 Skills → 打开全局工作区 → 点击 Preset 标签激活，或点 + 添加 Skills 从技能库挑选并即时切换目标 Agent。多项目用户：打开项目工作区，同样可用 Preset 标签或 + 添加 Skills 弹层为该项目的 Agent 配置 Skills。多机用户：在设置页开启 Git 备份，把中央仓库在多台设备间同步。"
+        "description": "单 Agent 用户：安装 Skills → 打开全局工作区 → 点击预设标签激活，或点 + 添加 Skills 从技能库挑选并即时切换目标 Agent。多项目用户：打开项目工作区，同样可用预设标签或 + 添加 Skills 弹层为该项目的 Agent 配置 Skills。多机用户：在设置页开启 Git 备份，把中央仓库在多台设备间同步。"
       },
       "presets": {
-        "title": "Preset",
-        "description": "把 Skills 组织成命名的 Preset。在任意工作区点击 Preset 标签，即可一键激活或停用其全部 Skills。激活的 Preset 显示 ✓，部分安装的显示数量。应用 Preset 是一次性操作，不会自动同步。"
+        "title": "预设",
+        "description": "把 Skills 组织成命名的预设。在任意工作区点击预设标签，即可一键激活或停用其全部 Skills。激活的预设显示 ✓，部分安装的显示数量。应用预设是一次性操作，不会自动同步。"
       },
       "install": {
         "title": "安装 Skills",
@@ -42,7 +42,7 @@
       },
       "projects": {
         "title": "项目工作区",
-        "description": "关联项目后查看各 Agent 的本地 Skills 目录，对照中央仓库双向导入导出。使用 Preset 标签激活技能组，或点 + 添加 Skills 通过多 Agent 目标选择器从技能库挑选。"
+        "description": "关联项目后查看各 Agent 的本地 Skills 目录，对照中央仓库双向导入导出。使用预设标签激活技能组，或点 + 添加 Skills 通过多 Agent 目标选择器从技能库挑选。"
       },
       "backup": {
         "title": "备份与同步",
@@ -55,10 +55,10 @@
     }
   },
   "commandPalette": {
-    "placeholder": "跳转到技能、Preset、项目或操作…",
+    "placeholder": "跳转到技能、预设、项目或操作…",
     "empty": "没有匹配项，换个关键词试试。",
     "skills": "技能",
-    "presets": "Preset",
+    "presets": "预设",
     "projects": "项目",
     "actions": "操作",
     "scanImport": "扫描并导入本地技能",
@@ -173,7 +173,7 @@
       "deviceDenied": "授权在 GitHub 上被拒绝，未做任何更改。",
       "deviceFallbackPat": "如果你的网络访问 github.com 不稳定，可改用下方的个人访问令牌方式。",
       "patToggle": "改用个人访问令牌（高级）",
-      "publicRepoWarning": "注意：连接的备份仓库是公开的——任何人都能看到你的技能、标签和 Preset。如非有意，请到 GitHub 仓库的 Settings → General → Danger Zone → Change visibility 改为私有。",
+      "publicRepoWarning": "注意：连接的备份仓库是公开的——任何人都能看到你的技能、标签和预设。如非有意，请到 GitHub 仓库的 Settings → General → Danger Zone → Change visibility 改为私有。",
       "reconnect": "重新连接 GitHub",
       "reconnectTitle": "重新连接 GitHub"
     },
@@ -185,7 +185,7 @@
       "title": "备份范围",
       "included": {
         "skills": "技能文件及目录",
-        "metadata": "标签、Preset、Preset 成员关系和每 Agent 的技能开关"
+        "metadata": "标签、预设、预设成员关系和每 Agent 的技能开关"
       },
       "excluded": {
         "secrets": "API key、token 和代理凭证",
@@ -235,15 +235,15 @@
   },
   "mySkills": {
     "title": "技能库",
-    "applyToDefault": "应用 Preset",
+    "applyToDefault": "应用预设",
     "applied": "已应用",
     "notAppliedYet": "尚未应用",
     "appliedToast": "已应用",
     "applyMissingDefault": "没有可用的 Agent — 应用至少需要一个目标位置。",
     "defaultLocationMissing": "默认目标位置缺失",
     "openLocationSettings": "打开设置",
-    "applyCallout": "点击 Preset 只会打开浏览。使用「应用 Preset」可把其中的 Skills 添加到或移出选中的 Agent。",
-    "subtitle": "中央仓库共 {{count}} 个 Skills 已在“{{preset}}”Preset 中启用",
+    "applyCallout": "点击预设只会打开浏览。使用「应用预设」可把其中的 Skills 添加到或移出选中的 Agent。",
+    "subtitle": "中央仓库共 {{count}} 个 Skills 已在“{{preset}}”预设中启用",
     "searchPlaceholder": "搜索中央仓库中的 Skills...",
     "allStatus": "全部状态",
     "synced": "已同步",
@@ -252,26 +252,26 @@
     "enable": "启用",
     "enabledButton": "已启用",
     "disable": "停用",
-    "enableForPreset": "启用到当前 Preset",
-    "disableForPreset": "从当前 Preset 停用",
-    "enabledInPreset": "已加入当前 Preset",
-    "disabledInPreset": "已从当前 Preset 移除",
-    "inPreset": "当前 Preset 已启用",
-    "notInPreset": "当前 Preset 未启用",
-    "remove": "从当前 Preset 移除",
+    "enableForPreset": "启用到当前预设",
+    "disableForPreset": "从当前预设停用",
+    "enabledInPreset": "已加入当前预设",
+    "disabledInPreset": "已从当前预设移除",
+    "inPreset": "当前预设已启用",
+    "notInPreset": "当前预设未启用",
+    "remove": "从当前预设移除",
     "moreActions": "更多操作",
     "dragToReorder": "拖动排序",
     "delete": "删除 Skill",
-    "deleteConfirm": "确定彻底删除 Skill \"{{name}}\" 吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
+    "deleteConfirm": "确定彻底删除 Skill \"{{name}}\" 吗？中央仓库文件、预设关联和已同步到各 Agent 的目标都会被移除。",
     "deleted": "已删除",
     "viewDoc": "查看文档",
     "noSkills": "没有可显示的 Skills",
     "addFirst": "点击“安装 Skills”开始添加到中央仓库",
     "noMatch": "没有符合当前搜索或筛选条件的 Skills",
     "clearFilters": "清除筛选",
-    "noPreset": "当前还没有可用 Preset",
-    "currentPresetFallback": "当前 Preset",
-    "presetCount": "{{count}} 个 Preset",
+    "noPreset": "当前还没有可用预设",
+    "currentPresetFallback": "当前预设",
+    "presetCount": "{{count}} 个预设",
     "syncCoverage": "同步覆盖",
     "syncSummary": "已同步 {{synced}} / {{total}}",
     "moreAgents": "+{{count}} 个 Agent",
@@ -394,8 +394,8 @@
     "gitConfigEntry": "同步配置",
     "filters": {
       "all": "全部",
-      "enabled": "当前 Preset 已启用",
-      "available": "当前 Preset 未启用"
+      "enabled": "当前预设已启用",
+      "available": "当前预设未启用"
     },
     "sourceFilter": {
       "all": "全部来源",
@@ -428,7 +428,7 @@
     "batchAlreadyUpToDate": "{{count}} 个 Skill 已是最新",
     "batchUpdateFailed": "{{count}} 个 Skill 更新失败",
     "deleteSelected": "删除 {{count}} 个",
-    "batchDeleteConfirm": "确定彻底删除选中的 {{count}} 个 Skill 吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
+    "batchDeleteConfirm": "确定彻底删除选中的 {{count}} 个 Skill 吗？中央仓库文件、预设关联和已同步到各 Agent 的目标都会被移除。",
     "batchDeleted": "已删除 {{count}} 个 Skill",
     "batchDeleteFailed": "{{count}} 个 Skill 删除失败",
     "batchToggleFailed": "{{count}} 个 Skill 更新失败",
@@ -555,7 +555,7 @@
       "noResults": "没有发现可导入的本地 Skills",
       "noResultsHint": "当前目录可能已经全部纳入管理，或者相关 Agent 目录中还没有 Skills。",
       "locations": "{{count}} 个来源位置",
-      "listHint": "检测到现有本地 Skills，可直接导入到中央仓库并加入当前 Preset。",
+      "listHint": "检测到现有本地 Skills，可直接导入到中央仓库并加入当前预设。",
       "listImportedHint": "扫描结果都已纳入中央仓库，无需重复导入。",
       "stats": {
         "detected": "已发现",
@@ -614,7 +614,7 @@
     "addAgent": "添加",
     "globalConfig": "全局配置",
     "repoPath": "中央仓库路径",
-    "repoPathDesc": "所有 Skills 和 Preset 配置的默认存储位置。",
+    "repoPathDesc": "所有 Skills 和预设配置的默认存储位置。",
     "repoPathSaved": "中央仓库路径已更新",
     "repoPathReset": "中央仓库路径已恢复默认",
     "repoPathRestartNotice": "重启应用后，新路径会正式生效并迁移已有数据。",
@@ -628,8 +628,8 @@
     "syncModeDesc": "推荐使用符号链接，占用空间极小且修改可实时生效。全局与项目工作区均生效；注意项目里的符号链接指向本机中央库，不会随仓库带走。",
     "symlink": "符号链接",
     "copy": "文件复制",
-    "currentPreset": "当前 Preset",
-    "currentPresetDesc": "立即切换应用当前使用的 Preset，并刷新 Skills 配置。",
+    "currentPreset": "当前预设",
+    "currentPresetDesc": "立即切换应用当前使用的预设，并刷新 Skills 配置。",
     "theme": "主题",
     "themeDesc": "选择应用的外观主题。",
     "themeLight": "浅色",
@@ -646,7 +646,7 @@
     "website": "官网",
     "about": "关于",
     "version": "Skills Manager 1.40.3",
-    "tagline": "跨平台。极简、高效、无感多 Preset 切换。",
+    "tagline": "跨平台。极简、高效、无感多预设切换。",
     "checkUpdate": "检查更新",
     "checking": "检查中…",
     "updateAvailable": "发现新版本 {{version}}！",
@@ -797,7 +797,7 @@
     "loadFailed": "加载{{item}}失败",
     "dataOutOfDate": "部分数据未成功刷新",
     "documentMissing": "没有找到文档文件",
-    "presets": "Preset",
+    "presets": "预设",
     "agents": "Agent 状态",
     "skills": "Skills 列表",
     "success": "操作成功",
@@ -856,17 +856,17 @@
     }
   },
   "preset": {
-    "create": "新建 Preset",
-    "name": "Preset 名称",
+    "create": "新建预设",
+    "name": "预设名称",
     "description": "描述 (可选)",
-    "icon": "Preset 图标",
-    "namePlaceholder": "输入 Preset 名称...",
-    "descPlaceholder": "简短描述这个 Preset 的用途...",
-    "deleteConfirm": "确定删除 Preset \"{{name}}\" 吗？Skills 仍会保留在中央仓库中。",
-    "renamed": "Preset 已重命名",
-    "updated": "Preset 已更新",
-    "deleted": "Preset 已删除",
-    "created": "Preset 已创建",
+    "icon": "预设图标",
+    "namePlaceholder": "输入预设名称...",
+    "descPlaceholder": "简短描述这个预设的用途...",
+    "deleteConfirm": "确定删除预设 \"{{name}}\" 吗？Skills 仍会保留在中央仓库中。",
+    "renamed": "预设已重命名",
+    "updated": "预设已更新",
+    "deleted": "预设已删除",
+    "created": "预设已创建",
     "switched": "已切换到 \"{{name}}\""
   },
   "project": {
@@ -894,7 +894,7 @@
     "tabManual": "手动添加",
     "tabScan": "扫描发现",
     "tabLinked": "关联工作区",
-    "addLinkedHint": "关联一个外部 Skills 根目录。它只会作为工作区管理，不参与全局 Preset 同步。",
+    "addLinkedHint": "关联一个外部 Skills 根目录。它只会作为工作区管理，不参与全局预设同步。",
     "linkedNamePlaceholder": "工作区名称",
     "linkedPathPlaceholder": "Skills 目录路径",
     "linkedDisabledPathHint": "将自动创建同级目录（后缀 \"-disabled\"）用于存放停用的 Skills。",
@@ -1002,17 +1002,17 @@
     "batchTagScopeNote": "标签保存在中央技能库里，改动会影响所有使用这个 Skill 的项目。只属于本项目的本地 Skill 不会被修改。"
   },
   "presetActions": {
-    "button": "应用 Preset",
-    "applyToProject": "应用 Preset 到当前项目",
-    "applyToGlobal": "应用 Preset 到全局工作区",
-    "preset": "Preset",
+    "button": "应用预设",
+    "applyToProject": "应用预设到当前项目",
+    "applyToGlobal": "应用预设到全局工作区",
+    "preset": "预设",
     "action": "操作",
     "addMissing": "添加缺失 Skills",
     "removeMatching": "移除匹配 Skills",
     "agents": "Agents",
     "selectAgents": "请至少选择一个 Agent",
-    "noPresets": "没有可用 Preset",
-    "noPresetSkills": "这个 Preset 中没有 Skills",
+    "noPresets": "没有可用预设",
+    "noPresetSkills": "这个预设中没有 Skills",
     "addHelp": "只添加缺失 Skills，已存在的会跳过。",
     "removeHelp": "只从选中的 Agent 中移除已匹配的 Skills。",
     "addSummary": "准备添加 {{count}} 个 Skill-Agent 项，{{skipped}} 个已存在项会跳过。",

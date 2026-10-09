@@ -9,8 +9,8 @@
     "lobsterAgents": "龍蝦 Agent",
     "installSkills": "安裝 Skills",
     "backup": "備份",
-    "presets": "Preset",
-    "newPreset": "新增 Preset",
+    "presets": "預設集",
+    "newPreset": "新增預設集",
     "projects": "專案工作區",
     "addProject": "關聯專案",
     "settings": "設定"
@@ -18,15 +18,15 @@
   "help": {
     "eyebrow": "操作指南",
     "title": "快速上手 Skills Manager",
-    "description": "最快路徑：安裝 Skills → 開啟全域工作區 → 點擊 Preset 標籤啟用。按 ⌘K 可隨時呼出命令面板。按需使用專案工作區、Git 備份和設定。",
+    "description": "最快路徑：安裝 Skills → 開啟全域工作區 → 點擊預設集標籤啟用。按 ⌘K 可隨時呼出命令面板。按需使用專案工作區、Git 備份和設定。",
     "items": {
       "workflows": {
         "title": "推薦工作流程",
-        "description": "單一 Agent 用戶：安裝 Skills → 開啟全域工作區 → 點擊 Preset 標籤啟用，或點 + 新增 Skills 從技能庫挑選並即時切換目標 Agent。多專案用戶：開啟專案工作區，同樣可用 Preset 標籤或 + 新增 Skills 彈窗為該專案的 Agent 設定 Skills。多機用戶：在設定頁開啟 Git 備份，把中央倉庫在多台裝置間同步。"
+        "description": "單一 Agent 用戶：安裝 Skills → 開啟全域工作區 → 點擊預設集標籤啟用，或點 + 新增 Skills 從技能庫挑選並即時切換目標 Agent。多專案用戶：開啟專案工作區，同樣可用預設集標籤或 + 新增 Skills 彈窗為該專案的 Agent 設定 Skills。多機用戶：在設定頁開啟 Git 備份，把中央倉庫在多台裝置間同步。"
       },
       "presets": {
-        "title": "Preset",
-        "description": "把 Skills 組織成命名的 Preset。在任意工作區點擊 Preset 標籤，即可一鍵啟用或停用其全部 Skills。已啟用的 Preset 顯示 ✓，部分安裝的顯示數量。套用 Preset 是一次性操作，不會自動同步。"
+        "title": "預設集",
+        "description": "把 Skills 組織成命名的預設集。在任意工作區點擊預設集標籤，即可一鍵啟用或停用其全部 Skills。已啟用的預設集顯示 ✓，部分安裝的顯示數量。套用預設集是一次性操作，不會自動同步。"
       },
       "install": {
         "title": "安裝 Skills",
@@ -42,7 +42,7 @@
       },
       "projects": {
         "title": "專案工作區",
-        "description": "關聯專案後，可以檢視專案內各 Agent 的本地 Skills 目錄、對照中央倉庫，並依需求雙向匯入或匯出。使用 Preset 標籤啟用技能組，或點 + 新增 Skills 透過多 Agent 目標選擇器從技能庫挑選。"
+        "description": "關聯專案後，可以檢視專案內各 Agent 的本地 Skills 目錄、對照中央倉庫，並依需求雙向匯入或匯出。使用預設集標籤啟用技能組，或點 + 新增 Skills 透過多 Agent 目標選擇器從技能庫挑選。"
       },
       "backup": {
         "title": "備份與同步",
@@ -55,10 +55,10 @@
     }
   },
   "commandPalette": {
-    "placeholder": "跳轉到技能、Preset、專案或操作…",
+    "placeholder": "跳轉到技能、預設集、專案或操作…",
     "empty": "沒有符合項目，換個關鍵字試試。",
     "skills": "技能",
-    "presets": "Preset",
+    "presets": "預設集",
     "projects": "專案",
     "actions": "操作",
     "scanImport": "掃描並匯入本機技能",
@@ -173,7 +173,7 @@
       "deviceDenied": "授權在 GitHub 上被拒絕，未做任何變更。",
       "deviceFallbackPat": "如果你的網路存取 github.com 不穩定，可改用下方的個人存取權杖方式。",
       "patToggle": "改用個人存取權杖（進階）",
-      "publicRepoWarning": "注意：連線的備份儲存庫是公開的——任何人都能看到你的技能、標籤和 Preset。如非有意，請到 GitHub 儲存庫的 Settings → General → Danger Zone → Change visibility 改為私有。",
+      "publicRepoWarning": "注意：連線的備份儲存庫是公開的——任何人都能看到你的技能、標籤和預設集。如非有意，請到 GitHub 儲存庫的 Settings → General → Danger Zone → Change visibility 改為私有。",
       "reconnect": "重新連線 GitHub",
       "reconnectTitle": "重新連線 GitHub"
     },
@@ -185,7 +185,7 @@
       "title": "備份範圍",
       "included": {
         "skills": "技能檔案及目錄",
-        "metadata": "標籤、Preset、Preset 成員關係和每個 Agent 的技能開關"
+        "metadata": "標籤、預設集、預設集成員關係和每個 Agent 的技能開關"
       },
       "excluded": {
         "secrets": "API key、token 和代理憑證",
@@ -235,15 +235,15 @@
   },
   "mySkills": {
     "title": "技能庫",
-    "applyToDefault": "套用 Preset",
+    "applyToDefault": "套用預設集",
     "applied": "已套用",
     "notAppliedYet": "尚未套用",
     "appliedToast": "已套用",
     "applyMissingDefault": "沒有可用的 Agent — 套用至少需要一個目標位置。",
     "defaultLocationMissing": "預設目標位置缺失",
     "openLocationSettings": "開啟設定",
-    "applyCallout": "點擊 Preset 只會開啟瀏覽。使用「套用 Preset」可把其中的 Skills 加入到或移出選中的 Agent。",
-    "subtitle": "中央倉庫共 {{count}} 個 Skills 已在「{{preset}}」Preset 中啟用",
+    "applyCallout": "點擊預設集只會開啟瀏覽。使用「套用預設集」可把其中的 Skills 加入到或移出選中的 Agent。",
+    "subtitle": "中央倉庫共 {{count}} 個 Skills 已在「{{preset}}」預設集中啟用",
     "searchPlaceholder": "搜尋中央倉庫中的 Skills...",
     "allStatus": "全部狀態",
     "synced": "已同步",
@@ -252,26 +252,26 @@
     "enable": "啟用",
     "enabledButton": "已啟用",
     "disable": "停用",
-    "enableForPreset": "啟用到當前 Preset",
-    "disableForPreset": "從當前 Preset 停用",
-    "enabledInPreset": "已加入當前 Preset",
-    "disabledInPreset": "已從當前 Preset 移除",
-    "inPreset": "當前 Preset 已啟用",
-    "notInPreset": "當前 Preset 未啟用",
-    "remove": "從當前 Preset 移除",
+    "enableForPreset": "啟用到當前預設集",
+    "disableForPreset": "從當前預設集停用",
+    "enabledInPreset": "已加入當前預設集",
+    "disabledInPreset": "已從當前預設集移除",
+    "inPreset": "當前預設集已啟用",
+    "notInPreset": "當前預設集未啟用",
+    "remove": "從當前預設集移除",
     "moreActions": "更多操作",
     "dragToReorder": "拖曳排序",
     "delete": "刪除 Skill",
-    "deleteConfirm": "確定徹底刪除 Skill「{{name}}」嗎？中央倉庫檔案、Preset 關聯和已同步到各 Agent 的目標都會被移除。",
+    "deleteConfirm": "確定徹底刪除 Skill「{{name}}」嗎？中央倉庫檔案、預設集關聯和已同步到各 Agent 的目標都會被移除。",
     "deleted": "已刪除",
     "viewDoc": "檢視文件",
     "noSkills": "沒有可顯示的 Skills",
     "addFirst": "點擊「安裝 Skills」開始新增到中央倉庫",
     "noMatch": "沒有符合當前搜尋或篩選條件的 Skills",
     "clearFilters": "清除篩選",
-    "noPreset": "當前還沒有可用 Preset",
-    "currentPresetFallback": "當前 Preset",
-    "presetCount": "{{count}} 個 Preset",
+    "noPreset": "當前還沒有可用預設集",
+    "currentPresetFallback": "當前預設集",
+    "presetCount": "{{count}} 個預設集",
     "syncCoverage": "同步覆蓋",
     "syncSummary": "已同步 {{synced}} / {{total}}",
     "agentTogglesTitle": "全域工作區",
@@ -363,8 +363,8 @@
     "gitConfigEntry": "同步設定",
     "filters": {
       "all": "全部",
-      "enabled": "當前 Preset 已啟用",
-      "available": "當前 Preset 未啟用"
+      "enabled": "當前預設集已啟用",
+      "available": "當前預設集未啟用"
     },
     "sourceType": "來源類型",
     "sourceFilter": {
@@ -398,7 +398,7 @@
     "batchAlreadyUpToDate": "{{count}} 個 Skill 已是最新",
     "batchUpdateFailed": "{{count}} 個 Skill 更新失敗",
     "deleteSelected": "刪除 {{count}} 個",
-    "batchDeleteConfirm": "確定徹底刪除選中的 {{count}} 個 Skill 嗎？中央倉庫檔案、Preset 關聯和已同步到各 Agent 的目標都會被移除。",
+    "batchDeleteConfirm": "確定徹底刪除選中的 {{count}} 個 Skill 嗎？中央倉庫檔案、預設集關聯和已同步到各 Agent 的目標都會被移除。",
     "batchDeleted": "已刪除 {{count}} 個 Skill",
     "batchDeleteFailed": "{{count}} 個 Skill 刪除失敗",
     "batchToggleFailed": "{{count}} 個 Skill 更新失敗",
@@ -507,7 +507,7 @@
       "noResults": "沒有發現可匯入的本機 Skills",
       "noResultsHint": "當前目錄可能已經全部納入管理，或者相關 Agent 目錄中還沒有 Skills。",
       "locations": "{{count}} 個來源位置",
-      "listHint": "偵測到現有本機 Skills，可直接匯入到中央倉庫並加入當前 Preset。",
+      "listHint": "偵測到現有本機 Skills，可直接匯入到中央倉庫並加入當前預設集。",
       "listImportedHint": "掃描結果都已納入中央倉庫，無需重複匯入。",
       "stats": {
         "detected": "已發現",
@@ -565,7 +565,7 @@
     "addAgent": "新增",
     "globalConfig": "全域設定",
     "repoPath": "中央倉庫路徑",
-    "repoPathDesc": "所有 Skills 和 Preset 設定的預設儲存位置。",
+    "repoPathDesc": "所有 Skills 和預設集設定的預設儲存位置。",
     "repoPathSaved": "中央倉庫路徑已更新",
     "repoPathReset": "中央倉庫路徑已恢復預設",
     "repoPathRestartNotice": "重新啟動應用後，新路徑才會正式生效並遷移既有資料。",
@@ -579,8 +579,8 @@
     "syncModeDesc": "建議使用符號連結，佔用空間極小且修改可即時生效。全域與專案工作區均生效；注意專案裡的符號連結指向本機中央庫，不會隨倉庫帶走。",
     "symlink": "符號連結",
     "copy": "檔案複製",
-    "currentPreset": "當前 Preset",
-    "currentPresetDesc": "立即切換應用當前使用的 Preset，並重新整理 Skills 設定。",
+    "currentPreset": "當前預設集",
+    "currentPresetDesc": "立即切換應用當前使用的預設集，並重新整理 Skills 設定。",
     "theme": "主題",
     "themeDesc": "選擇應用的外觀主題。",
     "themeLight": "淺色",
@@ -597,7 +597,7 @@
     "website": "官網",
     "about": "關於",
     "version": "Skills Manager 1.40.3",
-    "tagline": "跨平台。極簡、高效、無感多 Preset 切換。",
+    "tagline": "跨平台。極簡、高效、無感多預設集切換。",
     "checkUpdate": "檢查更新",
     "checking": "檢查中…",
     "updateAvailable": "發現新版本 {{version}}！",
@@ -725,7 +725,7 @@
     "loadFailed": "載入{{item}}失敗",
     "dataOutOfDate": "部分資料未成功重新整理",
     "documentMissing": "沒有找到文件檔案",
-    "presets": "Preset",
+    "presets": "預設集",
     "agents": "Agent 狀態",
     "skills": "Skills 清單",
     "success": "操作成功",
@@ -783,17 +783,17 @@
     }
   },
   "preset": {
-    "create": "新增 Preset",
-    "name": "Preset 名稱",
+    "create": "新增預設集",
+    "name": "預設集名稱",
     "description": "描述（選填）",
-    "icon": "Preset 圖示",
-    "namePlaceholder": "輸入 Preset 名稱...",
-    "descPlaceholder": "簡短描述這個 Preset 的用途...",
-    "deleteConfirm": "確定刪除 Preset「{{name}}」嗎？Skills 仍會保留在中央倉庫中。",
-    "renamed": "Preset 已重新命名",
-    "updated": "Preset 已更新",
-    "deleted": "Preset 已刪除",
-    "created": "Preset 已建立",
+    "icon": "預設集圖示",
+    "namePlaceholder": "輸入預設集名稱...",
+    "descPlaceholder": "簡短描述這個預設集的用途...",
+    "deleteConfirm": "確定刪除預設集「{{name}}」嗎？Skills 仍會保留在中央倉庫中。",
+    "renamed": "預設集已重新命名",
+    "updated": "預設集已更新",
+    "deleted": "預設集已刪除",
+    "created": "預設集已建立",
     "switched": "已切換到「{{name}}」"
   },
   "project": {
@@ -821,7 +821,7 @@
     "tabManual": "手動新增",
     "tabScan": "掃描發現",
     "tabLinked": "關聯工作區",
-    "addLinkedHint": "關聯一個外部 Skills 根目錄。它只會作為工作區管理，不參與全域 Preset 同步。",
+    "addLinkedHint": "關聯一個外部 Skills 根目錄。它只會作為工作區管理，不參與全域預設集同步。",
     "linkedNamePlaceholder": "工作區名稱",
     "linkedPathPlaceholder": "Skills 目錄路徑",
     "linkedDisabledPathHint": "將自動建立同層目錄（字尾 \"-disabled\"）用於存放停用的 Skills。",
@@ -918,17 +918,17 @@
     "batchTagScopeNote": "標籤儲存在中央技能庫，改動會影響所有使用這個 Skill 的專案。只屬於本專案的本機 Skill 不會被修改。"
   },
   "presetActions": {
-    "button": "套用 Preset",
-    "applyToProject": "套用 Preset 到目前專案",
-    "applyToGlobal": "套用 Preset 到全域工作區",
-    "preset": "Preset",
+    "button": "套用預設集",
+    "applyToProject": "套用預設集到目前專案",
+    "applyToGlobal": "套用預設集到全域工作區",
+    "preset": "預設集",
     "action": "操作",
     "addMissing": "加入缺少的 Skills",
     "removeMatching": "移除符合的 Skills",
     "agents": "Agents",
     "selectAgents": "請至少選擇一個 Agent",
-    "noPresets": "沒有可用 Preset",
-    "noPresetSkills": "這個 Preset 中沒有 Skills",
+    "noPresets": "沒有可用預設集",
+    "noPresetSkills": "這個預設集中沒有 Skills",
     "addHelp": "只加入缺少的 Skills，已存在的會略過。",
     "removeHelp": "只從選中的 Agent 中移除已符合的 Skills。",
     "addSummary": "準備加入 {{count}} 個 Skill-Agent 項，{{skipped}} 個已存在項會略過。",
