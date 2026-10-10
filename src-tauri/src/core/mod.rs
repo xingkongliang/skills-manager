@@ -5,6 +5,7 @@ pub mod central_repo;
 pub mod cli_bridge;
 pub mod content_hash;
 pub mod crypto;
+pub mod custom_repos;
 pub mod error;
 pub mod file_watcher;
 pub mod git2_engine;

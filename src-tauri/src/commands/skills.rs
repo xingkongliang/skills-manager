@@ -296,6 +296,14 @@ pub struct GitSkillPreview {
     pub rel_path: String,
     pub name: String,
     pub description: Option<String>,
+    /// Whether an installed skill already records this repository URL and
+    /// subpath. Informational only — re-installing is allowed and acts as an
+    /// update, so the frontend uses it to flag and pre-deselect the row.
+    pub installed: bool,
+    /// Id of the installed skill behind `installed`, so the frontend can
+    /// target a removal without re-deriving the URL + subpath match. `None`
+    /// whenever `installed` is false.
+    pub installed_skill_id: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1111,9 +1119,17 @@ pub async fn install_from_skillssh(
 
 /// Clone a git repo and return a preview list of skills found, without installing.
 /// The caller must follow up with `confirm_git_install` using the returned `temp_dir`.
+///
+/// `refresh` picks the cache policy: `false` serves a warm repository cache
+/// fully offline ([`git_fetcher::FetchPolicy::CacheFirst`]) so expanding a
+/// saved source is instant, with the network reached only when the cache is
+/// missing/invalid. `true` forces the fetch-first policy so the preview shows
+/// the remote's current state — the frontend passes it for adding a source,
+/// error retries and "refresh all".
 #[tauri::command]
 pub async fn preview_git_install(
     repo_url: String,
+    refresh: bool,
     store: State<'_, Arc<SkillStore>>,
     cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
     app_handle: tauri::AppHandle,
@@ -1152,19 +1168,29 @@ pub async fn preview_git_install(
                 )
                 .ok();
         });
-        let temp_dir = git_fetcher::clone_repo_ref_scoped(
+        let policy = if refresh {
+            git_fetcher::FetchPolicy::UpdateCache
+        } else {
+            git_fetcher::FetchPolicy::CacheFirst
+        };
+        let temp_dir = git_fetcher::clone_repo_ref_scoped_with_policy(
             &parsed.clone_url,
             parsed.branch.as_deref(),
             parsed.subpath.as_deref(),
             Some(&cancel),
             proxy_url.as_deref(),
             Some(progress_cb),
+            policy,
         )
         .map_err(AppError::classify_git_error)?;
 
         let build_preview = || -> Result<GitPreviewResult, AppError> {
             let skill_dir = resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)?;
             let dirs = collect_git_skill_dirs(&skill_dir);
+            // Loaded once per preview; the installed flags below are computed
+            // against the same URL + subpath pair that confirm_git_install
+            // would record for each item.
+            let installed_skills = store.get_all_skills().map_err(AppError::db)?;
 
             let skills: Vec<GitSkillPreview> = dirs
                 .iter()
@@ -1179,10 +1205,18 @@ pub async fn preview_git_install(
                         .name
                         .filter(|s| !s.trim().is_empty())
                         .unwrap_or_else(|| basename.clone());
+                    let subpath = git_fetcher::relative_subpath(&temp_dir, dir);
+                    let matched = find_installed_preview_skill_id(
+                        &installed_skills,
+                        &parsed.clone_url,
+                        subpath.as_deref(),
+                    );
                     GitSkillPreview {
                         rel_path,
                         name,
                         description: meta.description,
+                        installed: matched.is_some(),
+                        installed_skill_id: matched.map(|skill| skill.id.clone()),
                     }
                 })
                 .collect();
@@ -1193,11 +1227,37 @@ pub async fn preview_git_install(
             })
         };
 
-        build_preview().inspect_err(|_e| {
+        let preview = build_preview().inspect_err(|_e| {
             git_fetcher::cleanup_temp(&temp_dir);
-        })
+        });
+        // Fetch metadata is the age signal the source cards show: record it
+        // only now that the preview demonstrably succeeded, and only for a
+        // refresh preview — see `note_custom_repo_fetch`.
+        if let Ok(result) = preview.as_ref() {
+            note_custom_repo_fetch(&store, refresh, &parsed.clone_url, result.skills.len());
+        }
+        preview
     })
     .await?
+}
+
+/// Record "when this source's content was last fetched from the network" on
+/// the matching custom-repo bookmark.
+///
+/// Gated on `refresh`: only an UpdateCache preview pulled from the remote
+/// just now moves the timestamp. A cache-first serve is by definition
+/// possibly-older content, so stamping it would lie about the age of what the
+/// user is looking at. Best-effort — a storage failure is logged and never
+/// surfaced to the (already successful) preview.
+fn note_custom_repo_fetch(store: &SkillStore, refresh: bool, clone_url: &str, skill_count: usize) {
+    if !refresh {
+        return;
+    }
+    if let Err(err) =
+        crate::core::custom_repos::note_fetch(store, clone_url, skill_count as u32)
+    {
+        log::warn!("Failed to record fetch metadata for custom repo {clone_url}: {err}");
+    }
 }
 
 /// Install selected skills from a previously cloned temp directory.
@@ -2799,6 +2859,24 @@ pub fn skill_rel_key(skill_dir: &Path, dir: &Path) -> String {
     }
 }
 
+/// The installed skill a preview item corresponds to, if any.
+///
+/// The match keys are the same pair `confirm_git_install` records per item:
+/// `source_ref_resolved == repo_clone_url` and `source_subpath == item_subpath`.
+/// A `None` subpath (skill at the checkout root) only matches another `None`;
+/// non-git sources and records without a resolved URL never match.
+pub fn find_installed_preview_skill_id<'a>(
+    skills: &'a [SkillRecord],
+    repo_clone_url: &str,
+    item_subpath: Option<&str>,
+) -> Option<&'a SkillRecord> {
+    skills.iter().find(|skill| {
+        skill.source_type == "git"
+            && skill.source_ref_resolved.as_deref() == Some(repo_clone_url)
+            && skill.source_subpath.as_deref() == item_subpath
+    })
+}
+
 /// Validate and canonicalize a temp directory path used by the git preview/install flow.
 /// Returns the canonicalized path if it passes security checks.
 pub fn validate_clone_temp_path(temp_dir: &str) -> Result<PathBuf, AppError> {
@@ -3286,6 +3364,17 @@ mod tests {
             last_checked_at: None,
             last_check_error: None,
         }
+    }
+
+    /// A skill installed from a git repository, as `confirm_git_install`
+    /// records it: resolved clone URL plus subpath relative to the checkout.
+    fn git_source_skill(id: &str, clone_url: &str, subpath: Option<&str>) -> SkillRecord {
+        let mut record = sample_skill(id, id, Path::new("/tmp/central"));
+        record.source_type = "git".to_string();
+        record.source_ref = Some("user-entered-ref".to_string());
+        record.source_ref_resolved = Some(clone_url.to_string());
+        record.source_subpath = subpath.map(str::to_string);
+        record
     }
 
     #[test]
@@ -4273,5 +4362,138 @@ mod tests {
             "the user's local fork must survive the skill removal"
         );
         assert!(repo.store.get_targets_for_skill("s1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn find_installed_preview_skill_id_matches_same_url_and_subpath() {
+        let skills = vec![git_source_skill(
+            "s1",
+            "https://github.com/owner/repo",
+            Some("skills/foo"),
+        )];
+
+        assert_eq!(
+            find_installed_preview_skill_id(
+                &skills,
+                "https://github.com/owner/repo",
+                Some("skills/foo")
+            )
+            .map(|skill| skill.id.as_str()),
+            Some("s1")
+        );
+    }
+
+    #[test]
+    fn find_installed_preview_skill_id_requires_same_subpath() {
+        let skills = vec![git_source_skill(
+            "s1",
+            "https://github.com/owner/repo",
+            Some("skills/foo"),
+        )];
+
+        assert!(find_installed_preview_skill_id(
+            &skills,
+            "https://github.com/owner/repo",
+            Some("skills/bar")
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn find_installed_preview_skill_id_requires_same_url() {
+        let skills = vec![git_source_skill(
+            "s1",
+            "https://github.com/owner/repo",
+            Some("skills/foo"),
+        )];
+
+        // A different spelling of the URL is a different key — no fuzzy matching.
+        assert!(find_installed_preview_skill_id(
+            &skills,
+            "https://github.com/owner/repo.git",
+            Some("skills/foo")
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn find_installed_preview_skill_id_none_subpath_never_matches_some() {
+        let some_subpath = vec![git_source_skill(
+            "s1",
+            "https://github.com/owner/repo",
+            Some("skills/foo"),
+        )];
+        let root_skill = vec![git_source_skill("s2", "https://github.com/owner/repo", None)];
+
+        assert!(find_installed_preview_skill_id(
+            &some_subpath,
+            "https://github.com/owner/repo",
+            None
+        )
+        .is_none());
+        assert!(find_installed_preview_skill_id(
+            &root_skill,
+            "https://github.com/owner/repo",
+            Some("skills/foo")
+        )
+        .is_none());
+        // None matches None when the URL agrees.
+        assert_eq!(
+            find_installed_preview_skill_id(&root_skill, "https://github.com/owner/repo", None)
+                .map(|skill| skill.id.as_str()),
+            Some("s2")
+        );
+    }
+
+    #[test]
+    fn find_installed_preview_skill_id_ignores_non_git_and_unresolved_sources() {
+        // Same resolved URL + subpath, but installed from a local import —
+        // never a git-preview match.
+        let mut imported = git_source_skill("s1", "https://github.com/owner/repo", Some("x"));
+        imported.source_type = "import".to_string();
+        assert!(find_installed_preview_skill_id(
+            &[imported],
+            "https://github.com/owner/repo",
+            Some("x")
+        )
+        .is_none());
+
+        // Git source that never recorded a resolved clone URL.
+        let mut unresolved = git_source_skill("s2", "https://github.com/owner/repo", Some("x"));
+        unresolved.source_ref_resolved = None;
+        assert!(find_installed_preview_skill_id(
+            &[unresolved],
+            "https://github.com/owner/repo",
+            Some("x")
+        )
+        .is_none());
+
+        // Empty list trivially matches nothing.
+        assert!(
+            find_installed_preview_skill_id(&[], "https://github.com/owner/repo", None).is_none()
+        );
+    }
+
+    // ── custom repo fetch metadata (preview_git_install wiring) ──
+
+    #[test]
+    fn fetch_metadata_is_recorded_only_for_refresh_previews() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let record = crate::core::custom_repos::add(&store, "owner/repo").unwrap();
+
+        // Cache-first serves (cold expand, post-install re-scan) must not
+        // stamp the fields: their content is as old as the cache, and the
+        // timestamp means "last successful network fetch".
+        note_custom_repo_fetch(&store, false, &record.url, 7);
+        let stored = crate::core::custom_repos::list(&store).unwrap();
+        assert_eq!(stored[0].last_fetch_at, None, "cache-first must not bump");
+        assert_eq!(stored[0].last_fetch_count, None, "cache-first must not bump");
+
+        // Only a refresh preview (UpdateCache) fetched from the remote just now.
+        note_custom_repo_fetch(&store, true, &record.url, 7);
+        let stored = crate::core::custom_repos::list(&store).unwrap();
+        assert!(stored[0].last_fetch_at.unwrap() > 0);
+        assert_eq!(stored[0].last_fetch_count, Some(7));
     }
 }
