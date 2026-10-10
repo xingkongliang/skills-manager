@@ -5,6 +5,21 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 发布概览
+- 原文件夹已丢失的 Skill 可以重新从线上找回并就地重装，不再只剩「重新关联」或「删掉重来」两条路。
+
+### 用户可见更新
+- **原路径丢失的 Skill 可以从线上找回并重新安装** — 标记为「原路径丢失」的 Skill 现在多出第三个操作「从线上找回」，排在「重新关联」与「转为本地副本」之间。它会在 skills.sh 上搜索候选，也接受 Git 仓库地址或 `owner/repo`；monorepo 里仓库根目录不是 Skill 时，可另填仓库内子目录。替换任何文件之前，它会展示完整差异与本次会移除的全部路径，未确认前不写任何东西。Skill 的 id、标签、预设与各 Agent 的部署副本都会保留。从未公开发布过的 Skill 本就无源可寻，空状态直接指向「转为本地副本」。
+- **原路径丢失的 Skill 不再显示「刷新」** — 该操作只能走到重新导入自己的「原路径已不存在」。这也让这类 Skill 从「全部更新」的相关计数中消失——它们读的是同一条判断。
+- **已知限制：换源是单向门** — 一旦 Skill 改为跟随仓库，「重新关联」与「转为本地副本」就不再提供，因为两者都拒绝非本地导入的行。选错只能删除重装，而那会连带清空它的标签、预设与部署目标。确认页会在提交之前把这一点说清楚。
+
+### 开发者与治理更新
+- `skills set-source` 现在在「会移除文件」时会先问，而不是只判断内容是否不同——复用更新、重新导入、重新关联三条路径同一套审批令牌机制。`--force` 仍可强制覆盖；不带时命令会报告待批准项并以非零码退出。其 `--json` 输出新增 `applied`、`pending_removals`、`removal_approval`、`diff_entries`、`central_copy_exists`、`duplicate_skill_name`。
+- 闸门只存在于一处：`commit_repoint_locked`，在中央库锁内完成暂存、比对、原子替换与落库。`update_git_skill_internal`、relink、re-import 保持各自路径——它们的 Held 语义不同（要记录新 revision 并落在 `update_available` 上），共用会是行为变更而非重构。
+- `AppError` 新增可选的 `reason`，仅在调用方需要「做点什么」而非「报个错」时设置：`subpath_required`（仓库根目录不是 Skill）与 `auth_failed`。`classify_git_error` 现在能识别凭据失败，前端据此给出指向「转为本地副本」的提示，而不是把 git 的英文 CLI 指引抛给中文界面。
+- 有意留待后续：批量恢复；以及导入时记录 skill 的来源——那才是让以后的检查能判定「候选确实就是同一个 skill」而不必靠人眼的关键。
 ## [1.40.3] - 2026-10-02
 
 ### 发布概览

@@ -256,7 +256,7 @@ pub struct SkillSourceDiffDto {
     pub entries: Vec<SkillSourceDiffEntryDto>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct SkillSourceDiffEntryDto {
     pub relative_path: String,
     /// "added" | "removed" | "modified"
@@ -1793,6 +1793,288 @@ pub async fn detach_local_skill_source(
     .await?
 }
 
+#[tauri::command]
+/// Re-install a skill whose recorded local path is gone, from a repository.
+///
+/// The first call reports instead of committing: it returns the difference and
+/// the paths a replacement would take away, with an approval bound to that exact
+/// revision and list. The second call carries that approval and commits.
+/// Anything that changes in between — a push, a file written into the library —
+/// invalidates the approval and the change is reported again rather than
+/// applied.
+pub async fn recover_skill_source(
+    skill_id: String,
+    repo_url: String,
+    locator_source: Option<String>,
+    locator_skill_id: Option<String>,
+    subpath: Option<String>,
+    branch: Option<String>,
+    approved_removals: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<SetSourceResult, AppError> {
+    let store = store.inner().clone();
+    let proxy_url = store.proxy_url();
+    tauri::async_runtime::spawn_blocking(move || {
+        recover_skill_source_internal(
+            &store,
+            &skill_id,
+            &repo_url,
+            locator_source.as_deref(),
+            locator_skill_id.as_deref(),
+            subpath.as_deref(),
+            branch.as_deref(),
+            proxy_url.as_deref(),
+            approved_removals.as_deref(),
+        )
+    })
+    .await?
+}
+
+/// Upper bound on one batch recovery. Every entry is a clone, so an unbounded
+/// list is a way to occupy the process for an unbounded time. The largest
+/// library this ships against is a few hundred skills, so the cap sits well
+/// above any real batch and only rejects a runaway list.
+const MAX_BATCH_RECOVER: usize = 200;
+
+/// One skill's entry in a batch recovery request.
+///
+/// The source travels with the skill because a `source_missing` row carries no
+/// usable remote — the dead local path is the only thing recorded, which is the
+/// whole reason it needs recovering. Approval is per skill for the same reason:
+/// [`crate::core::removals`] binds a token to one revision and one removal list,
+/// and no single revision is true for several repositories at once. A batch
+/// therefore carries N independent approvals, never one shared one.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BatchRecoverRequest {
+    pub skill_id: String,
+    pub repo_url: String,
+    #[serde(default)]
+    pub locator_source: Option<String>,
+    #[serde(default)]
+    pub locator_skill_id: Option<String>,
+    #[serde(default)]
+    pub subpath: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// Token from a previous report for *this* skill. `None` on the first call,
+    /// which reports without writing.
+    #[serde(default)]
+    pub approved_removals: Option<String>,
+}
+
+/// One skill's outcome inside a batch.
+///
+/// Every failure mode is data here rather than an error that ends the batch: a
+/// skill whose upstream 404s must not cost the others their commit. The same
+/// reason `pending_removals` is not a failure — declining to approve is an
+/// answer, not an error.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchRecoverItem {
+    pub skill_id: String,
+    pub name: String,
+    pub applied: bool,
+    pub content_changed: bool,
+    pub clone_url: String,
+    pub revision: String,
+    pub subpath: Option<String>,
+    pub branch: Option<String>,
+    pub pending_removals: Vec<PendingRemoval>,
+    pub removal_approval: Option<String>,
+    pub diff_entries: Vec<SkillSourceDiffEntryDto>,
+    pub central_copy_exists: bool,
+    pub duplicate_skill_name: Option<String>,
+    /// Why this skill did not make it. `None` on success — including a skill
+    /// that is held back awaiting approval, which is reported through
+    /// `removal_approval` instead.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchRecoverResult {
+    pub requested: usize,
+    pub applied: usize,
+    pub held: usize,
+    pub failed: usize,
+    pub items: Vec<BatchRecoverItem>,
+}
+
+/// Recover several skills whose original paths are gone, in one call.
+///
+/// Two calls make the batch: the first reports every skill without writing
+/// anything, the second carries each skill's own approval back. Reporting
+/// resolves N upstreams, so a batch costs N clones — that is inherent to the
+/// two-phase contract, not something this loop can avoid.
+///
+/// Serial on purpose. Each commit takes and releases the central repo lock
+/// inside itself, so this loop never holds it across a clone — which is the
+/// whole reason the lock is not taken out here. Running two commits
+/// concurrently would serialise on that lock anyway while adding the cost of
+/// interleaved staging directories for no gain.
+///
+/// `on_progress` is called as `(index, total, name, done)` around each skill.
+/// Reporting N sources means N clones, and a batch of a dozen is minutes of
+/// work; a caller showing one spinner for that is indistinguishable from a
+/// hang. It is an argument rather than an app handle so the CLI can print the
+/// same steps and the tests can ignore them.
+pub fn batch_recover_skill_sources_internal(
+    store: &SkillStore,
+    requests: &[BatchRecoverRequest],
+    proxy_url: Option<&str>,
+    mut on_progress: Option<&mut dyn FnMut(usize, usize, &str, bool)>,
+) -> Result<BatchRecoverResult, AppError> {
+    if requests.is_empty() {
+        return Err(AppError::invalid_input("No skills to recover"));
+    }
+    if requests.len() > MAX_BATCH_RECOVER {
+        return Err(AppError::invalid_input(format!(
+            "A batch recovers at most {MAX_BATCH_RECOVER} skills at a time; got {}",
+            requests.len()
+        )));
+    }
+
+    // The same row twice would recover once and then be refused on the second
+    // pass by the local/import guard, which reads as a batch bug rather than a
+    // caller mistake. Say so up front instead.
+    let mut seen = std::collections::HashSet::new();
+    for request in requests {
+        if !seen.insert(request.skill_id.as_str()) {
+            return Err(AppError::invalid_input(format!(
+                "Skill '{}' appears more than once in the batch",
+                request.skill_id
+            )));
+        }
+    }
+
+    let mut applied = 0usize;
+    let mut held = 0usize;
+    let mut failed = 0usize;
+    let mut items = Vec::with_capacity(requests.len());
+
+    for (position, request) in requests.iter().enumerate() {
+        let name = store
+            .get_skill_by_id(&request.skill_id)
+            .ok()
+            .flatten()
+            .map(|skill| skill.name)
+            .unwrap_or_else(|| request.skill_id.clone());
+
+        if let Some(report) = on_progress.as_mut() {
+            report(position + 1, requests.len(), &name, false);
+        }
+
+        let item = match recover_skill_source_internal(
+            store,
+            &request.skill_id,
+            &request.repo_url,
+            request.locator_source.as_deref(),
+            request.locator_skill_id.as_deref(),
+            request.subpath.as_deref(),
+            request.branch.as_deref(),
+            proxy_url,
+            request.approved_removals.as_deref(),
+        ) {
+            Ok(result) => {
+                if result.applied {
+                    applied += 1;
+                } else {
+                    held += 1;
+                }
+                BatchRecoverItem {
+                    skill_id: result.skill_id,
+                    name: name.clone(),
+                    applied: result.applied,
+                    content_changed: result.content_changed,
+                    clone_url: result.clone_url,
+                    revision: result.revision,
+                    subpath: result.subpath,
+                    branch: result.branch,
+                    pending_removals: result.pending_removals,
+                    removal_approval: result.removal_approval,
+                    diff_entries: result.diff_entries,
+                    central_copy_exists: result.central_copy_exists,
+                    duplicate_skill_name: result.duplicate_skill_name,
+                    error: None,
+                }
+            }
+            // The row keeps its pre-attempt status, so a skill that fails here
+            // is still recoverable on the next run — the batch reports the
+            // reason instead of ending the call.
+            Err(err) => {
+                failed += 1;
+                BatchRecoverItem {
+                    skill_id: request.skill_id.clone(),
+                    name: name.clone(),
+                    applied: false,
+                    content_changed: false,
+                    clone_url: request.repo_url.clone(),
+                    revision: String::new(),
+                    subpath: request.subpath.clone(),
+                    branch: request.branch.clone(),
+                    pending_removals: Vec::new(),
+                    removal_approval: None,
+                    diff_entries: Vec::new(),
+                    central_copy_exists: false,
+                    duplicate_skill_name: None,
+                    error: Some(err.message.clone()),
+                }
+            }
+        };
+        if let Some(report) = on_progress.as_mut() {
+            report(position + 1, requests.len(), &name, true);
+        }
+        items.push(item);
+    }
+
+    Ok(BatchRecoverResult {
+        requested: requests.len(),
+        applied,
+        held,
+        failed,
+        items,
+    })
+}
+
+#[tauri::command]
+/// Recover several skills whose original paths are gone, in one call.
+///
+/// Mirrors [`recover_skill_source`] per skill rather than replacing it: every
+/// entry goes through the same gate and the same commit path, so a batch cannot
+/// acquire a capability the single-skill command refuses. See
+/// [`batch_recover_skill_sources_internal`] for why the loop is serial.
+///
+/// Emits `batch-recover-progress` around each skill. Reporting N sources means
+/// N clones, so a batch can run for minutes; without this the only honest
+/// thing the UI could show was a spinner that never ends.
+pub async fn batch_recover_skill_sources(
+    app: tauri::AppHandle,
+    requests: Vec<BatchRecoverRequest>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<BatchRecoverResult, AppError> {
+    use tauri::Emitter;
+    let store = store.inner().clone();
+    let proxy_url = store.proxy_url();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut report = |index: usize, total: usize, name: &str, done: bool| {
+            let _ = app.emit(
+                "batch-recover-progress",
+                serde_json::json!({
+                    "index": index,
+                    "total": total,
+                    "name": name,
+                    "done": done,
+                }),
+            );
+        };
+        batch_recover_skill_sources_internal(
+            &store,
+            &requests,
+            proxy_url.as_deref(),
+            Some(&mut report),
+        )
+    })
+    .await?
+}
+
 fn managed_skill_to_dto(
     store: &SkillStore,
     skill: SkillRecord,
@@ -2075,6 +2357,33 @@ pub struct SetSourceResult {
     /// difference (and are left in place, since no file work runs).
     pub content_changed: bool,
     pub dry_run: bool,
+    /// Whether the re-point was committed. `false` means the change is waiting
+    /// on the user's answer: nothing was written and `pending_removals` says
+    /// what approving it would take away. Same contract as
+    /// [`UpdateSkillResult::pending_removals`] — see the comment on
+    /// [`BatchUpdateSkillsResult::held_back`] for why declining is not a
+    /// failure and must not be reported as one.
+    ///
+    /// A `dry_run` report sets this to `true`: producing the report *is* its
+    /// whole job, and there is nothing pending to approve.
+    pub applied: bool,
+    /// Non-empty together with `applied == false` — the paths approving this
+    /// re-point would remove, and the approval that releases them.
+    pub pending_removals: Vec<PendingRemoval>,
+    pub removal_approval: Option<String>,
+    /// What the new source has that the library copy does not, and the reverse.
+    /// Empty when `applied` is true (nothing was replaced) or when the two trees
+    /// are identical.
+    pub diff_entries: Vec<SkillSourceDiffEntryDto>,
+    /// Whether the library copy still exists. `false` means there is nothing to
+    /// diff against and nothing to roll back to: the re-install is the only
+    /// remaining copy of this skill's content, and `pending_removals` is empty
+    /// only because there is nothing left to remove.
+    pub central_copy_exists: bool,
+    /// Name of another installed skill already tracked at this exact source, if
+    /// any. Recovering onto a source that is already in the library gives two
+    /// rows the same upstream, which then update and deploy independently.
+    pub duplicate_skill_name: Option<String>,
 }
 
 /// Resolve the skill directory inside a fresh checkout, strictly.
@@ -2090,7 +2399,7 @@ fn resolve_repoint_skill_dir(repo_dir: &Path, subpath: Option<&str>) -> Result<P
         return if is_valid_skill_dir(repo_dir) {
             Ok(repo_dir.to_path_buf())
         } else {
-            Err(AppError::invalid_input(
+            Err(AppError::subpath_required(
                 "Repository root is not a skill directory (no SKILL.md); pass --subpath",
             ))
         };
@@ -2119,6 +2428,123 @@ fn resolve_repoint_skill_dir(repo_dir: &Path, subpath: Option<&str>) -> Result<P
     Ok(candidate)
 }
 
+/// What a re-point needs to know about the source it is pointing at.
+///
+/// The pair `locator_source` + `locator_skill_id` is what keeps a skills.sh
+/// skill locatable after upstream moves the directory: `source_ref` is written
+/// as `"{locator_source}/{locator_skill_id}"` (the same shape
+/// [`install_from_skillssh`] writes), and [`git_source_from_skill`] recovers the
+/// locator from it. Write a bare clone URL there instead and
+/// [`skill_ssh_id`] would cut it into `("https://github.com/owner", "repo.git")`
+/// — a locator that names nothing.
+#[derive(Debug, Clone, Copy)]
+struct RepointRequest<'a> {
+    clone_url: &'a str,
+    subpath: Option<&'a str>,
+    branch: Option<&'a str>,
+    locator_source: Option<&'a str>,
+    locator_skill_id: Option<&'a str>,
+}
+
+/// The source metadata a committed re-point writes to the row.
+struct RepointSource {
+    source_type: String,
+    source_ref: String,
+    source_ref_resolved: String,
+    branch: Option<String>,
+    remote_revision: String,
+}
+
+/// Tracks what this call actually did to the row, so a failure reports the
+/// truth about it rather than a fixed "error".
+///
+/// Same pair of markers [`set_git_source_internal`] has always carried: a
+/// refusal that never set `updating` must not be dressed up as an error, and the
+/// revision written on failure has to be the one the row still points at.
+#[derive(Default)]
+struct RepointProgress {
+    marked_updating: std::cell::Cell<bool>,
+    source_committed: std::cell::Cell<bool>,
+}
+
+#[derive(Debug)]
+enum RepointOutcome {
+    Applied {
+        content_changed: bool,
+        resolved_subpath: Option<String>,
+    },
+    /// Waiting on the user's answer; nothing was written.
+    Held {
+        pending: Vec<PendingRemoval>,
+        approval: String,
+        diff_entries: Vec<SkillSourceDiffEntryDto>,
+        central_copy_exists: bool,
+        duplicate_skill_name: Option<String>,
+        resolved_subpath: Option<String>,
+    },
+}
+
+/// The row metadata a re-point commits.
+///
+/// A skills.sh candidate has to be written as `{owner}/{repo}/{skill_id}`, not
+/// as its clone URL: [`skill_ssh_id`] recovers the locator by cutting the ref on
+/// `/`, and a URL cuts into `("https://github.com/owner", "repo.git")` — a
+/// locator that names nothing, and the whole reason not to downgrade such a
+/// skill to `git` (see [`git_source_from_skill`]). Either half of the locator
+/// pair alone is not enough to make one, so both are required.
+fn repoint_source_for(
+    request: &RepointRequest<'_>,
+    original_url: &str,
+    clone_url: &str,
+    branch: Option<String>,
+    remote_revision: &str,
+) -> RepointSource {
+    match (request.locator_source, request.locator_skill_id) {
+        (Some(owner_repo), Some(locator)) => RepointSource {
+            source_type: "skillssh".to_string(),
+            source_ref: format!("{}/{}", owner_repo, locator),
+            source_ref_resolved: clone_url.to_string(),
+            branch,
+            remote_revision: remote_revision.to_string(),
+        },
+        _ => RepointSource {
+            source_type: "git".to_string(),
+            source_ref: original_url.to_string(),
+            source_ref_resolved: clone_url.to_string(),
+            branch,
+            remote_revision: remote_revision.to_string(),
+        },
+    }
+}
+
+/// Which status a failed re-point leaves on the row.
+///
+/// The error itself always goes to `last_check_error`; this only decides what
+/// the badge reads, and that is not free — the relink / find-source / detach
+/// actions are offered for `source_missing` and nothing else, so overwriting it
+/// strands the row with no way out.
+///
+/// Three cases, because each is a different claim about the row:
+/// - committed: it points at the new source now, and the old status described a
+///   source it no longer tracks.
+/// - still `source_missing`: the path really is gone, which has not stopped being
+///   true just because this attempt failed. The caller's own status never wins
+///   here — "error" is not a licence to hide the exit.
+/// - anything else: report under what the caller asked for.
+fn failure_status_for<'a>(
+    source_committed: bool,
+    snapshot_status: &str,
+    caller_status: &'a str,
+) -> &'a str {
+    if source_committed {
+        "error"
+    } else if snapshot_status == "source_missing" {
+        "source_missing"
+    } else {
+        caller_status
+    }
+}
+
 /// Re-point an installed skill at a git source **in place**.
 ///
 /// The skill row is updated by id, so the skill id, tags, preset membership and
@@ -2128,11 +2554,8 @@ fn resolve_repoint_skill_dir(repo_dir: &Path, subpath: Option<&str>) -> Result<P
 /// otherwise silently allocates `<name>-2`, while `remove` + `install` drops the
 /// id and everything keyed to it.
 ///
-/// When the new source's content differs from the current central copy the
-/// command refuses unless `force` is set. Re-pointing is not an update: the
-/// remote is not yet known to be the authoritative copy, so overwriting local
-/// content that may exist nowhere else has to be a deliberate choice.
-#[allow(clippy::too_many_arguments)]
+/// `force` is the CLI's "I know, overwrite" switch. Without it a re-point that
+/// would take files away stops and reports them, exactly as the update paths do.
 pub fn set_git_source_internal(
     store: &SkillStore,
     skill_id: &str,
@@ -2143,7 +2566,99 @@ pub fn set_git_source_internal(
     force: bool,
     dry_run: bool,
 ) -> Result<SetSourceResult, AppError> {
+    repoint_skill(
+        store,
+        skill_id,
+        &RepointRequest {
+            clone_url: git_url,
+            subpath,
+            branch,
+            locator_source: None,
+            locator_skill_id: None,
+        },
+        proxy_url,
+        force,
+        dry_run,
+        None,
+        // A failed `set-source` has always reported itself as an error on the
+        // row; the CLI prints the message either way.
+        "error",
+    )
+}
+
+/// Re-install a skill whose recorded local path is gone, from a repository found
+/// online.
+///
+/// Same in-place re-point as [`set_git_source_internal`], which is what keeps the
+/// id, tags, preset membership and deployments — but it never takes `force`:
+/// overwriting is authorised through the approval token instead, so the user is
+/// shown exactly which files the replacement would take away. A failure restores
+/// the status the row had rather than stamping `error` on it, because the
+/// relink / find-source / detach buttons are only reachable *from* `source_missing`
+/// and an error status would hide all three.
+pub fn recover_skill_source_internal(
+    store: &SkillStore,
+    skill_id: &str,
+    repo_url: &str,
+    locator_source: Option<&str>,
+    locator_skill_id: Option<&str>,
+    subpath: Option<&str>,
+    branch: Option<&str>,
+    proxy_url: Option<&str>,
+    approved_removals: Option<&str>,
+) -> Result<SetSourceResult, AppError> {
     let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+
+    // Same guard relink and re-import carry. Without it this command would be a
+    // general "re-point anything at anything" entry point, reachable by anything
+    // that can construct an invoke.
+    if !matches!(skill.source_type.as_str(), "local" | "import") {
+        return Err(AppError::invalid_input(
+            "Only local skills can recover their source",
+        ));
+    }
+
+    let held_status = skill.update_status.clone();
+    repoint_skill(
+        store,
+        skill_id,
+        &RepointRequest {
+            clone_url: repo_url,
+            subpath,
+            branch,
+            locator_source,
+            locator_skill_id,
+        },
+        proxy_url,
+        false,
+        false,
+        approved_removals,
+        &held_status,
+    )
+}
+
+/// The one path both re-points go through: resolve and fetch the source off the
+/// lock, then hand a fresh checkout to [`commit_repoint_locked`], which owns
+/// everything that writes.
+///
+/// `failure_status` is what a failure reports on the row — see
+/// [`RepointProgress`].
+fn repoint_skill(
+    store: &SkillStore,
+    skill_id: &str,
+    request: &RepointRequest<'_>,
+    proxy_url: Option<&str>,
+    force: bool,
+    dry_run: bool,
+    approved_removals: Option<&str>,
+    failure_status: &str,
+) -> Result<SetSourceResult, AppError> {
+    // Read before anything can change underneath us: this snapshot is what the
+    // locked re-read is checked against.
+    let snapshot = store
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Skill not found"))?;
@@ -2151,14 +2666,17 @@ pub fn set_git_source_internal(
     // Validate before parsing: resolving a GitHub tree URL runs `ls-remote`, so
     // an unvalidated URL would reach the network first. `install` validates its
     // raw input the same way.
-    git_fetcher::validate_git_url(git_url).map_err(AppError::git)?;
-    let parsed = git_fetcher::parse_git_source_resolved(git_url, proxy_url);
+    git_fetcher::validate_git_url(request.clone_url).map_err(AppError::git)?;
+    let parsed = git_fetcher::parse_git_source_resolved(request.clone_url, proxy_url);
 
-    // An explicit flag wins over whatever the URL encodes. `--subpath ""` is the
-    // caller saying "the skill is at the repo root", which is distinct from
-    // omitting the flag and letting the URL decide.
-    let branch = branch.map(str::to_string).or_else(|| parsed.branch.clone());
-    let subpath = match subpath {
+    // An explicit flag wins over whatever the URL encodes. An empty subpath is
+    // the caller saying "the skill is at the repo root", which is distinct from
+    // omitting it and letting the URL decide.
+    let branch = request
+        .branch
+        .map(str::to_string)
+        .or_else(|| parsed.branch.clone());
+    let subpath = match request.subpath {
         Some("") => None,
         Some(value) => Some(value.to_string()),
         None => parsed.subpath.clone(),
@@ -2166,7 +2684,13 @@ pub fn set_git_source_internal(
 
     let remote_revision =
         git_fetcher::resolve_remote_revision(&parsed.clone_url, branch.as_deref(), proxy_url)
-            .map_err(|e| AppError::git(e.to_string()))?;
+            // Classified, not `git`: this is the first call to reach the network,
+            // and for a private repository it is the one that fails — waiting
+            // for the clone would mean a second, identical round trip. Without
+            // the classifier the auth case falls through as a plain git error
+            // and the caller cannot tell "needs credentials" from "no such
+            // repository".
+            .map_err(AppError::classify_git_error)?;
 
     let temp_dir = git_fetcher::clone_repo_ref_scoped(
         &parsed.clone_url,
@@ -2181,136 +2705,328 @@ pub fn set_git_source_internal(
     // Nothing before this point has written to the store, so a failure during
     // the network phase leaves no state to unwind — in particular the skill is
     // never left stuck in `updating`.
-    let marked_updating = std::cell::Cell::new(false);
-    let source_committed = std::cell::Cell::new(false);
-    let outcome = (|| -> Result<(String, bool), AppError> {
+    let progress = RepointProgress::default();
+    let outcome = (|| -> Result<RepointOutcome, AppError> {
         git_fetcher::checkout_revision(&temp_dir, &remote_revision).map_err(AppError::git)?;
-        let skill_dir = resolve_repoint_skill_dir(&temp_dir, subpath.as_deref())?;
+
+        // A locator means upstream may have moved the skill since it was
+        // recorded, so the forgiving resolver is right — it falls back to
+        // searching the checkout (issue #278). Without one it must be the
+        // strict resolver: an unrelated root, or the whole `skills/` container,
+        // would otherwise be installed over the existing copy.
+        let skill_dir = match request.locator_skill_id {
+            Some(locator) => resolve_skill_dir(&temp_dir, subpath.as_deref(), Some(locator))?,
+            None => resolve_repoint_skill_dir(&temp_dir, subpath.as_deref())?,
+        };
         let resolved_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
 
         let new_hash =
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
-        let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
+
+        let source = repoint_source_for(
+            request,
+            &parsed.original_url,
+            &parsed.clone_url,
+            branch.clone(),
+            &remote_revision,
+        );
 
         // Report before refusing: inspecting a skill whose content differs is
-        // exactly what --dry-run is for, so it must not need --force to run.
+        // exactly what a dry run is for, so it must not need `force` to run.
+        // Producing the report *is* its job — there is nothing pending to
+        // approve — so it counts as applied.
         if dry_run {
-            return Ok((resolved_subpath.unwrap_or_default(), content_changed));
-        }
-        if content_changed && !force {
-            return Err(AppError::invalid_input(
-                "New source content differs from the current library copy; \
-                 re-run with --dry-run to inspect, or --force to overwrite",
-            ));
+            return Ok(RepointOutcome::Applied {
+                content_changed: snapshot.content_hash.as_deref() != Some(new_hash.as_str()),
+                resolved_subpath,
+            });
         }
 
-        let _lock = RepoLock::acquire_foreground("set skill source").map_err(AppError::db)?;
-
-        // The clone happened outside the lock, so the skill may have been
-        // removed or re-pointed meanwhile. Re-read and refuse to apply a
-        // decision made against a stale snapshot.
-        let current = store
-            .get_skill_by_id(skill_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Skill was removed while fetching the source"))?;
-        if current.central_path != skill.central_path
-            || current.content_hash != skill.content_hash
-            || current.source_type != skill.source_type
-            || current.source_ref != skill.source_ref
-        {
-            return Err(AppError::invalid_input(
-                "Skill changed while fetching the source; re-run the command",
-            ));
-        }
-
-        store
-            .update_skill_update_status(skill_id, "updating")
-            .map_err(AppError::db)?;
-        marked_updating.set(true);
-
-        // Identical content needs no file work — swapping would rewrite the
-        // central copy for a metadata-only change, and `installer` does not
-        // copy exactly the set of files `content_hash` covers, so the rewrite
-        // could alter files while still reporting `content_changed: false`.
-        let description = if content_changed {
-            let staged_path = staged_path_for(&skill.central_path);
-            let install_result =
-                installer::install_skill_dir_to_destination(&skill_dir, &skill.name, &staged_path)
-                    .inspect_err(|_| {
-                        let _ = std::fs::remove_dir_all(&staged_path);
-                    })
-                    .map_err(AppError::io)?;
-            swap_skill_directory(&staged_path, Path::new(&skill.central_path))?;
-            install_result.description
-        } else {
-            skill.description.clone()
-        };
-
-        store
-            .update_skill_after_reinstall(
-                &skill.id,
-                &skill.name,
-                description.as_deref(),
-                "git",
-                Some(&parsed.original_url),
-                Some(&parsed.clone_url),
-                resolved_subpath.as_deref(),
-                branch.as_deref(),
-                Some(&remote_revision),
-                Some(&remote_revision),
-                Some(&new_hash),
-                "up_to_date",
-            )
-            .map_err(AppError::db)?;
-        source_committed.set(true);
-        resync_copy_targets(store, &skill.id)?;
-        sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
-        Ok((resolved_subpath.unwrap_or_default(), content_changed))
+        commit_repoint_locked(
+            store,
+            &snapshot,
+            &skill_dir,
+            &new_hash,
+            resolved_subpath.as_deref(),
+            &source,
+            force,
+            approved_removals,
+            &progress,
+        )
     })();
 
     git_fetcher::cleanup_temp(&temp_dir);
 
     match outcome {
-        Ok((resolved_subpath, content_changed)) => Ok(SetSourceResult {
-            skill_id: skill.id,
-            name: skill.name,
-            previous_source_type: skill.source_type,
-            previous_source_ref: skill.source_ref,
+        Ok(RepointOutcome::Applied {
+            content_changed,
+            resolved_subpath,
+        }) => Ok(SetSourceResult {
+            skill_id: snapshot.id,
+            name: snapshot.name,
+            previous_source_type: snapshot.source_type,
+            previous_source_ref: snapshot.source_ref,
             clone_url: parsed.clone_url,
-            subpath: (!resolved_subpath.is_empty()).then_some(resolved_subpath),
+            subpath: resolved_subpath,
             branch,
             revision: remote_revision,
             content_changed,
             dry_run,
+            applied: true,
+            pending_removals: Vec::new(),
+            removal_approval: None,
+            diff_entries: Vec::new(),
+            // A dry run committed nothing, so this still answers about the
+            // library copy as it was; after a real commit the swap has just
+            // put it there, which reads the same.
+            central_copy_exists: Path::new(&snapshot.central_path).is_dir(),
+            duplicate_skill_name: None,
+        }),
+        Ok(RepointOutcome::Held {
+            pending,
+            approval,
+            diff_entries,
+            central_copy_exists,
+            duplicate_skill_name,
+            resolved_subpath,
+        }) => Ok(SetSourceResult {
+            skill_id: snapshot.id,
+            name: snapshot.name,
+            previous_source_type: snapshot.source_type,
+            previous_source_ref: snapshot.source_ref,
+            clone_url: parsed.clone_url,
+            subpath: resolved_subpath,
+            branch,
+            revision: remote_revision,
+            content_changed: false,
+            dry_run,
+            applied: false,
+            pending_removals: pending,
+            removal_approval: Some(approval),
+            diff_entries,
+            central_copy_exists,
+            duplicate_skill_name,
         }),
         Err(e) => {
-            // Only clear `updating` if this call actually set it. A refusal
-            // (bad subpath, content differs without --force) touched nothing,
-            // so marking the skill as errored would be a lie.
-            //
-            // `update_skill_check_state` always writes the revision column, so
-            // it has to be given the one that matches whichever source the row
-            // now describes: the new source's revision once the re-point
-            // committed, otherwise the revision the old source already had.
-            // Passing the newly resolved revision unconditionally would file a
-            // commit from the new repo under a skill still pointing at the old
-            // one; passing None would blank a revision that is still valid.
-            if marked_updating.get() {
-                let revision = if source_committed.get() {
+            if progress.marked_updating.get() {
+                // Only clear `updating` if this call actually set it. A refusal
+                // (bad subpath, nothing approved) touched nothing, so marking
+                // the skill as errored would be a lie.
+                //
+                // `update_skill_check_state` always writes the revision column,
+                // so it has to be given the one that matches whichever source
+                // the row now describes: the new source's revision once the
+                // re-point committed, otherwise the revision the old source
+                // already had. Passing the newly resolved revision
+                // unconditionally would file a commit from the new repo under a
+                // skill still pointing at the old one; passing None would blank
+                // a revision that is still valid.
+                let revision = if progress.source_committed.get() {
                     Some(remote_revision.as_str())
                 } else {
-                    skill.remote_revision.as_deref()
+                    snapshot.remote_revision.as_deref()
                 };
+                // `failure_status` is what the caller wants the row to read
+                // afterwards: "error" for the CLI, and for recovery the status it
+                // already had — the source is still the dead local path, so the
+                // buttons that can rescue it must stay reachable. The message
+                // goes to `last_check_error` either way, so nothing is lost.
+                let status = failure_status_for(
+                    progress.source_committed.get(),
+                    &snapshot.update_status,
+                    failure_status,
+                );
                 let _ = store.update_skill_check_state(
                     skill_id,
                     revision,
-                    "error",
+                    status,
                     Some(&e.message),
                 );
             }
             Err(e)
         }
     }
+}
+
+/// Apply a re-point to `snapshot`, or hold it for the user's answer.
+///
+/// Owns every write to the store, which is why it takes the lock itself: the
+/// clone happened outside it and the row may have moved on, and staging,
+/// comparing and swapping all have to see one consistent library. `snapshot` is
+/// the row as it was read before the network phase — the re-read is refused
+/// unless it still matches.
+///
+/// `skill_dir` must already be a resolved skill directory inside a fresh
+/// checkout. `force` is the CLI's blunt "overwrite anyway" switch and is
+/// deliberately not offered to the recovery path.
+fn commit_repoint_locked(
+    store: &SkillStore,
+    snapshot: &SkillRecord,
+    skill_dir: &Path,
+    new_hash: &str,
+    resolved_subpath: Option<&str>,
+    source: &RepointSource,
+    force: bool,
+    approved_removals: Option<&str>,
+    progress: &RepointProgress,
+) -> Result<RepointOutcome, AppError> {
+    let _lock = RepoLock::acquire_foreground("repoint skill source").map_err(AppError::db)?;
+
+    // The clone happened outside the lock, so the skill may have been removed or
+    // re-pointed meanwhile. Re-read and refuse to apply a decision made against
+    // a stale snapshot.
+    let current = store
+        .get_skill_by_id(&snapshot.id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill was removed while fetching the source"))?;
+    if current.central_path != snapshot.central_path
+        || current.content_hash != snapshot.content_hash
+        || current.source_type != snapshot.source_type
+        || current.source_ref != snapshot.source_ref
+    {
+        return Err(AppError::invalid_input(
+            "Skill changed while fetching the source; try again",
+        ));
+    }
+
+    let central_path = Path::new(&current.central_path);
+    let central_copy_exists = central_path.is_dir();
+    // A recorded hash can still match while the files it described are gone —
+    // a cleaner emptied the directory, or the library was moved. Writing nothing
+    // and reporting success would leave a skill that is listed but cannot be
+    // read, so a missing copy counts as a difference even when the hash agrees.
+    let content_changed = !central_copy_exists
+        || current.content_hash.as_deref() != Some(new_hash);
+
+    store
+        .update_skill_update_status(&current.id, "updating")
+        .map_err(AppError::db)?;
+    progress.marked_updating.set(true);
+
+    // Stage first, then compare. The tree that lands in the library is the
+    // installer's output, not the raw checkout — it drops `.git` and every
+    // symlink — so comparing against the checkout would report a path as
+    // surviving that the swap then removes.
+    let staged_path = staged_path_for(&current.central_path);
+    let install_result = if content_changed {
+        Some(
+            installer::install_skill_dir_to_destination(skill_dir, &current.name, &staged_path)
+                .inspect_err(|_| {
+                    let _ = remove_path_if_exists(&staged_path);
+                })
+                .map_err(AppError::io)?,
+        )
+    } else {
+        None
+    };
+    let staged_guard = StagedPathGuard::new(&staged_path, install_result.is_some());
+
+    // Always checked, even when the library copy keeps its content: every
+    // copy-mode deployment is torn down and rebuilt from that tree, which loses
+    // files just as effectively.
+    let pending = pending_removals_for(
+        store,
+        &current,
+        install_result.is_some().then_some(staged_path.as_path()),
+    )?;
+
+    // The library copy is the "before"; the staged tree is the "after". With
+    // identical content there is no staged tree and this compares the library
+    // against itself, which is empty — correct, there is nothing to show.
+    let diff_entries = build_source_diff_entries(
+        central_path,
+        install_result
+            .is_some()
+            .then_some(staged_path.as_path())
+            .unwrap_or(central_path),
+    );
+
+    // A confirmation answers one exact question: this revision, this list as
+    // shown. It closes the window while the dialog is open — a push, or a file
+    // that changes the list, re-asks.
+    let approval = removal_approval_token(&source.remote_revision, &pending);
+    // A differing tree is itself the thing to confirm, not just a source of
+    // removals: two skills can share a name and a file list while sharing
+    // nothing else, and at this point the library copy may be the only one left.
+    if !force
+        && (content_changed || !pending.is_empty())
+        && approved_removals != Some(approval.as_str())
+    {
+        let duplicate_skill_name = duplicate_source_name(store, &current, source)?;
+        // Put back exactly what was there. Hardcoding a status loses
+        // `source_missing` — the only state recovery is reachable from — so
+        // declining would hide the relink / find-source / detach buttons on the
+        // next refresh, and `check_state` would also clear the recorded error
+        // and check time that nothing here has re-established. Restoring only
+        // the status leaves those alone.
+        store
+            .update_skill_update_status(&current.id, &current.update_status)
+            .map_err(AppError::db)?;
+        return Ok(RepointOutcome::Held {
+            pending,
+            approval,
+            diff_entries,
+            central_copy_exists,
+            duplicate_skill_name,
+            resolved_subpath: resolved_subpath.map(str::to_string),
+        });
+    }
+
+    // Identical content needs no file work — swapping would rewrite the central
+    // copy for a metadata-only change, and `installer` does not copy exactly the
+    // set of files `content_hash` covers, so the rewrite could alter files while
+    // still reporting `content_changed: false`.
+    let description = match install_result.as_ref() {
+        Some(result) => result.description.clone(),
+        None => current.description.clone(),
+    };
+
+    if install_result.is_some() {
+        swap_skill_directory(&staged_path, central_path)?;
+        // Only now is it the library's; before this the guard still owns it.
+        staged_guard.release();
+    }
+
+    store
+        .update_skill_after_reinstall(
+            &current.id,
+            &current.name,
+            description.as_deref(),
+            &source.source_type,
+            Some(&source.source_ref),
+            Some(&source.source_ref_resolved),
+            resolved_subpath,
+            source.branch.as_deref(),
+            Some(&source.remote_revision),
+            Some(&source.remote_revision),
+            Some(new_hash),
+            "up_to_date",
+        )
+        .map_err(AppError::db)?;
+    progress.source_committed.set(true);
+    resync_copy_targets(store, &current.id)?;
+    sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+
+    Ok(RepointOutcome::Applied {
+        content_changed,
+        resolved_subpath: resolved_subpath.map(str::to_string),
+    })
+}
+
+/// Another installed skill already tracking this exact source, by name.
+///
+/// Two rows on one upstream would update, deploy and back up independently, and
+/// the auto-updater would visit both — so recovery says so before committing.
+fn duplicate_source_name(
+    store: &SkillStore,
+    current: &SkillRecord,
+    source: &RepointSource,
+) -> Result<Option<String>, AppError> {
+    Ok(store
+        .get_skill_by_source_ref(&source.source_type, &source.source_ref)
+        .map_err(AppError::db)?
+        .filter(|other| other.id != current.id)
+        .map(|other| other.name))
 }
 
 /// Re-import a local skill from its recorded source path.
@@ -3228,6 +3944,8 @@ fn remove_path_if_exists(path: &Path) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::error::ErrorKind;
+    use crate::core::skill_store::ScenarioRecord;
     use std::fs;
     use tempfile::{tempdir, TempDir};
 
@@ -4273,5 +4991,742 @@ mod tests {
             "the user's local fork must survive the skill removal"
         );
         assert!(repo.store.get_targets_for_skill("s1").unwrap().is_empty());
+    }
+
+    //── Recovery: re-pointing a skill whose local path is gone ──
+
+    /// A `local` row as the app leaves one after an install: a real content
+    /// hash, reported missing. `sample_skill` leaves the hash empty, which
+    /// would make every re-point look like a content change.
+    fn lost_local_skill(
+        repo: &TestRepo,
+        id: &str,
+        name: &str,
+        body: &str,
+    ) -> (SkillRecord, PathBuf) {
+        let central = write_skill_dir(name);
+        fs::write(central.join("SKILL.md"), body).unwrap();
+        let mut skill = sample_skill(id, name, &central);
+        skill.content_hash = Some(crate::core::content_hash::hash_directory(&central).unwrap());
+        skill.update_status = "source_missing".to_string();
+        skill.last_check_error = Some("Original source path no longer exists".to_string());
+        repo.store.insert_skill(&skill).unwrap();
+        (skill, central)
+    }
+
+    /// A fresh checkout, standing in for what `clone` would have left behind
+    /// once the skill directory has been located inside it.
+    fn checkout(repo: &TestRepo, files: &[(&str, &str)]) -> PathBuf {
+        let dir = repo._tmp.path().join("checkout");
+        fs::create_dir_all(&dir).unwrap();
+        for (name, body) in files {
+            let path = dir.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, body).unwrap();
+        }
+        dir
+    }
+
+    fn git_source(revision: &str) -> RepointSource {
+        RepointSource {
+            source_type: "git".to_string(),
+            source_ref: "https://github.com/acme/skills".to_string(),
+            source_ref_resolved: "https://github.com/acme/skills.git".to_string(),
+            branch: None,
+            remote_revision: revision.to_string(),
+        }
+    }
+
+    /// Drive the gate itself — no network, no clone. Testing the gate rather
+    /// than the token function is deliberate: the bugs this guards against
+    /// have all been in the wiring, and a test that only calls the hasher twice
+    /// passes either way.
+    fn run_gate(
+        repo: &TestRepo,
+        snapshot: &SkillRecord,
+        fresh: &Path,
+        source: &RepointSource,
+        approved: Option<&str>,
+    ) -> Result<RepointOutcome, AppError> {
+        let new_hash = crate::core::content_hash::hash_directory(fresh).unwrap();
+        commit_repoint_locked(
+            &repo.store,
+            snapshot,
+            fresh,
+            &new_hash,
+            None,
+            source,
+            false,
+            approved,
+            &RepointProgress::default(),
+        )
+    }
+
+    /// The five things a held re-point has to report back.
+    #[allow(clippy::type_complexity)]
+    fn held(
+        outcome: RepointOutcome,
+    ) -> (
+        Vec<PendingRemoval>,
+        String,
+        Vec<SkillSourceDiffEntryDto>,
+        bool,
+        Option<String>,
+    ) {
+        match outcome {
+            RepointOutcome::Held {
+                pending,
+                approval,
+                diff_entries,
+                central_copy_exists,
+                duplicate_skill_name,
+                ..
+            } => (
+                pending,
+                approval,
+                diff_entries,
+                central_copy_exists,
+                duplicate_skill_name,
+            ),
+            RepointOutcome::Applied { .. } => {
+                panic!("the re-point was applied when it should have waited for approval")
+            }
+        }
+    }
+
+    fn applied(outcome: RepointOutcome) -> bool {
+        match outcome {
+            RepointOutcome::Applied { .. } => true,
+            RepointOutcome::Held { .. } => false,
+        }
+    }
+
+    /// Staging directories left in the library. A stray one is picked up by the
+    /// metadata rebuild scan as a skill of its own, so every path that stops
+    /// early has to leave none.
+    fn leftover_staging_dirs() -> Vec<String> {
+        central_repo::skills_dir()
+            .read_dir()
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains(".staged-"))
+            .collect()
+    }
+
+    /// The clone runs outside the lock, so the row can move on while it is in
+    /// flight. A decision made against the snapshot must not be applied to
+    /// whatever the row has become.
+    #[test]
+    fn a_repoint_refuses_a_row_that_moved_on_since_the_snapshot() {
+        let repo = test_repo();
+        let (skill, central) = lost_local_skill(&repo, "s1", "pdf", "old body");
+
+        // Something else got here first — the user relinked, or another update
+        // landed. The snapshot the caller holds no longer describes the row.
+        let mut moved = skill.clone();
+        moved.source_ref = Some("D:/somewhere/else".to_string());
+        repo.store.upsert_skill(&moved).unwrap();
+
+        let fresh = checkout(&repo, &[("SKILL.md", "new body")]);
+        let err = run_gate(&repo, &skill, &fresh, &git_source("rev1"), None).unwrap_err();
+
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert!(err.message.contains("changed while fetching"));
+        assert_eq!(
+            fs::read_to_string(central.join("SKILL.md")).unwrap(),
+            "old body",
+            "a refused re-point must not have written anything"
+        );
+        assert!(leftover_staging_dirs().is_empty());
+    }
+
+    /// The shape decision, which is the only branch in the network phase that
+    /// is new: a candidate is either a locator or a URL, and half a locator
+    /// must never be stored as one.
+    #[test]
+    fn a_recovered_source_is_either_a_locator_or_the_url_they_gave_and_nothing_between() {
+        let plain = RepointRequest {
+            clone_url: "https://github.com/acme/skills.git",
+            subpath: None,
+            branch: None,
+            locator_source: None,
+            locator_skill_id: None,
+        };
+        let resolve = |request: &RepointRequest<'_>| {
+            repoint_source_for(
+                request,
+                "https://github.com/acme/skills",
+                "https://github.com/acme/skills.git",
+                None,
+                "rev1",
+            )
+        };
+
+        let url = resolve(&plain);
+        assert_eq!(url.source_type, "git");
+        assert_eq!(url.source_ref, "https://github.com/acme/skills");
+
+        let located = resolve(&RepointRequest {
+            locator_source: Some("acme/skills"),
+            locator_skill_id: Some("pdf"),
+            ..plain
+        });
+        assert_eq!(located.source_type, "skillssh");
+        assert_eq!(
+            located.source_ref, "acme/skills/pdf",
+            "the ref is what skill_ssh_id cuts the locator out of"
+        );
+
+        for half in [
+            RepointRequest {
+                locator_source: Some("acme/skills"),
+                ..plain
+            },
+            RepointRequest {
+                locator_skill_id: Some("pdf"),
+                ..plain
+            },
+        ] {
+            assert_eq!(
+                resolve(&half).source_type,
+                "git",
+                "one half of a locator names no skill, so it must not be stored as one"
+            );
+        }
+    }
+
+    /// The badge a failed re-point leaves behind.
+///
+/// The `source_missing` case is the one that matters: that status is the *only*
+/// condition under which the relink / find-source / detach actions render, so
+/// an error written over it takes away the row's last exit.
+#[test]
+fn a_failed_repoint_never_hides_the_recovery_actions() {
+    // Committed: the row points at the new source now, so the old badge is
+    // describing something it no longer tracks.
+    assert_eq!(failure_status_for(true, "source_missing", "error"), "error");
+    // Not committed and still missing: "error" must not win, even though the
+    // caller asked for it.
+    assert_eq!(
+        failure_status_for(false, "source_missing", "error"),
+        "source_missing",
+        "the CLI asks for 'error'; overwriting this would strand the row"
+    );
+    assert_eq!(failure_status_for(false, "up_to_date", "error"), "error");
+    assert_eq!(
+        failure_status_for(false, "up_to_date", "source_missing"),
+        "source_missing",
+        "recovery passes its own snapshot status for an ordinary row"
+    );
+}
+
+/// A recorded hash can still match while the files it described are gone. That
+/// has to read as a difference, or the re-point reports success having written
+/// nothing — and the skill stays listed but unreadable.
+#[test]
+fn a_gone_library_copy_is_reinstalled_even_when_the_hash_agrees() {
+    let repo = test_repo();
+    let central = write_skill_dir("vanished");
+    let fresh = checkout(&repo, &[("SKILL.md", "---\nname: vanished\n---\n")]);
+
+    let mut skill = sample_skill("s1", "vanished", &central);
+    // The hash is a lie: it describes content that is no longer on disk.
+    skill.content_hash = Some(crate::core::content_hash::hash_directory(&fresh).unwrap());
+    skill.update_status = "source_missing".to_string();
+    repo.store.insert_skill(&skill).unwrap();
+    fs::remove_dir_all(&central).unwrap();
+
+    let (pending, approval, _, exists, _) =
+        held(run_gate(&repo, &skill, &fresh, &git_source("rev1"), None).unwrap());
+    assert!(!exists);
+    assert!(
+        pending.is_empty(),
+        "nothing is being taken away — the files are already gone"
+    );
+    // The token matching is what lets this through, and only because the gate
+    // still counts the missing copy as a difference worth asking about.
+    assert!(
+        applied(run_gate(&repo, &skill, &fresh, &git_source("rev1"), Some(&approval)).unwrap()),
+        "a matching hash is not a reason to write nothing"
+    );
+    assert_eq!(
+        fs::read_to_string(central.join("SKILL.md")).unwrap(),
+        "---\nname: vanished\n---\n"
+    );
+    assert_eq!(
+        repo.store.get_skill_by_id("s1").unwrap().unwrap().update_status,
+        "up_to_date"
+    );
+}
+
+/// A differing tree is itself something to confirm, even with nothing to
+    /// delete: two skills can share a name and a file list while sharing
+    /// nothing else, and at this point the library copy may be the only one
+    /// left in existence.
+    #[test]
+    fn recovery_holds_when_the_remote_differs_even_with_nothing_to_delete() {
+        let repo = test_repo();
+        let (skill, central) = lost_local_skill(&repo, "s1", "pdf", "old body");
+        let fresh = checkout(&repo, &[("SKILL.md", "new body")]);
+
+        let (pending, approval, diff, exists, duplicate) =
+            held(run_gate(&repo, &skill, &fresh, &git_source("rev1"), None).unwrap());
+
+        assert!(
+            pending.is_empty(),
+            "no path is being taken away — that is the whole point of this case"
+        );
+        assert!(exists, "the library copy is still there, and still at risk");
+        assert_eq!(duplicate, None);
+        assert!(
+            !diff.is_empty(),
+            "the user has to be shown what would change before it does"
+        );
+        assert_eq!(fs::read_to_string(central.join("SKILL.md")).unwrap(), "old body");
+        assert_eq!(
+            fs::read_to_string(&fresh.join("SKILL.md")).unwrap(),
+            "new body"
+        );
+        assert!(!approval.is_empty());
+        assert!(
+            leftover_staging_dirs().is_empty(),
+            "a held re-point staged a copy and must have cleaned it up"
+        );
+    }
+
+    /// The half `update_git_skill_internal` deliberately kept: even with the
+    /// library copy unchanged, every copy-mode deployment is torn down and
+    /// rebuilt, which takes a private file with it.
+    #[test]
+    fn recovery_holds_when_only_a_deployed_copy_would_lose_a_file() {
+        let repo = test_repo();
+        let (skill, _central) = lost_local_skill(&repo, "s1", "pdf", "same body");
+        let fresh = checkout(&repo, &[("SKILL.md", "same body")]);
+
+        let deployed = repo._tmp.path().join("agent/pdf");
+        fs::create_dir_all(&deployed).unwrap();
+        fs::write(deployed.join("SKILL.md"), "same body").unwrap();
+        fs::write(deployed.join("mine.txt"), "private").unwrap();
+        repo.store
+            .insert_target(&SkillTargetRecord {
+                id: "t1".to_string(),
+                skill_id: "s1".to_string(),
+                tool: "cursor".to_string(),
+                target_path: deployed.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: None,
+            })
+            .unwrap();
+
+        let (pending, _, _, _, _) =
+            held(run_gate(&repo, &skill, &fresh, &git_source("rev1"), None).unwrap());
+
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].location, "cursor");
+        assert_eq!(pending[0].path, "mine.txt");
+        assert!(
+            deployed.join("mine.txt").exists(),
+            "a held re-point must not have taken it"
+        );
+    }
+
+    /// The whole two-leg exchange, and what a committed re-point has to
+    /// preserve: the id, and everything keyed to it.
+    #[test]
+    fn an_approved_recovery_repoints_in_place_and_keeps_what_is_keyed_to_the_id() {
+        let repo = test_repo();
+        let (skill, central) = lost_local_skill(&repo, "s1", "pdf", "old body");
+        let deployed = repo._tmp.path().join("agent/pdf");
+        fs::create_dir_all(&deployed).unwrap();
+        fs::write(deployed.join("SKILL.md"), "old body").unwrap();
+        repo.store
+            .insert_target(&SkillTargetRecord {
+                id: "t1".to_string(),
+                skill_id: "s1".to_string(),
+                tool: "cursor".to_string(),
+                target_path: deployed.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: None,
+            })
+            .unwrap();
+        repo.store
+            .set_tags_for_skill("s1", &["pdf".to_string()])
+            .unwrap();
+        repo.store
+            .insert_scenario(&ScenarioRecord {
+                id: "sc1".to_string(),
+                name: "work".to_string(),
+                description: None,
+                icon: None,
+                sort_order: 0,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        repo.store.add_skill_to_scenario("sc1", "s1").unwrap();
+
+        let fresh = checkout(&repo, &[("SKILL.md", "new body")]);
+        let (_, approval, _, _, _) =
+            held(run_gate(&repo, &skill, &fresh, &git_source("rev1"), None).unwrap());
+
+        assert!(applied(
+            run_gate(&repo, &skill, &fresh, &git_source("rev1"), Some(&approval)).unwrap()
+        ));
+
+        let row = repo.store.get_skill_by_id("s1").unwrap().unwrap();
+        assert_eq!(row.id, "s1", "the id is the whole point of a re-point");
+        assert_eq!(row.central_path, central.to_string_lossy());
+        assert_eq!(fs::read_to_string(central.join("SKILL.md")).unwrap(), "new body");
+        assert_eq!(row.source_type, "git");
+        assert_eq!(row.source_ref.as_deref(), Some("https://github.com/acme/skills"));
+        assert_eq!(row.remote_revision.as_deref(), Some("rev1"));
+        assert_eq!(row.update_status, "up_to_date");
+        assert_eq!(row.last_check_error, None);
+        assert_eq!(
+            repo.store.get_tags_map().unwrap().get("s1"),
+            Some(&vec!["pdf".to_string()])
+        );
+        assert_eq!(repo.store.get_scenarios_for_skill("s1").unwrap(), vec!["sc1"]);
+
+        let target = repo.store.get_targets_for_skill("s1").unwrap();
+        assert_eq!(target.len(), 1, "the deployment target survives");
+        assert_eq!(
+            target[0].source_hash, row.content_hash,
+            "the deployment was resynced to the new content"
+        );
+    }
+
+    /// The window the approval exists to close. Approving a list is not
+    /// approving whatever the list has since become.
+    #[test]
+    fn a_stale_approval_does_not_authorize_a_grown_list() {
+        let repo = test_repo();
+        let (skill, central) = lost_local_skill(&repo, "s1", "pdf", "old body");
+        let fresh = checkout(&repo, &[("SKILL.md", "new body")]);
+
+        let (_, approval, _, _, _) =
+            held(run_gate(&repo, &skill, &fresh, &git_source("rev1"), None).unwrap());
+
+        // The user took the dialog to go and made something, and so does
+        // something else that only the second call can see.
+        fs::write(central.join("appeared-later.md"), "mine").unwrap();
+
+        let (pending, _, _, _, _) = held(
+            run_gate(&repo, &skill, &fresh, &git_source("rev1"), Some(&approval)).unwrap(),
+        );
+        assert_eq!(pending.len(), 1, "the new file has to be asked about");
+        assert_eq!(pending[0].path, "appeared-later.md");
+        assert!(central.join("appeared-later.md").exists());
+        assert_eq!(fs::read_to_string(central.join("SKILL.md")).unwrap(), "old body");
+    }
+
+    /// The `skillssh` locator is what keeps an upstream that moves the skill
+    /// locatable, and it only survives if `source_ref` is the
+    /// `{owner}/{repo}/{skill_id}` shape rather than a bare clone URL — a URL
+    /// cut on `/` yields a locator that names nothing.
+    #[test]
+    fn a_skillssh_recovery_writes_a_locator_source_ref() {
+        let repo = test_repo();
+        let (skill, _central) = lost_local_skill(&repo, "s1", "pdf", "old body");
+        let fresh = checkout(&repo, &[("SKILL.md", "new body")]);
+
+        let source = RepointSource {
+            source_type: "skillssh".to_string(),
+            source_ref: "acme/skills/pdf".to_string(),
+            source_ref_resolved: "https://github.com/acme/skills.git".to_string(),
+            branch: None,
+            remote_revision: "rev1".to_string(),
+        };
+
+        let (_, approval, _, _, _) =
+            held(run_gate(&repo, &skill, &fresh, &source, None).unwrap());
+        assert!(applied(
+            run_gate(&repo, &skill, &fresh, &source, Some(&approval)).unwrap()
+        ));
+
+        let row = repo.store.get_skill_by_id("s1").unwrap().unwrap();
+        assert_eq!(row.source_type, "skillssh");
+        assert_eq!(row.source_ref.as_deref(), Some("acme/skills/pdf"));
+
+        let resolved = git_source_from_skill(&row).unwrap();
+        assert_eq!(resolved.locator_skill_id.as_deref(), Some("pdf"));
+        assert_eq!(resolved.clone_url, "https://github.com/acme/skills.git");
+    }
+
+    /// Recovery exists for rows that lost their path. Without this guard the
+    /// command is a general "re-point anything at anything" entry point.
+    #[test]
+    fn recovery_refuses_a_row_that_is_not_local_or_import() {
+        let repo = test_repo();
+        let central = write_skill_dir("tracked");
+        let mut skill = sample_skill("g1", "tracked", &central);
+        skill.source_type = "git".to_string();
+        skill.source_ref = Some("https://github.com/acme/skills.git".to_string());
+        repo.store.insert_skill(&skill).unwrap();
+
+        let err = recover_skill_source_internal(
+            &repo.store,
+            "g1",
+            "https://github.com/acme/skills.git",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert!(err.message.contains("local"));
+        assert_eq!(
+            repo.store.get_skill_by_id("g1").unwrap().unwrap().source_type,
+            "git",
+            "a refused recovery must not have touched the row"
+        );
+    }
+
+    // ── Batch recovery ──
+
+    /// A minimal batch entry: every field past the id and the URL has a
+    /// default in the real flow, and these cases turn on neither.
+    fn request_for(skill_id: &str, repo_url: &str) -> BatchRecoverRequest {
+        BatchRecoverRequest {
+            skill_id: skill_id.to_string(),
+            repo_url: repo_url.to_string(),
+            locator_source: None,
+            locator_skill_id: None,
+            subpath: None,
+            branch: None,
+            approved_removals: None,
+        }
+    }
+
+    /// Reported success for a batch that did nothing is the one answer the UI
+    /// cannot recover from, so an empty batch is refused.
+    #[test]
+    fn an_empty_batch_recovers_nothing_rather_than_reporting_success() {
+        let repo = test_repo();
+        let err = batch_recover_skill_sources_internal(&repo.store, &[], None, None).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert!(err.message.contains("No skills"));
+    }
+
+    /// Every entry is a clone, so an unbounded list is an unbounded wait.
+    #[test]
+    fn a_batch_is_capped_so_a_runaway_list_cannot_queue_unbounded_clones() {
+        let repo = test_repo();
+        let requests: Vec<BatchRecoverRequest> = (0..=MAX_BATCH_RECOVER)
+            .map(|i| request_for(&format!("s{i}"), "https://github.com/acme/skills.git"))
+            .collect();
+        let err =
+            batch_recover_skill_sources_internal(&repo.store, &requests, None, None).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert!(
+            err.message.contains(&MAX_BATCH_RECOVER.to_string()),
+            "the message has to say where the limit is: {}",
+            err.message
+        );
+    }
+
+    /// The same row twice would recover once and then be refused by the
+    /// local/import guard, which reads as a batch bug rather than a caller
+    /// mistake. Say so before anything runs.
+    #[test]
+    fn a_repeated_skill_is_refused_before_anything_runs() {
+        let repo = test_repo();
+        let entry = request_for("s1", "https://github.com/acme/skills.git");
+        let err = batch_recover_skill_sources_internal(&repo.store, &[entry.clone(), entry], None, None)
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert!(err.message.contains("more than once"));
+    }
+
+    /// The point of a batch is that one bad skill does not cost the others
+    /// their turn. Each refusal here lands before the network, so this needs no
+    /// remote — and it asserts the rows are untouched, because a refusal that
+    /// left `source_missing` behind as `error` would hide the rescue buttons.
+    #[test]
+    fn one_skill_failing_does_not_cost_the_batch_its_place() {
+        let repo = test_repo();
+
+        // Never lost its source, so the guard refuses it.
+        let central = write_skill_dir("tracked");
+        let mut tracked = sample_skill("g1", "tracked", &central);
+        tracked.source_type = "git".to_string();
+        tracked.source_ref = Some("https://github.com/acme/skills.git".to_string());
+        repo.store.insert_skill(&tracked).unwrap();
+
+        // The only kind that can be recovered at all.
+        let (lost, _) = lost_local_skill(&repo, "s1", "pdf", "old body");
+
+        let result = batch_recover_skill_sources_internal(
+            &repo.store,
+            &[
+                request_for("does-not-exist", "https://github.com/acme/skills.git"),
+                request_for("g1", "https://github.com/acme/skills.git"),
+                request_for(&lost.id, "file:///etc/passwd"),
+            ],
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.requested, 3);
+        assert_eq!(result.failed, 3);
+        assert_eq!(result.applied, 0);
+        assert_eq!(
+            result.held, 0,
+            "a refusal is a failure, not something awaiting approval"
+        );
+        assert_eq!(result.items.len(), 3, "the loop ran to the end of the list");
+        assert!(
+            result.items.iter().all(|item| item.error.is_some()),
+            "every entry carries its own reason: {:?}",
+            result
+                .items
+                .iter()
+                .map(|item| item.error.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(result.items[0].skill_id, "does-not-exist");
+        assert_eq!(result.items[1].name, "tracked");
+        assert_eq!(
+            repo.store
+                .get_skill_by_id(&lost.id)
+                .unwrap()
+                .unwrap()
+                .update_status,
+            "source_missing",
+            "a refused batch entry must leave the row recoverable"
+        );
+    }
+
+    /// The whole diff, before any write — the one command that could produce
+    /// it (`get_skill_source_diff`) reads the path that no longer exists, so
+    /// this is the only place the user can see it.
+    #[test]
+    fn recovery_reports_the_full_diff_before_any_write() {
+        let repo = test_repo();
+        let (skill, central) = lost_local_skill(&repo, "s1", "pdf", "old body");
+        fs::write(central.join("gone-upstream.md"), "old").unwrap();
+        let fresh = checkout(&repo, &[("SKILL.md", "new body"), ("new.md", "new")]);
+
+        let (_, _, diff, _, _) =
+            held(run_gate(&repo, &skill, &fresh, &git_source("rev1"), None).unwrap());
+
+        let status = |name: &str| {
+            diff.iter()
+                .find(|entry| entry.relative_path == name)
+                .map(|entry| entry.status.clone())
+        };
+        assert_eq!(status("new.md").as_deref(), Some("added"));
+        assert_eq!(status("gone-upstream.md").as_deref(), Some("removed"));
+        assert_eq!(status("SKILL.md").as_deref(), Some("modified"));
+        assert!(
+            central.join("gone-upstream.md").exists(),
+            "the library copy must be exactly as it was"
+        );
+    }
+
+    /// The most dangerous cell in the grid: nothing left to diff against and
+    /// nothing to roll back to. The list is empty only because there is nothing
+    /// left to remove, which is not the same as there being nothing to lose.
+    #[test]
+    fn a_gone_library_copy_is_reported_rather_than_looking_safe() {
+        let repo = test_repo();
+        let absent = central_repo::skills_dir().join("never-existed");
+        let mut skill = sample_skill("s1", "pdf", &absent);
+        skill.content_hash = Some("stale".to_string());
+        skill.update_status = "source_missing".to_string();
+        repo.store.insert_skill(&skill).unwrap();
+
+        let fresh = checkout(&repo, &[("SKILL.md", "new body")]);
+        let (pending, _, diff, exists, _) =
+            held(run_gate(&repo, &skill, &fresh, &git_source("rev1"), None).unwrap());
+
+        assert!(
+            !exists,
+            "the frontend keys its loudest warning on this"
+        );
+        assert!(pending.is_empty());
+        assert!(
+            diff.iter().all(|entry| entry.status == "added"),
+            "with no baseline every file is new, which is not the same as 'no change'"
+        );
+    }
+
+    /// Declining is not a failure. Restoring the status is what keeps the
+    /// relink / find-source / detach buttons reachable — they are only shown
+    /// for `source_missing` — and leaving the recorded check alone is what
+    /// keeps the explanation of why the path went missing.
+    #[test]
+    fn a_held_recovery_restores_the_status_it_started_from() {
+        let repo = test_repo();
+        let (mut skill, _central) = lost_local_skill(&repo, "s1", "pdf", "old body");
+        skill.remote_revision = Some("the old revision".to_string());
+        repo.store.upsert_skill(&skill).unwrap();
+        let snapshot = repo.store.get_skill_by_id("s1").unwrap().unwrap();
+
+        let fresh = checkout(&repo, &[("SKILL.md", "new body")]);
+        held(run_gate(&repo, &snapshot, &fresh, &git_source("rev1"), None).unwrap());
+
+        let row = repo.store.get_skill_by_id("s1").unwrap().unwrap();
+        assert_eq!(row.update_status, "source_missing");
+        assert_ne!(row.update_status, "update_available");
+        assert_eq!(row.remote_revision.as_deref(), Some("the old revision"));
+        assert_eq!(
+            row.last_check_error.as_deref(),
+            Some("Original source path no longer exists"),
+            "a decline is not a failed check, and must not read as one"
+        );
+    }
+
+    /// Nothing to replace, nothing to remove, nothing to ask: a source that
+    /// already holds the exact same bytes is a metadata change and should not
+    /// cost a dialog or a rewrite of the library copy.
+    #[test]
+    fn an_identical_source_repoints_without_a_dialog() {
+        let repo = test_repo();
+        let (skill, central) = lost_local_skill(&repo, "s1", "pdf", "same body");
+        let fresh = checkout(&repo, &[("SKILL.md", "same body")]);
+
+        assert!(applied(
+            run_gate(&repo, &skill, &fresh, &git_source("rev1"), None).unwrap()
+        ));
+
+        let row = repo.store.get_skill_by_id("s1").unwrap().unwrap();
+        assert_eq!(row.source_type, "git");
+        assert_eq!(row.update_status, "up_to_date");
+        assert_eq!(fs::read_to_string(central.join("SKILL.md")).unwrap(), "same body");
+        assert!(
+            leftover_staging_dirs().is_empty(),
+            "a no-op re-point must leave no staging directory behind"
+        );
+    }
+
+    /// Recovery onto a source that is already in the library gives two rows the
+    /// same upstream; both would then update, deploy and back up on their own.
+    #[test]
+    fn a_recovery_onto_an_already_tracked_source_says_so() {
+        let repo = test_repo();
+        let other = write_skill_dir("pdf-2");
+        let mut tracked = sample_skill("g1", "pdf (already installed)", &other);
+        tracked.source_type = "git".to_string();
+        tracked.source_ref = Some("https://github.com/acme/skills".to_string());
+        repo.store.insert_skill(&tracked).unwrap();
+
+        let (skill, _central) = lost_local_skill(&repo, "s1", "pdf", "old body");
+        let fresh = checkout(&repo, &[("SKILL.md", "new body")]);
+
+        let (_, _, _, _, duplicate) =
+            held(run_gate(&repo, &skill, &fresh, &git_source("rev1"), None).unwrap());
+        assert_eq!(duplicate.as_deref(), Some("pdf (already installed)"));
     }
 }

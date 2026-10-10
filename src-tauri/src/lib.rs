@@ -1024,6 +1024,8 @@ pub fn run() {
             commands::skills::reimport_local_skill,
             commands::skills::relink_local_skill_source,
             commands::skills::detach_local_skill_source,
+            commands::skills::recover_skill_source,
+            commands::skills::batch_recover_skill_sources,
             commands::skills::get_all_tags,
             commands::skills::set_skill_tags,
             commands::skills::rename_tag,

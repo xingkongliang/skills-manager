@@ -223,6 +223,40 @@ enum SkillsCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Re-install skills whose original path is gone from a repository, keeping
+    /// each row's id, tags, preset membership and deployments.
+    ///
+    /// Two passes: without `--approve` every skill is resolved and reported and
+    /// nothing is written. Re-run with the `removal_approval` values the first
+    /// pass printed to commit. Each skill carries its own approval.
+    Recover {
+        /// Skill refs (id / name / dir basename / central path). Omit with
+        /// `--all-lost`.
+        references: Vec<String>,
+        /// Every skill reported as `source_missing`, i.e. every local or import
+        /// row whose original path no longer exists.
+        #[arg(long, conflicts_with = "references")]
+        all_lost: bool,
+        /// Source for the refs that carry no `--map`. A GitHub tree URL may
+        /// encode branch and subpath.
+        #[arg(long = "git-url")]
+        git_url: Option<String>,
+        /// Per-skill source as `REF=URL`, repeatable. Required whenever the
+        /// skills come from different repositories, or from one repository at
+        /// different subpaths — the case a shared `--git-url` cannot express.
+        #[arg(long = "map", value_name = "REF=URL")]
+        maps: Vec<String>,
+        /// Subpath inside the repo. Pass "" if the skill is at the repo root.
+        #[arg(long, requires = "git_url")]
+        subpath: Option<String>,
+        #[arg(long, requires = "git_url")]
+        branch: Option<String>,
+        /// Approvals from a previous report, as `REF=TOKEN`, repeatable. A held
+        /// skill is never reported as a failure, so this is how a batch with
+        /// nothing to delete gets committed at all.
+        #[arg(long = "approve", value_name = "REF=TOKEN")]
+        approvals: Vec<String>,
+    },
     Adopt {
         /// Agent skill dirs to scan (e.g. ~/.claude/skills), or a single skill dir
         paths: Vec<PathBuf>,
@@ -983,7 +1017,51 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
                 dry_run,
             )
             .map_err(map_app_err)?;
+            // `applied == false` means the change is waiting on an answer rather
+            // than done: a replacement that would take files away, or content
+            // that differs from the library copy. There is no way to send an
+            // approval token from here, so say what is pending instead of
+            // committing. A dry run reports `applied: true` — producing the
+            // report is its whole job.
+            if !report.applied {
+                if !report.pending_removals.is_empty() {
+                    bail!(
+                        "Re-pointing would remove {} path(s) from the library copy and its deployed copies; re-run with --force to overwrite",
+                        report.pending_removals.len()
+                    );
+                }
+                bail!("New source content differs from the current library copy; re-run with --dry-run to inspect, or --force to overwrite");
+            }
             print_json(&report, json);
+        }
+        SkillsCommand::Recover {
+            references,
+            all_lost,
+            git_url,
+            maps,
+            subpath,
+            branch,
+            approvals,
+        } => {
+            let report = run_recover(
+                store,
+                &references,
+                all_lost,
+                git_url.as_deref(),
+                &maps,
+                subpath.as_deref(),
+                branch.as_deref(),
+                &approvals,
+            )?;
+            print_json(&report, json);
+            // Printed first, so the per-skill reasons survive the exit code.
+            if report.failed > 0 {
+                anyhow::bail!(
+                    "{} of {} skill(s) could not be recovered; see reports[].error",
+                    report.failed,
+                    report.requested
+                );
+            }
         }
         SkillsCommand::Adopt {
             paths,
@@ -1799,6 +1877,203 @@ fn run_update(
     }
 
     Ok(reports)
+}
+
+/// One skill's line in a `skills recover` report.
+#[derive(Debug, Serialize)]
+struct RecoverReport {
+    skill_id: String,
+    name: String,
+    source_type_before: String,
+    /// `false` means nothing was written and this is waiting on
+    /// `removal_approval`. That is not a failure: declining to approve is an
+    /// answer, and a batch that reported it as one could not be told apart
+    /// from a batch that broke.
+    applied: bool,
+    content_changed: bool,
+    clone_url: String,
+    revision: String,
+    subpath: Option<String>,
+    /// The paths a commit would take away. Empty is not the same as
+    /// "approved, nothing removed" — `applied` is what says which happened.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pending_removals: Vec<String>,
+    /// Pass back as `--approve REF=TOKEN` to commit this one skill.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    removal_approval: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RecoverBatchReport {
+    requested: usize,
+    applied: usize,
+    held: usize,
+    failed: usize,
+    reports: Vec<RecoverReport>,
+}
+
+/// `REF=VALUE` pairs, the shape `--map` and `--approve` take. Split on the
+/// first `=` only: a token or a URL carries `=` characters of its own.
+fn parse_pairs(
+    pairs: &[String],
+    flag: &str,
+) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    let mut parsed = std::collections::HashMap::new();
+    for pair in pairs {
+        let Some((ref_key, value)) = pair.split_once('=') else {
+            bail!("{flag} expects REF=VALUE, got '{pair}'");
+        };
+        let (ref_key, value) = (ref_key.trim(), value.trim());
+        if ref_key.is_empty() {
+            bail!("{flag} has an empty ref in '{pair}'");
+        }
+        if parsed
+            .insert(ref_key.to_string(), value.to_string())
+            .is_some()
+        {
+            bail!("{flag} names '{ref_key}' twice");
+        }
+    }
+    Ok(parsed)
+}
+
+/// Recover skills whose original path is gone.
+///
+/// Every row carries its own source, because a lost row records nothing usable
+/// — the dead local path is all it has. That is also why `--map` exists: a
+/// shared `--git-url` cannot express two skills from one repository at two
+/// subpaths, which is the ordinary shape of a real batch.
+fn run_recover(
+    store: &SkillStore,
+    references: &[String],
+    all_lost: bool,
+    git_url: Option<&str>,
+    maps: &[String],
+    subpath: Option<&str>,
+    branch: Option<&str>,
+    approvals: &[String],
+) -> anyhow::Result<RecoverBatchReport> {
+    let overrides = parse_pairs(maps, "--map")?;
+    let approved = parse_pairs(approvals, "--approve")?;
+
+    let skills = if all_lost {
+        let lost: Vec<app_lib::core::skill_store::SkillRecord> = store
+            .get_all_skills()?
+            .into_iter()
+            .filter(|skill| {
+                matches!(skill.source_type.as_str(), "local" | "import")
+                    && skill.update_status == "source_missing"
+            })
+            .collect();
+        if lost.is_empty() {
+            bail!("no skill has a missing original path; nothing to recover");
+        }
+        lost
+    } else if references.is_empty() {
+        bail!("pass at least one skill ref, or --all-lost");
+    } else {
+        resolve_skill_references(store, references)?
+    };
+
+    let source_type_before: std::collections::HashMap<String, String> = skills
+        .iter()
+        .map(|skill| (skill.id.clone(), skill.source_type.clone()))
+        .collect();
+
+    let mut requests = Vec::with_capacity(skills.len());
+    for skill in &skills {
+        let mapped = overrides
+            .get(skill.name.as_str())
+            .or_else(|| overrides.get(&skill.id));
+        let Some(url) = mapped.map(String::as_str).or(git_url) else {
+            bail!(
+                "no source for '{}': pass --git-url, or --map {}=<url>",
+                skill.name,
+                skill.name
+            );
+        };
+        // `--subpath` / `--branch` describe the shared `--git-url`. A `--map`
+        // entry is free to be a GitHub tree URL that carries its own, so
+        // applying the shared pair to it would override what it said.
+        requests.push(cmd::BatchRecoverRequest {
+            skill_id: skill.id.clone(),
+            repo_url: url.to_string(),
+            locator_source: None,
+            locator_skill_id: None,
+            subpath: if mapped.is_some() {
+                None
+            } else {
+                subpath.map(str::to_string)
+            },
+            branch: if mapped.is_some() {
+                None
+            } else {
+                branch.map(str::to_string)
+            },
+            approved_removals: approved
+                .get(skill.name.as_str())
+                .or_else(|| approved.get(&skill.id))
+                .cloned(),
+        });
+    }
+
+    let proxy_url = store.proxy_url();
+    // stderr, so `--json` on stdout stays parseable. Resolving N sources is N
+    // clones; a command that says nothing for minutes reads as a hang.
+    let mut progress = |index: usize, total: usize, name: &str, done: bool| {
+        eprintln!(
+            "[{index}/{total}] {name}{}",
+            if done { " — done" } else { " …" }
+        );
+    };
+    let result = cmd::batch_recover_skill_sources_internal(
+        store,
+        &requests,
+        proxy_url.as_deref(),
+        Some(&mut progress),
+    )
+    .map_err(map_app_err)?;
+
+    let reports: Vec<RecoverReport> = result
+        .items
+        .into_iter()
+        .map(|item| RecoverReport {
+            source_type_before: source_type_before
+                .get(&item.skill_id)
+                .cloned()
+                .unwrap_or_default(),
+            skill_id: item.skill_id,
+            name: item.name,
+            applied: item.applied,
+            content_changed: item.content_changed,
+            clone_url: item.clone_url,
+            revision: item.revision,
+            subpath: item.subpath,
+            pending_removals: item
+                .pending_removals
+                .iter()
+                .map(|pending| format!("{}: {}", pending.location, pending.path))
+                .collect(),
+            removal_approval: item.removal_approval,
+            error: item.error,
+        })
+        .collect();
+
+    let batch = RecoverBatchReport {
+        requested: result.requested,
+        applied: result.applied,
+        held: result.held,
+        failed: result.failed,
+        reports,
+    };
+
+    // The caller decides the exit code, and only after this report is printed:
+    // a non-zero exit that swallowed `reports[].error` would leave the user
+    // with a failure and no reason for it. Held skills are not failures — they
+    // are waiting on `--approve` and commit on the next run.
+    Ok(batch)
 }
 
 fn run_check(
