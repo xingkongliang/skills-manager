@@ -878,6 +878,13 @@
     "created": "Preset 已创建",
     "switched": "已切换到 \"{{name}}\""
   },
+  "platform": {
+    "fileManager": {
+      "finder": "访达",
+      "explorer": "文件资源管理器",
+      "linux": "文件管理器"
+    }
+  },
   "project": {
     "title": "项目 Skills",
     "path": "项目路径",
@@ -912,7 +919,6 @@
     "addSelected": "添加选中 ({{count}})",
     "selectAll": "全选",
     "deselectAll": "取消全选",
-    "openInFinder": "打开目录",
     "skillFiles": "文件",
     "importToCenter": "更新中心",
     "importFromCenter": "添加 Skill",
@@ -1008,7 +1014,8 @@
     "batchEditTags": "标签 ({{count}})",
     "batchTagsUpdated": "已更新 {{count}} 个中心 Skill 的标签",
     "batchTagsFailed": "{{count}} 个中心 Skill 标签更新失败",
-    "batchTagScopeNote": "标签保存在中央技能库里，改动会影响所有使用这个 Skill 的项目。只属于本项目的本地 Skill 不会被修改。"
+    "batchTagScopeNote": "标签保存在中央技能库里，改动会影响所有使用这个 Skill 的项目。只属于本项目的本地 Skill 不会被修改。",
+    "revealInFileManager": "在{{app}}中打开"
   },
   "presetActions": {
     "button": "应用 Preset",

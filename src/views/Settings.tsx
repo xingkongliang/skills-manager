@@ -61,10 +61,8 @@ import { ToggleSwitch } from "../components/ToggleSwitch";
 import * as api from "../lib/tauri";
 import { applyTextSize } from "../lib/textScale";
 import { getErrorMessage } from "../lib/error";
+import { IS_MACOS, IS_WINDOWS } from "../lib/platform";
 import type { Theme } from "../hooks/useTheme";
-
-const IS_WINDOWS = navigator.userAgent.includes("Windows");
-const IS_MACOS = navigator.userAgent.includes("Mac");
 
 /** Platforms whose updater artifact can replace the running install.
  *
