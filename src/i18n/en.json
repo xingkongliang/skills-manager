@@ -13,7 +13,8 @@
     "newPreset": "New Preset",
     "projects": "Project Workspaces",
     "addProject": "Link Project",
-    "settings": "Settings"
+    "settings": "Settings",
+    "resize": "Resize sidebar"
   },
   "help": {
     "eyebrow": "Guide",
