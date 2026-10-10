@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Release Overview
+- A skill whose original folder is gone can be found online again and reinstalled in place, instead of being left with only "relink" or "delete".
+
+### User-facing
+- **A skill whose source folder is gone can be found again and reinstalled** — A skill showing "source missing" now offers a third action, "Find online", between "Relink" and "Keep local copy". It searches skills.sh for candidates, and also accepts a Git repository address or `owner/repo` — with an optional in-repository folder for monorepos, where the root is not the skill. Before anything is replaced it shows the full difference and every path the replacement would take away, and applies nothing until you confirm. The skill keeps its id, tags, presets and deployed copies. A skill that was never published has no source to be found, so the empty state points at "Keep local copy" instead.
+- **The refresh action no longer appears for a skill whose folder is gone** — It could only reach the re-import's own "path no longer exists" refusal. This also keeps those skills out of the "update all" counters, which read the same rule.
+- **Known limitation: re-pointing is one-way** — Once a skill follows a repository, "Relink" and "Keep local copy" are no longer offered: both refuse anything that is not a local import. A mistaken choice can only be undone by deleting and reinstalling, which clears that skill's tags, presets and deployments. The confirmation says so before anything is committed.
+
+### Developer & Governance
+- `skills set-source` now asks before a replacement that would take files away, rather than only checking whether content differs — using the same approval token as the update, re-import and relink paths. `--force` still overwrites; without it the command reports what is pending and exits non-zero. Its `--json` output gains `applied`, `pending_removals`, `removal_approval`, `diff_entries`, `central_copy_exists` and `duplicate_skill_name`.
+- The gate lives in one place, `commit_repoint_locked`, which stages, compares, swaps and commits under the central-repo lock. `update_git_skill_internal`, relink and re-import keep their own paths — their Held semantics differ (they record a new revision and land on `update_available`), so sharing would have been a behaviour change rather than a refactor.
+- `AppError` gains an optional `reason`, set only where the caller has to *act* rather than report: `subpath_required` (the repository root is not a skill) and `auth_failed`. `classify_git_error` now recognises credential failures, which the UI turns into a hint pointing at "Keep local copy" instead of git's English CLI advice.
+- Left for later, deliberately: batch recovery, and recording a skill's provenance at import time — which is what would let a future check tell whether a candidate is really the same skill rather than asking a person to.
 ## [1.40.3] - 2026-10-02
 
 ### Release Overview

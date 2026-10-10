@@ -15,6 +15,27 @@ pub struct AppError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<ErrorDetails>,
+    /// What the caller has to do about it, when the message alone does not say.
+    ///
+    /// Set only where a caller has to *act*, not merely report: a GUI user should
+    /// not have to recognise a CLI flag name to know which field to fill in, and
+    /// a private repository needs a different hint than a repository that is not
+    /// there. Both cases are matched on English text today, which breaks the
+    /// moment a message is reworded. Omitted when absent, so nothing that does
+    /// not set it changes shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ErrorReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorReason {
+    /// The repository root is not a skill directory, so the caller has to say
+    /// which directory inside it is.
+    SubpathRequired,
+    /// Git refused the operation for want of credentials — a private repository,
+    /// or one the current login cannot read.
+    AuthFailed,
 }
 
 /// The paths a deployment refused to write, because they belong to someone
@@ -61,6 +82,7 @@ impl AppError {
             kind: ErrorKind::NotFound,
             message: msg.into(),
             details: None,
+            reason: None,
         }
     }
 
@@ -69,6 +91,21 @@ impl AppError {
             kind: ErrorKind::InvalidInput,
             message: msg.into(),
             details: None,
+            reason: None,
+        }
+    }
+
+    /// The caller has to say which directory inside the repository is the skill.
+    ///
+    /// The message stays CLI-shaped for the CLI's own output; what the GUI does
+    /// about it comes from [`ErrorReason::SubpathRequired`], so no caller has to
+    /// recognise a flag name to know which field to put the answer in.
+    pub fn subpath_required(msg: impl Into<String>) -> Self {
+        Self {
+            kind: ErrorKind::InvalidInput,
+            message: msg.into(),
+            details: None,
+            reason: Some(ErrorReason::SubpathRequired),
         }
     }
 
@@ -78,6 +115,7 @@ impl AppError {
             kind: ErrorKind::Cancelled,
             message: msg.into(),
             details: None,
+            reason: None,
         }
     }
 
@@ -87,6 +125,7 @@ impl AppError {
             kind: ErrorKind::Database,
             message: e.to_string(),
             details: None,
+            reason: None,
         }
     }
 
@@ -96,10 +135,17 @@ impl AppError {
             kind: ErrorKind::Git,
             message: e.to_string(),
             details: None,
+            reason: None,
         }
     }
 
-    /// Classify a git operation error into cancellation, network, or generic git error.
+    /// Classify a git operation error into cancellation, network, authentication
+    /// or generic git error.
+    ///
+    /// The buckets are matched on English text, which is as fragile as it sounds
+    /// — but that is what git hands us, and [`ErrorReason`] carries the one
+    /// distinction a caller must *act* on out to the frontend so it never has to
+    /// repeat the matching.
     pub fn classify_git_error(e: impl fmt::Display) -> Self {
         let message = e.to_string();
         let lower = message.to_ascii_lowercase();
@@ -108,6 +154,18 @@ impl AppError {
                 kind: ErrorKind::Cancelled,
                 message,
                 details: None,
+                reason: None,
+            }
+        } else if lower.contains("authentication failed")
+            || lower.contains("could not read username")
+            || lower.contains("permission denied (publickey)")
+            || lower.contains("terminal prompts disabled")
+        {
+            Self {
+                kind: ErrorKind::Git,
+                message,
+                details: None,
+                reason: Some(ErrorReason::AuthFailed),
             }
         } else if lower.contains("connection refused")
             || lower.contains("could not resolve host")
@@ -119,12 +177,14 @@ impl AppError {
                 kind: ErrorKind::Network,
                 message,
                 details: None,
+                reason: None,
             }
         } else {
             Self {
                 kind: ErrorKind::Git,
                 message,
                 details: None,
+                reason: None,
             }
         }
     }
@@ -135,6 +195,7 @@ impl AppError {
             kind: ErrorKind::Network,
             message: e.to_string(),
             details: None,
+            reason: None,
         }
     }
 
@@ -144,6 +205,7 @@ impl AppError {
             kind: ErrorKind::Io,
             message: e.to_string(),
             details: None,
+            reason: None,
         }
     }
 
@@ -158,6 +220,7 @@ impl AppError {
             kind: ErrorKind::TargetConflict,
             message: message.into(),
             details: Some(ErrorDetails { conflicts }),
+            reason: None,
         }
     }
 
@@ -166,6 +229,7 @@ impl AppError {
             kind: ErrorKind::Internal,
             message: e.to_string(),
             details: None,
+            reason: None,
         }
     }
 }
@@ -178,6 +242,7 @@ impl From<std::io::Error> for AppError {
             kind: ErrorKind::Io,
             message: e.to_string(),
             details: None,
+            reason: None,
         }
     }
 }
@@ -188,6 +253,7 @@ impl From<tokio::task::JoinError> for AppError {
             kind: ErrorKind::Internal,
             message: e.to_string(),
             details: None,
+            reason: None,
         }
     }
 }
@@ -198,6 +264,7 @@ impl From<tauri::Error> for AppError {
             kind: ErrorKind::Internal,
             message: e.to_string(),
             details: None,
+            reason: None,
         }
     }
 }
@@ -242,6 +309,60 @@ mod tests {
             "fatal: unable to access: Could not resolve host: example.com",
         );
         assert!(matches!(err.kind, ErrorKind::Network));
+    }
+
+    /// The frontend branches on `reason`, so its spelling is a wire contract
+    /// like any other: renaming the variant silently turns a specific hint into
+    /// generic advice. Locked here because nothing else exercises the JSON.
+    #[test]
+    fn actionable_reasons_serialize_as_the_frontend_expects() {
+        let wire = |err: AppError| serde_json::to_value(err).unwrap();
+
+        let auth = AppError::classify_git_error(
+            "fatal: Authentication failed for 'https://github.com/acme/private.git/'",
+        );
+        assert_eq!(auth.reason, Some(ErrorReason::AuthFailed));
+        assert_eq!(
+            wire(auth)["reason"],
+            "auth_failed",
+            "src/lib/error.ts matches on this exact string"
+        );
+
+        assert_eq!(
+            wire(AppError::subpath_required("no SKILL.md at the root"))["reason"],
+            "subpath_required"
+        );
+
+        // Every other error must keep the old two-field shape, or every
+        // consumer that reads `kind` breaks.
+        let plain = wire(AppError::not_found("gone"));
+        assert_eq!(plain["kind"], "not_found");
+        assert!(
+            plain.get("reason").is_none(),
+            "reason is omitted when absent, not serialized as null"
+        );
+    }
+
+    /// A private repository fails at the *first* network call, well before a
+    /// clone is attempted, so the classifier has to be on that one too.
+    #[test]
+    fn classify_git_error_distinguishes_credentials_from_an_absent_repository() {
+        for message in [
+            "Authentication failed: no credentials available",
+            "could not read Username for 'https://github.com': terminal prompts disabled",
+            "git@github.com: Permission denied (publickey).",
+        ] {
+            assert_eq!(
+                AppError::classify_git_error(message).reason,
+                Some(ErrorReason::AuthFailed),
+                "{message} should read as needing credentials"
+            );
+        }
+        assert_eq!(
+            AppError::classify_git_error("repository not found").reason,
+            None,
+            "a missing repository is a different problem with a different hint"
+        );
     }
 
     #[test]

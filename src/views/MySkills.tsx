@@ -38,10 +38,12 @@ import { TagRenameDialog } from "../components/TagRenameDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
+import { BatchRecoverSourceDialog } from "../components/BatchRecoverSourceDialog";
 import { BatchSyncAgentDialog } from "../components/BatchSyncAgentDialog";
 import { SyncDots } from "../components/SyncDots";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { CardActionMenu } from "../components/CardActionMenu";
+import { RecoverSourceDialog } from "../components/RecoverSourceDialog";
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
@@ -164,6 +166,7 @@ export function MySkills() {
   const refreshAfterDeleteRef = useRef<number | null>(null);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
+  const [batchRecoverOpen, setBatchRecoverOpen] = useState(false);
   const [batchSyncDialogOpen, setBatchSyncDialogOpen] = useState(false);
   const [batchToggling, setBatchToggling] = useState(false);
   const [checkingAll, setCheckingAll] = useState(false);
@@ -178,6 +181,7 @@ export function MySkills() {
   const [tagEditSkillId, setTagEditSkillId] = useState<string | null>(null);
   const [menuSkillId, setMenuSkillId] = useState<string | null>(null);
   const [skillToDelete, setSkillToDelete] = useState<ManagedSkill | null>(null);
+  const [recoverTarget, setRecoverTarget] = useState<ManagedSkill | null>(null);
   const [tagInput, setTagInput] = useState("");
   const tagInputRef = useRef<HTMLInputElement>(null);
 
@@ -347,7 +351,8 @@ export function MySkills() {
       filterMode,
       viewedPreset?.id ?? null,
     ]),
-    escapeEnabled: !batchTagDialogOpen && !batchSyncDialogOpen && !batchDeleteConfirm,
+    escapeEnabled:
+      !batchTagDialogOpen && !batchSyncDialogOpen && !batchDeleteConfirm && !batchRecoverOpen,
   });
 
   const selectedSkill = useMemo(
@@ -1045,10 +1050,21 @@ export function MySkills() {
     }
   };
 
+  /**
+   * Whether the refresh action can do anything for this skill.
+   *
+   * A `local`/`import` row whose path is gone is excluded: refreshing it only
+   * reaches the re-import's own "path no longer exists" refusal, so showing the
+   * button — here, in the card menu, or in the batch counts that read this same
+   * predicate — offers an action that can only fail. Those rows are reachable
+   * through the relink / find-source / detach actions instead.
+   */
   const canRefresh = (skill: ManagedSkill) =>
     skill.source_type === "git" ||
     skill.source_type === "skillssh" ||
-    ((skill.source_type === "local" || skill.source_type === "import") && !!skill.source_ref);
+    ((skill.source_type === "local" || skill.source_type === "import") &&
+      !!skill.source_ref &&
+      skill.update_status !== "source_missing");
 
   const anyRefreshableSelected = useMemo(
     () => skills.some((skill) => selectedIds.has(skill.id) && canRefresh(skill)),
@@ -1060,6 +1076,21 @@ export function MySkills() {
   );
   const refreshableSelectedCount = useMemo(
     () => skills.filter((skill) => selectedIds.has(skill.id) && canRefresh(skill)).length,
+    [skills, selectedIds]
+  );
+  /**
+   * Only the selected skills a recovery would actually accept. A mixed selection
+   * must not count rows the command refuses, or the button promises a batch that
+   * reports half of it as failures.
+   */
+  const recoverableSelected = useMemo(
+    () =>
+      skills.filter(
+        (skill) =>
+          selectedIds.has(skill.id) &&
+          (skill.source_type === "local" || skill.source_type === "import") &&
+          skill.update_status === "source_missing"
+      ),
     [skills, selectedIds]
   );
   /**
@@ -1309,6 +1340,17 @@ export function MySkills() {
                   onSelect: handleBatchTogglePreset,
                 }]
               : []),
+            ...(recoverableSelected.length > 0
+              ? [{
+                  key: "recover",
+                  tone: "primary" as const,
+                  label: t("mySkills.batchRecover.toolbarLabel", {
+                    count: recoverableSelected.length,
+                  }),
+                  icon: <GitBranch className="h-3.5 w-3.5" />,
+                  onSelect: () => setBatchRecoverOpen(true),
+                }]
+              : []),
             {
               key: "sync",
               label: t("mySkills.batchSyncAgents", { count: selectedIds.size }),
@@ -1545,6 +1587,12 @@ export function MySkills() {
                               className="rounded-full border border-border-subtle px-2 py-0.5 text-[12px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
                             >
                               {t("mySkills.updateActions.relink")}
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setRecoverTarget(skill); }}
+                              className="rounded-full border border-border-subtle px-2 py-0.5 text-[12px] font-medium text-secondary transition-colors hover:bg-surface-hover"
+                            >
+                              {t("mySkills.updateActions.findOnline")}
                             </button>
                             <button
                               onClick={(e) => { e.stopPropagation(); handleDetachSource(skill); }}
@@ -1796,6 +1844,12 @@ export function MySkills() {
                       {t("mySkills.updateActions.relink")}
                     </button>
                     <button
+                      onClick={(e) => { e.stopPropagation(); setRecoverTarget(skill); }}
+                      className="rounded px-2 py-0.5 text-[13px] font-medium text-secondary transition-colors hover:bg-surface-hover"
+                    >
+                      {t("mySkills.updateActions.findOnline")}
+                    </button>
+                    <button
                       onClick={(e) => { e.stopPropagation(); handleDetachSource(skill); }}
                       disabled={updatingSkillId === skill.id}
                       className="rounded px-2 py-0.5 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
@@ -1928,6 +1982,17 @@ export function MySkills() {
         onClose={() => setTagToRename(null)}
         onRename={handleRenameTag}
       />
+      <RecoverSourceDialog
+        open={recoverTarget !== null}
+        skill={recoverTarget}
+        onClose={() => setRecoverTarget(null)}
+        onDone={refreshManagedSkills}
+        onKeepLocal={async () => {
+          const target = recoverTarget;
+          setRecoverTarget(null);
+          if (target) await handleDetachSource(target);
+        }}
+      />
       {tagMenu && (
         <>
           {/* Backdrop closes on left- or right-click outside the menu. Explicit
@@ -1973,6 +2038,14 @@ export function MySkills() {
         allTags={allTags}
         onClose={() => setBatchTagDialogOpen(false)}
         onApply={handleBatchEditTags}
+      />
+
+      <BatchRecoverSourceDialog
+        open={batchRecoverOpen}
+        skills={recoverableSelected}
+        skipped={selectedIds.size - recoverableSelected.length}
+        onClose={() => setBatchRecoverOpen(false)}
+        onDone={refreshManagedSkills}
       />
 
       <BatchSyncAgentDialog

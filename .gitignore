@@ -38,3 +38,8 @@ CLAUDE.md
 AGENTS.md
 .loop-log
 
+# 本地 agent 知识库：规格、会话记录、可复用手册。是工作笔记与过程产物，
+# 不是产品源码，会过期、会与代码漂移；进了 git 就得跟着每次重构改。与上面
+# 那批 agent 产物同类。真正需要留存的说明应进仓库根 README 或 CHANGELOG。
+project-context/
+

@@ -24,12 +24,20 @@ export interface TargetConflictDetails {
   conflicts: TargetConflictDetail[];
 }
 
+/**
+ * What the caller has to *do* about an error, when the message alone does not
+ * say. Lets the UI ask for the in-repository directory instead of showing a
+ * CLI flag name, and offer the right way out of a private repository.
+ */
+export type ErrorReason = "subpath_required" | "auth_failed";
+
 /** Structured error returned by Tauri commands. */
 export interface AppError {
   kind: ErrorKind;
   message: string;
   /** Present only for kinds that carry machine-readable specifics. */
   details?: TargetConflictDetails;
+  reason?: ErrorReason;
 }
 
 const validKinds: ReadonlySet<string> = new Set(ERROR_KINDS);
@@ -60,5 +68,11 @@ export function getErrorMessage(error: unknown, fallback: string): string {
 /** Extract the error kind (or `undefined` for non-structured errors). */
 export function getErrorKind(error: unknown): ErrorKind | undefined {
   if (isAppError(error)) return error.kind;
+  return undefined;
+}
+
+/** Extract the actionable reason (or `undefined` when there isn't one). */
+export function getErrorReason(error: unknown): ErrorReason | undefined {
+  if (isAppError(error)) return error.reason;
   return undefined;
 }
