@@ -41,6 +41,9 @@ const MARKET_SEARCH_STEP = 60;
 const MARKET_SEARCH_DEBOUNCE_MS = 450;
 const MARKET_SEARCH_CACHE_TTL_MS = 120_000;
 const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
+// skills.sh lists skills a website publishes itself under /site/<domain>/<skill>;
+// their source is the domain, not a GitHub owner/repo.
+const SKILLS_SH_SITE_REF = /\/site\/([^/]+)\/([^/?#]+)\/?$/;
 
 export function InstallSkills() {
   const { t } = useTranslation();
@@ -138,6 +141,9 @@ export function InstallSkills() {
     for (const skill of managedSkills) {
       if (skill.source_type === "skillssh" && skill.source_ref) {
         set.add(skill.source_ref);
+      } else if (skill.source_type === "well-known" && skill.source_ref) {
+        const site = skill.source_ref.match(SKILLS_SH_SITE_REF);
+        if (site) set.add(`${site[1]}/${site[2]}`);
       }
     }
     return set;
@@ -1046,7 +1052,11 @@ export function InstallSkills() {
 
                           <div className="flex shrink-0 items-center gap-1">
                             <button
-                              onClick={() => openUrl(`https://skills.sh/${skill.source}/${skill.skill_id}`)}
+                              onClick={() => openUrl(
+                                skill.source.includes("/")
+                                  ? `https://skills.sh/${skill.source}/${skill.skill_id}`
+                                  : `https://skills.sh/site/${skill.source}/${skill.skill_id}`
+                              )}
                               className="rounded-[5px] p-1 text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
                               title={t("install.viewOnWeb")}
                             >

@@ -2104,8 +2104,17 @@ fn run_search(
     Ok(hits
         .into_iter()
         .map(|s| {
-            let install_ref = format!("{}/{}", s.source, s.skill_id);
-            let skills_sh_url = format!("https://skills.sh/{}/{}", s.source, s.skill_id);
+            // A source with no `/` is a website, listed under /site/ on skills.sh;
+            // that URL is also what `skills install` accepts for it.
+            let (install_ref, skills_sh_url) = if s.source.contains('/') {
+                (
+                    format!("{}/{}", s.source, s.skill_id),
+                    format!("https://skills.sh/{}/{}", s.source, s.skill_id),
+                )
+            } else {
+                let url = format!("https://skills.sh/site/{}/{}", s.source, s.skill_id);
+                (url.clone(), url)
+            };
             SearchHit {
                 install_ref,
                 name: s.name,

@@ -70,7 +70,7 @@ pub fn is_site_ref(input: &str) -> bool {
 
 pub fn download_site_skill(input: &str, proxy_url: Option<&str>) -> Result<DownloadedSkill> {
     let site = parse_site_ref(input)?;
-    let client = crate::core::skillssh_api::build_http_client(proxy_url, 30);
+    let client = site_client(proxy_url)?;
     let index = fetch_index(&client, &site.source_url)?;
     let entry = index
         .payload
@@ -118,6 +118,21 @@ pub fn cleanup_temp(temp_dir: &Path) {
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 
+/// Every request, redirects included, must stay on HTTPS: a v1 file list
+/// carries no digest, so the connection is all that vouches for its content.
+fn site_client(proxy_url: Option<&str>) -> Result<Client> {
+    let mut builder = Client::builder()
+        .user_agent("skills-manager")
+        .timeout(std::time::Duration::from_secs(30))
+        .https_only(true);
+    if let Some(proxy) = proxy_url.filter(|s| !s.is_empty()) {
+        if let Ok(proxy) = reqwest::Proxy::all(proxy) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    builder.build().context("Failed to build the website download client")
+}
+
 fn fetch_index(client: &Client, source_url: &str) -> Result<DiscoveryIndex> {
     for well_known_path in [".well-known/agent-skills", ".well-known/skills"] {
         let url = reqwest::Url::parse(source_url)?.join(&format!("{well_known_path}/index.json"))?;
@@ -126,8 +141,11 @@ fn fetch_index(client: &Client, source_url: &str) -> Result<DiscoveryIndex> {
         if !response.status().is_success() {
             continue;
         }
-        let payload: Value = serde_json::from_slice(&read_limited(response, MAX_DOWNLOAD_BYTES)?)
-            .with_context(|| format!("Failed to parse skills index at {url}"))?;
+        // A site can answer a path it does not serve with its HTML app shell and
+        // a 200 (open.feishu.cn does for agent-skills), so only a real index ends
+        // the search.
+        let Ok(bytes) = read_limited(response, MAX_DOWNLOAD_BYTES) else { continue };
+        let Ok(payload) = serde_json::from_slice::<Value>(&bytes) else { continue };
         if payload.get("skills").and_then(Value::as_array).is_some() {
             return Ok(DiscoveryIndex {
                 url,
@@ -610,5 +628,63 @@ mod tests {
             assert!(!temp_path.exists(), "invalid archive must not survive as an installable bundle");
             server.join().unwrap();
         }
+    }
+
+    /// open.feishu.cn answers `agent-skills/index.json` with its HTML app shell
+    /// and a 200; its real index lives under `skills/`.
+    #[test]
+    fn index_lookup_moves_past_a_200_html_page_to_the_next_well_known_path() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let source_url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let read = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                let body = if request.starts_with("GET /.well-known/agent-skills/") {
+                    "<!DOCTYPE html><html></html>"
+                } else {
+                    r#"{"skills":[{"name":"demo","files":["SKILL.md"]}]}"#
+                };
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let index = fetch_index(&Client::new(), &source_url).unwrap();
+        assert!(index.url.as_str().ends_with("/.well-known/skills/index.json"), "{}", index.url);
+        server.join().unwrap();
+    }
+
+    /// The headers' declared size is only a preflight; the copy itself must
+    /// stop at the limit, because the zip reader does not enforce it.
+    #[test]
+    fn an_understated_entry_size_cannot_write_past_the_extraction_limit() {
+        let mut bytes = archive(&[("SKILL.md", &vec![b'a'; 1_000_000])]);
+        let local = bytes.windows(4).position(|w| w == b"PK\x03\x04").unwrap();
+        bytes[local + 22..local + 26].copy_from_slice(&10u32.to_le_bytes());
+        let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        bytes[central + 24..central + 28].copy_from_slice(&10u32.to_le_bytes());
+        let temp = tempfile::tempdir().unwrap();
+        assert!(extract_zip_with_limits(&bytes, temp.path(), 100, 10).is_err());
+        let written = std::fs::metadata(temp.path().join("SKILL.md")).map(|m| m.len()).unwrap_or(0);
+        assert!(written <= 100, "wrote {written} bytes past a 100-byte limit");
+    }
+
+    #[test]
+    fn a_bounded_read_never_pulls_more_than_one_byte_past_the_limit() {
+        struct Source {
+            served: u64,
+        }
+        impl Read for Source {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let n = buf.len().min((1_000_000 - self.served) as usize);
+                buf[..n].fill(b'a');
+                self.served += n as u64;
+                Ok(n)
+            }
+        }
+        let mut source = Source { served: 0 };
+        assert!(read_limited(&mut source, 4096).is_err());
+        assert!(source.served <= 4097, "read {} bytes", source.served);
     }
 }

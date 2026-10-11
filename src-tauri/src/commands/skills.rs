@@ -918,6 +918,41 @@ pub async fn install_local(
     .await?
 }
 
+/// Install a skill a website publishes itself (skills.sh `/site/<domain>/<skill>`).
+/// It is a snapshot: there is no repository to check for updates against.
+fn install_site_skill(
+    store: &SkillStore,
+    site_url: &str,
+    name: Option<&str>,
+    proxy_url: Option<&str>,
+    emit_progress: &dyn Fn(&str),
+) -> Result<(String, String), AppError> {
+    emit_progress("cloning");
+    let downloaded =
+        well_known::download_site_skill(site_url, proxy_url).map_err(AppError::network)?;
+    emit_progress("installing");
+    let result = (|| -> Result<(String, String), AppError> {
+        let _lock = RepoLock::acquire_foreground("install website skill").map_err(AppError::db)?;
+        let install_result =
+            installer::install_from_local(&downloaded.skill_dir, name).map_err(AppError::io)?;
+        let metadata = InstallSourceMetadata {
+            source_type: "well-known".to_string(),
+            source_ref: Some(site_url.to_string()),
+            source_ref_resolved: Some(downloaded.resolved_url.clone()),
+            source_subpath: None,
+            source_branch: None,
+            source_revision: downloaded.revision.clone(),
+            remote_revision: downloaded.revision.clone(),
+            update_status: "local_only".to_string(),
+        };
+        let skill_name = install_result.name.clone();
+        let skill_id = store_installed_skill_unlocked(store, &install_result, &metadata, None)?;
+        Ok((skill_id, skill_name))
+    })();
+    well_known::cleanup_temp(&downloaded.temp_dir);
+    result
+}
+
 #[tauri::command]
 pub async fn install_git(
     repo_url: String,
@@ -948,37 +983,13 @@ pub async fn install_git(
         };
 
         if well_known::is_site_ref(&repo_url) {
-            let outcome = (|| -> Result<(String, String), AppError> {
-                emit_progress("cloning");
-                let downloaded = well_known::download_site_skill(&repo_url, proxy_url.as_deref())
-                    .map_err(AppError::network)?;
-                emit_progress("installing");
-                let result = (|| -> Result<(String, String), AppError> {
-                    let _lock = RepoLock::acquire_foreground("install website skill")
-                        .map_err(AppError::db)?;
-                    let install_result = installer::install_from_local(
-                        &downloaded.skill_dir,
-                        name.as_deref(),
-                    )
-                    .map_err(AppError::io)?;
-                    let metadata = InstallSourceMetadata {
-                        source_type: "well-known".to_string(),
-                        source_ref: Some(repo_url.clone()),
-                        source_ref_resolved: Some(downloaded.resolved_url.clone()),
-                        source_subpath: None,
-                        source_branch: None,
-                        source_revision: downloaded.revision.clone(),
-                        remote_revision: downloaded.revision.clone(),
-                        update_status: "local_only".to_string(),
-                    };
-                    let skill_name = install_result.name.clone();
-                    let skill_id =
-                        store_installed_skill_unlocked(&store, &install_result, &metadata, None)?;
-                    Ok((skill_id, skill_name))
-                })();
-                well_known::cleanup_temp(&downloaded.temp_dir);
-                result
-            })();
+            let outcome = install_site_skill(
+                &store,
+                &repo_url,
+                name.as_deref(),
+                proxy_url.as_deref(),
+                &emit_progress,
+            );
             log_install_outcome(&store, "well-known", outcome.as_ref());
             outcome?;
             emit_progress("done");
@@ -1078,6 +1089,18 @@ pub async fn install_from_skillssh(
                 )
                 .ok();
         };
+
+        // skills.sh also lists skills that websites publish themselves; their
+        // source is the site's domain, not a GitHub `owner/repo`.
+        if !source.contains('/') {
+            let site_url = format!("https://skills.sh/site/{source}/{skill_id}");
+            let outcome =
+                install_site_skill(&store, &site_url, None, proxy_url.as_deref(), &emit_progress);
+            log_install_outcome(&store, "well-known", outcome.as_ref());
+            outcome?;
+            emit_progress("done");
+            return Ok(());
+        }
 
         let outcome = (|| -> Result<(String, String), AppError> {
             emit_progress("cloning");
