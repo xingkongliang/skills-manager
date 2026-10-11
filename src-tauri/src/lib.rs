@@ -977,12 +977,15 @@ pub fn run() {
                     api.prevent_close();
                 }
             });
-            let _ = win.restore_state(
+            // A failed restore still shows the window at its default geometry.
+            if let Err(err) = win.restore_state(
                 StateFlags::SIZE
                     | StateFlags::POSITION
                     | StateFlags::MAXIMIZED
                     | StateFlags::FULLSCREEN,
-            );
+            ) {
+                log::warn!("Failed to restore saved window state: {err}");
+            }
             win.show()?;
             log::info!(
                 "startup: window handle + close hook + state restore in {} ms",

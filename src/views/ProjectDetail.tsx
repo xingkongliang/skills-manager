@@ -913,7 +913,7 @@ export function ProjectDetail() {
                 aria-label={revealLabel}
                 title={revealLabel}
                 onClick={() => void revealProjectFolder(project.id)}
-                className="flex cursor-pointer items-center rounded outline-none focus-visible:ring-2 focus-visible:ring-border"
+                className="flex cursor-pointer items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-border"
               >
                 <FolderOpen className="h-5 w-5 text-accent" />
               </button>

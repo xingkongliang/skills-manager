@@ -7,6 +7,7 @@
 //! Command construction is pure so the branches can be asserted in tests
 //! without launching a file manager on the machine running them.
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
 
@@ -25,9 +26,10 @@ pub enum FileManagerAction {
 /// The program and arguments for an action, without running anything.
 ///
 /// Arguments are returned unquoted. `Command` escapes them for the platform,
-/// and pre-quoting would leave the quotes inside the path.
-pub fn file_manager_command(path: &Path, action: FileManagerAction) -> (String, Vec<String>) {
-    let shown = path.display().to_string();
+/// and pre-quoting would leave the quotes inside the path. They stay `OsString`
+/// so a path that is not valid UTF-8 reaches the file manager byte for byte.
+pub fn file_manager_command(path: &Path, action: FileManagerAction) -> (String, Vec<OsString>) {
+    let shown = path.as_os_str().to_owned();
 
     if cfg!(target_os = "macos") {
         match action {
@@ -39,7 +41,9 @@ pub fn file_manager_command(path: &Path, action: FileManagerAction) -> (String, 
             FileManagerAction::OpenDir => ("explorer".into(), vec![shown]),
             // explorer takes the selection as one argument, path included.
             FileManagerAction::RevealItem => {
-                ("explorer".into(), vec![format!("/select,{shown}")])
+                let mut select = OsString::from("/select,");
+                select.push(shown);
+                ("explorer".into(), vec![select])
             }
         }
     } else {
@@ -49,7 +53,7 @@ pub fn file_manager_command(path: &Path, action: FileManagerAction) -> (String, 
             // the closest thing to revealing one. A path with no parent is its
             // own location.
             FileManagerAction::RevealItem => {
-                let target = path.parent().unwrap_or(path).display().to_string();
+                let target = path.parent().unwrap_or(path).as_os_str().to_owned();
                 ("xdg-open".into(), vec![target])
             }
         }
@@ -118,7 +122,7 @@ mod tests {
             FileManagerAction::OpenDir,
         );
 
-        assert_eq!(args, vec!["/tmp/My Projects/技能库".to_string()]);
+        assert_eq!(args, vec![OsString::from("/tmp/My Projects/技能库")]);
         assert_eq!(
             program,
             if cfg!(target_os = "macos") {
@@ -141,16 +145,16 @@ mod tests {
             // -R must precede the path, or `open` reads it as a file to launch.
             assert_eq!(
                 args,
-                vec!["-R".to_string(), "/tmp/My Projects/技能库".to_string()]
+                vec![OsString::from("-R"), OsString::from("/tmp/My Projects/技能库")]
             );
         } else if cfg!(target_os = "windows") {
             assert_eq!(program, "explorer");
             // explorer wants the path inside the single /select argument.
-            assert_eq!(args, vec!["/select,/tmp/My Projects/技能库".to_string()]);
+            assert_eq!(args, vec![OsString::from("/select,/tmp/My Projects/技能库")]);
         } else {
             assert_eq!(program, "xdg-open");
             // No selection concept, so the containing directory is opened.
-            assert_eq!(args, vec!["/tmp/My Projects".to_string()]);
+            assert_eq!(args, vec![OsString::from("/tmp/My Projects")]);
         }
     }
 
@@ -161,6 +165,19 @@ mod tests {
 
         assert!(!args.is_empty());
         assert!(args.iter().all(|arg| !arg.is_empty()), "{args:?}");
+    }
+
+    /// Linux paths are bytes, not text. Rendering one through `display()` would
+    /// swap an invalid byte for U+FFFD and open a different (missing) path.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_path_reaches_the_file_manager_unchanged() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let raw = std::ffi::OsStr::from_bytes(b"/tmp/caf\xe9");
+        let (_, args) = file_manager_command(Path::new(raw), FileManagerAction::OpenDir);
+
+        assert_eq!(args.last().map(|arg| arg.as_bytes()), Some(raw.as_bytes()));
     }
 
     /// A clean exit is never a failure; a non-zero one is, except on Windows
