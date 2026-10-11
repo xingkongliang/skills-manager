@@ -656,7 +656,7 @@
     "gitSetupTitle": "設定 Git 備份",
     "gitSetupSubtitle": "選擇此 skill 庫的備份連線方式。",
     "gitSetupCardCloneTitle": "使用既有的遠端備份",
-    "gitSetupCardCloneDesc": "從設定的遠端倉庫複製，會保留本機現有 skills，並把不衝突的內容合併回來。",
+    "gitSetupCardCloneDesc": "從設定的遠端倉庫複製，並把只在本機的 skills 合併進來。若本機某個 skill 與遠端同名版本內容不同，會先詢問你，可選擇把本機版本另存到單獨的資料夾後再繼續。",
     "gitSetupCardCloneBadge": "推薦：第二台及以後的機器",
     "gitSetupCardInitTitle": "把本機作為新的備份來源",
     "gitSetupCardInitDesc": "在本機初始化 Git，並將目前 skill 庫推送到設定的遠端位址。",
@@ -667,12 +667,19 @@
     "gitRecoverySubtitleUnrelated": "本機倉庫與遠端倉庫歷史不一致，無法直接同步。請選擇修復方式。",
     "gitRecoverySubtitleNoUpstream": "尚未與遠端倉庫建立追蹤關係。請選擇修復方式。",
     "gitRecoverySubtitleDetached": "目前位於游離狀態（detached HEAD），可能是還原快照所致。建議重新對齊到遠端，或先在快照面板還原其它版本。",
-    "gitRecoverySubtitleConflict": "本機與遠端的技能變更發生衝突，合併已自動回復。請從遠端重新克隆以還原為乾淨副本；僅本機存在的技能會被保留。",
+    "gitRecoverySubtitleConflict": "本機與遠端的技能變更發生衝突，合併已自動回復，本機的 skill 檔案保持原樣。重新克隆時，本機版本與遠端不同的 skill 會先列出來，由你決定是否把本機版本另存後繼續。",
     "gitRecoveryCardRecloneTitle": "使用遠端備份還原本機（推薦）",
-    "gitRecoveryCardRecloneDesc": "保留本機現有 skills 的暫存副本，從遠端重新複製，再把不衝突的內容合併回來。最安全。",
+    "gitRecoveryCardRecloneDesc": "從遠端重新複製，並把只在本機的 skills 合併進來。同名但內容不同的 skill 會先列出來，可選擇把本機版本另存後繼續；無法確認已在遠端的舊本機 Git 歷史會另外保留一份。",
     "gitRecoveryCardKeepLocalTitle": "保留本機內容，建立追蹤",
     "gitRecoveryCardKeepLocalDesc": "嘗試把本機的內容作為遠端的延續推上去。僅在確認遠端倉庫為空、或本機內容應當覆蓋遠端時使用。",
     "gitRecoveryRecloneSuccess": "已重新複製遠端倉庫",
+    "gitRecoveryRecloneKeptHistory": "已重新複製遠端倉庫。無法確認舊的本機 Git 歷史都已在遠端（可能有未推送的提交或標籤），已保留在：{{path}}",
+    "gitSetAsideTitle": "本機有 skill 與遠端備份不同",
+    "gitSetAsideMessage": "以下 skill 的本機版本與遠端備份中的同名版本內容不同。繼續的話，這些本機版本會保存到技能庫旁邊的單獨資料夾，庫裡改用遠端版本；完成後會告訴你資料夾位置。",
+    "gitSetAsideConfirm": "另存本機版本並繼續",
+    "gitLocalCopiesSaved": "內容不同的 skill 本機版本已另存到：{{path}}",
+    "gitSetAsideCancelled": "已取消，沒有複製，本機技能庫保持原樣。",
+    "gitSetAsideListChanged": "名單在你確認後有變化，沒有替換任何內容。請再確認一次。",
     "gitRecoveryRecloning": "重新複製中…",
     "gitRecoveryFallbackHint": "「保留本機內容」目前需在終端執行。請聯絡開發者或參考文件。",
     "gitNotInitialized": "尚未初始化",
@@ -711,6 +718,8 @@
     "gitErrorAuth": "驗證失敗，請檢查 SSH Key 或存取權杖。",
     "gitErrorNetwork": "網路連線失敗，請檢查網路和遠端倉庫位址。",
     "gitErrorConflict": "本機與遠端的變更發生衝突，請選擇修復方式。",
+    "gitErrorFilesKeptAside": "操作沒有正常完成，部分檔案保存在技能庫之外，請勿刪除",
+    "gitErrorCloneLocalDiffers": "已停止：本機這些 skill 與遠端備份中的同名版本內容不同，繼續會覆蓋它們：{{names}}。本機未做任何變更。",
     "gitErrorNotRepo": "未偵測到 Git 倉庫，請先設定備份。",
     "gitErrorRejected": "遠端有新的更新，需要先合併後再同步。",
     "gitErrorUnrelatedHistories": "本機倉庫與遠端倉庫歷史不一致。請打開「修復同步設定」選擇處理方式。",
@@ -796,6 +805,13 @@
     "created": "Preset 已建立",
     "switched": "已切換到「{{name}}」"
   },
+  "platform": {
+    "fileManager": {
+      "finder": "Finder",
+      "explorer": "檔案總管",
+      "linux": "檔案管理員"
+    }
+  },
   "project": {
     "title": "專案 Skills",
     "path": "專案路徑",
@@ -830,7 +846,6 @@
     "addSelected": "新增選取（{{count}}）",
     "selectAll": "全選",
     "deselectAll": "取消全選",
-    "openInFinder": "開啟目錄",
     "skillFiles": "檔案",
     "importToCenter": "更新中心",
     "importFromCenter": "更新專案",
@@ -915,7 +930,8 @@
     "batchEditTags": "標籤 ({{count}})",
     "batchTagsUpdated": "已更新 {{count}} 個中心 Skill 的標籤",
     "batchTagsFailed": "{{count}} 個中心 Skill 標籤更新失敗",
-    "batchTagScopeNote": "標籤儲存在中央技能庫，改動會影響所有使用這個 Skill 的專案。只屬於本專案的本機 Skill 不會被修改。"
+    "batchTagScopeNote": "標籤儲存在中央技能庫，改動會影響所有使用這個 Skill 的專案。只屬於本專案的本機 Skill 不會被修改。",
+    "revealInFileManager": "在{{app}}中開啟"
   },
   "presetActions": {
     "button": "套用 Preset",

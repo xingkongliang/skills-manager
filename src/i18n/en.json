@@ -711,7 +711,7 @@
     "gitSetupTitle": "Set Up Git Backup",
     "gitSetupSubtitle": "Choose how this skill library connects to a backup.",
     "gitSetupCardCloneTitle": "Use existing remote backup",
-    "gitSetupCardCloneDesc": "Clone from the configured remote. Local skills are preserved and non-conflicting items are merged back.",
+    "gitSetupCardCloneDesc": "Clone from the configured remote and copy in skills that exist only on this machine. If a local skill differs from the remote's copy of the same name, you are asked first and can save the local version to a separate folder before continuing.",
     "gitSetupCardCloneBadge": "Recommended: 2nd machine and beyond",
     "gitSetupCardInitTitle": "Back up this machine as new",
     "gitSetupCardInitDesc": "Initialize Git locally and push the current skill library to the configured remote.",
@@ -722,12 +722,19 @@
     "gitRecoverySubtitleUnrelated": "Local repository and remote do not share history; sync cannot proceed. Pick how to fix it.",
     "gitRecoverySubtitleNoUpstream": "No upstream tracking is set up with the remote. Pick how to fix it.",
     "gitRecoverySubtitleDetached": "Currently in detached HEAD state, possibly after restoring a snapshot. Realign to remote or restore a different snapshot first.",
-    "gitRecoverySubtitleConflict": "Local and remote skills were changed in conflicting ways. The merge was rolled back automatically — re-clone from remote to restore a clean copy. Skills that exist only locally are preserved.",
+    "gitRecoverySubtitleConflict": "Local and remote skills were changed in conflicting ways. The merge was rolled back automatically and the skill files on this machine are as they were. When re-cloning, skills whose local version differs from the remote's are listed first, and you decide whether to save the local versions aside and continue.",
     "gitRecoveryCardRecloneTitle": "Use remote backup (recommended)",
-    "gitRecoveryCardRecloneDesc": "Keep a temporary copy of local skills, re-clone from remote, then merge non-conflicting items back. Safest option.",
+    "gitRecoveryCardRecloneDesc": "Re-clone from the remote and copy in skills that exist only on this machine. Same-named skills that differ are listed first, and their local versions can be saved aside before continuing; old local Git history not confirmed to be on the remote is kept aside.",
     "gitRecoveryCardKeepLocalTitle": "Keep local, set up tracking",
     "gitRecoveryCardKeepLocalDesc": "Try to push local content as the new remote head. Only use when remote is empty or local should overwrite remote.",
     "gitRecoveryRecloneSuccess": "Remote backup re-cloned",
+    "gitRecoveryRecloneKeptHistory": "Remote backup re-cloned. The old local Git history could not be confirmed to be fully on the remote (it may hold unpushed commits or tags), so it was kept at: {{path}}",
+    "gitSetAsideTitle": "Some local skills differ from the remote backup",
+    "gitSetAsideMessage": "The local versions of these skills differ from the same-named copies in the remote backup. If you continue, the local versions are saved to a separate folder next to the skills library and the library uses the remote versions; you'll be told where the folder is.",
+    "gitSetAsideConfirm": "Save local versions and continue",
+    "gitLocalCopiesSaved": "The local versions of the differing skills were saved to: {{path}}",
+    "gitSetAsideCancelled": "Cancelled. Nothing was cloned and this machine's skills library is unchanged.",
+    "gitSetAsideListChanged": "The list changed since you confirmed it — nothing was replaced. Please check it again.",
     "gitRecoveryRecloning": "Re-cloning…",
     "gitRecoveryFallbackHint": "\"Keep local\" currently requires terminal action. See docs or contact the developer.",
     "gitNotInitialized": "Not initialized",
@@ -766,6 +773,8 @@
     "gitErrorAuth": "Authentication failed. Check SSH key or access token.",
     "gitErrorNetwork": "Network connection failed. Check your network and remote URL.",
     "gitErrorConflict": "Local and remote changes conflict. Choose how to resolve it.",
+    "gitErrorFilesKeptAside": "The operation did not finish normally. Some files were kept outside the skills library — don't delete them",
+    "gitErrorCloneLocalDiffers": "Stopped: these local skills differ from the same-named copies in the remote backup, and continuing would overwrite them: {{names}}. Nothing on this machine was changed.",
     "gitErrorNotRepo": "Git repository not found. Set up backup first.",
     "gitErrorRejected": "Remote has new updates. Pull and merge them before syncing.",
     "gitErrorUnrelatedHistories": "Local and remote do not share history. Open Fix Sync Setup to resolve.",
@@ -869,6 +878,13 @@
     "created": "Preset created",
     "switched": "Switched to \"{{name}}\""
   },
+  "platform": {
+    "fileManager": {
+      "finder": "Finder",
+      "explorer": "File Explorer",
+      "linux": "File Manager"
+    }
+  },
   "project": {
     "title": "Project Skills",
     "path": "Project Path",
@@ -903,7 +919,6 @@
     "addSelected": "Add Selected ({{count}})",
     "selectAll": "Select All",
     "deselectAll": "Deselect All",
-    "openInFinder": "Open Directory",
     "skillFiles": "Files",
     "importToCenter": "Update Center",
     "importFromCenter": "Add Skill",
@@ -999,7 +1014,8 @@
     "batchEditTags": "Tags ({{count}})",
     "batchTagsUpdated": "Tags updated for {{count}} center skills",
     "batchTagsFailed": "{{count}} center skills failed to update tags",
-    "batchTagScopeNote": "Tags live in the central library, so edits affect every project using these skills. Project-only local skills are left untouched."
+    "batchTagScopeNote": "Tags live in the central library, so edits affect every project using these skills. Project-only local skills are left untouched.",
+    "revealInFileManager": "Open in {{app}}"
   },
   "presetActions": {
     "button": "Apply Preset",

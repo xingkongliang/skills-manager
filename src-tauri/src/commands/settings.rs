@@ -3,7 +3,9 @@ use std::process::Command;
 use std::sync::Arc;
 use tauri::{Manager, State};
 
-use crate::core::{central_repo, error::AppError, log_sanitize, skill_store::SkillStore, skillssh_api};
+use crate::core::{
+    central_repo, error::AppError, file_manager, log_sanitize, skill_store::SkillStore, skillssh_api,
+};
 
 #[derive(serde::Serialize)]
 pub struct AppUpdateInfo {
@@ -124,32 +126,15 @@ pub async fn open_central_repo_folder() -> Result<(), AppError> {
     tauri::async_runtime::spawn_blocking(|| {
         let repo_path = central_repo::base_dir();
 
-        #[cfg(target_os = "macos")]
-        let mut cmd = Command::new("open");
-        #[cfg(target_os = "windows")]
-        let mut cmd = {
-            let mut c = Command::new("explorer");
-            use std::os::windows::process::CommandExt;
-            c.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            c
-        };
-        #[cfg(target_os = "linux")]
-        let mut cmd = Command::new("xdg-open");
-
-        let status = cmd
-            .arg(&repo_path)
-            .status()
+        let status = file_manager::open_dir(&repo_path)
             .map_err(|e| AppError::io(format!("Failed to open folder: {e}")))?;
 
-        // Windows explorer.exe returns exit code 1 even on success
-        #[cfg(not(target_os = "windows"))]
-        if !status.success() {
+        if file_manager::exit_is_failure(status.success()) {
             return Err(AppError::io(format!(
                 "File manager exited with status: {status}"
             )));
         }
 
-        let _ = status;
         Ok(())
     })
     .await?
@@ -601,7 +586,7 @@ pub async fn export_logs_zip(
 
         zip.finish().map_err(|e| AppError::io(e.to_string()))?;
 
-        reveal_in_file_manager(&zip_path);
+        let _ = file_manager::reveal_item(&zip_path);
 
         Ok(LogExportResult {
             zip_path: zip_path.to_string_lossy().to_string(),
@@ -609,27 +594,6 @@ pub async fn export_logs_zip(
         })
     })
     .await?
-}
-
-fn reveal_in_file_manager(path: &std::path::Path) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("open").arg("-R").arg(path).status();
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        let mut cmd = Command::new("explorer");
-        cmd.creation_flags(0x08000000);
-        let arg = format!("/select,{}", path.display());
-        let _ = cmd.arg(arg).status();
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(parent) = path.parent() {
-            let _ = Command::new("xdg-open").arg(parent).status();
-        }
-    }
 }
 
 #[cfg(test)]

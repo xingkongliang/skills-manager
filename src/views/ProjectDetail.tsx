@@ -25,6 +25,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useApp } from "../context/AppContext";
+import { useSkillViewMode } from "../hooks/useSkillViewMode";
 import { useMultiSelect } from "../hooks/useMultiSelect";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
@@ -42,6 +43,7 @@ import { cn } from "../utils";
 import * as api from "../lib/tauri";
 import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { useRevealProjectFolder } from "../hooks/useRevealProjectFolder";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 const projectLastUsedAgentsKey = (projectId: string) =>
   `project_last_used_export_agents:${projectId}`;
@@ -128,11 +130,12 @@ export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const { label: revealLabel, reveal: revealProjectFolder } = useRevealProjectFolder();
   const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
   const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [viewMode, setViewMode] = useSkillViewMode();
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("all");
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
@@ -905,7 +908,15 @@ export function ProjectDetail() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 flex-[1_1_260px]">
             <h1 className="app-page-title flex items-center gap-2.5">
-              <FolderOpen className="h-5 w-5 text-accent" />
+              <button
+                type="button"
+                aria-label={revealLabel}
+                title={revealLabel}
+                onClick={() => void revealProjectFolder(project.id)}
+                className="flex cursor-pointer items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-border"
+              >
+                <FolderOpen className="h-5 w-5 text-accent" />
+              </button>
               {project.name}
               <span className="app-badge">{groupedSkills.length}</span>
             </h1>

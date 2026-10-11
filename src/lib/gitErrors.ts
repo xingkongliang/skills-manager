@@ -9,6 +9,18 @@ export function mapGitErrorMessage(error: unknown, t: TFunction): string {
   const kind = getErrorKind(error);
   const message = getErrorMessage(error, "");
 
+  // A clone or re-clone that left the user's files (or old history) beside
+  // the library says where; no category message may hide that, network
+  // included.
+  if (message.includes("kept at")) {
+    return `${t("settings.gitErrorFilesKeptAside")} (${message.trim()})`;
+  }
+  // Before the phrase checks below: the skill names it lists could match them.
+  const differing = differingSkillNames(error);
+  if (differing) {
+    return t("settings.gitErrorCloneLocalDiffers", { names: differing.join(", ") });
+  }
+
   if (kind === "network") return t("settings.gitErrorNetwork");
   if (
     message.includes("Authentication failed")
@@ -49,4 +61,15 @@ export function mapGitErrorMessage(error: unknown, t: TFunction): string {
   return detail && detail !== "Error"
     ? `${t("settings.gitErrorGeneric")} (${detail})`
     : t("settings.gitErrorGeneric");
+}
+
+/** The skills a clone or re-clone stopped on because their local versions
+ *  differ from the remote's (`CLONE_LOCAL_DIFFERS`); `null` for any other
+ *  error, including one that left files beside the library. */
+export function differingSkillNames(error: unknown): string[] | null {
+  const message = getErrorMessage(error, "");
+  if (message.includes("kept at")) return null;
+  // One name per line, so a comma in a name cannot split it.
+  const match = /CLONE_LOCAL_DIFFERS: .*?copies:\n(.+)$/s.exec(message);
+  return match ? match[1].split("\n") : null;
 }

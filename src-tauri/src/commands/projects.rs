@@ -9,7 +9,9 @@ use tauri::State;
 
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
 use crate::core::timing::should_log_first_or_slow;
-use crate::core::{error::AppError, installer, project_scanner, sync_engine, tool_adapters};
+use crate::core::{
+    error::AppError, file_manager, installer, project_scanner, sync_engine, tool_adapters,
+};
 
 #[derive(Serialize, Default)]
 pub struct SyncHealthDto {
@@ -743,6 +745,46 @@ pub async fn remove_project(store: State<'_, Arc<SkillStore>>, id: String) -> Re
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || store.delete_project(&id).map_err(AppError::db))
         .await?
+}
+
+/// Show a workspace's folder in the OS file manager, selected where the
+/// platform can (Linux `xdg-open` opens the containing directory).
+///
+/// The path is resolved from the id here instead of being accepted from the
+/// frontend, so a caller cannot ask the OS to open an arbitrary path. The
+/// folder is checked first because a file manager given a missing path either
+/// fails silently or opens somewhere the user did not ask for.
+#[tauri::command]
+pub async fn reveal_project_folder(
+    store: State<'_, Arc<SkillStore>>,
+    project_id: String,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let record = store
+            .get_project_by_id(&project_id)
+            .map_err(AppError::db)?
+            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+        let path = PathBuf::from(&record.path);
+        if !path.is_dir() {
+            return Err(AppError::invalid_input(format!(
+                "Folder does not exist: {}",
+                record.path
+            )));
+        }
+
+        // explorer.exe exits non-zero even when it succeeds, so the platform
+        // branch is judged by `exit_is_failure` rather than checked here.
+        let status = file_manager::reveal_item(&path).map_err(AppError::io)?;
+        if file_manager::exit_is_failure(status.success()) {
+            return Err(AppError::io(format!(
+                "File manager exited with status: {status}"
+            )));
+        }
+        Ok(())
+    })
+    .await?
 }
 
 #[tauri::command]

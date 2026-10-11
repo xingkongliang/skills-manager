@@ -31,6 +31,7 @@ import { GitSetupDialog } from "../components/GitSetupDialog";
 import { useApp } from "../context/AppContext";
 import { getErrorKind, getErrorMessage } from "../lib/error";
 import { mapGitErrorMessage } from "../lib/gitErrors";
+import { useSetAsideOffer } from "../hooks/useSetAsideOffer";
 import * as api from "../lib/tauri";
 import type {
   GitBackupSizeReport,
@@ -95,6 +96,7 @@ export function Backup() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryReason, setRecoveryReason] = useState<RecoveryReason>("unrelated_histories");
+  const { attempt: offerSetAsideOnDiffering, announceLocalCopies, dialog: setAsideDialog } = useSetAsideOffer();
   const [restoreVersionTag, setRestoreVersionTag] = useState<string | null>(null);
   const [restoringVersionTag, setRestoringVersionTag] = useState<string | null>(null);
   const [disconnectConfirmOpen, setDisconnectConfirmOpen] = useState(false);
@@ -385,11 +387,13 @@ export function Backup() {
   const handleSetupClone = async () => {
     setLoading("start");
     try {
-      await api.gitBackupClone(remoteConfig);
-      toast.success(t("settings.gitCloneSuccess"));
-      await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshPresets(), refreshVersions()]);
+      await offerSetAsideOnDiffering(async (setAside) => {
+        announceLocalCopies(await api.gitBackupClone(remoteConfig, setAside));
+        toast.success(t("settings.gitCloneSuccess"));
+        await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshPresets(), refreshVersions()]);
+      });
     } catch (error) {
-      toast.error(mapGitError(error));
+      toast.error(mapGitError(error), { duration: 12000 });
       throw error;
     } finally {
       setLoading(null);
@@ -420,11 +424,18 @@ export function Backup() {
     }
     setLoading("recovery");
     try {
-      await api.gitBackupReclone(remoteConfig);
-      toast.success(t("settings.gitRecoveryRecloneSuccess"));
-      await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshPresets(), refreshVersions()]);
+      await offerSetAsideOnDiffering(async (setAside) => {
+        const result = await api.gitBackupReclone(remoteConfig, setAside);
+        announceLocalCopies(result.local_copies);
+        if (result.kept_git) {
+          toast.success(t("settings.gitRecoveryRecloneKeptHistory", { path: result.kept_git }), { duration: 20000 });
+        } else {
+          toast.success(t("settings.gitRecoveryRecloneSuccess"));
+        }
+        await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshPresets(), refreshVersions()]);
+      });
     } catch (error) {
-      toast.error(mapGitError(error));
+      toast.error(mapGitError(error), { duration: 12000 });
       throw error;
     } finally {
       setLoading(null);
@@ -577,13 +588,19 @@ export function Backup() {
     const status = await api.gitBackupStatus();
     if (res.remote_has_content) {
       // Existing backup: restore it (or just rewire when a repo already exists).
+      const restored = async () => {
+        toast.success(t("backup.github.connectedRestored"));
+        await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshPresets(), refreshVersions()]);
+      };
       if (!status.is_repo) {
-        await api.gitBackupClone(res.url);
+        await offerSetAsideOnDiffering(async (setAside) => {
+          announceLocalCopies(await api.gitBackupClone(res.url, setAside));
+          await restored();
+        });
       } else {
         await api.gitBackupSetRemote(res.url);
+        await restored();
       }
-      toast.success(t("backup.github.connectedRestored"));
-      await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshPresets(), refreshVersions()]);
     } else {
       // Fresh backup: initialize if needed, wire the remote, run the first backup.
       if (!status.is_repo) {
@@ -1366,6 +1383,8 @@ export function Backup() {
         onClose={() => setRecoveryOpen(false)}
         onReclone={handleRecoveryReclone}
       />
+      {/* After the setup and recovery dialogs, so it opens on top of them. */}
+      {setAsideDialog}
     </div>
   );
 }

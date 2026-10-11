@@ -200,7 +200,7 @@ fn is_foldable_text(content: &[u8]) -> bool {
 /// A lone `\r` (old-Mac line ending, or a carriage return inside a progress
 /// bar) is left alone — only `\r\n` is a line ending both platforms mean the
 /// same thing by.
-fn fold_crlf(content: &[u8]) -> Cow<'_, [u8]> {
+pub(crate) fn fold_crlf(content: &[u8]) -> Cow<'_, [u8]> {
     if !is_foldable_text(content) || !content.windows(2).any(|pair| pair == b"\r\n") {
         return Cow::Borrowed(content);
     }

@@ -576,11 +576,16 @@ pub async fn git_backup_resolve_conflict(
     .await?
 }
 
+/// Clone the remote into the skills directory. Local skills that differ from
+/// the remote's same-named copies stop the clone (`CLONE_LOCAL_DIFFERS`)
+/// unless `set_aside` is exactly that list, as the user confirmed it: their
+/// local versions are then copied to a folder beside the library, returned.
 #[tauri::command]
 pub async fn git_backup_clone(
     store: State<'_, Arc<SkillStore>>,
     url: String,
-) -> Result<(), AppError> {
+    set_aside: Option<Vec<String>>,
+) -> Result<Option<String>, AppError> {
     git_fetcher::validate_git_url(&url).map_err(AppError::git)?;
     let store = store.inner().clone();
     sync_engine_pref(&store);
@@ -588,23 +593,37 @@ pub async fn git_backup_clone(
     tokio::task::spawn_blocking(move || {
         let effective = sanitize_url_to_keychain(url.trim());
         git_backup::with_repo_lock("git clone", || {
-            git_backup::clone_into_unlocked(&skills_dir, &effective)?;
+            let local_copies = git_backup::clone_into_unlocked(
+                &skills_dir,
+                &effective,
+                &set_aside.unwrap_or_default(),
+            )?;
             apply_device_identity(&store, &skills_dir);
             reconcile_skills_index_unlocked(&store)
+                .map_err(|e| name_what_was_left(e, &[("local versions of differing skills", &local_copies)]))?;
+            Ok(local_copies.map(|path| path.display().to_string()))
         })
         .map_err(classify_git_chain)
     })
     .await?
 }
 
-/// Recovery: discard the local `.git` and re-clone from the configured remote.
-/// Existing skill files are preserved via the same backup-then-merge flow
-/// used by the regular clone path.
+/// What a re-clone left beside the library (see [`git_backup::RecloneOutcome`]).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RecloneResult {
+    pub kept_git: Option<String>,
+    pub local_copies: Option<String>,
+}
+
+/// Recovery: set the local `.git` aside and re-clone from the configured
+/// remote. Existing skill files go through the same flow as
+/// [`git_backup_clone`], including `set_aside`.
 #[tauri::command]
 pub async fn git_backup_reclone(
     store: State<'_, Arc<SkillStore>>,
     url: String,
-) -> Result<(), AppError> {
+    set_aside: Option<Vec<String>>,
+) -> Result<RecloneResult, AppError> {
     git_fetcher::validate_git_url(&url).map_err(AppError::git)?;
     let store = store.inner().clone();
     sync_engine_pref(&store);
@@ -612,13 +631,47 @@ pub async fn git_backup_reclone(
     tokio::task::spawn_blocking(move || {
         let effective = sanitize_url_to_keychain(url.trim());
         git_backup::with_repo_lock("git reclone", || {
-            git_backup::reclone_from_remote_unlocked(&skills_dir, &effective)?;
+            let outcome = git_backup::reclone_from_remote_unlocked(
+                &skills_dir,
+                &effective,
+                &set_aside.unwrap_or_default(),
+            )?;
             apply_device_identity(&store, &skills_dir);
-            reconcile_skills_index_unlocked(&store)
+            reconcile_skills_index_unlocked(&store).map_err(|e| {
+                name_what_was_left(
+                    e,
+                    &[
+                        ("the previous .git history", &outcome.kept_git),
+                        ("local versions of differing skills", &outcome.local_copies),
+                    ],
+                )
+            })?;
+            let shown = |path: Option<std::path::PathBuf>| path.map(|p| p.display().to_string());
+            Ok(RecloneResult {
+                kept_git: shown(outcome.kept_git),
+                local_copies: shown(outcome.local_copies),
+            })
         })
         .map_err(classify_git_chain)
     })
     .await?
+}
+
+/// An error after a (re-)clone that left files beside the library must still
+/// say where they are.
+fn name_what_was_left(
+    e: anyhow::Error,
+    left: &[(&str, &Option<std::path::PathBuf>)],
+) -> anyhow::Error {
+    let kept: Vec<String> = left
+        .iter()
+        .filter_map(|(what, path)| path.as_ref().map(|p| format!("{what} kept at {}", p.display())))
+        .collect();
+    if kept.is_empty() {
+        e
+    } else {
+        e.context(format!("cloned, with {}", kept.join("; ")))
+    }
 }
 
 #[tauri::command]

@@ -9,6 +9,9 @@ interface Props {
   details?: string[];
   confirmLabel?: string;
   tone?: "danger" | "warning";
+  /** Keep the dialog up while the confirmed action runs (closing would not
+   *  stop it). Only for actions that always finish, like a clone. */
+  lockWhileRunning?: boolean;
   onClose: () => void;
   onConfirm: () => Promise<void>;
 }
@@ -20,6 +23,7 @@ export function ConfirmDialog({
   details,
   confirmLabel,
   tone = "danger",
+  lockWhileRunning = false,
   onClose,
   onConfirm,
 }: Props) {
@@ -38,6 +42,11 @@ export function ConfirmDialog({
 
   if (!open) return null;
 
+  const locked = lockWhileRunning && loading;
+  const close = () => {
+    if (!locked) onClose();
+  };
+
   const handleConfirm = async () => {
     setLoading(true);
     try {
@@ -54,14 +63,14 @@ export function ConfirmDialog({
     // <html> and zoom does not scale vh: a bare 85vh renders at 102% of the
     // viewport on the largest size. Same compensation as html/body in index.css.
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={close} />
       <div className="relative bg-surface border border-border rounded-xl w-full max-w-sm p-5 shadow-2xl flex flex-col max-h-[calc(85vh/var(--app-scale))]">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-[13px] font-semibold text-primary flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-400" />
             {title || t("common.confirm")}
           </h2>
-          <button onClick={onClose} className="text-muted hover:text-secondary p-1 rounded transition-colors outline-none">
+          <button onClick={close} disabled={locked} className="text-muted hover:text-secondary p-1 rounded transition-colors outline-none disabled:opacity-50">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -82,8 +91,9 @@ export function ConfirmDialog({
 
         <div className="flex justify-end gap-2">
           <button
-            onClick={onClose}
-            className="px-3 py-1.5 rounded-lg text-[13px] font-medium text-tertiary hover:text-secondary hover:bg-surface-hover transition-colors outline-none"
+            onClick={close}
+            disabled={locked}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium text-tertiary hover:text-secondary hover:bg-surface-hover transition-colors outline-none disabled:opacity-50"
           >
             {t("common.cancel")}
           </button>

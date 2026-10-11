@@ -13,9 +13,11 @@
 </p>
 
 <p align="center">
-  🎬 <a href="https://www.bilibili.com/video/BV1845F6REUu/">视频介绍（Bilibili）</a>
+  🎬 <a href="https://www.bilibili.com/video/BV1cdpc6PExG/">1.5 分钟介绍（Bilibili）</a>
   &nbsp;·&nbsp;
-  <a href="https://www.youtube.com/watch?v=wfbCrfNASVU">Video intro (YouTube)</a>
+  <a href="https://www.bilibili.com/video/BV1845F6REUu/">完整功能演示（9 分钟）</a>
+  &nbsp;·&nbsp;
+  <a href="https://www.youtube.com/watch?v=DJ9RIX8nbow">Video intro (YouTube)</a>
 </p>
 
 <p align="center">
