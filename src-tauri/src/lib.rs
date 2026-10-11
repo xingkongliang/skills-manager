@@ -1135,6 +1135,18 @@ pub fn run() {
             commands::presets::get_preset_skill_order,
             commands::presets::reorder_preset_skills,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event
+            {
+                if !has_visible_windows {
+                    restore_main_window(app);
+                }
+            }
+        });
 }
