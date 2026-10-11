@@ -21,7 +21,16 @@ const SITE_HOSTS: &[&str] = &["skills.sh", "www.skills.sh"];
 #[derive(Debug, Clone)]
 pub struct SiteRef {
     pub source_url: String,
+    pub domain: String,
     pub skill_name: String,
+}
+
+impl SiteRef {
+    /// One spelling for every accepted form (`www.`, trailing slash), so the
+    /// market, a pasted link and the CLI all record the same source.
+    pub fn canonical_url(&self) -> String {
+        format!("https://skills.sh/site/{}/{}", self.domain, self.skill_name)
+    }
 }
 
 #[derive(Debug)]
@@ -60,6 +69,7 @@ pub fn parse_site_ref(input: &str) -> Result<SiteRef> {
 
     Ok(SiteRef {
         source_url: format!("https://{domain}/"),
+        domain: domain.to_string(),
         skill_name: skill.to_string(),
     })
 }

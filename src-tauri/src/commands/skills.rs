@@ -926,31 +926,71 @@ fn install_site_skill(
     name: Option<&str>,
     proxy_url: Option<&str>,
     emit_progress: &dyn Fn(&str),
+    cancel: &AtomicBool,
 ) -> Result<(String, String), AppError> {
     emit_progress("cloning");
     let downloaded =
         well_known::download_site_skill(site_url, proxy_url).map_err(AppError::network)?;
-    emit_progress("installing");
     let result = (|| -> Result<(String, String), AppError> {
+        // The download itself is not interruptible; a cancel during it still
+        // leaves the library untouched.
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::cancelled("Installation cancelled by user"));
+        }
+        emit_progress("installing");
         let _lock = RepoLock::acquire_foreground("install website skill").map_err(AppError::db)?;
-        let install_result =
-            installer::install_from_local(&downloaded.skill_dir, name).map_err(AppError::io)?;
-        let metadata = InstallSourceMetadata {
-            source_type: "well-known".to_string(),
-            source_ref: Some(site_url.to_string()),
-            source_ref_resolved: Some(downloaded.resolved_url.clone()),
-            source_subpath: None,
-            source_branch: None,
-            source_revision: downloaded.revision.clone(),
-            remote_revision: downloaded.revision.clone(),
-            update_status: "local_only".to_string(),
-        };
-        let skill_name = install_result.name.clone();
-        let skill_id = store_installed_skill_unlocked(store, &install_result, &metadata, None)?;
-        Ok((skill_id, skill_name))
+        let (skill_id, result) = install_site_skill_dir(
+            store,
+            site_url,
+            &downloaded.skill_dir,
+            name,
+            &downloaded.resolved_url,
+            downloaded.revision.clone(),
+            None,
+        )?;
+        Ok((skill_id, result.name))
     })();
     well_known::cleanup_temp(&downloaded.temp_dir);
     result
+}
+
+/// Put a downloaded website skill into the library; the caller holds the repo
+/// lock. Every entry point records the canonical skills.sh URL, so reinstalling
+/// from the market, a pasted link or the CLI lands on the same record and
+/// directory instead of adding a `-2` copy.
+pub fn install_site_skill_dir(
+    store: &SkillStore,
+    site_url: &str,
+    skill_dir: &Path,
+    name: Option<&str>,
+    resolved_url: &str,
+    revision: Option<String>,
+    active_scenario_id: Option<&str>,
+) -> Result<(String, installer::InstallResult), AppError> {
+    let site = well_known::parse_site_ref(site_url)
+        .map_err(|error| AppError::invalid_input(error.to_string()))?;
+    let source_ref = site.canonical_url();
+    let base_name = match name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(custom) => skill_metadata::sanitize_skill_name(custom)
+            .ok_or_else(|| AppError::invalid_input(format!("Invalid skill name: '{custom}'")))?,
+        None => site.skill_name,
+    };
+    let (install_name, destination) =
+        resolve_install_target(store, "well-known", &source_ref, &base_name)?;
+    let result = installer::install_skill_dir_to_destination(skill_dir, &install_name, &destination)
+        .map_err(AppError::io)?;
+    let metadata = InstallSourceMetadata {
+        source_type: "well-known".to_string(),
+        source_ref: Some(source_ref),
+        source_ref_resolved: Some(resolved_url.to_string()),
+        source_subpath: None,
+        source_branch: None,
+        source_revision: revision.clone(),
+        remote_revision: revision,
+        update_status: "local_only".to_string(),
+    };
+    let skill_id = store_installed_skill_unlocked(store, &result, &metadata, active_scenario_id)?;
+    Ok((skill_id, result))
 }
 
 #[tauri::command]
@@ -989,6 +1029,7 @@ pub async fn install_git(
                 name.as_deref(),
                 proxy_url.as_deref(),
                 &emit_progress,
+                &cancel,
             );
             log_install_outcome(&store, "well-known", outcome.as_ref());
             outcome?;
@@ -1094,8 +1135,14 @@ pub async fn install_from_skillssh(
         // source is the site's domain, not a GitHub `owner/repo`.
         if !source.contains('/') {
             let site_url = format!("https://skills.sh/site/{source}/{skill_id}");
-            let outcome =
-                install_site_skill(&store, &site_url, None, proxy_url.as_deref(), &emit_progress);
+            let outcome = install_site_skill(
+                &store,
+                &site_url,
+                None,
+                proxy_url.as_deref(),
+                &emit_progress,
+                &cancel,
+            );
             log_install_outcome(&store, "well-known", outcome.as_ref());
             outcome?;
             emit_progress("done");
@@ -1202,6 +1249,9 @@ pub async fn preview_git_install(
             let downloaded = well_known::download_site_skill(&repo_url, proxy_url.as_deref())
                 .map_err(AppError::network)?;
             let result = (|| -> Result<GitPreviewResult, AppError> {
+                if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(AppError::cancelled("Installation cancelled by user"));
+                }
                 let dirs = collect_git_skill_dirs(&downloaded.skill_dir);
                 if dirs.is_empty() {
                     return Err(AppError::not_found("Downloaded source contains no skills"));
@@ -1337,21 +1387,15 @@ pub async fn confirm_git_install(
                         Some(item) => item,
                         None => continue,
                     };
-                    let custom_name = item.name.trim();
-                    let install_name = (!custom_name.is_empty()).then_some(custom_name);
-                    let install_result = installer::install_from_local(dir, install_name)
-                        .map_err(AppError::io)?;
-                    let metadata = InstallSourceMetadata {
-                        source_type: "well-known".to_string(),
-                        source_ref: Some(repo_url.clone()),
-                        source_ref_resolved: Some(repo_url.clone()),
-                        source_subpath: None,
-                        source_branch: None,
-                        source_revision: None,
-                        remote_revision: None,
-                        update_status: "local_only".to_string(),
-                    };
-                    store_installed_skill_unlocked(&store, &install_result, &metadata, None)?;
+                    install_site_skill_dir(
+                        &store,
+                        &repo_url,
+                        dir,
+                        Some(item.name.as_str()),
+                        &repo_url,
+                        None,
+                        None,
+                    )?;
                 }
                 Ok(())
             })();
@@ -2779,6 +2823,9 @@ pub fn check_skill_update_internal_with_remote(
                 .update_skill_check_state(&skill.id, None, status, error.as_deref())
                 .map_err(AppError::db)?;
         }
+        // A website snapshot has no revision to compare against; it stays
+        // `local_only` rather than turning `unknown` on every check.
+        "well-known" => {}
         _ => {
             store
                 .update_skill_check_state(&skill.id, None, "unknown", None)
@@ -3044,8 +3091,20 @@ pub fn resolve_skillssh_install_target(
     source_ref: &str,
     skill_id: &str,
 ) -> Result<(String, PathBuf), AppError> {
+    resolve_install_target(store, "skillssh", source_ref, skill_id)
+}
+
+/// A reinstall keeps the directory its record already owns; a new skill takes
+/// the first name no other record occupies, even when that record's content is
+/// identical.
+fn resolve_install_target(
+    store: &SkillStore,
+    source_type: &str,
+    source_ref: &str,
+    skill_id: &str,
+) -> Result<(String, PathBuf), AppError> {
     if let Some(existing) = store
-        .get_skill_by_source_ref("skillssh", source_ref)
+        .get_skill_by_source_ref(source_type, source_ref)
         .map_err(AppError::db)?
     {
         return Ok((existing.name, PathBuf::from(existing.central_path)));
@@ -4422,5 +4481,39 @@ mod tests {
             "the user's local fork must survive the skill removal"
         );
         assert!(repo.store.get_targets_for_skill("s1").unwrap().is_empty());
+    }
+
+    fn site_skill_source(body: &str) -> TempDir {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("SKILL.md"), body).unwrap();
+        dir
+    }
+
+    /// Reinstalling a website skill, however its URL is spelled, updates the
+    /// record and directory it already has. A same-named skill from another
+    /// site gets its own, even with identical content.
+    #[test]
+    fn a_site_skill_reinstall_keeps_its_record_and_another_site_gets_its_own() {
+        let repo = test_repo();
+        let feishu = "https://skills.sh/site/open.feishu.cn/lark-im";
+        let v1 = site_skill_source("---\nname: lark-im\n---\nv1\n");
+        let (id, installed) =
+            install_site_skill_dir(&repo.store, feishu, v1.path(), None, "r", None, None).unwrap();
+
+        let v2 = site_skill_source("---\nname: lark-im\n---\nv2\n");
+        let respelled = "https://www.skills.sh/site/open.feishu.cn/lark-im";
+        let (again, _) =
+            install_site_skill_dir(&repo.store, respelled, v2.path(), None, "r", None, None).unwrap();
+        assert_eq!(again, id);
+        assert!(fs::read_to_string(installed.central_path.join("SKILL.md")).unwrap().ends_with("v2\n"));
+        assert!(!central_repo::skills_dir().join("lark-im-2").exists());
+
+        let larksuite = "https://skills.sh/site/open.larksuite.com/lark-im";
+        let (other, other_result) =
+            install_site_skill_dir(&repo.store, larksuite, v2.path(), None, "r", None, None).unwrap();
+        assert_ne!(other, id);
+        assert_eq!(other_result.name, "lark-im-2");
+        let original = repo.store.get_skill_by_id(&id).unwrap().unwrap();
+        assert_eq!(original.source_ref.as_deref(), Some(feishu));
     }
 }

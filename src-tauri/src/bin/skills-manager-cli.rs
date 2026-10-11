@@ -1711,27 +1711,18 @@ fn install_well_known_action(
     let downloaded = well_known::download_site_skill(site_url, store.proxy_url().as_deref())?;
     let result = (|| -> anyhow::Result<(String, String, String)> {
         let _lock = RepoLock::acquire_foreground("cli install website skill")?;
-        let install_result = installer::install_from_local(&downloaded.skill_dir, name)?;
-        let metadata = cmd::InstallSourceMetadata {
-            source_type: "well-known".to_string(),
-            source_ref: Some(site_url.to_string()),
-            source_ref_resolved: Some(downloaded.resolved_url.clone()),
-            source_subpath: None,
-            source_branch: None,
-            source_revision: downloaded.revision.clone(),
-            remote_revision: downloaded.revision.clone(),
-            update_status: "local_only".to_string(),
-        };
-        let central_path = install_result.central_path.to_string_lossy().to_string();
-        let install_name = install_result.name.clone();
-        let skill_id = cmd::store_installed_skill_unlocked(
+        let (skill_id, install_result) = cmd::install_site_skill_dir(
             store,
-            &install_result,
-            &metadata,
+            site_url,
+            &downloaded.skill_dir,
+            name,
+            &downloaded.resolved_url,
+            downloaded.revision.clone(),
             active_scenario,
         )
         .map_err(map_app_err)?;
-        Ok((skill_id, install_name, central_path))
+        let central_path = install_result.central_path.to_string_lossy().to_string();
+        Ok((skill_id, install_result.name, central_path))
     })();
     well_known::cleanup_temp(&downloaded.temp_dir);
     let (skill_id, install_name, central_path) = result?;
