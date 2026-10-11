@@ -26,8 +26,8 @@ pub struct SiteRef {
 }
 
 impl SiteRef {
-    /// One spelling for every accepted form (`www.`, trailing slash), so the
-    /// market, a pasted link and the CLI all record the same source.
+    /// One spelling whether or not the link used `www.`, so the market, a
+    /// pasted link and the CLI all record the same source.
     pub fn canonical_url(&self) -> String {
         format!("https://skills.sh/site/{}/{}", self.domain, self.skill_name)
     }

@@ -932,13 +932,14 @@ fn install_site_skill(
     let downloaded =
         well_known::download_site_skill(site_url, proxy_url).map_err(AppError::network)?;
     let result = (|| -> Result<(String, String), AppError> {
-        // The download itself is not interruptible; a cancel during it still
-        // leaves the library untouched.
+        emit_progress("installing");
+        let _lock = RepoLock::acquire_foreground("install website skill").map_err(AppError::db)?;
+        // Checked once the lock is held, right before anything is written: the
+        // download is not interruptible and the lock can take a while, and a
+        // cancel during either must still leave the library untouched.
         if cancel.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(AppError::cancelled("Installation cancelled by user"));
         }
-        emit_progress("installing");
-        let _lock = RepoLock::acquire_foreground("install website skill").map_err(AppError::db)?;
         let (skill_id, result) = install_site_skill_dir(
             store,
             site_url,
@@ -3095,8 +3096,8 @@ pub fn resolve_skillssh_install_target(
 }
 
 /// A reinstall keeps the directory its record already owns; a new skill takes
-/// the first name no other record occupies, even when that record's content is
-/// identical.
+/// the first name that is neither another record's (even with identical
+/// content) nor an existing folder, which installing would replace.
 fn resolve_install_target(
     store: &SkillStore,
     source_type: &str,
@@ -3124,10 +3125,11 @@ fn resolve_install_target(
         };
         let candidate_path = central_repo::skills_dir().join(&candidate_name);
         let candidate_path_str = candidate_path.to_string_lossy().to_string();
-        let occupied = store
-            .get_skill_by_central_path(&candidate_path_str)
-            .map_err(AppError::db)?
-            .is_some();
+        let occupied = candidate_path.exists()
+            || store
+                .get_skill_by_central_path(&candidate_path_str)
+                .map_err(AppError::db)?
+                .is_some();
 
         if !occupied {
             return Ok((candidate_name, candidate_path));
@@ -4515,5 +4517,29 @@ mod tests {
         assert_eq!(other_result.name, "lark-im-2");
         let original = repo.store.get_skill_by_id(&id).unwrap().unwrap();
         assert_eq!(original.source_ref.as_deref(), Some(feishu));
+    }
+
+    /// A folder already in the library that no record owns is not ours to
+    /// replace: a new website skill with the same name goes next to it.
+    #[test]
+    fn a_new_site_skill_never_replaces_an_unrecorded_folder() {
+        let repo = test_repo();
+        let stray = central_repo::skills_dir().join("lark-doc");
+        fs::create_dir_all(&stray).unwrap();
+        fs::write(stray.join("notes.md"), "mine").unwrap();
+
+        let source = site_skill_source("---\nname: lark-doc\n---\n");
+        let (_, installed) = install_site_skill_dir(
+            &repo.store,
+            "https://skills.sh/site/open.feishu.cn/lark-doc",
+            source.path(),
+            None,
+            "r",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(installed.name, "lark-doc-2");
+        assert_eq!(fs::read_to_string(stray.join("notes.md")).unwrap(), "mine");
     }
 }
