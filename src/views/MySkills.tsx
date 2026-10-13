@@ -134,6 +134,10 @@ function centralDirName(skill: ManagedSkill) {
   return skill.central_path.split(/[\\/]/).filter(Boolean).pop() || skill.name;
 }
 
+function normalizeSkillSearch(value: string) {
+  return value.toLowerCase().trim().replace(/[-_\s]+/g, " ");
+}
+
 export function MySkills() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -284,12 +288,15 @@ export function MySkills() {
   }, [skills]);
 
   const filtered = useMemo(() => {
+    const query = normalizeSkillSearch(search);
     const result = skills.filter((skill) => {
       const displayName = skillDisplayNames.get(skill.id) || skill.name;
-      const matchesSearch =
-        skill.name.toLowerCase().includes(search.toLowerCase()) ||
-        displayName.toLowerCase().includes(search.toLowerCase()) ||
-        (skill.description || "").toLowerCase().includes(search.toLowerCase());
+      const matchesSearch = [
+        skill.name,
+        displayName,
+        centralDirName(skill),
+        skill.description || "",
+      ].some((value) => normalizeSkillSearch(value).includes(query));
       if (!matchesSearch) return false;
 
       if (sourceFilters.size > 0 && !sourceFilters.has(skill.source_type)) return false;
