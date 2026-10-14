@@ -360,6 +360,7 @@
     "collapseAgentToggles": "收起",
     "agentToggleEnabled": "{{agent}} 已开启",
     "agentToggleDisabled": "{{agent}} 已关闭",
+    "agentTogglePendingSync": "待同步",
     "agentToggleNotInstalled": "未安装",
     "agentToggleDisabledGlobally": "已在设置中禁用",
     "agentUnavailableCount": "{{count}} 个不可用",

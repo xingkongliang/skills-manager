@@ -215,6 +215,7 @@ function SkillDetailPanelContent({
     key: toggle.tool,
     displayName: toggle.display_name,
     enabled: toggle.enabled,
+    deployed: toggle.deployed,
     isAvailable: toggle.installed && toggle.globally_enabled,
     disabled: !toggle.installed || !toggle.globally_enabled,
     badgeLabel: !toggle.installed

@@ -57,6 +57,8 @@ export interface SkillToolToggle {
   installed: boolean;
   globally_enabled: boolean;
   enabled: boolean;
+  /** Backed by a `skill_targets` row — an actual deployment (#384). */
+  deployed: boolean;
 }
 
 export interface SkillDocument {

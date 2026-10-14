@@ -277,6 +277,7 @@
     "agentTogglesTitle": "全域工作區",
     "expandAgentToggles": "展開",
     "collapseAgentToggles": "收起",
+    "agentTogglePendingSync": "待同步",
     "agentToggleNotInstalled": "未安裝",
     "agentToggleDisabledGlobally": "已在設定中停用",
     "agentUnavailableCount": "{{count}} 個不可用",

@@ -1,17 +1,18 @@
 import { useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronUp, Circle, Loader2 } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Circle,
+  CircleDashed,
+  Loader2,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../utils";
+import { isItemDeployed, type AgentToggleItem } from "../lib/agentToggleState";
 import { AgentIcon } from "./AgentIcon";
 
-export interface AgentToggleItem {
-  key: string;
-  displayName: string;
-  enabled: boolean;
-  isAvailable: boolean;
-  disabled?: boolean;
-  badgeLabel?: string | null;
-}
+export type { AgentToggleItem };
 
 interface Props {
   items: AgentToggleItem[];
@@ -31,7 +32,9 @@ export function AgentToggleSection({
 
   const availableItems = items.filter((item) => item.isAvailable);
   const unavailableItems = items.filter((item) => !item.isAvailable);
-  const enabledAvailableCount = availableItems.filter((item) => item.enabled).length;
+  const syncedAvailableCount = availableItems.filter((item) =>
+    isItemDeployed(item)
+  ).length;
 
   return (
     <div className={cn("rounded-xl border border-border-subtle", className)}>
@@ -41,7 +44,7 @@ export function AgentToggleSection({
             <span className="font-medium text-secondary">{t("mySkills.agentTogglesTitle")}</span>
             <span className="rounded-full border border-border-subtle bg-surface px-2 py-0.5 text-[12px] text-muted">
               {t("mySkills.syncSummary", {
-                synced: enabledAvailableCount,
+                synced: syncedAvailableCount,
                 total: availableItems.length,
               })}
             </span>
@@ -99,7 +102,10 @@ function AgentToggle({
   loading: boolean;
   onToggle: (key: string, enabled: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const disabled = Boolean(item.disabled || loading);
+  const pendingSync = item.enabled && !isItemDeployed(item);
+  const badge = item.badgeLabel ?? (pendingSync ? t("mySkills.agentTogglePendingSync") : null);
   return (
     <button
       type="button"
@@ -111,13 +117,15 @@ function AgentToggle({
         !disabled && "hover:bg-surface-hover",
         disabled && "opacity-55"
       )}
-      title={item.badgeLabel ?? undefined}
+      title={badge ?? undefined}
     >
       <span className="shrink-0">
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
-        ) : item.enabled ? (
+        ) : isItemDeployed(item) ? (
           <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+        ) : item.enabled ? (
+          <CircleDashed className="h-3.5 w-3.5 text-amber-500" />
         ) : (
           <Circle className="h-3.5 w-3.5 text-muted" />
         )}
@@ -130,9 +138,9 @@ function AgentToggle({
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-secondary">
         {item.displayName}
       </span>
-      {item.badgeLabel && (
+      {badge && (
         <span className="shrink-0 rounded-full border border-border-subtle bg-bg-secondary px-1.5 py-0.5 text-[11px] text-muted">
-          {item.badgeLabel}
+          {badge}
         </span>
       )}
     </button>

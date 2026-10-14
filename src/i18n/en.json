@@ -360,6 +360,7 @@
     "collapseAgentToggles": "Collapse",
     "agentToggleEnabled": "{{agent}} enabled",
     "agentToggleDisabled": "{{agent}} disabled",
+    "agentTogglePendingSync": "Pending sync",
     "agentToggleNotInstalled": "Not installed",
     "agentToggleDisabledGlobally": "Disabled in Settings",
     "agentUnavailableCount": "{{count}} unavailable",
