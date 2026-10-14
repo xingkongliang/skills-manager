@@ -331,6 +331,11 @@ export interface PendingRemoval {
   /** `"library"`, or the agent key whose deployed copy holds it. */
   location: string;
   path: string;
+  /**
+   * `"removed"`: the new version does not have it. `"overwritten"`: the user
+   * changed it, and the new version writes over the change.
+   */
+  kind: "removed" | "overwritten";
 }
 
 /** `approvedRemovals` carries back `removal_approval` from a declined call. */

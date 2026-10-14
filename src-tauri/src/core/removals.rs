@@ -5,21 +5,24 @@
 //! of #256 lost the PowerPoint templates `ppt-master` had written into its own
 //! `templates/`, and only found out afterwards.
 //!
-//! The updater cannot tell whose files are whose; that needs per-file provenance
-//! and is a much larger change. But it does not need to. At the moment of the
-//! swap both trees are on disk, so it can answer a narrower question that costs
-//! nothing to compute and nothing to store:
+//! Two questions, answered separately.
 //!
-//! > which paths exist now, and are simply not in the new version?
+//! [`removed_paths`]: which paths exist now, and are simply not in the new
+//! version? At the moment of the swap both trees are on disk, so this costs
+//! nothing to compute and nothing to store. Some of those paths are the user's;
+//! some are files the author deleted upstream. Saying "these will be removed" is
+//! true of both, makes no claim about ownership, and is enough for a person to
+//! recognise their own work and stop.
 //!
-//! Those are the ones about to vanish. Some are the user's; some are files the
-//! author deleted upstream. Saying "these will be removed" is true of both,
-//! makes no claim about ownership, and is enough for a person to recognise their
-//! own work and stop.
+//! [`overwritten_paths`]: which files did the user change that the new version
+//! writes over? The path survives, so the two trees alone cannot say — it takes
+//! the installed revision as a third, fixed reference, which the caller fetches.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+
+use crate::core::content_hash::same_content_eol_insensitive;
 
 /// Names that reappear the next time the skill runs, so listing them would be
 /// noise rather than information.
@@ -150,6 +153,113 @@ fn display_path(relative: &Path, is_dir: bool) -> String {
 /// Convenience for callers holding paths as strings.
 pub fn removed_paths_between(current: &str, replacement: &Path) -> Result<Vec<String>> {
     removed_paths(&PathBuf::from(current), replacement)
+}
+
+/// Files a replacement would write over after the user changed them.
+///
+/// [`removed_paths`] sees what a replacement takes away by absence. It cannot
+/// see a file the new version also ships: the path survives, the edit does not.
+/// Telling an edit from an upstream change needs a third tree, so this compares
+/// three:
+///
+/// - `current`: what is on disk now — the library, or a copy-mode deployment;
+/// - `baseline`: the files of the installed revision, prepared the way the
+///   installer prepares a library copy;
+/// - `replacement`: what is about to be written.
+///
+/// A file is reported when the replacement will write different content over it
+/// *and* it no longer matches the baseline: edited since install, or never part
+/// of it — created by the user or the skill at a path the new version now ships.
+/// A file that still matches the baseline is upstream's to change, and is not
+/// news.
+///
+/// Content is compared with CRLF folded to LF in text, so a checkout's line
+/// endings are never mistaken for an edit, nor a re-saved line ending for one.
+///
+/// Paths the replacement does not have as a file are left to [`removed_paths`],
+/// which already reports them; listing them here too would show one loss twice.
+///
+/// Sorted, so the same update always reads the same way.
+pub fn overwritten_paths(current: &Path, baseline: &Path, replacement: &Path) -> Result<Vec<String>> {
+    match std::fs::symlink_metadata(current) {
+        Ok(md) if md.is_dir() => {}
+        // Not a directory, or not there: whatever is lost is a removal.
+        Ok(_) => return Ok(Vec::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(anyhow::Error::from(err)
+                .context(format!("Cannot inspect {:?} before replacing it", current)));
+        }
+    }
+
+    let mut out = Vec::new();
+    collect_overwritten(current, baseline, replacement, Path::new(""), &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+/// The regular file at `path`, `None` when there is no regular file there.
+///
+/// Anything but a clean answer is an error: reading "could not look" as "not
+/// there" would turn an unreadable baseline into "edited" or an unreadable
+/// replacement into "nothing to overwrite".
+fn read_regular_file(path: &Path) -> Result<Option<Vec<u8>>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(md) if md.is_file() => std::fs::read(path)
+            .map(Some)
+            .with_context(|| format!("Failed to read {:?}", path)),
+        Ok(_) => Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(anyhow::Error::from(err).context(format!("Cannot inspect {:?}", path))),
+    }
+}
+
+fn collect_overwritten(
+    current_root: &Path,
+    baseline_root: &Path,
+    replacement_root: &Path,
+    prefix: &Path,
+    out: &mut Vec<String>,
+) -> Result<()> {
+    let dir = current_root.join(prefix);
+    let entries = std::fs::read_dir(&dir).with_context(|| format!("Failed to read {:?}", dir))?;
+
+    for entry in entries {
+        let entry = entry.with_context(|| format!("Failed to read an entry in {:?}", dir))?;
+        let name = entry.file_name();
+        if is_regenerable(&name.to_string_lossy()) {
+            continue;
+        }
+
+        let relative = prefix.join(&name);
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("Failed to inspect {:?}", entry.path()))?;
+        if file_type.is_dir() {
+            collect_overwritten(current_root, baseline_root, replacement_root, &relative, out)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            // A link the installer would never have written; if the new version
+            // puts a file there, `removed_paths` reports the change of shape.
+            continue;
+        }
+
+        let Some(incoming) = read_regular_file(&replacement_root.join(&relative))? else {
+            continue;
+        };
+        let on_disk =
+            std::fs::read(entry.path()).with_context(|| format!("Failed to read {:?}", entry.path()))?;
+        if same_content_eol_insensitive(&on_disk, &incoming) {
+            continue;
+        }
+        let installed = read_regular_file(&baseline_root.join(&relative))?;
+        if installed.is_some_and(|installed| same_content_eol_insensitive(&on_disk, &installed)) {
+            continue;
+        }
+        out.push(display_path(&relative, false));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -301,5 +411,125 @@ mod tests {
         std::os::unix::fs::symlink("/somewhere", current.join("link")).unwrap();
 
         assert_eq!(removed_paths(&current, &replacement).unwrap(), vec!["link"]);
+    }
+
+    // ── overwritten_paths ──
+
+    struct Trees {
+        _tmp: TempDir,
+        current: PathBuf,
+        baseline: PathBuf,
+        replacement: PathBuf,
+    }
+
+    fn trees() -> Trees {
+        let tmp = TempDir::new().unwrap();
+        let trees = Trees {
+            current: tmp.path().join("current"),
+            baseline: tmp.path().join("baseline"),
+            replacement: tmp.path().join("new"),
+            _tmp: tmp,
+        };
+        for dir in [&trees.current, &trees.baseline, &trees.replacement] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        trees
+    }
+
+    fn overwritten(t: &Trees) -> Vec<String> {
+        overwritten_paths(&t.current, &t.baseline, &t.replacement).unwrap()
+    }
+
+    /// The remaining gap in #256: the new version ships the file too, so the
+    /// path survives and only the edit is lost.
+    #[test]
+    fn reports_an_edited_file_the_new_version_also_ships() {
+        let t = trees();
+        write(&t.baseline.join("templates/default.md"), "upstream v1");
+        write(&t.current.join("templates/default.md"), "upstream v1, tuned by the user");
+        write(&t.replacement.join("templates/default.md"), "upstream v2");
+
+        assert_eq!(overwritten(&t), vec!["templates/default.md"]);
+    }
+
+    /// An untouched file changing upstream is what an update is for.
+    #[test]
+    fn says_nothing_about_a_file_only_upstream_changed() {
+        let t = trees();
+        write(&t.baseline.join("SKILL.md"), "v1");
+        write(&t.current.join("SKILL.md"), "v1");
+        write(&t.replacement.join("SKILL.md"), "v2");
+
+        assert!(overwritten(&t).is_empty());
+    }
+
+    /// An edit the new version happens to agree with loses nothing.
+    #[test]
+    fn says_nothing_when_the_new_version_carries_the_same_content() {
+        let t = trees();
+        write(&t.baseline.join("SKILL.md"), "v1");
+        write(&t.current.join("SKILL.md"), "the fix the user made by hand");
+        write(&t.replacement.join("SKILL.md"), "the fix the user made by hand");
+
+        assert!(overwritten(&t).is_empty());
+    }
+
+    /// A file that was never installed, at a path the new version now ships:
+    /// whatever is there is the user's, and it is about to be replaced.
+    #[test]
+    fn reports_a_file_the_install_never_had_when_the_new_version_adds_it() {
+        let t = trees();
+        write(&t.baseline.join("SKILL.md"), "v1");
+        write(&t.current.join("SKILL.md"), "v1");
+        write(&t.current.join("config.json"), "{\"mine\": true}");
+        write(&t.replacement.join("SKILL.md"), "v1");
+        write(&t.replacement.join("config.json"), "{\"defaults\": true}");
+
+        assert_eq!(overwritten(&t), vec!["config.json"]);
+    }
+
+    /// The same text with different line endings is not an edit: a Windows
+    /// checkout and a re-save in another editor both produce it.
+    #[test]
+    fn line_endings_alone_are_not_an_edit() {
+        let t = trees();
+        write(&t.baseline.join("SKILL.md"), "line one\nline two\n");
+        write(&t.current.join("SKILL.md"), "line one\r\nline two\r\n");
+        write(&t.replacement.join("SKILL.md"), "line one\nline two changed\n");
+
+        assert!(overwritten(&t).is_empty());
+    }
+
+    /// A path the new version lacks is a removal; one report per loss.
+    #[test]
+    fn leaves_paths_the_new_version_lacks_to_removed_paths() {
+        let t = trees();
+        write(&t.baseline.join("notes.md"), "v1");
+        write(&t.current.join("notes.md"), "edited");
+
+        assert!(overwritten(&t).is_empty());
+        assert_eq!(
+            removed_paths(&t.current, &t.replacement).unwrap(),
+            vec!["notes.md"]
+        );
+    }
+
+    /// Bytecode is rebuilt on the next run and is not the user's work.
+    #[test]
+    fn skips_regenerable_artifacts() {
+        let t = trees();
+        write(&t.current.join("scripts/__pycache__/m.cpython-311.pyc"), "local");
+        write(&t.replacement.join("scripts/__pycache__/m.cpython-311.pyc"), "shipped");
+
+        assert!(overwritten(&t).is_empty());
+    }
+
+    #[test]
+    fn an_absent_current_directory_reports_nothing_overwritten() {
+        let t = trees();
+        let gone = t.current.join("gone");
+        assert!(overwritten_paths(&gone, &t.baseline, &t.replacement)
+            .unwrap()
+            .is_empty());
     }
 }

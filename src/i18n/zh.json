@@ -389,7 +389,10 @@
       "alreadyUpToDate": "Skill 内容未变化（版本已同步）",
       "removalTitle": "这次更新会删除文件",
       "removalMessage": "更新 {{name}} 会移除 {{count}} 个新版本里没有的文件。如果其中有你自己的东西，先把它移到 skill 文件夹以外——目前还没有任何改动。",
-      "removalConfirm": "仍然更新"
+      "removalConfirm": "仍然更新",
+      "overwriteTitle": "这次更新会覆盖你改过的文件",
+      "overwriteMessage": "更新 {{name}} 会影响 {{count}} 个文件：标为「已修改」的是你改过、新版本也带的文件，你的修改会被新版本覆盖；其余是新版本里没有的文件，会被移除。需要保留的先复制到 skill 文件夹以外——目前还没有任何改动。",
+      "overwrittenMark": "（已修改，将被覆盖）"
     },
     "gitConfigEntry": "同步配置",
     "filters": {
@@ -452,7 +455,7 @@
       "clickToRemove": "点击标记为移除",
       "undoRemove": "点击保留此标签"
     },
-    "batchHeldBack": "有 {{count}} 个 skill 未更新——更新会删除文件（{{names}}）。逐个更新可以看到具体是哪些。",
+    "batchHeldBack": "有 {{count}} 个 skill 未更新——更新会删除或覆盖文件（{{names}}）。逐个更新可以看到具体是哪些。",
     "batchSyncAgents": "同步到 Agent ({{count}})",
     "batchSynced": "已同步 {{count}} 项到 Agent",
     "batchSyncFailed": "{{count}} 项同步失败",
