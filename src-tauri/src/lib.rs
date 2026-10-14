@@ -1148,5 +1148,7 @@ pub fn run() {
                     restore_main_window(app);
                 }
             }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
         });
 }
