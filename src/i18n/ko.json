@@ -645,7 +645,7 @@
     "help": "도움말",
     "website": "웹사이트",
     "about": "정보",
-    "version": "Skills Manager 1.42.0",
+    "version": "Skills Manager {{version}}",
     "tagline": "운영체제와 상관없이 여러 프리셋을 가볍고 빠르게 전환합니다.",
     "checkUpdate": "업데이트 확인",
     "checking": "확인 중…",

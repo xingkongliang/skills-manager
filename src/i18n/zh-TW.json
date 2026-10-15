@@ -645,7 +645,7 @@
     "help": "說明",
     "website": "官網",
     "about": "關於",
-    "version": "Skills Manager 1.42.0",
+    "version": "Skills Manager {{version}}",
     "tagline": "跨平台。極簡、高效、無感多 Preset 切換。",
     "checkUpdate": "檢查更新",
     "checking": "檢查中…",

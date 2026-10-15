@@ -645,7 +645,7 @@
     "help": "Help",
     "website": "Website",
     "about": "About",
-    "version": "Skills Manager 1.42.0",
+    "version": "Skills Manager {{version}}",
     "tagline": "Cross-platform. Minimal, efficient, seamless multi-preset switching.",
     "checkUpdate": "Check for Updates",
     "checking": "Checking…",
