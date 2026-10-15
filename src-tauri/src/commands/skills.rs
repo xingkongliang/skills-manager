@@ -194,6 +194,12 @@ pub struct BatchDeleteSkillsResult {
 }
 
 #[derive(Debug, Serialize)]
+pub struct InstallLocalResult {
+    pub skill_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ManagedSkillDto {
     pub id: String,
     pub name: String,
@@ -887,7 +893,7 @@ pub async fn install_local(
     source_path: String,
     name: Option<String>,
     store: State<'_, Arc<SkillStore>>,
-) -> Result<(), AppError> {
+) -> Result<InstallLocalResult, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let outcome = (|| -> Result<(String, String), AppError> {
@@ -913,7 +919,7 @@ pub async fn install_local(
             Ok((skill_id, skill_name))
         })();
         log_install_outcome(&store, "local", outcome.as_ref());
-        outcome.map(|_| ())
+        outcome.map(|(skill_id, name)| InstallLocalResult { skill_id, name })
     })
     .await?
 }

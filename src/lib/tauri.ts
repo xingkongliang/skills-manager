@@ -259,11 +259,16 @@ export interface BatchDeleteSkillsResult {
   failed: string[];
 }
 
+export interface InstallLocalResult {
+  skill_id: string;
+  name: string;
+}
+
 export const deleteManagedSkills = (skillIds: string[]) =>
   invoke<BatchDeleteSkillsResult>("delete_managed_skills", { skillIds });
 
 export const installLocal = (sourcePath: string, name?: string) =>
-  invoke<void>("install_local", { sourcePath, name: name || null });
+  invoke<InstallLocalResult>("install_local", { sourcePath, name: name || null });
 
 export const installGit = (repoUrl: string, name?: string) =>
   invoke<void>("install_git", { repoUrl, name: name || null });

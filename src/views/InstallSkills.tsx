@@ -300,10 +300,11 @@ export function InstallSkills() {
   }, [activeTab, scanLoading, scanResult, runScan]);
 
   const installLocalSource = async (sourcePath: string) => {
-    const name = sourcePath.split("/").pop() || sourcePath;
+    const name = sourcePath.replace(/\\/g, "/").split("/").pop() || sourcePath;
     const toastId = toast.loading(t("install.toast.installing", { name }));
+    let installed: api.InstallLocalResult;
     try {
-      await api.installLocal(sourcePath);
+      installed = await api.installLocal(sourcePath);
     } catch (e) {
       const message = getErrorMessage(e, t("common.error"));
       setLocalError(message);
@@ -318,11 +319,14 @@ export function InstallSkills() {
       runScanSilent(),
     ]);
     warnRejected(results, "post-install refresh");
-    toast.success(t("install.toast.success", { name }), {
+    toast.success(t("install.toast.success", { name: installed.name }), {
       id: toastId,
       action: {
         label: t("install.toast.view"),
-        onClick: () => goToSkill(name),
+        onClick: () => {
+          openSkillDetailById(installed.skill_id);
+          navigate("/my-skills");
+        },
       },
     });
   };
