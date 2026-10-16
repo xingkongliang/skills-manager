@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cn } from "../utils";
@@ -130,35 +130,49 @@ export function PresetBar({
           const isLoading = loadingKey?.startsWith(preset.id) ?? false;
 
           return (
-            <button
-              key={preset.id}
-              onClick={() => {
-                if (busy) return;
-                if (s.status === "active") handleDeactivate(preset);
-                else handleActivate(preset);
-              }}
-              disabled={busy}
-              title={preset.description ? `${preset.name} — ${preset.description}` : preset.name}
-              className={cn(
-                "inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[12px] font-medium transition-colors disabled:opacity-50",
-                s.status === "active"
-                  ? `${presetIcon.activeClass} ${presetIcon.colorClass}`
-                  : s.status === "partial"
-                  ? "border-amber-400/50 bg-amber-500/8 text-amber-600 dark:text-amber-400 hover:bg-amber-500/12"
-                  : "border-border-subtle text-faint hover:border-border hover:text-muted"
-              )}
-            >
-              {isLoading
-                ? <Loader2 className="h-3 w-3 animate-spin" />
-                : <Icon className="h-3 w-3" />}
-              <span className="max-w-[140px] truncate">{preset.name}</span>
-              {s.status === "active" && <Check className="h-3 w-3 shrink-0" />}
+            <div key={preset.id} className="inline-flex shrink-0 items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => {
+                  if (busy) return;
+                  if (s.status === "active") handleDeactivate(preset);
+                  else handleActivate(preset);
+                }}
+                disabled={busy}
+                title={preset.description ? `${preset.name} — ${preset.description}` : preset.name}
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[12px] font-medium transition-colors disabled:opacity-50",
+                  s.status === "active"
+                    ? `${presetIcon.activeClass} ${presetIcon.colorClass}`
+                    : s.status === "partial"
+                    ? "border-amber-400/50 bg-amber-500/8 text-amber-600 dark:text-amber-400 hover:bg-amber-500/12"
+                    : "border-border-subtle text-faint hover:border-border hover:text-muted"
+                )}
+              >
+                {isLoading
+                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                  : <Icon className="h-3 w-3" />}
+                <span className="max-w-[140px] truncate">{preset.name}</span>
+                {s.status === "active" && <Check className="h-3 w-3 shrink-0" />}
+                {s.status === "partial" && (
+                  <span className="rounded-full bg-amber-500/20 px-1.5 py-px text-[11px] font-semibold">
+                    {s.installed}/{s.total}
+                  </span>
+                )}
+              </button>
               {s.status === "partial" && (
-                <span className="rounded-full bg-amber-500/20 px-1.5 py-px text-[11px] font-semibold">
-                  {s.installed}/{s.total}
-                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => { if (!busy) void handleDeactivate(preset); }}
+                  title={t("presetActions.removePreset", { name: preset.name })}
+                  aria-label={t("presetActions.removePreset", { name: preset.name })}
+                  className="rounded-full p-1 text-amber-600 transition-colors hover:bg-amber-500/12 disabled:opacity-50 dark:text-amber-400"
+                >
+                  <X className="h-3 w-3" />
+                </button>
               )}
-            </button>
+            </div>
           );
         })}
       </div>

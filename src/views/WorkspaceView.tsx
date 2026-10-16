@@ -207,12 +207,13 @@ function WorkspaceSkillCard({
   );
 }
 
-function getLocalStatusMeta(t: (key: string) => string, status: ProjectSkill["sync_status"]) {
-  switch (status) {
+function getLocalStatusMeta(t: (key: string) => string, skill: ProjectSkill, managedIds: Set<string>) {
+  const isManaged = !!skill.center_skill_id && managedIds.has(skill.center_skill_id);
+  switch (skill.sync_status) {
     case "in_sync":
       return {
-        label: t("globalWorkspace.localSkills.status.inSync"),
-        className: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+        label: t(isManaged ? "globalWorkspace.localSkills.status.inSync" : "globalWorkspace.localSkills.status.unmanaged"),
+        className: isManaged ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-surface-hover text-muted",
       };
     case "project_newer":
       return {
@@ -465,11 +466,6 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       });
   }, [localSkills, search, tagFilters]);
 
-  const inSyncLocalCount = useMemo(
-    () => localSkills.filter((skill) => skill.sync_status === "in_sync").length,
-    [localSkills]
-  );
-
   const installedIds = useMemo(() => new Set(agentSkills.map((s) => s.id)), [agentSkills]);
 
   const managedLocalIds = useMemo(
@@ -484,6 +480,12 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
 
   const managedLocalCount = useMemo(
     () => localSkills.filter((skill) => !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id)).length,
+    [localSkills, managedLocalIds]
+  );
+
+  const inSyncLocalCount = useMemo(
+    () => localSkills.filter((skill) => skill.sync_status === "in_sync"
+      && !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id)).length,
     [localSkills, managedLocalIds]
   );
 
@@ -523,7 +525,6 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     () => visibleLocalSkills.filter((skill) =>
       selectedIds.has(localSkillKey(skill))
       && !(skill.center_skill_id && managedLocalIds.has(skill.center_skill_id))
-      && skill.sync_status === "project_only"
     ),
     [visibleLocalSkills, selectedIds, managedLocalIds]
   );
@@ -718,13 +719,11 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     const canPull = skill.sync_status === "center_newer" || skill.sync_status === "diverged";
     const isInSync = skill.sync_status === "in_sync";
     const isManaged = !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id);
-    const canDeleteLocal = !isManaged && skill.sync_status === "project_only";
+    const canDeleteLocal = !isManaged;
     const removing = removingLocalSkillId === skill.relative_path;
     const buttonClassName = variant === "grid"
       ? "rounded-md px-2 py-1 text-[13px] font-medium text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
       : "rounded-md p-0.5 text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50";
-
-    if (isInSync && !isManaged) return null;
 
     return (
       <>
@@ -746,7 +745,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           </button>
         )}
 
-        {!isInSync && (
+        {(!isInSync || !isManaged) && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -1123,7 +1122,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           )}
         >
           {visibleLocalSkills.map((skill) => {
-            const statusMeta = getLocalStatusMeta(t, skill.sync_status);
+            const statusMeta = getLocalStatusMeta(t, skill, managedLocalIds);
             const isManaged = !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id);
             const key = localSkillKey(skill);
 
@@ -1171,8 +1170,8 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         meta={
           localDetailSkill ? (
             <div className="flex flex-wrap items-center gap-2">
-              <span className={cn("rounded-full px-2.5 py-1 text-[12px] font-medium", getLocalStatusMeta(t, localDetailSkill.sync_status).className)}>
-                {getLocalStatusMeta(t, localDetailSkill.sync_status).label}
+              <span className={cn("rounded-full px-2.5 py-1 text-[12px] font-medium", getLocalStatusMeta(t, localDetailSkill, managedLocalIds).className)}>
+                {getLocalStatusMeta(t, localDetailSkill, managedLocalIds).label}
               </span>
               <span className="rounded-full bg-surface-hover px-2.5 py-1 text-[12px] text-muted">
                 {localDetailSkill.relative_path}

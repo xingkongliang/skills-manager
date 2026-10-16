@@ -1025,6 +1025,7 @@
     "action": "操作",
     "addMissing": "加入缺少的 Skills",
     "removeMatching": "移除符合的 Skills",
+    "removePreset": "從目前工作區移除 {{name}}",
     "agents": "Agents",
     "selectAgents": "請至少選擇一個 Agent",
     "noPresets": "沒有可用 Preset",
@@ -1108,12 +1109,13 @@
       "status": {
         "localOnly": "僅本機",
         "inSync": "已同步",
+        "unmanaged": "與技能庫一致 · 未受管理",
         "localNewer": "本機有變更",
         "centerNewer": "中心有變更",
         "diverged": "衝突"
       },
       "deleteLocalSelected": "永久刪除 {{count}} 個",
-      "deleteLocalBatchConfirm": "永久刪除 {{agent}} 裡的 {{count}} 個本機 Skill？這些 Skill 只存在於該 Agent 目錄，刪除後無法復原。",
+      "deleteLocalBatchConfirm": "永久刪除 {{agent}} 裡的 {{count}} 個本機 Skill？本機檔案刪除後無法復原，已有的技能庫副本會保留。",
       "deletedLocalBatch": "已刪除 {{count}} 個本機 Skill",
       "deleteLocalBatchFailed": "{{count}} 個本機 Skill 刪除失敗"
     }

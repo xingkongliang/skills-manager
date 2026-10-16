@@ -1025,6 +1025,7 @@
     "action": "操作",
     "addMissing": "添加缺失 Skills",
     "removeMatching": "移除匹配 Skills",
+    "removePreset": "从当前工作区移除 {{name}}",
     "agents": "Agents",
     "selectAgents": "请至少选择一个 Agent",
     "noPresets": "没有可用 Preset",
@@ -1108,12 +1109,13 @@
       "status": {
         "localOnly": "仅本地",
         "inSync": "已同步",
+        "unmanaged": "与技能库一致 · 未受管理",
         "localNewer": "本地有变更",
         "centerNewer": "中心有变更",
         "diverged": "冲突"
       },
       "deleteLocalSelected": "永久删除 {{count}} 个",
-      "deleteLocalBatchConfirm": "永久删除 {{agent}} 里的 {{count}} 个本地 Skill？这些 Skill 只存在于该 Agent 目录，删除后无法恢复。",
+      "deleteLocalBatchConfirm": "永久删除 {{agent}} 里的 {{count}} 个本地 Skill？本地文件删除后无法恢复，已有的技能库副本会保留。",
       "deletedLocalBatch": "已删除 {{count}} 个本地 Skill",
       "deleteLocalBatchFailed": "{{count}} 个本地 Skill 删除失败"
     }

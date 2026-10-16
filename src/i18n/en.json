@@ -1025,6 +1025,7 @@
     "action": "Action",
     "addMissing": "Add missing skills",
     "removeMatching": "Remove matching skills",
+    "removePreset": "Remove {{name}} from this workspace",
     "agents": "Agents",
     "selectAgents": "Select at least one agent",
     "noPresets": "No presets available",
@@ -1108,12 +1109,13 @@
       "status": {
         "localOnly": "Local only",
         "inSync": "In sync",
+        "unmanaged": "Matches library · unmanaged",
         "localNewer": "Local changed",
         "centerNewer": "Center changed",
         "diverged": "Conflict"
       },
       "deleteLocalSelected": "Delete {{count}} permanently",
-      "deleteLocalBatchConfirm": "Permanently delete {{count}} local skills from {{agent}}? They exist only in this agent’s folder and cannot be recovered.",
+      "deleteLocalBatchConfirm": "Permanently delete {{count}} local skills from {{agent}}? Local files cannot be recovered; any central library copies are kept.",
       "deletedLocalBatch": "{{count}} local skills deleted",
       "deleteLocalBatchFailed": "{{count}} local skills failed to delete"
     }
