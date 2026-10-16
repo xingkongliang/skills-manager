@@ -240,14 +240,14 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
         ToolAdapter {
             key: "antigravity".into(),
             display_name: "Antigravity".into(),
-            relative_skills_dir: ".gemini/antigravity/skills".into(),
+            relative_skills_dir: ".gemini/config/skills".into(),
             relative_detect_dir: ".gemini/antigravity".into(),
             additional_scan_dirs: vec![],
             override_skills_dir: None,
             category: ToolCategory::Coding,
             is_custom: false,
             recursive_scan: false,
-            project_relative_skills_dir: None,
+            project_relative_skills_dir: Some(".agents/skills".into()),
         },
         ToolAdapter {
             key: "amp".into(),
@@ -698,7 +698,7 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             category: ToolCategory::Coding,
             is_custom: false,
             recursive_scan: false,
-            project_relative_skills_dir: None,
+            project_relative_skills_dir: Some(".trae/skills".into()),
         },
         ToolAdapter {
             key: "zencoder".into(),
@@ -1004,21 +1004,43 @@ pub fn enabled_installed_adapters(
 #[cfg(test)]
 mod tests {
     use super::{
-        CustomToolDef, ToolCategory, all_tool_adapters, default_tool_adapters,
-        find_adapter_with_store,
+        all_tool_adapters, default_tool_adapters, find_adapter_with_store, CustomToolDef,
+        ToolCategory,
     };
     use crate::core::skill_store::SkillStore;
 
     use tempfile::tempdir;
 
     #[test]
-    fn antigravity_uses_current_default_skills_path() {
+    fn antigravity_uses_expected_default_paths() {
         let adapter = default_tool_adapters()
             .into_iter()
             .find(|adapter| adapter.key == "antigravity")
             .expect("antigravity adapter should exist");
 
-        assert_eq!(adapter.relative_skills_dir, ".gemini/antigravity/skills");
+        assert_eq!(adapter.relative_skills_dir, ".gemini/config/skills");
+        assert_eq!(adapter.relative_detect_dir, ".gemini/antigravity");
+        assert_eq!(
+            adapter.project_relative_skills_dir.as_deref(),
+            Some(".agents/skills")
+        );
+        assert_eq!(adapter.project_relative_skills_dir(), ".agents/skills");
+    }
+
+    #[test]
+    fn trae_cn_uses_expected_default_paths() {
+        let adapter = default_tool_adapters()
+            .into_iter()
+            .find(|adapter| adapter.key == "trae_cn")
+            .expect("trae_cn adapter should exist");
+
+        assert_eq!(adapter.relative_skills_dir, ".trae-cn/skills");
+        assert_eq!(adapter.relative_detect_dir, ".trae-cn");
+        assert_eq!(
+            adapter.project_relative_skills_dir.as_deref(),
+            Some(".trae/skills")
+        );
+        assert_eq!(adapter.project_relative_skills_dir(), ".trae/skills");
     }
 
     #[test]
@@ -1062,7 +1084,11 @@ mod tests {
             CustomToolDef {
                 key: "omp_agent".to_string(),
                 display_name: "Legacy Custom OMP".to_string(),
-                skills_dir: tmp.path().join("legacy-skills").to_string_lossy().into_owned(),
+                skills_dir: tmp
+                    .path()
+                    .join("legacy-skills")
+                    .to_string_lossy()
+                    .into_owned(),
                 project_relative_skills_dir: Some(".legacy/skills".to_string()),
                 category: ToolCategory::Lobster,
             },
@@ -1075,7 +1101,10 @@ mod tests {
             },
         ];
         store
-            .set_setting("custom_tools", &serde_json::to_string(&custom_tools).unwrap())
+            .set_setting(
+                "custom_tools",
+                &serde_json::to_string(&custom_tools).unwrap(),
+            )
             .unwrap();
 
         let adapters = all_tool_adapters(&store);
@@ -1101,7 +1130,10 @@ mod tests {
         assert!(custom_adapter.is_custom);
         assert_eq!(custom_adapter.category, ToolCategory::Lobster);
         assert_eq!(custom_adapter.skills_dir(), custom_skills);
-        assert_eq!(custom_adapter.project_relative_skills_dir(), custom_project_path);
+        assert_eq!(
+            custom_adapter.project_relative_skills_dir(),
+            custom_project_path
+        );
 
         let found = find_adapter_with_store(&store, "omp_agent").unwrap();
         assert_eq!(found.display_name, "OMP Agent");
