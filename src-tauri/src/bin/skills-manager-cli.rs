@@ -791,6 +791,7 @@ fn run_tools(args: ToolsArgs, store: &SkillStore, json: bool) -> anyhow::Result<
                 name.as_deref().unwrap_or(&key),
                 &path,
                 project_path.as_deref(),
+                None,
             )
             .map_err(map_app_err)?;
             store.log_audit(AuditDraft::new("add_custom_agent").tool(key.clone()).ok());
@@ -3256,6 +3257,7 @@ mod tests {
                 skills_dir: target_root.to_string_lossy().to_string(),
                 project_relative_skills_dir: None,
                 category: ToolCategory::Coding,
+                icon: None,
             }],
         )
         .unwrap();
@@ -3468,6 +3470,7 @@ mod tests {
             skills_dir: target_root.to_string_lossy().to_string(),
             project_relative_skills_dir: None,
             category: ToolCategory::Coding,
+            icon: None,
         };
         tool_service::set_custom_tools(&store, &[test_agent.clone()]).unwrap();
         store.set_setting("sync_mode", "copy").unwrap();
