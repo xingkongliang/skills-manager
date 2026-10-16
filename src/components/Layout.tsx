@@ -6,6 +6,8 @@ import { CommandPalette } from "./CommandPalette";
 import { useApp } from "../context/AppContext";
 import { useTranslation } from "react-i18next";
 import { useDragWindow } from "../hooks/useDragWindow";
+import { IS_MACOS } from "../lib/platform";
+import { cn } from "../utils";
 
 export function Layout() {
   const { t } = useTranslation();
@@ -35,14 +37,18 @@ export function Layout() {
 
   return (
     <div className="relative flex h-full w-full overflow-hidden bg-background text-primary">
-      {/* Full-width top drag bar — spans sidebar + content, with bottom divider */}
-      <div
-        onMouseDown={onDrag}
-        className="absolute inset-x-0 top-0 z-50 h-[28px] border-b border-border-subtle bg-bg-secondary"
-      />
+      {/* Reserve the drag region for macOS overlay window controls. */}
+      {IS_MACOS && (
+        <div
+          onMouseDown={onDrag}
+          className="absolute inset-x-0 top-0 z-50 h-[28px] border-b border-border-subtle bg-bg-secondary"
+        />
+      )}
       <Sidebar />
       <div className="relative flex min-w-[600px] flex-1 flex-col overflow-hidden">
-        <div className="flex-1 overflow-y-auto px-5 pb-5 pt-[calc(28px+20px)] scrollbar-hide">
+        <div
+          className={cn("flex-1 overflow-y-auto px-5 pb-5 scrollbar-hide", IS_MACOS ? "pt-[calc(28px+20px)]" : "pt-5")}
+        >
           <div className="mx-auto flex min-h-full max-w-[1200px] flex-col gap-4">
             {appError ? (
               <StatusBanner

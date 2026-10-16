@@ -29,6 +29,7 @@ import { AgentIcon } from "./AgentIcon";
 import * as api from "../lib/tauri";
 import type { SyncHealth, ToolCategory, ToolInfo } from "../lib/tauri";
 import { getPresetIconOption } from "../lib/presetIcons";
+import { IS_MACOS } from "../lib/platform";
 
 function getSyncHealthIndicator(health: SyncHealth, skillCount: number): { color: string; title: string } | null {
   if (skillCount === 0) return null;
@@ -378,9 +379,9 @@ export function Sidebar() {
   return (
     <>
       <div className="w-[220px] flex-shrink-0 bg-bg-secondary border-r border-border-subtle h-full flex flex-col select-none relative z-10">
-        {/* Traffic-light safe zone */}
-        <div className="h-[38px] shrink-0" />
-        {/* App logo — sits below macOS window controls */}
+        {/* Only macOS needs the extra 28px for overlaid window controls. */}
+        <div className={cn("shrink-0", IS_MACOS ? "h-[38px]" : "h-2.5")} />
+        {/* App logo — follows the platform's title-bar spacing. */}
         <div className="flex items-center px-3 gap-3 pb-2.5 shrink-0">
           <img
             src="/icons/32x32.png"

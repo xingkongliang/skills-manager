@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { IS_MACOS } from "../lib/platform";
+import { cn } from "../utils";
 
 interface DetailSheetProps {
   open: boolean;
@@ -42,8 +43,12 @@ export function DetailSheet({
 
   if (!open) return null;
 
+  // Reserve space for the macOS drag bar.
   return createPortal(
-    <div ref={sheetRef} className="fixed top-[28px] right-0 bottom-0 left-[220px] z-40 isolate">
+    <div
+      ref={sheetRef}
+      className={cn("fixed right-0 bottom-0 left-[220px] z-40 isolate", IS_MACOS ? "top-[28px]" : "top-0")}
+    >
       <div
         className={
           IS_MACOS
