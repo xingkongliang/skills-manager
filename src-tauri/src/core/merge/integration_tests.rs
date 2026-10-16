@@ -77,6 +77,7 @@ impl Env {
         let dev = Device { base, skills, store, name: "Device A" };
         dev.activate();
         git(&dev.skills, &["init", "-b", "main"]);
+        git(&dev.skills, &["config", "--local", "core.excludesFile", ""]);
         git_backup::configure_device_identity(&dev.skills, dev.name).unwrap();
         git(&dev.skills, &["remote", "add", "origin", self.remote.to_str().unwrap()]);
         dev
@@ -97,6 +98,7 @@ impl Env {
             .success());
         let store = SkillStore::new(&base.join("db.sqlite")).unwrap();
         let dev = Device { base, skills, store, name: "Device B" };
+        git(&dev.skills, &["config", "--local", "core.excludesFile", ""]);
         dev.activate();
         git_backup::configure_device_identity(&dev.skills, dev.name).unwrap();
         dev.reindex();
