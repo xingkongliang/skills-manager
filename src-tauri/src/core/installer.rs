@@ -154,6 +154,24 @@ pub fn install_skill_dir_to_destination(
 ) -> Result<InstallResult> {
     let meta = skill_metadata::parse_skill_md(source);
 
+    // A local skill can be a symlink back to this exact central directory
+    // (for example, after restoring the database). Treat that as an already
+    // installed directory: removing `destination` here would delete the data
+    // that `source` resolves to before the copy starts.
+    if source != destination {
+        let source_canonical = source.canonicalize().ok();
+        let destination_canonical = destination.canonicalize().ok();
+        if source_canonical.is_some() && source_canonical == destination_canonical {
+            let hash = content_hash::hash_directory(destination)?;
+            return Ok(InstallResult {
+                name: name.to_string(),
+                description: meta.description,
+                central_path: destination.to_path_buf(),
+                content_hash: hash,
+            });
+        }
+    }
+
     sync_engine::ensure_dst_not_inside_src(source, destination)?;
 
     if destination.exists() {
