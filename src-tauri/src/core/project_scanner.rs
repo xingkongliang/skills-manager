@@ -48,27 +48,42 @@ pub fn read_project_skills(
     agent_configs: &[AgentSkillConfig],
 ) -> Vec<ProjectSkillInfo> {
     let mut skills = Vec::new();
+    let mut scanned_by_dir: std::collections::HashMap<String, Vec<ProjectSkillInfo>> =
+        std::collections::HashMap::new();
 
     for config in agent_configs {
-        let skills_dir = project_path.join(&config.relative_skills_dir);
-        let disabled_dir = project_path.join(format!("{}-disabled", &config.relative_skills_dir));
+        let scanned = scanned_by_dir
+            .entry(config.relative_skills_dir.clone())
+            .or_insert_with(|| {
+                let mut scanned = Vec::new();
+                let skills_dir = project_path.join(&config.relative_skills_dir);
+                let disabled_dir =
+                    project_path.join(format!("{}-disabled", &config.relative_skills_dir));
 
-        read_skills_from_dir(
-            &skills_dir,
-            true,
-            &config.key,
-            &config.display_name,
-            &mut skills,
-            true,
-        );
-        read_skills_from_dir(
-            &disabled_dir,
-            false,
-            &config.key,
-            &config.display_name,
-            &mut skills,
-            true,
-        );
+                read_skills_from_dir(
+                    &skills_dir,
+                    true,
+                    &config.key,
+                    &config.display_name,
+                    &mut scanned,
+                    true,
+                );
+                read_skills_from_dir(
+                    &disabled_dir,
+                    false,
+                    &config.key,
+                    &config.display_name,
+                    &mut scanned,
+                    true,
+                );
+                scanned
+            });
+
+        skills.extend(scanned.iter().cloned().map(|mut skill| {
+            skill.agent = config.key.clone();
+            skill.agent_display_name = config.display_name.clone();
+            skill
+        }));
     }
 
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
