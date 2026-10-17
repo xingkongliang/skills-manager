@@ -1,3 +1,4 @@
+use super::git_command::git_command;
 use crate::core::central_repo;
 use crate::core::git_credentials;
 use crate::core::log_sanitize;
@@ -23,18 +24,6 @@ pub const CLONE_TEMP_PREFIX: &str = "skills-manager-clone-";
 
 /// Callback type for reporting clone progress messages to the UI.
 pub type ProgressCallback = Box<dyn Fn(&str) + Send>;
-
-/// Create a `Command` for git that hides the console window on Windows.
-fn git_command() -> Command {
-    #[allow(unused_mut)]
-    let mut cmd = Command::new("git");
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    cmd
-}
 
 #[derive(Debug, Clone)]
 pub struct ParsedGitSource {

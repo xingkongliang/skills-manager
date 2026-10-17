@@ -1,24 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::git2_engine;
+use super::git_command::git_command;
 use super::git_credentials;
 use super::merge::protocol;
 use super::repo_lock::RepoLock;
-
-/// Create a `Command` for git that hides the console window on Windows.
-fn git_command() -> Command {
-    #[allow(unused_mut)]
-    let mut cmd = Command::new("git");
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    cmd
-}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GitBackupStatus {
@@ -1992,6 +1980,7 @@ fn parse_restored_from_tag_message(message: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     // ── redact_url ──
 

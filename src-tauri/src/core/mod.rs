@@ -10,6 +10,7 @@ pub mod file_manager;
 pub mod file_watcher;
 pub mod git2_engine;
 pub mod git_backup;
+mod git_command;
 pub mod git_credentials;
 pub mod git_fetcher;
 pub mod github_api;
