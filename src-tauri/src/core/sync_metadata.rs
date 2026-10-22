@@ -11,6 +11,7 @@ use super::central_repo;
 use super::repo_lock::RepoLock;
 use super::skill_metadata;
 use super::skill_store::{ScenarioRecord, SkillRecord, SkillStore};
+use super::tool_adapters::{all_tool_adapters, ToolAdapter};
 
 const SCHEMA_VERSION: u32 = 1;
 const APP_MIN_VERSION: &str = "2.0.0";
@@ -205,6 +206,20 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
     // merge collision reshuffles) cannot trip the UNIQUE constraint mid-loop.
     store.park_central_paths_for_reindex()?;
 
+    // Only worth scanning when a local path is actually missing; the walk
+    // touches every agent directory on disk.
+    let local_sources = if skills.iter().any(|m| {
+        matches!(m.source.source_type.as_str(), "import" | "local")
+            && existing_by_id
+                .get(&m.skill_id)
+                .map(|s| s.source_ref.is_none())
+                .unwrap_or(true)
+    }) {
+        local_source_index(store)
+    } else {
+        HashMap::new()
+    };
+
     for meta in skills {
         let skill_dir = skills_root.join(&meta.path);
         if !skill_dir.is_dir() {
@@ -223,7 +238,15 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
             .unwrap_or(inferred_name);
         let previous = existing_by_id.get(&meta.skill_id);
         let source_ref = if matches!(meta.source.source_type.as_str(), "import" | "local") {
-            previous.and_then(|s| s.source_ref.clone())
+            // The synced metadata never carries a local path (it is
+            // machine-specific). Prefer whatever this machine recorded before;
+            // on a machine that has never seen the skill — a restore, a fresh
+            // clone — locate it by name among the agent directories here.
+            previous.and_then(|s| s.source_ref.clone()).or_else(|| {
+                local_sources
+                    .get(&name)
+                    .map(|path| path.to_string_lossy().to_string())
+            })
         } else {
             meta.source.ref_.clone()
         };
@@ -441,6 +464,56 @@ fn remove_stale_json_files(dir: &Path, expected_stems: &HashSet<String>) -> Resu
         }
     }
     Ok(())
+}
+
+/// Every skill directory this machine's agents would load, keyed by folder
+/// name.
+///
+/// A restored library cannot carry `source_ref` for local skills: the path is
+/// machine-specific, so `write_skill_file` deliberately drops it. The reading
+/// side then had nothing to fall back on, and every local skill on a new
+/// machine ended up with no source at all — "source missing" in the UI, and
+/// Reimport (the action that exists to repair that) unable to do anything.
+/// Matching by folder name against the directories that actually exist here is
+/// the one signal both machines share.
+fn local_source_index(store: &SkillStore) -> HashMap<String, PathBuf> {
+    let mut index = HashMap::new();
+    for adapter in all_tool_adapters(store) {
+        for root in adapter.all_scan_dirs() {
+            collect_skill_dirs(&root, 0, &mut index);
+        }
+    }
+    index
+}
+
+/// Two levels: a flat agent directory (`~/.claude/skills/<name>`) and one
+/// category level (`hermes/skills/<category>/<name>`). Deeper trees are not
+/// walked — a skill nested further is unlikely to be a name this index should
+/// answer for, and the walk runs on every reindex.
+fn collect_skill_dirs(dir: &Path, depth: usize, index: &mut HashMap<String, PathBuf>) {
+    if depth > 1 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            continue;
+        };
+        if skill_metadata::is_valid_skill_dir(&path) {
+            // First writer wins: a flat agent directory is found before the
+            // category layout of the same tool, and the earlier adapter in
+            // priority order is the one the user actually uses.
+            index.entry(name).or_insert(path);
+        } else {
+            collect_skill_dirs(&path, depth + 1, index);
+        }
+    }
 }
 
 fn write_skill_file(skill: &SkillRecord, tags: &[String]) -> Result<()> {
@@ -724,6 +797,69 @@ mod tests {
             _tmp: tmp,
             store,
         }
+    }
+
+    /// A restored library has no local source path (it is machine-specific),
+    /// so the only way to re-point a skill is to find its folder among the
+    /// agent directories this machine actually has. Flat agent layouts and
+    /// Hermes' one-category-deep layout both have to be found.
+    #[test]
+    fn a_local_source_index_finds_flat_and_categorised_skill_dirs() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        let flat = root.join("flat").join("pdf-tools");
+        fs::create_dir_all(&flat).unwrap();
+        fs::write(flat.join("SKILL.md"), "---\nname: pdf-tools\n---\n").unwrap();
+
+        let nested = root.join("nested").join("devops").join("docker-ops");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("SKILL.md"), "---\nname: docker-ops\n---\n").unwrap();
+
+        // A directory that is neither: not a skill, and its children are not
+        // reached because the walk only goes one level deeper.
+        fs::create_dir_all(root.join("nested").join("empty-category")).unwrap();
+
+        let mut index = HashMap::new();
+        collect_skill_dirs(&root.join("flat"), 0, &mut index);
+        collect_skill_dirs(&root.join("nested"), 0, &mut index);
+
+        assert_eq!(
+            index.get("pdf-tools").map(|p| p.as_path()),
+            Some(flat.as_path())
+        );
+        assert_eq!(
+            index.get("docker-ops").map(|p| p.as_path()),
+            Some(nested.as_path())
+        );
+        assert!(!index.contains_key("empty-category"));
+        assert_eq!(index.len(), 2);
+    }
+
+    /// The first directory found wins: a flat skill directory is matched before
+    /// the same name under a category, and the adapter priority order decides
+    /// which agent is found first.
+    #[test]
+    fn a_local_source_index_keeps_the_first_match_for_a_name() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        let first = root.join("first").join("shared");
+        fs::create_dir_all(&first).unwrap();
+        fs::write(first.join("SKILL.md"), "---\nname: shared\n---\n").unwrap();
+
+        let second = root.join("second").join("shared");
+        fs::create_dir_all(&second).unwrap();
+        fs::write(second.join("SKILL.md"), "---\nname: shared\n---\n").unwrap();
+
+        let mut index = HashMap::new();
+        collect_skill_dirs(&root.join("first"), 0, &mut index);
+        collect_skill_dirs(&root.join("second"), 0, &mut index);
+
+        assert_eq!(
+            index.get("shared").map(|p| p.as_path()),
+            Some(first.as_path())
+        );
     }
 
     fn write_skill_dir(name: &str) -> PathBuf {
