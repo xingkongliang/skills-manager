@@ -16,6 +16,7 @@ pub mod git_fetcher;
 pub mod github_api;
 pub mod install_cancel;
 pub mod installer;
+pub mod linux_display;
 pub mod log_sanitize;
 pub mod merge;
 pub mod migrations;
