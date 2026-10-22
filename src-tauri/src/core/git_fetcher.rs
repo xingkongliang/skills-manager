@@ -486,7 +486,9 @@ fn is_ssh_warning(line: &str) -> bool {
         || trimmed.starts_with("See https://openssh.com")
 }
 
-fn spawn_stderr_collector(
+/// Drain a child's stderr on a thread, filtering SSH warnings.
+/// Returns the progress channel plus a handle yielding the collected text.
+pub(crate) fn spawn_stderr_collector(
     stderr: Option<ChildStderr>,
     forward_progress: bool,
 ) -> (
