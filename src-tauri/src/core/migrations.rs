@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 8;
+const LATEST_VERSION: u32 = 12;
 
 /// Run all pending migrations on the database.
 ///
@@ -55,6 +55,10 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         5 => migrate_v5_to_v6(conn),
         6 => migrate_v6_to_v7(conn),
         7 => migrate_v7_to_v8(conn),
+        8 => migrate_v8_to_v9(conn),
+        9 => migrate_v9_to_v10(conn),
+        10 => migrate_v10_to_v11(conn),
+        11 => migrate_v11_to_v12(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -295,6 +299,152 @@ fn migrate_v6_to_v7(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v7 → v8: package inventory and scope-aware host bindings.
+///
+/// Package sources stay in the managed cache. Bindings describe desired and
+/// observed host state; project-shared bindings are mirrored to the project's
+/// `.skillapse/project.json` manifest by the package service.
+fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS packages (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            source_url TEXT NOT NULL UNIQUE,
+            requested_revision TEXT,
+            resolved_revision TEXT NOT NULL,
+            cache_path TEXT NOT NULL UNIQUE,
+            manifest_kind TEXT NOT NULL DEFAULT 'none',
+            status TEXT NOT NULL DEFAULT 'ready'
+                CHECK(status IN ('ready', 'invalid', 'update_available')),
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS package_components (
+            id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL
+                CHECK(kind IN ('skill', 'rule', 'agent', 'command', 'hook', 'mcp')),
+            name TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            host_hint TEXT,
+            required INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(package_id, kind, relative_path)
+        );
+
+        CREATE TABLE IF NOT EXISTS package_surfaces (
+            id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+            tool TEXT NOT NULL,
+            kind TEXT NOT NULL
+                CHECK(kind IN ('native_plugin', 'host_bundle', 'portable_skills', 'setup_script')),
+            root_path TEXT NOT NULL,
+            manifest_path TEXT,
+            priority INTEGER NOT NULL DEFAULT 0,
+            coverage_json TEXT NOT NULL DEFAULT '[]',
+            install_command_json TEXT,
+            UNIQUE(package_id, tool, kind, root_path)
+        );
+
+        CREATE TABLE IF NOT EXISTS package_bindings (
+            id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+            tool TEXT NOT NULL,
+            scope TEXT NOT NULL
+                CHECK(scope IN ('user', 'project_shared', 'project_local', 'managed')),
+            project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+            surface_policy TEXT NOT NULL DEFAULT 'auto'
+                CHECK(surface_policy IN ('auto', 'native', 'portable', 'setup')),
+            requested_components_json TEXT NOT NULL DEFAULT '[]',
+            desired_enabled INTEGER NOT NULL DEFAULT 1,
+            resolved_surface_id TEXT REFERENCES package_surfaces(id) ON DELETE SET NULL,
+            compatibility TEXT NOT NULL DEFAULT 'unsupported'
+                CHECK(compatibility IN ('full', 'partial', 'unsupported')),
+            state TEXT NOT NULL DEFAULT 'not_applied'
+                CHECK(state IN ('not_applied', 'planned', 'installed', 'partial', 'drifted', 'failed')),
+            target_ref TEXT,
+            applied_revision TEXT,
+            approved_plan_hash TEXT,
+            last_error TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            CHECK(
+                (scope IN ('user', 'managed') AND project_id IS NULL)
+                OR (scope IN ('project_shared', 'project_local') AND project_id IS NOT NULL)
+            )
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_package_bindings_identity
+            ON package_bindings(package_id, tool, scope, IFNULL(project_id, ''));
+        CREATE INDEX IF NOT EXISTS idx_package_components_package
+            ON package_components(package_id);
+        CREATE INDEX IF NOT EXISTS idx_package_surfaces_package_tool
+            ON package_surfaces(package_id, tool);
+        ",
+    )?;
+    Ok(())
+}
+
+fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
+    // Upstream v8 only removed a setting; the fork's v8 created packages.
+    // Ensure the package tables exist for either lineage before adding columns.
+    migrate_v7_to_v8(conn)?;
+    add_column_if_missing(
+        conn,
+        "package_bindings",
+        "ownership",
+        "TEXT NOT NULL DEFAULT 'managed' CHECK(ownership IN ('managed', 'adopted'))",
+    )
+}
+
+fn migrate_v9_to_v10(conn: &Connection) -> Result<()> {
+    add_column_if_missing(conn, "package_bindings", "applied_surface_kind", "TEXT")?;
+    conn.execute_batch(
+        "
+        UPDATE package_bindings
+        SET applied_surface_kind = (
+            SELECT kind FROM package_surfaces
+            WHERE package_surfaces.id = package_bindings.resolved_surface_id
+        )
+        WHERE applied_surface_kind IS NULL AND target_ref IS NOT NULL;
+        ",
+    )?;
+    Ok(())
+}
+
+fn migrate_v10_to_v11(conn: &Connection) -> Result<()> {
+    add_column_if_missing(
+        conn,
+        "package_components",
+        "artifact_key",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "package_surfaces",
+        "artifact_key",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "package_bindings",
+        "artifact_key",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    conn.execute_batch(
+        "
+        DROP INDEX IF EXISTS idx_package_bindings_identity;
+        CREATE UNIQUE INDEX idx_package_bindings_identity
+            ON package_bindings(package_id, artifact_key, tool, scope, IFNULL(project_id, ''));
+        CREATE INDEX IF NOT EXISTS idx_package_components_artifact
+            ON package_components(package_id, artifact_key);
+        CREATE INDEX IF NOT EXISTS idx_package_surfaces_artifact_tool
+            ON package_surfaces(package_id, artifact_key, tool);
+        ",
+    )?;
+    Ok(())
+}
+
 /// Drop the orphaned `project_default_export_agents` preference.
 ///
 /// It was written behind a "save default agents" action that 688fc9b removed
@@ -303,7 +453,7 @@ fn migrate_v6_to_v7(conn: &Connection) -> Result<()> {
 /// change, and it silently narrows which agents a project preset reaches —
 /// exactly the failure #400 reported, but invisible and unfixable from the UI.
 /// A preference with no way to inspect or edit it is a trap, not a preference.
-fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
+fn migrate_v11_to_v12(conn: &Connection) -> Result<()> {
     // A database can reach this step without a settings table (older partial
     // schemas do), and a cleanup has no business failing an upgrade.
     let has_settings: bool = conn.query_row(
@@ -389,6 +539,77 @@ mod tests {
         assert!(tables.contains(&"skill_tags".to_string()));
         assert!(tables.contains(&"scenario_skill_tools".to_string()));
         assert!(tables.contains(&"audit_log".to_string()));
+        assert!(tables.contains(&"packages".to_string()));
+        assert!(tables.contains(&"package_components".to_string()));
+        assert!(tables.contains(&"package_surfaces".to_string()));
+        assert!(tables.contains(&"package_bindings".to_string()));
+        assert!(has_column(&conn, "package_bindings", "ownership").unwrap());
+        assert!(has_column(&conn, "package_bindings", "applied_surface_kind").unwrap());
+        assert!(has_column(&conn, "package_components", "artifact_key").unwrap());
+        assert!(has_column(&conn, "package_surfaces", "artifact_key").unwrap());
+        assert!(has_column(&conn, "package_bindings", "artifact_key").unwrap());
+    }
+
+    #[test]
+    fn artifact_migration_preserves_installed_binding_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch("CREATE TABLE projects (id TEXT PRIMARY KEY);")
+            .unwrap();
+        migrate_v7_to_v8(&conn).unwrap();
+        migrate_v8_to_v9(&conn).unwrap();
+        migrate_v9_to_v10(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO packages (
+                id, name, source_url, resolved_revision, cache_path, created_at, updated_at
+             ) VALUES ('p1', 'Demo', 'https://example.com/demo.git', 'abc', '/tmp/p1', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO package_surfaces (
+                id, package_id, tool, kind, root_path, coverage_json
+             ) VALUES ('s1', 'p1', 'codex', 'native_plugin', '.', '[]')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO package_bindings (
+                id, package_id, tool, scope, resolved_surface_id, compatibility, state,
+                target_ref, applied_revision, approved_plan_hash, created_at, updated_at,
+                ownership, applied_surface_kind
+             ) VALUES (
+                'b1', 'p1', 'codex', 'user', 's1', 'full', 'installed',
+                '{\"target\":\"keep\"}', 'abc', 'hash', 1, 1, 'managed', 'native_plugin'
+             )",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 10).unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let row: (String, String, String, String, String) = conn
+            .query_row(
+                "SELECT artifact_key, target_ref, ownership, applied_surface_kind, state
+                 FROM package_bindings WHERE id = 'b1'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0, "");
+        assert_eq!(row.1, r#"{"target":"keep"}"#);
+        assert_eq!(row.2, "managed");
+        assert_eq!(row.3, "native_plugin");
+        assert_eq!(row.4, "installed");
     }
 
     #[test]
@@ -529,6 +750,77 @@ mod tests {
     }
 
     #[test]
+    fn upstream_v8_database_gains_package_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        // Upstream v8 has the common v7 schema and no package tables.
+        for version in 0..7 {
+            migrate_step(&conn, version).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 8).unwrap();
+        conn.execute("INSERT INTO settings VALUES ('theme', 'dark')", [])
+            .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        for table in ["package_components", "package_surfaces", "package_bindings"] {
+            assert!(has_column(&conn, table, "artifact_key").unwrap());
+        }
+        assert!(has_column(&conn, "package_bindings", "ownership").unwrap());
+        assert!(has_column(&conn, "package_bindings", "applied_surface_kind").unwrap());
+        let theme: String = conn
+            .query_row("SELECT value FROM settings WHERE key = 'theme'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(theme, "dark");
+    }
+
+    #[test]
+    fn fork_v11_upgrade_preserves_artifacts_and_cleans_old_preference() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        for version in 0..11 {
+            migrate_step(&conn, version).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 11).unwrap();
+        conn.execute_batch(
+            "INSERT INTO settings VALUES ('project_default_export_agents', '[]');
+             INSERT INTO settings VALUES ('theme', 'dark');
+             INSERT INTO packages
+                 (id, name, source_url, resolved_revision, cache_path, created_at, updated_at)
+                 VALUES ('p1', 'Demo', 'https://example.com/demo.git', 'abc', '/tmp/p1', 1, 1);
+             INSERT INTO package_bindings
+                 (id, package_id, artifact_key, tool, scope, state, ownership,
+                  applied_surface_kind, target_ref, applied_revision, created_at, updated_at)
+                 VALUES ('b1', 'p1', 'plugins/demo', 'claude_code', 'user', 'installed',
+                         'adopted', 'native_plugin', 'keep', 'abc', 1, 1);",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let preserved: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM package_bindings WHERE id = 'b1'
+             AND artifact_key = 'plugins/demo' AND state = 'installed'
+             AND ownership = 'adopted' AND applied_surface_kind = 'native_plugin'
+             AND target_ref = 'keep' AND applied_revision = 'abc')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(preserved);
+        assert_eq!(count_setting(&conn), 0);
+        let theme: String = conn
+            .query_row("SELECT value FROM settings WHERE key = 'theme'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(theme, "dark");
+    }
+
+    #[test]
     fn orphaned_default_export_agents_setting_is_dropped() {
         let conn = Connection::open_in_memory().unwrap();
         // Arrive at v7 the way a real upgrading database does, then plant the
@@ -541,11 +833,19 @@ mod tests {
             ["[\"claude_code\",\"codex\"]"],
         )
         .unwrap();
-        assert_eq!(count_setting(&conn), 1, "precondition: the row must exist, or this test proves nothing");
+        assert_eq!(
+            count_setting(&conn),
+            1,
+            "precondition: the row must exist, or this test proves nothing"
+        );
 
         run_migrations(&conn).unwrap();
 
-        assert_eq!(count_setting(&conn), 0, "v7→v8 must delete the orphaned preference");
+        assert_eq!(
+            count_setting(&conn),
+            0,
+            "upgrade must delete the orphaned preference"
+        );
         // Unrelated settings must survive.
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('theme', 'dark')",
@@ -554,7 +854,9 @@ mod tests {
         .unwrap();
         run_migrations(&conn).unwrap();
         let theme: String = conn
-            .query_row("SELECT value FROM settings WHERE key = 'theme'", [], |r| r.get(0))
+            .query_row("SELECT value FROM settings WHERE key = 'theme'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(theme, "dark");
     }

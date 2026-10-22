@@ -703,6 +703,14 @@ mod tests {
     };
     use std::collections::HashMap;
 
+    fn disable_host_tools(store: &SkillStore) {
+        let keys = tool_adapters::default_tool_adapters()
+            .into_iter()
+            .map(|adapter| adapter.key)
+            .collect::<Vec<_>>();
+        tool_service::set_disabled_tools(store, &keys).unwrap();
+    }
+
     #[test]
     fn importing_nested_hermes_skill_preserves_same_named_category() {
         let _guard = central_repo::test_base_dir_lock();
@@ -1126,6 +1134,7 @@ mod tests {
 
         let db_path = temp.path().join("store.db");
         let store = SkillStore::new(&db_path).unwrap();
+        disable_host_tools(&store);
 
         let skills_root = temp.path().join("agent-skills");
         let skill_dir = skills_root.join("local-tool");
@@ -1430,6 +1439,7 @@ mod tests {
 
         let db_path = temp.path().join("store.db");
         let store = SkillStore::new(&db_path).unwrap();
+        disable_host_tools(&store);
 
         let skills_root = temp.path().join("agent-skills");
         let skill_dir = skills_root.join("local-tool");
@@ -1535,6 +1545,7 @@ mod tests {
 
         let db_path = temp.path().join("store.db");
         let store = SkillStore::new(&db_path).unwrap();
+        disable_host_tools(&store);
 
         let skills_root = temp.path().join("agent-skills");
         let skill_dir = skills_root.join("local-tool");
