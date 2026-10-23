@@ -167,6 +167,18 @@ export function getSkillSourceInfo(skill: ManagedSkill): SkillSourceInfo {
   return { key: "unknown", label: null, kind: "unknown" };
 }
 
+/** One row of the Source menu: the grouping key, its label, and how many skills it holds. */
+export type SkillSourceCandidate = Pick<SkillSourceInfo, "key" | "label"> & { count: number };
+
+/**
+ * The Source menu for a list of skills. Call it with the result of the *other*
+ * filters and before the Source filter, or picking one Source would remove the
+ * others from the menu the user needs in order to switch.
+ */
+export function sourceCandidates(skills: ManagedSkill[]): SkillSourceCandidate[] {
+  return buildSourceGroups(skills).map(({ key, label, count }) => ({ key, label, count }));
+}
+
 /**
  * A path group is labelled with its last segment, which is ambiguous more often
  * than not: `/work/a/skills` and `/home/b/skills` both read "skills". Widen
