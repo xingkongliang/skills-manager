@@ -21,6 +21,13 @@ interface MultiSelectToolbarLabels {
   deselectAll: string;
   cancel: string;
   more: string;
+  /**
+   * Already-translated note shown after the count when some selected rows are
+   * not on screen (skills inside a collapsed Source). Omit it, or leave it out
+   * entirely, when everything selected is visible: the count then reads as it
+   * always has.
+   */
+  hiddenSelected?: string;
 }
 
 interface MultiSelectToolbarProps {
@@ -62,6 +69,9 @@ export function MultiSelectToolbar({
       <span className="text-[13px] text-muted tabular-nums">
         {hasSelection ? labels.selected : labels.hint}
       </span>
+      {hasSelection && labels.hiddenSelected && (
+        <span className="text-[13px] text-faint tabular-nums">{labels.hiddenSelected}</span>
+      )}
 
       {inlineActions.map((action) => (
         <button
