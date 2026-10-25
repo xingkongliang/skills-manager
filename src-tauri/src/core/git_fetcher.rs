@@ -24,24 +24,8 @@ pub const CLONE_TEMP_PREFIX: &str = "skills-manager-clone-";
 /// Callback type for reporting clone progress messages to the UI.
 pub type ProgressCallback = Box<dyn Fn(&str) + Send>;
 
-#[derive(Debug, Clone)]
-pub struct ParsedGitSource {
-    pub original_url: String,
-    pub clone_url: String,
-    pub branch: Option<String>,
-    pub subpath: Option<String>,
-}
-
-pub fn parse_git_source(url: &str) -> ParsedGitSource {
-    let trimmed = url.trim().to_string();
-    let (clone_url, branch, subpath) = normalize_url(&trimmed);
-
-    ParsedGitSource {
-        original_url: trimmed,
-        clone_url,
-        branch,
-        subpath,
-    }
+pub fn parse_git_source(url: &str) -> crate::core::remote_ref::RemoteRef {
+    crate::core::remote_ref::RemoteRef::from_url(url)
 }
 
 /// Validate that a URL uses an allowed scheme for git operations.
@@ -1328,7 +1312,7 @@ pub fn relative_subpath(repo_dir: &Path, skill_dir: &Path) -> Option<String> {
     }
 }
 
-fn normalize_url(url: &str) -> (String, Option<String>, Option<String>) {
+pub(crate) fn normalize_url(url: &str) -> (String, Option<String>, Option<String>) {
     let trimmed = url.trim();
 
     // Already a full URL. The prefix check mirrors validate_git_url's
@@ -1540,7 +1524,7 @@ fn split_tree_branch_path(path: &str, known_branches: &[String]) -> (String, Opt
 /// with multi-segment paths, queries `git ls-remote --heads` to resolve which
 /// segments belong to the branch and which to the subpath. Falls back to the
 /// optimistic (single-segment-branch) parse on network failure.
-pub fn parse_git_source_resolved(url: &str, proxy_url: Option<&str>) -> ParsedGitSource {
+pub fn parse_git_source_resolved(url: &str, proxy_url: Option<&str>) -> crate::core::remote_ref::RemoteRef {
     let mut parsed = parse_git_source(url);
     let original_url = parsed.original_url.clone();
 

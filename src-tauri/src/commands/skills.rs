@@ -14,6 +14,7 @@ use crate::core::{
     git_fetcher,
     install_cancel::InstallCancelRegistry,
     installer, path_guard,
+    remote_ref::{RemoteIdentity, RemoteRef},
     repo_lock::RepoLock,
     scanner, scenario_service,
     skill_metadata::{self, is_valid_skill_dir},
@@ -289,14 +290,6 @@ pub struct InstallSourceMetadata {
     pub update_status: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct GitSkillSource {
-    pub clone_url: String,
-    pub branch: Option<String>,
-    pub subpath: Option<String>,
-    pub locator_skill_id: Option<String>,
-}
-
 #[derive(Debug, serde::Serialize)]
 pub struct GitSkillPreview {
     /// Path relative to the resolved scan root, using `/` separators. Stable key.
@@ -442,7 +435,7 @@ pub async fn get_source_skill_document(
             ));
         }
 
-        let git_source = git_source_from_skill(&skill)?;
+        let git_source = RemoteRef::from_skill(&skill)?;
         git_fetcher::validate_git_url(&git_source.clone_url).map_err(AppError::git)?;
         let remote_revision = git_fetcher::resolve_remote_revision(
             &git_source.clone_url,
@@ -466,7 +459,7 @@ pub async fn get_source_skill_document(
             let skill_dir = resolve_skill_dir(
                 &temp_dir,
                 git_source.subpath.as_deref(),
-                git_source.locator_skill_id.as_deref(),
+                git_source.locator.as_deref(),
             )?;
             let (filename, content) = read_skill_document_from_dir(&skill_dir)?;
 
@@ -641,7 +634,7 @@ pub async fn get_skill_source_diff(
             ));
         }
 
-        let git_source = git_source_from_skill(&skill)?;
+        let git_source = RemoteRef::from_skill(&skill)?;
         git_fetcher::validate_git_url(&git_source.clone_url).map_err(AppError::git)?;
         let remote_revision = git_fetcher::resolve_remote_revision(
             &git_source.clone_url,
@@ -665,7 +658,7 @@ pub async fn get_skill_source_diff(
             let skill_dir = resolve_skill_dir(
                 &temp_dir,
                 git_source.subpath.as_deref(),
-                git_source.locator_skill_id.as_deref(),
+                git_source.locator.as_deref(),
             )?;
             let entries = build_source_diff_entries(&central_dir, &skill_dir);
             Ok(SkillSourceDiffDto {
@@ -1512,7 +1505,7 @@ pub async fn check_all_skill_updates(
         // lock-timeout "busy" failure — the reason "检查全部" both crawled and
         // popped failures. Each remote also carries its subpath skills' installed
         // directories, so the monorepo siblings share one subtree fetch (#561).
-        let mut remotes: HashMap<RemoteKey, HashSet<(String, String)>> = HashMap::new();
+        let mut remotes: HashMap<RemoteIdentity, HashSet<(String, String)>> = HashMap::new();
         for skill in &skills {
             if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
                 continue;
@@ -1529,10 +1522,10 @@ pub async fn check_all_skill_updates(
                     err.message
                 ),
             }
-            if let Ok(source) = git_source_from_skill(skill) {
-                let installed = installed_subtree(skill, &source);
+            if let Ok(source) = RemoteRef::from_skill(skill) {
+                let installed = source.installed_subtree(skill);
                 remotes
-                    .entry(RemoteKey::from(source))
+                    .entry(source.identity())
                     .or_default()
                     .extend(installed);
             }
@@ -1557,9 +1550,9 @@ pub async fn check_all_skill_updates(
         let mut failed = Vec::new();
         for skill in &skills {
             let prefetched = if matches!(skill.source_type.as_str(), "git" | "skillssh") {
-                git_source_from_skill(skill)
+                RemoteRef::from_skill(skill)
                     .ok()
-                    .and_then(|source| remote_revisions.get(&RemoteKey::from(source)).cloned())
+                    .and_then(|source| remote_revisions.get(&source.identity()).cloned())
             } else {
                 None
             };
@@ -1597,29 +1590,6 @@ pub async fn check_all_skill_updates(
 /// share one — e.g. many skills installed from subdirectories of a single
 /// monorepo — so keying by (clone_url, branch) collapses the redundant network
 /// queries the per-skill loop used to make.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct RemoteKey {
-    clone_url: String,
-    branch: Option<String>,
-}
-
-impl From<GitSkillSource> for RemoteKey {
-    fn from(source: GitSkillSource) -> Self {
-        RemoteKey {
-            clone_url: source.clone_url,
-            branch: source.branch,
-        }
-    }
-}
-
-impl RemoteKey {
-    /// Whether `source` still points at this remote. Subpath is deliberately
-    /// ignored: two subdirectories of one repo share a head revision.
-    fn matches(&self, source: &GitSkillSource) -> bool {
-        self.clone_url == source.clone_url && self.branch == source.branch
-    }
-}
-
 /// A remote revision resolved off the central-repo lock, tagged with the remote
 /// it was resolved for. The tag is what makes it safe to apply later: a
 /// reinstall keeps a skill's row and repoints its source
@@ -1627,7 +1597,7 @@ impl RemoteKey {
 /// from the freshly read record and drops a prefetch that no longer matches.
 #[derive(Clone)]
 pub struct PrefetchedRemote {
-    key: RemoteKey,
+    key: RemoteIdentity,
     result: Result<String, String>,
     /// The `(source_revision, subpath)` pairs whose directory is the same tree
     /// at the resolved revision — see [`git_fetcher::unchanged_subtrees`].
@@ -1637,17 +1607,9 @@ pub struct PrefetchedRemote {
     comparison_error: Option<String>,
 }
 
-/// The directory a subpath skill was installed from, as `(revision, subpath)`.
-/// `None` for a skill installed from the repository root, which keeps comparing
-/// the whole repository's head.
-fn installed_subtree(skill: &SkillRecord, source: &GitSkillSource) -> Option<(String, String)> {
-    let subpath = source.subpath.as_deref().filter(|s| !s.is_empty())?;
-    Some((skill.source_revision.clone()?, subpath.to_string()))
-}
-
 /// Resolve `key`'s head, then which of `installed` it leaves unchanged.
 fn resolve_remote(
-    key: RemoteKey,
+    key: RemoteIdentity,
     installed: &HashSet<(String, String)>,
     proxy_url: Option<&str>,
 ) -> PrefetchedRemote {
@@ -1694,10 +1656,10 @@ pub fn prefetch_skill_remote(
     if should_skip_update_check(store, &skill, force).unwrap_or(false) {
         return None;
     }
-    let source = git_source_from_skill(&skill).ok()?;
-    let installed = installed_subtree(&skill, &source).into_iter().collect();
+    let source = RemoteRef::from_skill(&skill).ok()?;
+    let installed = source.installed_subtree(&skill).into_iter().collect();
     Some(resolve_remote(
-        RemoteKey::from(source),
+        source.identity(),
         &installed,
         proxy_url,
     ))
@@ -1713,9 +1675,9 @@ const MAX_CHECK_CONCURRENCY: usize = 8;
 /// `Err(message)` so Phase B can mark just that remote's skills as errored
 /// without aborting the batch.
 fn resolve_remotes_concurrent(
-    remotes: HashMap<RemoteKey, HashSet<(String, String)>>,
+    remotes: HashMap<RemoteIdentity, HashSet<(String, String)>>,
     proxy_url: Option<String>,
-) -> HashMap<RemoteKey, PrefetchedRemote> {
+) -> HashMap<RemoteIdentity, PrefetchedRemote> {
     resolve_concurrent(remotes.keys().cloned().collect(), |key| {
         resolve_remote(key.clone(), &remotes[key], proxy_url.as_deref())
     })
@@ -1728,15 +1690,15 @@ fn resolve_remotes_concurrent(
 /// exactly once, a per-remote failure is stored as `Err` rather than aborting the
 /// batch, and — since this function never touches `RepoLock` — resolution always
 /// runs off the central-repo lock.
-fn resolve_concurrent<T, F>(remotes: Vec<RemoteKey>, resolve: F) -> HashMap<RemoteKey, T>
+fn resolve_concurrent<T, F>(remotes: Vec<RemoteIdentity>, resolve: F) -> HashMap<RemoteIdentity, T>
 where
     T: Send,
-    F: Fn(&RemoteKey) -> T + Sync,
+    F: Fn(&RemoteIdentity) -> T + Sync,
 {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let next = AtomicUsize::new(0);
-    let results: Mutex<HashMap<RemoteKey, T>> = Mutex::new(HashMap::with_capacity(remotes.len()));
+    let results: Mutex<HashMap<RemoteIdentity, T>> = Mutex::new(HashMap::with_capacity(remotes.len()));
     let worker_count = MAX_CHECK_CONCURRENCY.min(remotes.len().max(1));
 
     std::thread::scope(|scope| {
@@ -2126,7 +2088,7 @@ pub fn update_git_skill_internal(
         ));
     }
 
-    let git_source = git_source_from_skill(&skill)?;
+    let git_source = RemoteRef::from_skill(&skill)?;
     git_fetcher::validate_git_url(&git_source.clone_url).map_err(AppError::git)?;
     let remote_revision = git_fetcher::resolve_remote_revision(
         &git_source.clone_url,
@@ -2162,7 +2124,7 @@ pub fn update_git_skill_internal(
         let skill_dir = resolve_skill_dir(
             &temp_dir,
             git_source.subpath.as_deref(),
-            git_source.locator_skill_id.as_deref(),
+            git_source.locator.as_deref(),
         )?;
 
         let new_hash =
@@ -2779,7 +2741,7 @@ pub fn check_skill_update_internal_with_remote(
 
     match skill.source_type.as_str() {
         "git" | "skillssh" => {
-            let git_source = git_source_from_skill(&skill)?;
+            let git_source = RemoteRef::from_skill(&skill)?;
             let metadata_updated = skill.source_ref_resolved.as_deref()
                 != Some(git_source.clone_url.as_str())
                 || skill.source_subpath.as_deref() != git_source.subpath.as_deref()
@@ -2811,7 +2773,7 @@ pub fn check_skill_update_internal_with_remote(
                 unchanged,
                 comparison_error,
                 ..
-            }) = prefetched.filter(|prefetched| prefetched.key.matches(&git_source))
+            }) = prefetched.filter(|prefetched| prefetched.key == git_source.identity())
             else {
                 log::debug!(
                     "check update: no usable prefetched remote for {}, skipping this round",
@@ -2847,7 +2809,7 @@ pub fn check_skill_update_internal_with_remote(
                         // update that changed nothing would, so the next
                         // check compares from there without fetching again.
                         Some(_)
-                            if installed_subtree(&skill, &git_source)
+                            if git_source.installed_subtree(&skill)
                                 .is_some_and(|installed| unchanged.contains(&installed)) =>
                         {
                             store
@@ -2988,63 +2950,6 @@ fn should_skip_update_check(
             .unwrap_or(false))
 }
 
-pub fn git_source_from_skill(skill: &SkillRecord) -> Result<GitSkillSource, AppError> {
-    if let Some(resolved) = &skill.source_ref_resolved {
-        return Ok(GitSkillSource {
-            clone_url: resolved.clone(),
-            branch: skill.source_branch.clone(),
-            subpath: skill.source_subpath.clone(),
-            locator_skill_id: skill_ssh_id(skill),
-        });
-    }
-
-    match skill.source_type.as_str() {
-        "git" => {
-            let source_ref = skill
-                .source_ref
-                .as_ref()
-                .ok_or_else(|| AppError::invalid_input("Git skill is missing its source URL"))?;
-            let parsed = git_fetcher::parse_git_source(source_ref);
-            Ok(GitSkillSource {
-                clone_url: parsed.clone_url,
-                // Prefer the branch resolved at install time — it survives
-                // slash-branch tree URLs that the sync parse can't disambiguate.
-                branch: skill.source_branch.clone().or(parsed.branch),
-                subpath: skill.source_subpath.clone().or(parsed.subpath),
-                locator_skill_id: None,
-            })
-        }
-        "skillssh" => {
-            let source_ref = skill.source_ref.as_ref().ok_or_else(|| {
-                AppError::invalid_input("skills.sh skill is missing its source reference")
-            })?;
-            let (repo_source, fallback_skill_id) = source_ref
-                .rsplit_once('/')
-                .ok_or_else(|| AppError::invalid_input("Invalid skills.sh source reference"))?;
-            Ok(GitSkillSource {
-                clone_url: format!("https://github.com/{}.git", repo_source),
-                branch: skill.source_branch.clone(),
-                subpath: skill.source_subpath.clone(),
-                locator_skill_id: Some(fallback_skill_id.to_string()),
-            })
-        }
-        _ => Err(AppError::invalid_input(
-            "Skill does not support git-based updates",
-        )),
-    }
-}
-
-fn skill_ssh_id(skill: &SkillRecord) -> Option<String> {
-    if skill.source_type != "skillssh" {
-        return None;
-    }
-
-    skill.source_ref.as_deref().and_then(|source_ref| {
-        source_ref
-            .rsplit_once('/')
-            .map(|(_, skill_id)| skill_id.to_string())
-    })
-}
 
 /// Return the list of individual skill directories to install from a resolved repo dir.
 /// If `skill_dir` is itself a valid skill, returns `[skill_dir]`.
@@ -3923,25 +3828,26 @@ mod tests {
         assert_eq!(k_b, "category-b/foo");
     }
 
-    // ── RemoteKey dedup (batch check_all fan-out) ──
+    // ── RemoteIdentity dedup (batch check_all fan-out) ──
 
-    fn source(clone_url: &str, branch: Option<&str>, subpath: Option<&str>) -> GitSkillSource {
-        GitSkillSource {
+    fn source(clone_url: &str, branch: Option<&str>, subpath: Option<&str>) -> RemoteRef {
+        RemoteRef {
+            original_url: clone_url.to_string(),
             clone_url: clone_url.to_string(),
             branch: branch.map(str::to_string),
             subpath: subpath.map(str::to_string),
-            locator_skill_id: None,
+            locator: None,
         }
     }
 
-    /// The whole point of keying Phase A by `RemoteKey`: skills installed from
+    /// The whole point of keying Phase A by `RemoteIdentity`: skills installed from
     /// different subdirectories of the same monorepo (same clone_url + branch)
     /// must collapse to one network query, while a different branch stays
     /// distinct. This is what turns 4 `mattpocock/skills` skills into 1
     /// `ls-remote` instead of 4.
     #[test]
     fn remote_key_dedups_by_url_and_branch_ignoring_subpath() {
-        let mut per_remote: HashMap<RemoteKey, usize> = HashMap::new();
+        let mut per_remote: HashMap<RemoteIdentity, usize> = HashMap::new();
         let skills = [
             source("https://github.com/mattpocock/skills.git", None, Some("a")),
             source("https://github.com/mattpocock/skills.git", None, Some("b")),
@@ -3955,12 +3861,12 @@ mod tests {
             ),
         ];
         for s in skills {
-            *per_remote.entry(RemoteKey::from(s)).or_insert(0) += 1;
+            *per_remote.entry(s.identity()).or_insert(0) += 1;
         }
 
         assert_eq!(per_remote.len(), 3, "distinct remotes to query");
         assert_eq!(
-            per_remote[&RemoteKey {
+            per_remote[&RemoteIdentity {
                 clone_url: "https://github.com/mattpocock/skills.git".to_string(),
                 branch: None,
             }],
@@ -3968,7 +3874,7 @@ mod tests {
             "three subpaths of one repo/branch share a single query"
         );
         assert_eq!(
-            per_remote[&RemoteKey {
+            per_remote[&RemoteIdentity {
                 clone_url: "https://github.com/mattpocock/skills.git".to_string(),
                 branch: Some("next".to_string()),
             }],
@@ -3977,8 +3883,8 @@ mod tests {
         );
     }
 
-    fn remote(url: &str, branch: Option<&str>) -> RemoteKey {
-        RemoteKey {
+    fn remote(url: &str, branch: Option<&str>) -> RemoteIdentity {
+        RemoteIdentity {
             clone_url: url.to_string(),
             branch: branch.map(|b| b.to_string()),
         }
@@ -3986,11 +3892,11 @@ mod tests {
 
     /// Work-stealing must cover every remote exactly once and collect each
     /// resolver result under its own key — this exercises the real concurrent
-    /// loop, not just `RemoteKey`'s hashing.
+    /// loop, not just `RemoteIdentity`'s hashing.
     #[test]
     fn resolve_concurrent_resolves_every_remote_exactly_once() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let remotes: Vec<RemoteKey> = (0..20)
+        let remotes: Vec<RemoteIdentity> = (0..20)
             .map(|i| remote(&format!("https://example.test/r{i}"), None))
             .collect();
         let calls = AtomicUsize::new(0);
@@ -4038,7 +3944,7 @@ mod tests {
     #[test]
     fn resolve_concurrent_runs_remotes_in_parallel() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let remotes: Vec<RemoteKey> = (0..8).map(|i| remote(&format!("r{i}"), None)).collect();
+        let remotes: Vec<RemoteIdentity> = (0..8).map(|i| remote(&format!("r{i}"), None)).collect();
         let in_flight = AtomicUsize::new(0);
         let peak = AtomicUsize::new(0);
 
