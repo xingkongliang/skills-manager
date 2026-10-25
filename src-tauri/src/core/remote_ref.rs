@@ -147,12 +147,18 @@ impl RemoteRef {
     }
 }
 
-/// Fold the spellings git treats as one repository, keeping the access path
-/// (ssh vs https) intact.
+/// Fold the spellings git treats as one repository, keeping everything that can
+/// change which repository git actually reads.
+///
+/// Only `.git` and a trailing slash are folded. Case is not: host names are
+/// case-insensitive, but paths are not on every host, and
+/// `git_fetcher::canonicalize_clone_url` deliberately does not fold it either.
+/// Merging two paths that differ only in case would hand one repository's head
+/// to the other's skills.
 fn comparison_key(clone_url: &str) -> String {
     let trimmed = clone_url.trim().trim_end_matches('/');
     let without_git = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-    without_git.trim_end_matches('/').to_lowercase()
+    without_git.trim_end_matches('/').to_string()
 }
 
 /// An empty subpath and no subpath are the same thing. Nothing else is
@@ -216,7 +222,6 @@ mod tests {
             "https://github.com/acme/skills",
             "https://github.com/acme/skills.git",
             "https://github.com/acme/skills/",
-            "https://GitHub.com/Acme/Skills",
         ];
         let first = reference(forms[0]).identity();
         for form in &forms[1..] {
@@ -227,6 +232,12 @@ mod tests {
                 forms[0]
             );
         }
+    }
+
+    #[test]
+    fn case_is_not_folded_because_paths_are_case_sensitive() {
+        assert!(!reference("https://example.com/Acme/Skills")
+            .same_remote(&reference("https://example.com/acme/skills")));
     }
 
     #[test]

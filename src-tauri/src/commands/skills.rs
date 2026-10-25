@@ -1870,16 +1870,29 @@ pub async fn batch_update_skills(
             }
         }
         let (groups, ungrouped) = group_by_source(loaded);
+        // Local and imported sources share nothing and have no remote to
+        // resolve, so they keep re-importing one at a time, as they always did.
         for (skill_id, skill) in ungrouped {
-            failed.push(format!(
-                "{}: {}",
-                skill.name,
-                RemoteRef::from_skill(&skill)
-                    .err()
-                    .map(|err| err.message)
-                    .unwrap_or_else(|| "Skill cannot be grouped".to_string())
-            ));
-            let _ = skill_id;
+            match skill.source_type.as_str() {
+                "local" | "import" => {
+                    let outcome = reimport_local_skill_internal(&store, &skill_id, None);
+                    log_reimport_outcome(&store, &skill_id, outcome.as_ref());
+                    match outcome {
+                        Ok(result) if !result.pending_removals.is_empty() => {
+                            held_back.push(skill.name.clone());
+                        }
+                        Ok(_) => refreshed += 1,
+                        Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
+                    }
+                }
+                _ => {
+                    let message = RemoteRef::from_skill(&skill)
+                        .err()
+                        .map(|err| err.message)
+                        .unwrap_or_else(|| "Skill has no usable source".to_string());
+                    failed.push(format!("{}: {}", skill.name, message));
+                }
+            }
         }
 
         // Phase A: resolve every Source once, concurrently, off the lock — the
@@ -1899,6 +1912,7 @@ pub async fn batch_update_skills(
             });
 
         // Phase B: fetch and apply, Source by Source.
+        let mut refreshed_slots: HashSet<(RemoteIdentity, bool)> = HashSet::new();
         for (identity, members) in groups {
             let head = match heads.get(&identity) {
                 Some(Ok(head)) => Some(head.clone()),
@@ -1920,59 +1934,45 @@ pub async fn batch_update_skills(
                 None => None,
             };
 
-            let mut first_checkout = true;
             for (skill_id, skill) in members {
-                let outcome = match skill.source_type.as_str() {
-                    "git" | "skillssh" => {
-                        // The first skill of a Source pulls the cache up to date;
-                        // its siblings only copy out of it.
-                        let refresh = if first_checkout {
-                            git_fetcher::CacheRefresh::IfStale
-                        } else {
-                            git_fetcher::CacheRefresh::Skip
-                        };
-                        first_checkout = false;
-                        let prepared = prepare_update(
-                            &store,
-                            &skill_id,
-                            &skill,
-                            proxy_url.as_deref(),
-                            None,
-                            refresh,
-                            head.as_deref(),
-                        );
-                        match prepared {
-                            Ok(prepared) => {
-                                let outcome = apply_prepared_update(
-                                    &store, &skill, &prepared, None, false,
-                                );
-                                log_batch_update_outcome(
-                                    &store,
-                                    &skill_id,
-                                    &skill.name,
-                                    outcome.as_ref(),
-                                );
-                                outcome
-                            }
-                            Err(err) => Err(err),
-                        }
-                    }
-                    _ => {
-                        let outcome = reimport_local_skill_internal(&store, &skill_id, None);
-                        log_reimport_outcome(&store, &skill_id, outcome.as_ref());
-                        // Local sources have no remote to share and no revision
-                        // to compare, so their three end states are counted here
-                        // rather than folded into an UpdateOutcome.
-                        match outcome {
-                            Ok(result) if !result.pending_removals.is_empty() => {
-                                held_back.push(skill.name.clone());
-                            }
-                            Ok(_) => refreshed += 1,
-                            Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
-                        }
-                        continue;
-                    }
+                // Cache slots are per Source *and* per shape: a root install and
+                // a subdirectory install of one repository do not share a slot,
+                // so each shape refreshes its own before the siblings reuse it.
+                let slot = (
+                    identity.clone(),
+                    skill.source_subpath.as_deref().is_some_and(|s| !s.is_empty()),
+                );
+                let refresh = if refreshed_slots.insert(slot) {
+                    git_fetcher::CacheRefresh::IfStale
+                } else {
+                    git_fetcher::CacheRefresh::Skip
                 };
+                let outcome = match prepare_update(
+                    &store,
+                    &skill_id,
+                    &skill,
+                    proxy_url.as_deref(),
+                    None,
+                    refresh,
+                    head.as_deref(),
+                ) {
+                    Ok(prepared) => {
+                        apply_prepared_update(&store, &skill, &prepared, None, false)
+                    }
+                    Err(err) => Err(err),
+                };
+                log_batch_update_outcome(&store, &skill_id, &skill.name, outcome.as_ref());
+                if let Err(err) = &outcome {
+                    // Same contract as the single-skill path: the row records
+                    // why, so the list can show it instead of leaving the skill
+                    // stuck on "updating".
+                    let _ = store.update_skill_check_state(
+                        &skill_id,
+                        skill.remote_revision.as_deref(),
+                        "error",
+                        Some(&err.message),
+                    );
+                }
 
                 match outcome {
                     Ok(UpdateOutcome::Applied { content_changed }) => {
@@ -1988,7 +1988,9 @@ pub async fn batch_update_skills(
             }
         }
 
-        // One description of the library for the whole batch, not one per skill.
+        // One description of the library for the whole batch, not one per skill
+        // — and under the lock, which every writer of that description takes.
+        let _lock = RepoLock::acquire_foreground("batch update metadata").map_err(AppError::db)?;
         sync_metadata::write_all_from_db_unlocked(&store).map_err(AppError::db)?;
 
         Ok(BatchUpdateSkillsResult {
