@@ -21,6 +21,17 @@ const CLONE_TIMEOUT_SECS: u64 = 300;
 /// Used by both `materialize_cached_repo` (writer) and `validate_clone_temp_path` (reader).
 pub const CLONE_TEMP_PREFIX: &str = "skills-manager-clone-";
 
+/// Whether a checkout must go out to the network first.
+///
+/// A batch that resolves each Source once fetches the cache slot on its first
+/// checkout and then reuses it for the siblings, instead of re-fetching the same
+/// repository once per skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheRefresh {
+    IfStale,
+    Skip,
+}
+
 /// Callback type for reporting clone progress messages to the UI.
 pub type ProgressCallback = Box<dyn Fn(&str) + Send>;
 
@@ -568,8 +579,24 @@ pub fn clone_repo_ref_scoped(
     proxy_url: Option<&str>,
     on_progress: Option<ProgressCallback>,
 ) -> Result<PathBuf> {
+    clone_repo_ref_scoped_with(
+        url, branch, subpath, cancel, proxy_url, on_progress, CacheRefresh::IfStale,
+    )
+}
+
+/// Same, but the caller states that this Source's cache slot was already
+/// refreshed in this batch. Only the copy-out remains, which is local.
+pub fn clone_repo_ref_scoped_with(
+    url: &str,
+    branch: Option<&str>,
+    subpath: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+    on_progress: Option<ProgressCallback>,
+    refresh: CacheRefresh,
+) -> Result<PathBuf> {
     if let Some(subpath) = sparse_pattern(subpath) {
-        match clone_repo_sparse(url, branch, &subpath, cancel, proxy_url, &on_progress) {
+        match clone_repo_sparse(url, branch, &subpath, cancel, proxy_url, &on_progress, refresh) {
             Ok(dir) => return Ok(dir),
             Err(e) if is_cancellation(&e) => return Err(e),
             Err(e) => {
@@ -580,7 +607,7 @@ pub fn clone_repo_ref_scoped(
         }
     }
 
-    clone_repo_full(url, branch, cancel, proxy_url, on_progress)
+    clone_repo_full(url, branch, cancel, proxy_url, on_progress, refresh)
 }
 
 /// Whether an error is a user cancellation rather than a fault worth retrying
@@ -634,6 +661,7 @@ fn clone_repo_sparse(
     cancel: Option<&Arc<AtomicBool>>,
     proxy_url: Option<&str>,
     on_progress: &Option<ProgressCallback>,
+    refresh: CacheRefresh,
 ) -> Result<PathBuf> {
     let cached_dir = repo_cache_dir_for(url, true);
     let _cache_lock = lock_repo_cache(&cached_dir, on_progress)?;
@@ -642,7 +670,8 @@ fn clone_repo_sparse(
     // expensive, and they are shared. The lock holds until this call's copy is
     // taken, so a later install re-scoping the worktree cannot disturb it.
     let reusable = cached_dir.exists()
-        && try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, on_progress)?;
+        && (refresh == CacheRefresh::Skip
+            || try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, on_progress)?);
 
     if !reusable {
         let _ = std::fs::remove_dir_all(&cached_dir);
@@ -922,11 +951,15 @@ fn clone_repo_full(
     cancel: Option<&Arc<AtomicBool>>,
     proxy_url: Option<&str>,
     on_progress: Option<ProgressCallback>,
+    refresh: CacheRefresh,
 ) -> Result<PathBuf> {
     let cached_dir = repo_cache_dir(url);
     let _cache_lock = lock_repo_cache(&cached_dir, &on_progress)?;
 
     // Try cached repo first.
+    if cached_dir.exists() && refresh == CacheRefresh::Skip {
+        return materialize_cached_repo(&cached_dir, cancel);
+    }
     if cached_dir.exists() {
         match try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, &on_progress) {
             Ok(true) => return materialize_cached_repo(&cached_dir, cancel),

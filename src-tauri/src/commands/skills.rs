@@ -847,6 +847,44 @@ fn log_update_outcome(
     store.log_audit(draft);
 }
 
+/// The batch path already knows the skill's name and whether content changed, so
+/// it records the same audit entry without re-reading the row it just wrote.
+fn log_batch_update_outcome(
+    store: &SkillStore,
+    skill_id: &str,
+    name: &str,
+    outcome: Result<&UpdateOutcome, &AppError>,
+) {
+    let mut draft = AuditDraft::new("update").detail("git");
+    match outcome {
+        Ok(UpdateOutcome::Held { pending, .. }) => {
+            draft = draft
+                .skill(skill_id.to_string(), name.to_string())
+                .detail(format!(
+                    "git; held back — would remove {} path(s)",
+                    pending.len()
+                ))
+                .ok();
+        }
+        Ok(UpdateOutcome::Applied { content_changed }) => {
+            draft = draft
+                .skill(skill_id.to_string(), name.to_string())
+                .detail(if *content_changed {
+                    "git; content changed".to_string()
+                } else {
+                    "git; unchanged".to_string()
+                })
+                .ok();
+        }
+        Err(e) => {
+            draft = draft
+                .skill(skill_id.to_string(), name.to_string())
+                .fail(e.to_string());
+        }
+    }
+    store.log_audit(draft);
+}
+
 fn log_reimport_outcome(
     store: &SkillStore,
     skill_id: &str,
@@ -1769,6 +1807,44 @@ pub async fn reimport_local_skill(
     .await?
 }
 
+/// Split a batch into one group per Source, keeping the caller's order.
+///
+/// Skills that cannot be tied to a remote (local, imported, or a broken source
+/// reference) come back separately: they still update, but one at a time, and
+/// nothing about them is shared.
+fn group_by_source(
+    loaded: Vec<(String, SkillRecord)>,
+) -> (
+    Vec<(RemoteIdentity, Vec<(String, SkillRecord)>)>,
+    Vec<(String, SkillRecord)>,
+) {
+    let mut groups: Vec<(RemoteIdentity, Vec<(String, SkillRecord)>)> = Vec::new();
+    let mut index: HashMap<RemoteIdentity, usize> = HashMap::new();
+    let mut ungrouped = Vec::new();
+
+    for (skill_id, skill) in loaded {
+        if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+            ungrouped.push((skill_id, skill));
+            continue;
+        }
+        let identity = match RemoteRef::from_skill(&skill) {
+            Ok(source) => source.identity(),
+            Err(_) => {
+                ungrouped.push((skill_id, skill));
+                continue;
+            }
+        };
+        match index.get(&identity) {
+            Some(&at) => groups[at].1.push((skill_id, skill)),
+            None => {
+                index.insert(identity.clone(), groups.len());
+                groups.push((identity, vec![(skill_id, skill)]));
+            }
+        }
+    }
+    (groups, ungrouped)
+}
+
 #[tauri::command]
 pub async fn batch_update_skills(
     skill_ids: Vec<String>,
@@ -1782,51 +1858,138 @@ pub async fn batch_update_skills(
         let mut failed = Vec::new();
         let mut held_back = Vec::new();
 
+        // Group by Source before doing anything: a library built from a dozen
+        // repositories holds many skills per repository, and every skill used to
+        // resolve and fetch its own copy. One resolution per Source, and the
+        // first checkout warms the cache the siblings then reuse.
+        let mut loaded: Vec<(String, SkillRecord)> = Vec::new();
         for skill_id in skill_ids {
-            let skill = match store.get_skill_by_id(&skill_id).map_err(AppError::db)? {
-                Some(skill) => skill,
-                None => {
-                    failed.push(format!("{skill_id}: Skill not found"));
-                    continue;
-                }
-            };
-
-            match skill.source_type.as_str() {
-                "git" | "skillssh" => {
-                    let outcome =
-                        update_git_skill_internal(&store, &skill_id, proxy_url.as_deref(), None, None);
-                    log_update_outcome(&store, &skill_id, "git", outcome.as_ref());
-                    match outcome {
-                        Ok(result) if !result.pending_removals.is_empty() => {
-                            // Held back rather than applied: it would have taken
-                            // away files the new version does not have, and a
-                            // batch has nobody to ask.
-                            held_back.push(skill.name.clone());
-                        }
-                        Ok(result) => {
-                            if result.content_changed {
-                                refreshed += 1;
-                            } else {
-                                unchanged += 1;
-                            }
-                        }
-                        Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
-                    }
-                }
-                "local" | "import" => {
-                    let outcome = reimport_local_skill_internal(&store, &skill_id, None);
-                    log_reimport_outcome(&store, &skill_id, outcome.as_ref());
-                    match outcome {
-                        Ok(result) if !result.pending_removals.is_empty() => {
-                            held_back.push(skill.name.clone());
-                        }
-                        Ok(_) => refreshed += 1,
-                        Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
-                    }
-                }
-                _ => failed.push(format!("{}: Source type cannot be refreshed", skill.name)),
+            match store.get_skill_by_id(&skill_id).map_err(AppError::db)? {
+                Some(skill) => loaded.push((skill_id, skill)),
+                None => failed.push(format!("{skill_id}: Skill not found")),
             }
         }
+        let (groups, ungrouped) = group_by_source(loaded);
+        for (skill_id, skill) in ungrouped {
+            failed.push(format!(
+                "{}: {}",
+                skill.name,
+                RemoteRef::from_skill(&skill)
+                    .err()
+                    .map(|err| err.message)
+                    .unwrap_or_else(|| "Skill cannot be grouped".to_string())
+            ));
+            let _ = skill_id;
+        }
+
+        // Phase A: resolve every Source once, concurrently, off the lock — the
+        // same rule the check phase already follows.
+        let identities: Vec<RemoteIdentity> = groups
+            .iter()
+            .map(|(identity, _)| identity.clone())
+            .collect();
+        let heads: HashMap<RemoteIdentity, Result<String, String>> =
+            resolve_concurrent(identities, |identity| {
+                git_fetcher::resolve_remote_revision(
+                    &identity.clone_url,
+                    identity.branch.as_deref(),
+                    proxy_url.as_deref(),
+                )
+                .map_err(|err| err.to_string())
+            });
+
+        // Phase B: fetch and apply, Source by Source.
+        for (identity, members) in groups {
+            let head = match heads.get(&identity) {
+                Some(Ok(head)) => Some(head.clone()),
+                Some(Err(err)) => {
+                    // Same contract as a per-skill failure: the row records the
+                    // error so the list can show it, and the rest of the batch
+                    // carries on.
+                    for (skill_id, skill) in &members {
+                        let _ = store.update_skill_check_state(
+                            skill_id,
+                            skill.remote_revision.as_deref(),
+                            "error",
+                            Some(err),
+                        );
+                        failed.push(format!("{}: {err}", skill.name));
+                    }
+                    continue;
+                }
+                None => None,
+            };
+
+            let mut first_checkout = true;
+            for (skill_id, skill) in members {
+                let outcome = match skill.source_type.as_str() {
+                    "git" | "skillssh" => {
+                        // The first skill of a Source pulls the cache up to date;
+                        // its siblings only copy out of it.
+                        let refresh = if first_checkout {
+                            git_fetcher::CacheRefresh::IfStale
+                        } else {
+                            git_fetcher::CacheRefresh::Skip
+                        };
+                        first_checkout = false;
+                        let prepared = prepare_update(
+                            &store,
+                            &skill_id,
+                            &skill,
+                            proxy_url.as_deref(),
+                            None,
+                            refresh,
+                            head.as_deref(),
+                        );
+                        match prepared {
+                            Ok(prepared) => {
+                                let outcome = apply_prepared_update(
+                                    &store, &skill, &prepared, None, false,
+                                );
+                                log_batch_update_outcome(
+                                    &store,
+                                    &skill_id,
+                                    &skill.name,
+                                    outcome.as_ref(),
+                                );
+                                outcome
+                            }
+                            Err(err) => Err(err),
+                        }
+                    }
+                    _ => {
+                        let outcome = reimport_local_skill_internal(&store, &skill_id, None);
+                        log_reimport_outcome(&store, &skill_id, outcome.as_ref());
+                        // Local sources have no remote to share and no revision
+                        // to compare, so their three end states are counted here
+                        // rather than folded into an UpdateOutcome.
+                        match outcome {
+                            Ok(result) if !result.pending_removals.is_empty() => {
+                                held_back.push(skill.name.clone());
+                            }
+                            Ok(_) => refreshed += 1,
+                            Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
+                        }
+                        continue;
+                    }
+                };
+
+                match outcome {
+                    Ok(UpdateOutcome::Applied { content_changed }) => {
+                        if content_changed {
+                            refreshed += 1;
+                        } else {
+                            unchanged += 1;
+                        }
+                    }
+                    Ok(UpdateOutcome::Held { .. }) => held_back.push(skill.name.clone()),
+                    Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
+                }
+            }
+        }
+
+        // One description of the library for the whole batch, not one per skill.
+        sync_metadata::write_all_from_db_unlocked(&store).map_err(AppError::db)?;
 
         Ok(BatchUpdateSkillsResult {
             refreshed,
@@ -2088,49 +2251,149 @@ pub fn update_git_skill_internal(
         ));
     }
 
-    let git_source = RemoteRef::from_skill(&skill)?;
-    git_fetcher::validate_git_url(&git_source.clone_url).map_err(AppError::git)?;
-    let remote_revision = git_fetcher::resolve_remote_revision(
-        &git_source.clone_url,
-        git_source.branch.as_deref(),
+    let prepared = prepare_update(
+        store,
+        skill.id.as_str(),
+        &skill,
         proxy_url,
-    )
-    .map_err(|e| {
-        let message = e.to_string();
-        let _ = store.update_skill_check_state(
-            skill_id,
-            skill.remote_revision.as_deref(),
-            "error",
-            Some(&message),
-        );
-        AppError::git(message)
-    })?;
+        cancel,
+        git_fetcher::CacheRefresh::IfStale,
+        None,
+    )?;
+    // Applying is the only part that takes the central-repo lock, and it never
+    // reaches the network: the checkout is already on disk.
+    let update_result = apply_prepared_update(store, &skill, &prepared, approved_removals, true);
+    match update_result {
+        Ok(outcome) => {
+            let (content_changed, pending_removals, removal_approval) = match outcome {
+                UpdateOutcome::Applied { content_changed } => (content_changed, Vec::new(), None),
+                UpdateOutcome::Held { pending, approval } => (false, pending, Some(approval)),
+            };
+            let skill = managed_skill_by_id(store, skill_id)?;
+            Ok(UpdateSkillResult {
+                skill,
+                content_changed,
+                pending_removals,
+                removal_approval,
+            })
+        }
+        Err(e) => {
+            let _ = store.update_skill_check_state(
+                skill_id,
+                Some(&prepared.revision),
+                "error",
+                Some(&e.message),
+            );
+            Err(e)
+        }
+    }
+}
+
+/// A Source's code, resolved and on disk, fetched before any lock is taken.
+///
+/// Holding the central-repo lock across a network round-trip is what made
+/// unrelated foreground operations fail with a 20s "repository is busy" (#315),
+/// so the fetch happens here and [`apply_prepared_update`] only writes.
+pub struct PreparedUpdate {
+    pub source: RemoteRef,
+    pub revision: String,
+    pub checkout: PathBuf,
+}
+
+impl Drop for PreparedUpdate {
+    fn drop(&mut self) {
+        git_fetcher::cleanup_temp(&self.checkout);
+    }
+}
+
+/// Resolve one skill's head and put its code on disk. No central-repo lock.
+fn prepare_update(
+    store: &SkillStore,
+    skill_id: &str,
+    skill: &SkillRecord,
+    proxy_url: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    refresh: git_fetcher::CacheRefresh,
+    resolved_head: Option<&str>,
+) -> Result<PreparedUpdate, AppError> {
+    if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+        return Err(AppError::invalid_input(
+            "Only git-based skills can be updated",
+        ));
+    }
+
+    let source = RemoteRef::from_skill(skill)?;
+    git_fetcher::validate_git_url(&source.clone_url).map_err(AppError::git)?;
+    // A batch resolves each Source once and hands the answer to every skill it
+    // holds; a single update resolves its own.
+    let revision = match resolved_head {
+        Some(head) => head.to_string(),
+        None => git_fetcher::resolve_remote_revision(
+            &source.clone_url,
+            source.branch.as_deref(),
+            proxy_url,
+        )
+        .map_err(|e| {
+            let message = e.to_string();
+            let _ = store.update_skill_check_state(
+                skill_id,
+                skill.remote_revision.as_deref(),
+                "error",
+                Some(&message),
+            );
+            AppError::git(message)
+        })?,
+    };
 
     store
         .update_skill_update_status(skill_id, "updating")
         .map_err(AppError::db)?;
 
-    let temp_dir = git_fetcher::clone_repo_ref_scoped(
-        &git_source.clone_url,
-        git_source.branch.as_deref(),
-        git_source.subpath.as_deref(),
+    let checkout = git_fetcher::clone_repo_ref_scoped_with(
+        &source.clone_url,
+        source.branch.as_deref(),
+        source.subpath.as_deref(),
         cancel,
         proxy_url,
         None,
+        refresh,
     )
     .map_err(AppError::classify_git_error)?;
+
+    Ok(PreparedUpdate {
+        source,
+        revision,
+        checkout,
+    })
+}
+
+/// Install a skill from a checkout that is already on disk.
+///
+/// The only step that takes the central-repo lock, and it cannot reach the
+/// network: everything expensive about the network happened in
+/// [`prepare_update`].
+fn apply_prepared_update(
+    store: &SkillStore,
+    skill: &SkillRecord,
+    prepared: &PreparedUpdate,
+    approved_removals: Option<&str>,
+    flush_metadata: bool,
+) -> Result<UpdateOutcome, AppError> {
+    let source = &prepared.source;
+    let revision = &prepared.revision;
+    let checkout = &prepared.checkout;
     let update_result = (|| -> Result<UpdateOutcome, AppError> {
-        git_fetcher::checkout_revision(&temp_dir, &remote_revision).map_err(AppError::git)?;
+        git_fetcher::checkout_revision(&checkout, &revision).map_err(AppError::git)?;
         let skill_dir = resolve_skill_dir(
-            &temp_dir,
-            git_source.subpath.as_deref(),
-            git_source.locator.as_deref(),
+            &checkout,
+            source.subpath.as_deref(),
+            source.locator.as_deref(),
         )?;
 
         let new_hash =
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
         let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
-        let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
+        let source_subpath = git_fetcher::relative_subpath(&checkout, &skill_dir);
         let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
 
         // Stage first, then compare. The tree that lands in the library is the
@@ -2162,7 +2425,7 @@ pub fn update_git_skill_internal(
         // Skills Manager, not the agent processes writing into these very
         // directories. Narrowing that further needs the directories frozen
         // before the scan, not another scan.
-        let approval = removal_approval_token(&remote_revision, &pending);
+        let approval = removal_approval_token(&revision, &pending);
         if !pending.is_empty() && approved_removals != Some(approval.as_str()) {
             // Declining is not a failure: nothing was touched and the update is
             // still waiting. Clear the `updating` marker here, inside the lock,
@@ -2172,7 +2435,7 @@ pub fn update_git_skill_internal(
             store
                 .update_skill_check_state(
                     &skill.id,
-                    Some(&remote_revision),
+                    Some(&revision),
                     "update_available",
                     None,
                 )
@@ -2189,10 +2452,10 @@ pub fn update_git_skill_internal(
             store
                 .update_skill_source_metadata(
                     &skill.id,
-                    Some(&git_source.clone_url),
+                    Some(&source.clone_url),
                     source_subpath.as_deref(),
-                    git_source.branch.as_deref(),
-                    Some(&remote_revision),
+                    source.branch.as_deref(),
+                    Some(&revision),
                 )
                 .map_err(AppError::db)?;
             store
@@ -2200,58 +2463,37 @@ pub fn update_git_skill_internal(
                     &skill.id,
                     &skill.name,
                     install_result.description.as_deref(),
-                    Some(&remote_revision),
-                    Some(&remote_revision),
+                    Some(&revision),
+                    Some(&revision),
                     Some(&install_result.content_hash),
                     "up_to_date",
                 )
                 .map_err(AppError::db)?;
             resync_copy_targets(store, &skill.id)?;
-            sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+            if flush_metadata {
+                sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+            }
         } else {
             store
                 .update_skill_source_metadata(
                     &skill.id,
-                    Some(&git_source.clone_url),
+                    Some(&source.clone_url),
                     source_subpath.as_deref(),
-                    git_source.branch.as_deref(),
-                    Some(&remote_revision),
+                    source.branch.as_deref(),
+                    Some(&revision),
                 )
                 .map_err(AppError::db)?;
             store
-                .update_skill_check_state(&skill.id, Some(&remote_revision), "up_to_date", None)
+                .update_skill_check_state(&skill.id, Some(&revision), "up_to_date", None)
                 .map_err(AppError::db)?;
             resync_copy_targets(store, &skill.id)?;
-            sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+            if flush_metadata {
+                sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+            }
         }
         Ok(UpdateOutcome::Applied { content_changed })
     })();
-    git_fetcher::cleanup_temp(&temp_dir);
-
-    match update_result {
-        Ok(outcome) => {
-            let (content_changed, pending_removals, removal_approval) = match outcome {
-                UpdateOutcome::Applied { content_changed } => (content_changed, Vec::new(), None),
-                UpdateOutcome::Held { pending, approval } => (false, pending, Some(approval)),
-            };
-            let skill = managed_skill_by_id(store, skill_id)?;
-            Ok(UpdateSkillResult {
-                skill,
-                content_changed,
-                pending_removals,
-                removal_approval,
-            })
-        }
-        Err(e) => {
-            let _ = store.update_skill_check_state(
-                skill_id,
-                Some(&remote_revision),
-                "error",
-                Some(&e.message),
-            );
-            Err(e)
-        }
-    }
+    update_result
 }
 
 #[derive(Debug, Serialize)]
@@ -3826,6 +4068,68 @@ mod tests {
         assert_ne!(k_a, k_b);
         assert_eq!(k_a, "category-a/foo");
         assert_eq!(k_b, "category-b/foo");
+    }
+
+    // ── batch_update_skills grouping ──
+
+    fn stored(id: &str, source: &str, branch: Option<&str>, subpath: Option<&str>) -> (String, SkillRecord) {
+        let mut skill = SkillRecord {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            source_type: "git".to_string(),
+            source_ref: Some(source.to_string()),
+            source_ref_resolved: Some(source.to_string()),
+            source_subpath: subpath.map(str::to_string),
+            source_branch: branch.map(str::to_string),
+            source_revision: None,
+            remote_revision: None,
+            central_path: format!("/fixture/{id}"),
+            content_hash: None,
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+            status: "ok".to_string(),
+            update_status: "update_available".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        skill.name = id.to_string();
+        (id.to_string(), skill)
+    }
+
+    /// The whole point of the batch grouping: skills installed from different
+    /// subdirectories of one repository share a single resolution and fetch.
+    #[test]
+    fn a_batch_asks_each_source_once() {
+        let loaded = vec![
+            stored("a", "https://github.com/mattpocock/skills.git", None, Some("a")),
+            stored("b", "https://github.com/mattpocock/skills.git", None, Some("b")),
+            stored("c", "https://github.com/mattpocock/skills.git", None, None),
+            stored("d", "https://github.com/vercel/ai.git", None, None),
+            stored("e", "https://github.com/mattpocock/skills.git", Some("next"), None),
+        ];
+        let (groups, ungrouped) = group_by_source(loaded);
+
+        assert!(ungrouped.is_empty());
+        assert_eq!(groups.len(), 3, "three distinct remotes to resolve");
+        let sizes: Vec<usize> = groups.iter().map(|(_, members)| members.len()).collect();
+        assert_eq!(sizes, vec![3, 1, 1], "subpath siblings collapse; branch does not");
+    }
+
+    #[test]
+    fn local_and_broken_sources_are_not_grouped() {
+        let mut local = stored("l1", "https://example.com/x.git", None, None).1;
+        local.source_type = "local".to_string();
+        let mut broken = stored("b1", "https://example.com/y.git", None, None).1;
+        broken.source_ref = None;
+        broken.source_ref_resolved = None;
+
+        let (groups, ungrouped) =
+            group_by_source(vec![("l1".to_string(), local), ("b1".to_string(), broken)]);
+
+        assert!(groups.is_empty());
+        assert_eq!(ungrouped.len(), 2);
     }
 
     // ── RemoteIdentity dedup (batch check_all fan-out) ──
