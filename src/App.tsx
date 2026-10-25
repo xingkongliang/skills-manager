@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AppProvider } from "./context/AppContext";
 import { ThemeProvider, useThemeContext } from "./context/ThemeContext";
+import { DevInspector } from "./components/DevInspector";
 import { HelpDialog } from "./components/HelpDialog";
 import { CloseActionGuard } from "./components/CloseActionGuard";
 import { FirstRunRestoreDialog } from "./components/FirstRunRestoreDialog";
@@ -36,6 +37,7 @@ function App() {
   return (
     <ThemeProvider>
       <AppProvider>
+        <DevInspector />
         <BrowserRouter>
           <Routes>
             <Route element={<Layout />}>
