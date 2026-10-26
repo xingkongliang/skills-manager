@@ -71,6 +71,7 @@ pub struct PendingRemoval {
 /// deployed copy.
 pub const LIBRARY_LOCATION: &str = "library";
 
+#[derive(Debug)]
 enum UpdateOutcome {
     Applied {
         content_changed: bool,
@@ -2381,6 +2382,13 @@ fn prepare_update(
         record_update_failure(store, skill_id, Some(&revision), &error.message);
         error
     })?;
+    // Pin the exact revision here, off the lock: apply must stay filesystem-only
+    // so it can be exercised against a plain directory.
+    git_fetcher::checkout_revision(&checkout, &revision).map_err(|e| {
+        let error = AppError::git(e.to_string());
+        record_update_failure(store, skill_id, Some(&revision), &error.message);
+        error
+    })?;
 
     Ok(PreparedUpdate {
         source,
@@ -2405,7 +2413,6 @@ fn apply_prepared_update(
     let revision = &prepared.revision;
     let checkout = &prepared.checkout;
     let update_result = (|| -> Result<UpdateOutcome, AppError> {
-        git_fetcher::checkout_revision(&checkout, &revision).map_err(AppError::git)?;
         let skill_dir = resolve_skill_dir(
             &checkout,
             source.subpath.as_deref(),
@@ -4152,6 +4159,165 @@ mod tests {
 
         assert!(groups.is_empty());
         assert_eq!(ungrouped.len(), 2);
+    }
+
+    // ── apply_prepared_update: the three end states ──
+
+    fn write_tree(root: &std::path::Path, files: &[(&str, &str)]) {
+        for (name, contents) in files {
+            let path = root.join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, contents).unwrap();
+        }
+    }
+
+    /// A git skill already in the library, plus a prepared checkout shaped like
+    /// one the transport would hand over.
+    fn prepared_fixture(
+        repo: &TestRepo,
+        central_files: &[(&str, &str)],
+        checkout_files: &[(&str, &str)],
+    ) -> (SkillRecord, PreparedUpdate, TempDir) {
+        let id = "skill-under-test";
+        let central_path = central_repo::skills_dir().join(id);
+        write_tree(&central_path, central_files);
+        let hash = crate::core::content_hash::hash_directory(&central_path).unwrap();
+
+        let record = SkillRecord {
+            id: id.to_string(),
+            name: "skill-under-test".to_string(),
+            description: None,
+            source_type: "git".to_string(),
+            source_ref: Some("https://example.com/acme/skills".to_string()),
+            source_ref_resolved: Some("https://example.com/acme/skills".to_string()),
+            source_subpath: Some("skill".to_string()),
+            source_branch: None,
+            source_revision: Some("rev1".to_string()),
+            remote_revision: Some("rev1".to_string()),
+            central_path: central_path.to_string_lossy().to_string(),
+            content_hash: Some(hash),
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+            status: "ok".to_string(),
+            update_status: "update_available".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        repo.store.upsert_skill(&record).unwrap();
+
+        let checkout = tempdir().unwrap();
+        write_tree(&checkout.path().join("skill"), checkout_files);
+        let prepared = PreparedUpdate {
+            source: RemoteRef::from_skill(&record).unwrap(),
+            revision: "rev2".to_string(),
+            checkout: checkout.path().to_path_buf(),
+        };
+        (record, prepared, checkout)
+    }
+
+    #[test]
+    fn unchanged_content_installs_nothing_and_records_the_new_revision() {
+        let repo = test_repo();
+        let (record, prepared, _checkout) = prepared_fixture(
+            &repo,
+            &[("a.txt", "same")],
+            &[("a.txt", "same")],
+        );
+
+        let outcome = apply_prepared_update(&repo.store, &record, &prepared, None, false).unwrap();
+
+        assert!(matches!(outcome, UpdateOutcome::Applied { content_changed: false }));
+        let after = repo.store.get_skill_by_id(&record.id).unwrap().unwrap();
+        assert_eq!(after.source_revision.as_deref(), Some("rev2"));
+        assert_eq!(after.update_status, "up_to_date");
+    }
+
+    #[test]
+    fn changed_content_replaces_the_library_copy() {
+        let repo = test_repo();
+        let (record, prepared, _checkout) = prepared_fixture(
+            &repo,
+            &[("a.txt", "old")],
+            &[("a.txt", "new"), ("b.txt", "added")],
+        );
+
+        let outcome = apply_prepared_update(&repo.store, &record, &prepared, None, false).unwrap();
+
+        assert!(matches!(outcome, UpdateOutcome::Applied { content_changed: true }));
+        let central = std::path::Path::new(&record.central_path);
+        assert_eq!(fs::read_to_string(central.join("a.txt")).unwrap(), "new");
+        assert_eq!(fs::read_to_string(central.join("b.txt")).unwrap(), "added");
+        let after = repo.store.get_skill_by_id(&record.id).unwrap().unwrap();
+        assert_eq!(after.update_status, "up_to_date");
+        assert_ne!(after.content_hash, record.content_hash);
+    }
+
+    #[test]
+    fn a_dropped_file_holds_the_update_back_for_a_decision() {
+        let repo = test_repo();
+        // The library has a file the new revision does not: applying it would
+        // remove something the user may still want.
+        let (record, prepared, _checkout) = prepared_fixture(
+            &repo,
+            &[("a.txt", "old"), ("keep-me.txt", "mine")],
+            &[("a.txt", "new")],
+        );
+
+        let outcome = apply_prepared_update(&repo.store, &record, &prepared, None, false).unwrap();
+
+        match outcome {
+            UpdateOutcome::Held { pending, approval } => {
+                assert!(pending
+                    .iter()
+                    .any(|removal| removal.path.contains("keep-me.txt")));
+                assert!(!approval.is_empty());
+            }
+            other => panic!("expected the update to be held, got {other:?}"),
+        }
+        // Nothing was touched, and the row is still waiting rather than stuck.
+        let central = std::path::Path::new(&record.central_path);
+        assert_eq!(fs::read_to_string(central.join("a.txt")).unwrap(), "old");
+        assert_eq!(fs::read_to_string(central.join("keep-me.txt")).unwrap(), "mine");
+        let after = repo.store.get_skill_by_id(&record.id).unwrap().unwrap();
+        assert_eq!(after.update_status, "update_available");
+    }
+
+    /// The batch pays for one whole-library rewrite, at the end. Anything that
+    /// forgets to pass `flush_metadata: false` turns an O(N) batch into O(N²).
+    #[test]
+    fn the_library_is_rewritten_once_per_batch_not_once_per_skill() {
+        use std::sync::atomic::Ordering;
+
+        let repo = test_repo();
+        let (record, prepared, _checkout) = prepared_fixture(
+            &repo,
+            &[("a.txt", "old")],
+            &[("a.txt", "new")],
+        );
+
+        let before = crate::core::sync_metadata::WRITE_ALL_CALLS.load(Ordering::SeqCst);
+        apply_prepared_update(&repo.store, &record, &prepared, None, false).unwrap();
+        let after_skill = crate::core::sync_metadata::WRITE_ALL_CALLS.load(Ordering::SeqCst);
+        assert_eq!(
+            after_skill, before,
+            "a skill inside a batch must not rewrite the whole library"
+        );
+
+        let (record2, prepared2, _checkout2) = prepared_fixture(
+            &repo,
+            &[("a.txt", "old")],
+            &[("a.txt", "newer")],
+        );
+        apply_prepared_update(&repo.store, &record2, &prepared2, None, true).unwrap();
+        let after_batch = crate::core::sync_metadata::WRITE_ALL_CALLS.load(Ordering::SeqCst);
+        assert_eq!(
+            after_batch,
+            before + 1,
+            "the batch boundary writes it exactly once"
+        );
     }
 
     // ── RemoteIdentity dedup (batch check_all fan-out) ──
