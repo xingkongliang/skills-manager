@@ -803,9 +803,20 @@ export function MySkills() {
       }
       if (result.held_back.length > 0) {
         toast.warning(
-          t("mySkills.batchHeldBack", {
+          t("mySkills.batchHeldBackPaths", {
             count: result.held_back.length,
+            paths: result.held_back_paths,
             names: result.held_back.slice(0, 3).join("、"),
+          })
+        );
+      }
+      if (result.missing_sources.length > 0) {
+        // Not a failure to retry: the Source moved or renamed these, so the
+        // advice is to re-point them.
+        toast.warning(
+          t("mySkills.batchMissingSources", {
+            count: result.missing_sources.length,
+            names: result.missing_sources.slice(0, 3).join("、"),
           })
         );
       }

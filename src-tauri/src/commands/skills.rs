@@ -190,6 +190,14 @@ pub struct BatchUpdateSkillsResult {
     pub held_back: Vec<String>,
     /// True when the user stopped the round: the counters describe what finished.
     pub cancelled: bool,
+    /// How many paths an update would have removed across every held-back
+    /// skill. The names alone do not tell the user whether it is one file or a
+    /// hundred.
+    pub held_back_paths: usize,
+    /// Skills whose recorded path no longer exists upstream — usually a rename
+    /// or a directory move, not a deletion. Kept apart from `failed` because the
+    /// fix is different: re-point the source, do not retry.
+    pub missing_sources: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1815,6 +1823,13 @@ pub async fn reimport_local_skill(
     .await?
 }
 
+/// Whether a failure means "this Source no longer has that directory" rather
+/// than "the network or git said no". The two need different advice: one is
+/// re-pointed, the other is retried.
+fn is_missing_source(message: &str) -> bool {
+    message.contains("does not exist in the repository")
+}
+
 /// Split a batch into one group per Source, keeping the caller's order.
 ///
 /// Skills that cannot be tied to a remote (local, imported, or a broken source
@@ -1894,6 +1909,10 @@ pub struct RoundProgress<'a> {
     pub done: usize,
     pub total: usize,
     pub skill: &'a str,
+    /// True when the skill is about to start, false when it has finished. A
+    /// finished-skill counter alone sits still through the first, slowest
+    /// checkout, which reads as a frozen UI.
+    pub started: bool,
 }
 
 /// Cancel key for the foreground batch, next to the per-skill `update:<id>`.
@@ -1908,6 +1927,8 @@ pub fn run_update_round(
     let total = skill_ids.len();
     let mut done = 0usize;
     let mut cancelled = false;
+    let mut held_back_paths = 0usize;
+    let mut missing_sources: Vec<String> = Vec::new();
     let mut refreshed = 0usize;
     let mut unchanged = 0usize;
     let proxy_url = store.proxy_url();
@@ -1925,9 +1946,14 @@ pub fn run_update_round(
             None => failed.push(format!("{skill_id}: Skill not found")),
         }
     }
-    let report = |done: usize, skill: &str| {
+    let report = |done: usize, skill: &str, started: bool| {
         if let Some(progress) = policy.progress {
-            progress(RoundProgress { done, total, skill });
+            progress(RoundProgress {
+                done,
+                total,
+                skill,
+                started,
+            });
         }
     };
     let is_cancelled =
@@ -1941,6 +1967,8 @@ pub fn run_update_round(
             failed,
             held_back,
             cancelled: true,
+            held_back_paths,
+            missing_sources,
         });
     }
 
@@ -1952,6 +1980,7 @@ pub fn run_update_round(
             cancelled = true;
             break;
         }
+        report(done, &skill.name, true);
         match skill.source_type.as_str() {
             "local" | "import" => {
                 let outcome = reimport_local_skill_internal(store, &skill_id, None);
@@ -1964,7 +1993,7 @@ pub fn run_update_round(
                     Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
                 }
                 done += 1;
-                report(done, &skill.name);
+                report(done, &skill.name, false);
             }
             _ => {
                 let message = RemoteRef::from_skill(&skill)
@@ -2075,6 +2104,12 @@ pub fn run_update_round(
                     skill.remote_revision.as_deref(),
                     &err.message,
                 );
+                // A path that no longer exists upstream is not a retry: the
+                // Source moved or renamed it, and the user needs to re-point the
+                // skill rather than press update again.
+                if is_missing_source(&err.message) {
+                    missing_sources.push(skill.name.clone());
+                }
             }
 
             match outcome {
@@ -2085,7 +2120,10 @@ pub fn run_update_round(
                         unchanged += 1;
                     }
                 }
-                Ok(UpdateOutcome::Held { .. }) => held_back.push(skill.name.clone()),
+                Ok(UpdateOutcome::Held { pending, .. }) => {
+                    held_back_paths += pending.len();
+                    held_back.push(skill.name.clone());
+                }
                 Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
             }
         }
@@ -2096,12 +2134,21 @@ pub fn run_update_round(
     let _lock = RepoLock::acquire_foreground("batch update metadata").map_err(AppError::db)?;
     sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
 
+    log::info!(
+        "update round: {refreshed} refreshed, {unchanged} unchanged, {} held back ({held_back_paths} path(s)), {} missing upstream, {} failed, cancelled={cancelled}",
+        held_back.len(),
+        missing_sources.len(),
+        failed.len()
+    );
+
     Ok(BatchUpdateSkillsResult {
         refreshed,
         unchanged,
         failed,
         held_back,
         cancelled,
+        held_back_paths,
+        missing_sources,
     })
 }
 

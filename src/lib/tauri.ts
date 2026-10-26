@@ -353,6 +353,10 @@ export interface BatchUpdateSkillsResult {
   failed: string[];
   /** True when the user stopped the round; the counters describe what finished. */
   cancelled: boolean;
+  /** How many paths an update would have removed across the held-back skills. */
+  held_back_paths: number;
+  /** Skills whose recorded path no longer exists upstream — renamed or moved. */
+  missing_sources: string[];
 }
 
 export const batchUpdateSkills = (skillIds: string[]) =>
