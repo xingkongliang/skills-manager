@@ -2104,12 +2104,6 @@ pub fn run_update_round(
                     skill.remote_revision.as_deref(),
                     &err.message,
                 );
-                // A path that no longer exists upstream is not a retry: the
-                // Source moved or renamed it, and the user needs to re-point the
-                // skill rather than press update again.
-                if is_missing_source(&err.message) {
-                    missing_sources.push(skill.name.clone());
-                }
             }
 
             match outcome {
@@ -2123,6 +2117,12 @@ pub fn run_update_round(
                 Ok(UpdateOutcome::Held { pending, .. }) => {
                     held_back_paths += pending.len();
                     held_back.push(skill.name.clone());
+                }
+                Err(err) if is_missing_source(&err.message) => {
+                    // Already listed under missing_sources above; counting it as
+                    // a failure too told the user two different things about one
+                    // skill, and invited a retry that cannot work.
+                    missing_sources.push(skill.name.clone());
                 }
                 Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
             }
