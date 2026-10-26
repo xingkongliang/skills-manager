@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -19,10 +19,13 @@ pub const MAX_UPDATE_CONCURRENCY: usize = 4;
 /// which is how "one trip per Source" and "the cap holds" become assertions
 /// instead of hopes.
 pub trait RemoteTransport: Send + Sync {
-    /// The remote's head revision for this Source.
-    fn resolve_head(&self, source: &RemoteRef) -> Result<String>;
-    /// The Source's code on disk. `refresh` says whether the cached copy must be
-    /// brought up to date first, or may be reused as-is.
+    /// The Source's code on disk, at whatever the branch points to right now
+    /// when `refresh` is [`CacheRefresh::Fetch`].
+    ///
+    /// There is deliberately no separate "what is the head" call: asking the
+    /// remote twice per Source (once for the revision, once for the code) was
+    /// half the network traffic of an update, and the checkout already knows the
+    /// answer.
     fn fetch_checkout(&self, source: &RemoteRef, refresh: CacheRefresh) -> Result<std::path::PathBuf>;
 }
 
@@ -54,14 +57,6 @@ impl GitTransport {
 }
 
 impl RemoteTransport for GitTransport {
-    fn resolve_head(&self, source: &RemoteRef) -> Result<String> {
-        git_fetcher::resolve_remote_revision(
-            &source.clone_url,
-            source.branch.as_deref(),
-            self.proxy_url.as_deref(),
-        )
-    }
-
     fn fetch_checkout(&self, source: &RemoteRef, refresh: CacheRefresh) -> Result<std::path::PathBuf> {
         git_fetcher::clone_repo_ref_scoped_with(
             &source.clone_url,
@@ -102,32 +97,6 @@ where
     results.into_inner().unwrap_or_default()
 }
 
-/// Resolve each Source's head once. A failure stays with its own Source: the
-/// caller turns it into a per-skill failure and carries on with the rest.
-pub fn resolve_heads(
-    transport: &dyn RemoteTransport,
-    sources: &[RemoteRef],
-) -> HashMap<RemoteIdentity, std::result::Result<String, String>> {
-    let mut seen: HashSet<RemoteIdentity> = HashSet::new();
-    let mut unique: Vec<RemoteRef> = Vec::new();
-    for source in sources {
-        if seen.insert(source.identity()) {
-            unique.push(source.clone());
-        }
-    }
-
-    let resolved = run_concurrent(unique, MAX_UPDATE_CONCURRENCY, |source| {
-        transport
-            .resolve_head(source)
-            .map_err(|err| err.to_string())
-    });
-
-    resolved
-        .into_iter()
-        .map(|(source, head)| (source.identity(), head))
-        .collect()
-}
-
 /// Whether each Source in a group must refresh the cache before it is copied.
 ///
 /// Cache slots are per Source **and** per shape — a root install and a
@@ -156,7 +125,6 @@ mod tests {
 
     #[derive(Default)]
     struct Recording {
-        heads: Mutex<Vec<String>>,
         fetches: Mutex<Vec<(String, CacheRefresh)>>,
         in_flight: AtomicUsize,
         peak: AtomicUsize,
@@ -173,21 +141,19 @@ mod tests {
     }
 
     impl RemoteTransport for Recording {
-        fn resolve_head(&self, source: &RemoteRef) -> Result<String> {
+        fn fetch_checkout(
+            &self,
+            source: &RemoteRef,
+            refresh: CacheRefresh,
+        ) -> Result<std::path::PathBuf> {
             let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(now, Ordering::SeqCst);
-            // Hold the slot long enough for a second worker to arrive.
             std::thread::sleep(std::time::Duration::from_millis(20));
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
 
             if self.fail_for == Some(source.clone_url.as_str()) {
                 anyhow::bail!("boom");
             }
-            self.heads.lock().unwrap().push(source.clone_url.clone());
-            Ok(format!("head:{}", source.clone_url))
-        }
-
-        fn fetch_checkout(&self, source: &RemoteRef, refresh: CacheRefresh) -> Result<std::path::PathBuf> {
             self.fetches
                 .lock()
                 .unwrap()
@@ -207,58 +173,34 @@ mod tests {
     }
 
     #[test]
-    fn each_source_is_resolved_once_however_many_skills_it_holds() {
-        let transport = Recording::default();
-        let sources = vec![
-            source("https://example.com/a.git", Some("x")),
-            source("https://example.com/a.git", Some("y")),
-            source("https://example.com/a.git", None),
-            source("https://example.com/b.git", None),
-        ];
-
-        let heads = resolve_heads(&transport, &sources);
-
-        assert_eq!(heads.len(), 2, "two Sources, not four skills");
-        assert_eq!(transport.heads.lock().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn a_failing_source_does_not_take_the_others_down() {
+    fn a_failing_checkout_stays_with_its_own_source() {
         let transport = Recording::failing_for("https://example.com/bad.git");
-        let sources = vec![
-            source("https://example.com/good.git", None),
-            source("https://example.com/bad.git", None),
-        ];
+        let good = source("https://example.com/good.git", None);
+        let bad = source("https://example.com/bad.git", None);
 
-        let heads = resolve_heads(&transport, &sources);
-
-        let good = heads
-            .iter()
-            .find(|(identity, _)| identity.clone_url.ends_with("good.git"))
-            .map(|(_, head)| head);
-        let bad = heads
-            .iter()
-            .find(|(identity, _)| identity.clone_url.ends_with("bad.git"))
-            .map(|(_, head)| head);
-        assert!(matches!(good, Some(Ok(_))));
-        assert!(matches!(bad, Some(Err(message)) if message == "boom"));
+        assert!(transport.fetch_checkout(&good, CacheRefresh::Fetch).is_ok());
+        assert!(transport.fetch_checkout(&bad, CacheRefresh::Fetch).is_err());
+        // The good one was still fetched; one bad Source does not undo it.
+        assert_eq!(transport.fetches.lock().unwrap().len(), 1);
     }
 
     #[test]
-    fn resolution_stays_within_the_concurrency_cap() {
+    fn parallel_checkouts_stay_within_the_cap() {
         let transport = Recording::default();
         let sources: Vec<RemoteRef> = (0..12)
             .map(|i| source(&format!("https://example.com/r{i}.git"), None))
             .collect();
 
-        resolve_heads(&transport, &sources);
+        let fetched = run_concurrent(sources, MAX_UPDATE_CONCURRENCY, |source| {
+            transport.fetch_checkout(source, CacheRefresh::Fetch)
+        });
 
+        assert_eq!(fetched.len(), 12);
         assert!(
             transport.peak.load(Ordering::SeqCst) <= MAX_UPDATE_CONCURRENCY,
             "peak {} exceeded the cap",
             transport.peak.load(Ordering::SeqCst)
         );
-        assert_eq!(transport.heads.lock().unwrap().len(), 12);
     }
 
     #[test]

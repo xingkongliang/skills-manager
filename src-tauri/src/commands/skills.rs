@@ -1976,40 +1976,14 @@ pub fn run_update_round(
         }
     }
 
-    // Phase A: resolve every Source once, concurrently, off the lock — the
-    // same rule the check phase already follows.
     let transport = remote_batch::GitTransport::new(proxy_url.clone());
-    let mut sources: Vec<RemoteRef> = Vec::new();
-    for (_, members) in &groups {
-        if let Some((_, skill)) = members.first() {
-            if let Ok(source) = RemoteRef::from_skill(skill) {
-                sources.push(source);
-            }
-        }
-    }
-    let heads = remote_batch::resolve_heads(&transport, &sources);
 
-    // Phase B: fetch and apply, Source by Source.
-    for (identity, members) in groups {
-        let head = match heads.get(&identity) {
-            Some(Ok(head)) => Some(head.clone()),
-            Some(Err(err)) => {
-                // Same contract as a per-skill failure: the row records the
-                // error so the list can show it, and the rest of the batch
-                // carries on.
-                for (skill_id, skill) in &members {
-                    record_update_failure(
-                        store,
-                        skill_id,
-                        skill.remote_revision.as_deref(),
-                        err,
-                    );
-                    failed.push(format!("{}: {err}", skill.name));
-                }
-                continue;
-            }
-            None => None,
-        };
+    // Fetch and apply, Source by Source.
+    for (_identity, members) in groups {
+        if is_cancelled() {
+            cancelled = true;
+            break;
+        }
 
         // Every member of this group parsed into a Source when the group was
         // built, so the plan lines up with the members by construction.
@@ -2031,16 +2005,23 @@ pub fn run_update_round(
         let (refreshing, reusing): (Vec<usize>, Vec<usize>) = (0..members.len())
             .partition(|at| plan[*at] == git_fetcher::CacheRefresh::Fetch);
 
+        // The first checkout of a Source is where the revision comes from;
+        // every later one reuses it rather than asking the remote again.
+        let mut head: Option<String> = None;
         for at in refreshing {
             let (skill_id, skill) = &members[at];
-            prepared[at] = Some(prepare_update(
+            let outcome = prepare_update(
                 store,
                 skill_id,
                 skill,
                 &transport,
                 git_fetcher::CacheRefresh::Fetch,
-                head.as_deref(),
-            ));
+                None,
+            );
+            if let Ok(prepared_update) = &outcome {
+                head = Some(prepared_update.revision.clone());
+            }
+            prepared[at] = Some(outcome);
         }
 
         if !reusing.is_empty() {
@@ -2495,26 +2476,24 @@ fn prepare_update(
     git_fetcher::validate_git_url(&source.clone_url).map_err(AppError::git)?;
     // A batch resolves each Source once and hands the answer to every skill it
     // holds; a single update resolves its own.
-    let revision = match resolved_head {
-        Some(head) => head.to_string(),
-        None => transport.resolve_head(&source).map_err(|e| {
-            let message = e.to_string();
-            record_update_failure(store, skill_id, skill.remote_revision.as_deref(), &message);
-            AppError::git(message)
-        })?,
-    };
-
     store
         .update_skill_update_status(skill_id, "updating")
         .map_err(AppError::db)?;
 
     let checkout = transport.fetch_checkout(&source, refresh).map_err(|e| {
         let error = AppError::classify_git_error(e);
-        record_update_failure(store, skill_id, Some(&revision), &error.message);
+        record_update_failure(store, skill_id, skill.remote_revision.as_deref(), &error.message);
         error
     })?;
-    // Pin the exact revision here, off the lock: apply must stay filesystem-only
-    // so it can be exercised against a plain directory.
+    // The checkout knows which revision it is at, so the remote is never asked
+    // twice: what used to be `ls-remote` then `fetch` is now one fetch.
+    let revision = match resolved_head {
+        Some(head) => head.to_string(),
+        None => git_fetcher::get_head_revision(&checkout)
+            .map_err(|e| AppError::git(e.to_string()))?,
+    };
+    // Pin it here, off the lock: apply must stay filesystem-only so it can be
+    // exercised against a plain directory.
     git_fetcher::checkout_revision(&checkout, &revision).map_err(|e| {
         let error = AppError::git(e.to_string());
         record_update_failure(store, skill_id, Some(&revision), &error.message);
