@@ -149,11 +149,6 @@ pub fn plan_fetches(sources: &[RemoteRef]) -> Vec<CacheRefresh> {
         .collect()
 }
 
-/// Share one transport across threads without leaking its lifetime into callers.
-pub fn shared(transport: GitTransport) -> Arc<dyn RemoteTransport> {
-    Arc::new(transport)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

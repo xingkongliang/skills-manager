@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use tauri::State;
 use walkdir::WalkDir;
@@ -820,6 +820,19 @@ fn record_update_failure(
 /// What an update did, as the audit trail records it. Both the single-skill and
 /// the batch path end here, so the two cannot describe the same outcome
 /// differently.
+impl<'a> From<&'a UpdateOutcome> for UpdateAudit<'a> {
+    fn from(outcome: &'a UpdateOutcome) -> Self {
+        match outcome {
+            UpdateOutcome::Held { pending, .. } => UpdateAudit::Held {
+                removed: pending.len(),
+            },
+            UpdateOutcome::Applied { content_changed } => UpdateAudit::Applied {
+                content_changed: *content_changed,
+            },
+        }
+    }
+}
+
 enum UpdateAudit<'a> {
     Applied { content_changed: bool },
     Held { removed: usize },
@@ -1741,27 +1754,11 @@ where
     T: Send,
     F: Fn(&RemoteIdentity) -> T + Sync,
 {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let next = AtomicUsize::new(0);
-    let results: Mutex<HashMap<RemoteIdentity, T>> = Mutex::new(HashMap::with_capacity(remotes.len()));
-    let worker_count = MAX_CHECK_CONCURRENCY.min(remotes.len().max(1));
-
-    std::thread::scope(|scope| {
-        for _ in 0..worker_count {
-            scope.spawn(|| loop {
-                let idx = next.fetch_add(1, Ordering::Relaxed);
-                let Some(key) = remotes.get(idx) else { break };
-
-                let resolved = resolve(key);
-                if let Ok(mut map) = results.lock() {
-                    map.insert(key.clone(), resolved);
-                }
-            });
-        }
-    });
-
-    results.into_inner().unwrap_or_default()
+    // One runner for both phases; only the cap differs (a check reads a ref
+    // advertisement, an update copies a tree).
+    remote_batch::run_concurrent(remotes, MAX_CHECK_CONCURRENCY, resolve)
+        .into_iter()
+        .collect()
 }
 
 /// Update one skill.
@@ -1938,54 +1935,81 @@ pub async fn batch_update_skills(
                 None => None,
             };
 
-            // Cache slots are per Source *and* per shape, so the plan refreshes
-            // each slot once and reuses it for that Source's siblings.
-            let group_sources: Vec<RemoteRef> = members
-                .iter()
-                .filter_map(|(_, skill)| RemoteRef::from_skill(skill).ok())
-                .collect();
-            let plan = remote_batch::plan_fetches(&group_sources);
+            // Every member of this group parsed into a Source when the group was
+            // built, so the plan lines up with the members by construction.
+            let mut prepared: Vec<Option<Result<PreparedUpdate, AppError>>> =
+                (0..members.len()).map(|_| None).collect();
+            let mut group_sources: Vec<Option<RemoteRef>> = Vec::with_capacity(members.len());
+            for (_, skill) in &members {
+                group_sources.push(RemoteRef::from_skill(skill).ok());
+            }
+            let plan = remote_batch::plan_fetches(
+                &group_sources
+                    .iter()
+                    .map(|source| source.clone().expect("grouped skills parse"))
+                    .collect::<Vec<_>>(),
+            );
 
-            for (at, (skill_id, skill)) in members.into_iter().enumerate() {
-                let refresh = plan
-                    .get(at)
-                    .copied()
-                    .unwrap_or(git_fetcher::CacheRefresh::Fetch);
-                let outcome = match prepare_update(
+            // The slot that has to refresh goes first and alone: its siblings
+            // copy out of what it fetched. Everything else can copy in parallel.
+            let (refreshing, reusing): (Vec<usize>, Vec<usize>) = (0..members.len())
+                .partition(|at| plan[*at] == git_fetcher::CacheRefresh::Fetch);
+
+            for at in refreshing {
+                let (skill_id, skill) = &members[at];
+                prepared[at] = Some(prepare_update(
                     &store,
-                    &skill_id,
-                    &skill,
+                    skill_id,
+                    skill,
                     &transport,
-                    refresh,
+                    git_fetcher::CacheRefresh::Fetch,
                     head.as_deref(),
-                ) {
-                    Ok(prepared) => {
-                        apply_prepared_update(&store, &skill, &prepared, None, false)
+                ));
+            }
+
+            if !reusing.is_empty() {
+                let fetched = remote_batch::run_concurrent(
+                    reusing,
+                    remote_batch::MAX_UPDATE_CONCURRENCY,
+                    |at| {
+                        let (skill_id, skill) = &members[*at];
+                        prepare_update(
+                            &store,
+                            skill_id,
+                            skill,
+                            &transport,
+                            git_fetcher::CacheRefresh::Reuse,
+                            head.as_deref(),
+                        )
+                    },
+                );
+                for (at, outcome) in fetched {
+                    prepared[at] = Some(outcome);
+                }
+            }
+
+            for (at, (skill_id, skill)) in members.iter().enumerate() {
+                let outcome = match prepared[at].take() {
+                    Some(Ok(prepared)) => {
+                        apply_prepared_update(&store, skill, &prepared, None, false)
                     }
-                    Err(err) => Err(err),
+                    Some(Err(err)) => Err(err),
+                    None => Err(AppError::git("Update was not prepared")),
                 };
                 log_update_entry(
                     &store,
-                    &skill_id,
+                    skill_id,
                     &skill.name,
                     "git",
                     match &outcome {
-                        Ok(UpdateOutcome::Held { pending, .. }) => UpdateAudit::Held {
-                            removed: pending.len(),
-                        },
-                        Ok(UpdateOutcome::Applied { content_changed }) => UpdateAudit::Applied {
-                            content_changed: *content_changed,
-                        },
+                        Ok(applied) => UpdateAudit::from(applied),
                         Err(err) => UpdateAudit::Failed(&err.message),
                     },
                 );
                 if let Err(err) = &outcome {
-                    // Same contract as the single-skill path: the row records
-                    // why, so the list can show it instead of leaving the skill
-                    // stuck on "updating".
                     record_update_failure(
                         &store,
-                        &skill_id,
+                        skill_id,
                         skill.remote_revision.as_deref(),
                         &err.message,
                     );
@@ -2352,9 +2376,11 @@ fn prepare_update(
         .update_skill_update_status(skill_id, "updating")
         .map_err(AppError::db)?;
 
-    let checkout = transport
-        .fetch_checkout(&source, refresh)
-        .map_err(AppError::classify_git_error)?;
+    let checkout = transport.fetch_checkout(&source, refresh).map_err(|e| {
+        let error = AppError::classify_git_error(e);
+        record_update_failure(store, skill_id, Some(&revision), &error.message);
+        error
+    })?;
 
     Ok(PreparedUpdate {
         source,
