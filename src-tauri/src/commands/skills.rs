@@ -1851,199 +1851,235 @@ fn group_by_source(
     (groups, ungrouped)
 }
 
+/// How a round of updates should behave.
+///
+/// The foreground batch wants speed; the background scheduler wants speed too,
+/// but must leave a gap between skills so a user-initiated operation waiting on
+/// the central-repo lock wins it. Both go through the same orchestration so the
+/// two cannot drift: one resolves per Source, one applies per skill, one writes
+/// the library metadata at the end.
+#[derive(Clone, Copy, Default)]
+pub struct UpdatePolicy {
+    pub yield_between: Option<std::time::Duration>,
+}
+
+impl UpdatePolicy {
+    /// The background round's policy: yield the lock between skills.
+    pub fn yield_to_foreground(gap: std::time::Duration) -> Self {
+        Self {
+            yield_between: Some(gap),
+        }
+    }
+}
+
+/// Update a set of skills: resoleach Source once, then fetch and apply.
+pub fn run_update_round(
+    store: &SkillStore,
+    skill_ids: Vec<String>,
+    policy: UpdatePolicy,
+) -> Result<BatchUpdateSkillsResult, AppError> {
+    let mut refreshed = 0usize;
+    let mut unchanged = 0usize;
+    let proxy_url = store.proxy_url();
+    let mut failed = Vec::new();
+    let mut held_back = Vec::new();
+
+    // Group by Source before doing anything: a library built from a dozen
+    // repositories holds many skills per repository, and every skill used to
+    // resolve and fetch its own copy. One resolution per Source, and the
+    // first checkout warms the cache the siblings then reuse.
+    let mut loaded: Vec<(String, SkillRecord)> = Vec::new();
+    for skill_id in skill_ids {
+        match store.get_skill_by_id(&skill_id).map_err(AppError::db)? {
+            Some(skill) => loaded.push((skill_id, skill)),
+            None => failed.push(format!("{skill_id}: Skill not found")),
+        }
+    }
+    let (groups, ungrouped) = group_by_source(loaded);
+    // Local and imported sources share nothing and have no remote to
+    // resolve, so they keep re-importing one at a time, as they always did.
+    for (skill_id, skill) in ungrouped {
+        match skill.source_type.as_str() {
+            "local" | "import" => {
+                let outcome = reimport_local_skill_internal(store, &skill_id, None);
+                log_reimport_outcome(store, &skill_id, outcome.as_ref());
+                match outcome {
+                    Ok(result) if !result.pending_removals.is_empty() => {
+                        held_back.push(skill.name.clone());
+                    }
+                    Ok(_) => refreshed += 1,
+                    Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
+                }
+            }
+            _ => {
+                let message = RemoteRef::from_skill(&skill)
+                    .err()
+                    .map(|err| err.message)
+                    .unwrap_or_else(|| "Skill has no usable source".to_string());
+                failed.push(format!("{}: {}", skill.name, message));
+            }
+        }
+    }
+
+    // Phase A: resolve every Source once, concurrently, off the lock — the
+    // same rule the check phase already follows.
+    let transport = remote_batch::GitTransport::new(proxy_url.clone());
+    let mut sources: Vec<RemoteRef> = Vec::new();
+    for (_, members) in &groups {
+        if let Some((_, skill)) = members.first() {
+            if let Ok(source) = RemoteRef::from_skill(skill) {
+                sources.push(source);
+            }
+        }
+    }
+    let heads = remote_batch::resolve_heads(&transport, &sources);
+
+    // Phase B: fetch and apply, Source by Source.
+    for (identity, members) in groups {
+        let head = match heads.get(&identity) {
+            Some(Ok(head)) => Some(head.clone()),
+            Some(Err(err)) => {
+                // Same contract as a per-skill failure: the row records the
+                // error so the list can show it, and the rest of the batch
+                // carries on.
+                for (skill_id, skill) in &members {
+                    record_update_failure(
+                        store,
+                        skill_id,
+                        skill.remote_revision.as_deref(),
+                        err,
+                    );
+                    failed.push(format!("{}: {err}", skill.name));
+                }
+                continue;
+            }
+            None => None,
+        };
+
+        // Every member of this group parsed into a Source when the group was
+        // built, so the plan lines up with the members by construction.
+        let mut prepared: Vec<Option<Result<PreparedUpdate, AppError>>> =
+            (0..members.len()).map(|_| None).collect();
+        let mut group_sources: Vec<Option<RemoteRef>> = Vec::with_capacity(members.len());
+        for (_, skill) in &members {
+            group_sources.push(RemoteRef::from_skill(skill).ok());
+        }
+        let plan = remote_batch::plan_fetches(
+            &group_sources
+                .iter()
+                .map(|source| source.clone().expect("grouped skills parse"))
+                .collect::<Vec<_>>(),
+        );
+
+        // The slot that has to refresh goes first and alone: its siblings
+        // copy out of what it fetched. Everything else can copy in parallel.
+        let (refreshing, reusing): (Vec<usize>, Vec<usize>) = (0..members.len())
+            .partition(|at| plan[*at] == git_fetcher::CacheRefresh::Fetch);
+
+        for at in refreshing {
+            let (skill_id, skill) = &members[at];
+            prepared[at] = Some(prepare_update(
+                store,
+                skill_id,
+                skill,
+                &transport,
+                git_fetcher::CacheRefresh::Fetch,
+                head.as_deref(),
+            ));
+        }
+
+        if !reusing.is_empty() {
+            let fetched = remote_batch::run_concurrent(
+                reusing,
+                remote_batch::MAX_UPDATE_CONCURRENCY,
+                |at| {
+                    let (skill_id, skill) = &members[*at];
+                    prepare_update(
+                        store,
+                        skill_id,
+                        skill,
+                        &transport,
+                        git_fetcher::CacheRefresh::Reuse,
+                        head.as_deref(),
+                    )
+                },
+            );
+            for (at, outcome) in fetched {
+                prepared[at] = Some(outcome);
+            }
+        }
+
+        for (at, (skill_id, skill)) in members.iter().enumerate() {
+            // A background round must not starve a user-initiated update: the
+            // gap is longer than the foreground lock poll, so a waiter wins.
+            if let Some(gap) = policy.yield_between {
+                std::thread::sleep(gap);
+            }
+            let outcome = match prepared[at].take() {
+                Some(Ok(prepared)) => {
+                    apply_prepared_update(store, skill, &prepared, None, false)
+                }
+                Some(Err(err)) => Err(err),
+                None => Err(AppError::git("Update was not prepared")),
+            };
+            log_update_entry(
+                store,
+                skill_id,
+                &skill.name,
+                "git",
+                match &outcome {
+                    Ok(applied) => UpdateAudit::from(applied),
+                    Err(err) => UpdateAudit::Failed(&err.message),
+                },
+            );
+            if let Err(err) = &outcome {
+                record_update_failure(
+                    store,
+                    skill_id,
+                    skill.remote_revision.as_deref(),
+                    &err.message,
+                );
+            }
+
+            match outcome {
+                Ok(UpdateOutcome::Applied { content_changed }) => {
+                    if content_changed {
+                        refreshed += 1;
+                    } else {
+                        unchanged += 1;
+                    }
+                }
+                Ok(UpdateOutcome::Held { .. }) => held_back.push(skill.name.clone()),
+                Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
+            }
+        }
+    }
+
+    // One description of the library for the whole batch, not one per skill
+    // — and under the lock, which every writer of that description takes.
+    let _lock = RepoLock::acquire_foreground("batch update metadata").map_err(AppError::db)?;
+    sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+
+    Ok(BatchUpdateSkillsResult {
+        refreshed,
+        unchanged,
+        failed,
+        held_back,
+    })
+}
+
 #[tauri::command]
 pub async fn batch_update_skills(
     skill_ids: Vec<String>,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<BatchUpdateSkillsResult, AppError> {
     let store = store.inner().clone();
-    let proxy_url = store.proxy_url();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut refreshed = 0usize;
-        let mut unchanged = 0usize;
-        let mut failed = Vec::new();
-        let mut held_back = Vec::new();
-
-        // Group by Source before doing anything: a library built from a dozen
-        // repositories holds many skills per repository, and every skill used to
-        // resolve and fetch its own copy. One resolution per Source, and the
-        // first checkout warms the cache the siblings then reuse.
-        let mut loaded: Vec<(String, SkillRecord)> = Vec::new();
-        for skill_id in skill_ids {
-            match store.get_skill_by_id(&skill_id).map_err(AppError::db)? {
-                Some(skill) => loaded.push((skill_id, skill)),
-                None => failed.push(format!("{skill_id}: Skill not found")),
-            }
-        }
-        let (groups, ungrouped) = group_by_source(loaded);
-        // Local and imported sources share nothing and have no remote to
-        // resolve, so they keep re-importing one at a time, as they always did.
-        for (skill_id, skill) in ungrouped {
-            match skill.source_type.as_str() {
-                "local" | "import" => {
-                    let outcome = reimport_local_skill_internal(&store, &skill_id, None);
-                    log_reimport_outcome(&store, &skill_id, outcome.as_ref());
-                    match outcome {
-                        Ok(result) if !result.pending_removals.is_empty() => {
-                            held_back.push(skill.name.clone());
-                        }
-                        Ok(_) => refreshed += 1,
-                        Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
-                    }
-                }
-                _ => {
-                    let message = RemoteRef::from_skill(&skill)
-                        .err()
-                        .map(|err| err.message)
-                        .unwrap_or_else(|| "Skill has no usable source".to_string());
-                    failed.push(format!("{}: {}", skill.name, message));
-                }
-            }
-        }
-
-        // Phase A: resolve every Source once, concurrently, off the lock — the
-        // same rule the check phase already follows.
-        let transport = remote_batch::GitTransport::new(proxy_url.clone());
-        let mut sources: Vec<RemoteRef> = Vec::new();
-        for (_, members) in &groups {
-            if let Some((_, skill)) = members.first() {
-                if let Ok(source) = RemoteRef::from_skill(skill) {
-                    sources.push(source);
-                }
-            }
-        }
-        let heads = remote_batch::resolve_heads(&transport, &sources);
-
-        // Phase B: fetch and apply, Source by Source.
-        for (identity, members) in groups {
-            let head = match heads.get(&identity) {
-                Some(Ok(head)) => Some(head.clone()),
-                Some(Err(err)) => {
-                    // Same contract as a per-skill failure: the row records the
-                    // error so the list can show it, and the rest of the batch
-                    // carries on.
-                    for (skill_id, skill) in &members {
-                        record_update_failure(
-                            &store,
-                            skill_id,
-                            skill.remote_revision.as_deref(),
-                            err,
-                        );
-                        failed.push(format!("{}: {err}", skill.name));
-                    }
-                    continue;
-                }
-                None => None,
-            };
-
-            // Every member of this group parsed into a Source when the group was
-            // built, so the plan lines up with the members by construction.
-            let mut prepared: Vec<Option<Result<PreparedUpdate, AppError>>> =
-                (0..members.len()).map(|_| None).collect();
-            let mut group_sources: Vec<Option<RemoteRef>> = Vec::with_capacity(members.len());
-            for (_, skill) in &members {
-                group_sources.push(RemoteRef::from_skill(skill).ok());
-            }
-            let plan = remote_batch::plan_fetches(
-                &group_sources
-                    .iter()
-                    .map(|source| source.clone().expect("grouped skills parse"))
-                    .collect::<Vec<_>>(),
-            );
-
-            // The slot that has to refresh goes first and alone: its siblings
-            // copy out of what it fetched. Everything else can copy in parallel.
-            let (refreshing, reusing): (Vec<usize>, Vec<usize>) = (0..members.len())
-                .partition(|at| plan[*at] == git_fetcher::CacheRefresh::Fetch);
-
-            for at in refreshing {
-                let (skill_id, skill) = &members[at];
-                prepared[at] = Some(prepare_update(
-                    &store,
-                    skill_id,
-                    skill,
-                    &transport,
-                    git_fetcher::CacheRefresh::Fetch,
-                    head.as_deref(),
-                ));
-            }
-
-            if !reusing.is_empty() {
-                let fetched = remote_batch::run_concurrent(
-                    reusing,
-                    remote_batch::MAX_UPDATE_CONCURRENCY,
-                    |at| {
-                        let (skill_id, skill) = &members[*at];
-                        prepare_update(
-                            &store,
-                            skill_id,
-                            skill,
-                            &transport,
-                            git_fetcher::CacheRefresh::Reuse,
-                            head.as_deref(),
-                        )
-                    },
-                );
-                for (at, outcome) in fetched {
-                    prepared[at] = Some(outcome);
-                }
-            }
-
-            for (at, (skill_id, skill)) in members.iter().enumerate() {
-                let outcome = match prepared[at].take() {
-                    Some(Ok(prepared)) => {
-                        apply_prepared_update(&store, skill, &prepared, None, false)
-                    }
-                    Some(Err(err)) => Err(err),
-                    None => Err(AppError::git("Update was not prepared")),
-                };
-                log_update_entry(
-                    &store,
-                    skill_id,
-                    &skill.name,
-                    "git",
-                    match &outcome {
-                        Ok(applied) => UpdateAudit::from(applied),
-                        Err(err) => UpdateAudit::Failed(&err.message),
-                    },
-                );
-                if let Err(err) = &outcome {
-                    record_update_failure(
-                        &store,
-                        skill_id,
-                        skill.remote_revision.as_deref(),
-                        &err.message,
-                    );
-                }
-
-                match outcome {
-                    Ok(UpdateOutcome::Applied { content_changed }) => {
-                        if content_changed {
-                            refreshed += 1;
-                        } else {
-                            unchanged += 1;
-                        }
-                    }
-                    Ok(UpdateOutcome::Held { .. }) => held_back.push(skill.name.clone()),
-                    Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
-                }
-            }
-        }
-
-        // One description of the library for the whole batch, not one per skill
-        // — and under the lock, which every writer of that description takes.
-        let _lock = RepoLock::acquire_foreground("batch update metadata").map_err(AppError::db)?;
-        sync_metadata::write_all_from_db_unlocked(&store).map_err(AppError::db)?;
-
-        Ok(BatchUpdateSkillsResult {
-            refreshed,
-            unchanged,
-            failed,
-            held_back,
-        })
+        run_update_round(&store, skill_ids, UpdatePolicy::default())
     })
     .await?
 }
+
 
 #[tauri::command]
 /// Re-point a local skill at a different source directory.
