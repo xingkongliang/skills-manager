@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
-use tauri::State;
+use tauri::{Emitter, State};
 use walkdir::WalkDir;
 
 use crate::core::{
@@ -188,6 +188,8 @@ pub struct BatchUpdateSkillsResult {
     /// version does not have. Named so the user can go and look, rather than
     /// wondering why the badge did not clear.
     pub held_back: Vec<String>,
+    /// True when the user stopped the round: the counters describe what finished.
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1858,26 +1860,54 @@ fn group_by_source(
 /// the central-repo lock wins it. Both go through the same orchestration so the
 /// two cannot drift: one resolves per Source, one applies per skill, one writes
 /// the library metadata at the end.
-#[derive(Clone, Copy, Default)]
-pub struct UpdatePolicy {
+pub struct UpdatePolicy<'a> {
     pub yield_between: Option<std::time::Duration>,
+    /// Set by the user's cancel button; checked between skills.
+    pub cancel: Option<Arc<AtomicBool>>,
+    /// Where to report "skill n of m". The scheduler passes none.
+    pub progress: Option<&'a (dyn Fn(RoundProgress<'_>) + Sync)>,
 }
 
-impl UpdatePolicy {
+impl Default for UpdatePolicy<'_> {
+    fn default() -> Self {
+        Self {
+            yield_between: None,
+            cancel: None,
+            progress: None,
+        }
+    }
+}
+
+impl<'a> UpdatePolicy<'a> {
     /// The background round's policy: yield the lock between skills.
     pub fn yield_to_foreground(gap: std::time::Duration) -> Self {
         Self {
             yield_between: Some(gap),
+            ..Default::default()
         }
     }
 }
+
+/// How far a round has got, for a UI that would otherwise show a spinner and
+/// nothing else for minutes.
+pub struct RoundProgress<'a> {
+    pub done: usize,
+    pub total: usize,
+    pub skill: &'a str,
+}
+
+/// Cancel key for the foreground batch, next to the per-skill `update:<id>`.
+pub const BATCH_UPDATE_CANCEL_KEY: &str = "update-batch";
 
 /// Update a set of skills: resoleach Source once, then fetch and apply.
 pub fn run_update_round(
     store: &SkillStore,
     skill_ids: Vec<String>,
-    policy: UpdatePolicy,
+    policy: UpdatePolicy<'_>,
 ) -> Result<BatchUpdateSkillsResult, AppError> {
+    let total = skill_ids.len();
+    let mut done = 0usize;
+    let mut cancelled = false;
     let mut refreshed = 0usize;
     let mut unchanged = 0usize;
     let proxy_url = store.proxy_url();
@@ -1895,10 +1925,33 @@ pub fn run_update_round(
             None => failed.push(format!("{skill_id}: Skill not found")),
         }
     }
+    let report = |done: usize, skill: &str| {
+        if let Some(progress) = policy.progress {
+            progress(RoundProgress { done, total, skill });
+        }
+    };
+    let is_cancelled =
+        || policy.cancel.as_ref().is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst));
+
+    if is_cancelled() {
+        // Stopping must not cost a round of network calls first.
+        return Ok(BatchUpdateSkillsResult {
+            refreshed,
+            unchanged,
+            failed,
+            held_back,
+            cancelled: true,
+        });
+    }
+
     let (groups, ungrouped) = group_by_source(loaded);
     // Local and imported sources share nothing and have no remote to
     // resolve, so they keep re-importing one at a time, as they always did.
     for (skill_id, skill) in ungrouped {
+        if is_cancelled() {
+            cancelled = true;
+            break;
+        }
         match skill.source_type.as_str() {
             "local" | "import" => {
                 let outcome = reimport_local_skill_internal(store, &skill_id, None);
@@ -1910,6 +1963,8 @@ pub fn run_update_round(
                     Ok(_) => refreshed += 1,
                     Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
                 }
+                done += 1;
+                report(done, &skill.name);
             }
             _ => {
                 let message = RemoteRef::from_skill(&skill)
@@ -2065,19 +2120,59 @@ pub fn run_update_round(
         unchanged,
         failed,
         held_back,
+        cancelled,
     })
+}
+
+#[derive(Clone, serde::Serialize)]
+struct UpdateProgressPayload {
+    done: usize,
+    total: usize,
+    skill: String,
 }
 
 #[tauri::command]
 pub async fn batch_update_skills(
     skill_ids: Vec<String>,
     store: State<'_, Arc<SkillStore>>,
+    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
+    app: tauri::AppHandle,
 ) -> Result<BatchUpdateSkillsResult, AppError> {
     let store = store.inner().clone();
+    let registry = cancel_registry.inner().clone();
+    let cancel = registry.register(BATCH_UPDATE_CANCEL_KEY);
+    let _cancel_guard = CancelRegistrationGuard::new(registry, BATCH_UPDATE_CANCEL_KEY.to_string());
+
     tauri::async_runtime::spawn_blocking(move || {
-        run_update_round(&store, skill_ids, UpdatePolicy::default())
+        // The UI has nothing else to show for a long round; one event per skill
+        // is cheap and lets it say "42 of 137" instead of spinning.
+        let emit = |progress: RoundProgress<'_>| {
+            let _ = app.emit(
+                "skill-update-progress",
+                UpdateProgressPayload {
+                    done: progress.done,
+                    total: progress.total,
+                    skill: progress.skill.to_string(),
+                },
+            );
+        };
+        run_update_round(
+            &store,
+            skill_ids,
+            UpdatePolicy {
+                cancel: Some(cancel),
+                progress: Some(&emit),
+                ..Default::default()
+            },
+        )
     })
     .await?
+}
+
+/// Stop a running batch update. Skills already finished stay finished.
+#[tauri::command]
+pub fn cancel_batch_update(cancel_registry: State<'_, Arc<InstallCancelRegistry>>) -> bool {
+    cancel_registry.cancel(BATCH_UPDATE_CANCEL_KEY)
 }
 
 
@@ -4354,6 +4449,32 @@ mod tests {
             before + 1,
             "the batch boundary writes it exactly once"
         );
+    }
+
+    #[test]
+    fn a_cancelled_round_stops_before_touching_the_network() {
+        let repo = test_repo();
+        let (record, _prepared, _checkout) = prepared_fixture(
+            &repo,
+            &[("a.txt", "old")],
+            &[("a.txt", "new")],
+        );
+
+        let summary = run_update_round(
+            &repo.store,
+            vec![record.id.clone()],
+            UpdatePolicy {
+                cancel: Some(Arc::new(AtomicBool::new(true))),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(summary.cancelled);
+        assert_eq!(summary.refreshed, 0);
+        // The library copy is untouched: the round never got as far as a skill.
+        let central = std::path::Path::new(&record.central_path);
+        assert_eq!(fs::read_to_string(central.join("a.txt")).unwrap(), "old");
     }
 
     // ── RemoteIdentity dedup (batch check_all fan-out) ──

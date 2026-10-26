@@ -351,10 +351,15 @@ export interface BatchUpdateSkillsResult {
   /** Skills left alone because updating would have removed files. */
   held_back: string[];
   failed: string[];
+  /** True when the user stopped the round; the counters describe what finished. */
+  cancelled: boolean;
 }
 
 export const batchUpdateSkills = (skillIds: string[]) =>
   invoke<BatchUpdateSkillsResult>("batch_update_skills", { skillIds });
+
+/** Stop a running batch update. Skills already finished stay finished. */
+export const cancelBatchUpdate = () => invoke<boolean>("cancel_batch_update");
 
 export interface ReimportSkillResult {
   skill: ManagedSkill;
