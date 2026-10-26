@@ -161,6 +161,12 @@ fn comparison_key(clone_url: &str) -> String {
     without_git.trim_end_matches('/').to_string()
 }
 
+/// Whether a skill with this Channel is fetched from git and therefore has a
+/// remote to resolve, a revision to compare, and a checkout to update from.
+pub fn is_git_channel(source_type: &str) -> bool {
+    matches!(source_type, "git" | "skillssh")
+}
+
 /// An empty subpath and no subpath are the same thing. Nothing else is
 /// rewritten: on unix a trailing space and a backslash are legal parts of a
 /// directory name, so tidying the string here would make the narrow checkout

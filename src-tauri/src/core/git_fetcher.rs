@@ -28,8 +28,10 @@ pub const CLONE_TEMP_PREFIX: &str = "skills-manager-clone-";
 /// repository once per skill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheRefresh {
-    IfStale,
-    Skip,
+    /// Bring the cached copy up to date before using it.
+    Fetch,
+    /// This batch already refreshed this slot; copy out of it as-is.
+    Reuse,
 }
 
 /// Callback type for reporting clone progress messages to the UI.
@@ -580,7 +582,7 @@ pub fn clone_repo_ref_scoped(
     on_progress: Option<ProgressCallback>,
 ) -> Result<PathBuf> {
     clone_repo_ref_scoped_with(
-        url, branch, subpath, cancel, proxy_url, on_progress, CacheRefresh::IfStale,
+        url, branch, subpath, cancel, proxy_url, on_progress, CacheRefresh::Fetch,
     )
 }
 
@@ -670,7 +672,7 @@ fn clone_repo_sparse(
     // expensive, and they are shared. The lock holds until this call's copy is
     // taken, so a later install re-scoping the worktree cannot disturb it.
     let reusable = cached_dir.exists()
-        && (refresh == CacheRefresh::Skip
+        && (refresh == CacheRefresh::Reuse
             || try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, on_progress)?);
 
     if !reusable {
@@ -957,7 +959,7 @@ fn clone_repo_full(
     let _cache_lock = lock_repo_cache(&cached_dir, &on_progress)?;
 
     // Try cached repo first.
-    if cached_dir.exists() && refresh == CacheRefresh::Skip {
+    if cached_dir.exists() && refresh == CacheRefresh::Reuse {
         return materialize_cached_repo(&cached_dir, cancel);
     }
     if cached_dir.exists() {

@@ -14,7 +14,8 @@ use crate::core::{
     git_fetcher,
     install_cancel::InstallCancelRegistry,
     installer, path_guard,
-    remote_ref::{RemoteIdentity, RemoteRef},
+    remote_batch,
+    remote_ref::{is_git_channel, RemoteIdentity, RemoteRef},
     repo_lock::RepoLock,
     scanner, scenario_service,
     skill_metadata::{self, is_valid_skill_dir},
@@ -429,7 +430,7 @@ pub async fn get_source_skill_document(
             });
         }
 
-        if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+        if !is_git_channel(&skill.source_type) {
             return Err(AppError::invalid_input(
                 "Skill does not support source diff preview",
             ));
@@ -628,7 +629,7 @@ pub async fn get_skill_source_diff(
             });
         }
 
-        if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+        if !is_git_channel(&skill.source_type) {
             return Err(AppError::invalid_input(
                 "Skill does not support source diff preview",
             ));
@@ -805,85 +806,92 @@ fn log_install_outcome(
     store.log_audit(draft);
 }
 
-fn log_update_outcome(
+/// One place that records "this update did not finish", so a row cannot be left
+/// showing `updating` forever by a path that forgot to write the error.
+fn record_update_failure(
     store: &SkillStore,
     skill_id: &str,
+    revision: Option<&str>,
+    message: &str,
+) {
+    let _ = store.update_skill_check_state(skill_id, revision, "error", Some(message));
+}
+
+/// What an update did, as the audit trail records it. Both the single-skill and
+/// the batch path end here, so the two cannot describe the same outcome
+/// differently.
+enum UpdateAudit<'a> {
+    Applied { content_changed: bool },
+    Held { removed: usize },
+    Failed(&'a str),
+}
+
+fn log_update_entry(
+    store: &SkillStore,
+    skill_id: &str,
+    name: &str,
     source_label: &str,
-    outcome: Result<&UpdateSkillResult, &AppError>,
+    entry: UpdateAudit<'_>,
 ) {
     let mut draft = AuditDraft::new("update").detail(source_label);
-    match outcome {
-        Ok(result) if !result.pending_removals.is_empty() => {
-            // Held back, not applied. Recording it as a successful "unchanged"
-            // would make the audit trail disagree with what actually happened.
+    match entry {
+        UpdateAudit::Held { removed } => {
             draft = draft
-                .skill(result.skill.id.clone(), result.skill.name.clone())
-                .detail(format!(
-                    "{source_label}; held back — would remove {} path(s)",
-                    result.pending_removals.len()
-                ))
+                .skill(skill_id.to_string(), name.to_string())
+                .detail(format!("{source_label}; held back — would remove {removed} path(s)"))
                 .ok();
         }
-        Ok(result) => {
+        UpdateAudit::Applied { content_changed } => {
             draft = draft
-                .skill(result.skill.id.clone(), result.skill.name.clone())
-                .detail(if result.content_changed {
+                .skill(skill_id.to_string(), name.to_string())
+                .detail(if content_changed {
                     format!("{source_label}; content changed")
                 } else {
                     format!("{source_label}; unchanged")
                 })
                 .ok();
         }
-        Err(e) => {
-            let name = store
-                .get_skill_by_id(skill_id)
-                .ok()
-                .flatten()
-                .map(|s| s.name)
-                .unwrap_or_default();
-            draft = draft.skill(skill_id.to_string(), name).fail(e.to_string());
+        UpdateAudit::Failed(message) => {
+            draft = draft
+                .skill(skill_id.to_string(), name.to_string())
+                .fail(message.to_string());
         }
     }
     store.log_audit(draft);
 }
 
-/// The batch path already knows the skill's name and whether content changed, so
-/// it records the same audit entry without re-reading the row it just wrote.
-fn log_batch_update_outcome(
+fn log_update_outcome(
     store: &SkillStore,
     skill_id: &str,
-    name: &str,
-    outcome: Result<&UpdateOutcome, &AppError>,
+    source_label: &str,
+    outcome: Result<&UpdateSkillResult, &AppError>,
 ) {
-    let mut draft = AuditDraft::new("update").detail("git");
-    match outcome {
-        Ok(UpdateOutcome::Held { pending, .. }) => {
-            draft = draft
-                .skill(skill_id.to_string(), name.to_string())
-                .detail(format!(
-                    "git; held back — would remove {} path(s)",
-                    pending.len()
-                ))
-                .ok();
-        }
-        Ok(UpdateOutcome::Applied { content_changed }) => {
-            draft = draft
-                .skill(skill_id.to_string(), name.to_string())
-                .detail(if *content_changed {
-                    "git; content changed".to_string()
-                } else {
-                    "git; unchanged".to_string()
-                })
-                .ok();
-        }
-        Err(e) => {
-            draft = draft
-                .skill(skill_id.to_string(), name.to_string())
-                .fail(e.to_string());
-        }
-    }
-    store.log_audit(draft);
+    let (name, entry) = match outcome {
+        Ok(result) if !result.pending_removals.is_empty() => (
+            result.skill.name.clone(),
+            UpdateAudit::Held {
+                removed: result.pending_removals.len(),
+            },
+        ),
+        Ok(result) => (
+            result.skill.name.clone(),
+            UpdateAudit::Applied {
+                content_changed: result.content_changed,
+            },
+        ),
+        Err(e) => (
+            store
+                .get_skill_by_id(skill_id)
+                .ok()
+                .flatten()
+                .map(|s| s.name)
+                .unwrap_or_default(),
+            UpdateAudit::Failed(&e.message),
+        ),
+    };
+    log_update_entry(store, skill_id, &name, source_label, entry);
 }
+
 
 fn log_reimport_outcome(
     store: &SkillStore,
@@ -1545,7 +1553,7 @@ pub async fn check_all_skill_updates(
         // directories, so the monorepo siblings share one subtree fetch (#561).
         let mut remotes: HashMap<RemoteIdentity, HashSet<(String, String)>> = HashMap::new();
         for skill in &skills {
-            if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+            if !is_git_channel(&skill.source_type) {
                 continue;
             }
             match should_skip_update_check(&store, skill, force_check) {
@@ -1587,7 +1595,7 @@ pub async fn check_all_skill_updates(
         // so the caller knows the check didn't complete for it.
         let mut failed = Vec::new();
         for skill in &skills {
-            let prefetched = if matches!(skill.source_type.as_str(), "git" | "skillssh") {
+            let prefetched = if is_git_channel(&skill.source_type) {
                 RemoteRef::from_skill(skill)
                     .ok()
                     .and_then(|source| remote_revisions.get(&source.identity()).cloned())
@@ -1688,7 +1696,7 @@ pub fn prefetch_skill_remote(
     proxy_url: Option<&str>,
 ) -> Option<PrefetchedRemote> {
     let skill = store.get_skill_by_id(skill_id).ok().flatten()?;
-    if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+    if !is_git_channel(&skill.source_type) {
         return None;
     }
     if should_skip_update_check(store, &skill, force).unwrap_or(false) {
@@ -1823,7 +1831,7 @@ fn group_by_source(
     let mut ungrouped = Vec::new();
 
     for (skill_id, skill) in loaded {
-        if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+        if !is_git_channel(&skill.source_type) {
             ungrouped.push((skill_id, skill));
             continue;
         }
@@ -1897,22 +1905,18 @@ pub async fn batch_update_skills(
 
         // Phase A: resolve every Source once, concurrently, off the lock — the
         // same rule the check phase already follows.
-        let identities: Vec<RemoteIdentity> = groups
-            .iter()
-            .map(|(identity, _)| identity.clone())
-            .collect();
-        let heads: HashMap<RemoteIdentity, Result<String, String>> =
-            resolve_concurrent(identities, |identity| {
-                git_fetcher::resolve_remote_revision(
-                    &identity.clone_url,
-                    identity.branch.as_deref(),
-                    proxy_url.as_deref(),
-                )
-                .map_err(|err| err.to_string())
-            });
+        let transport = remote_batch::GitTransport::new(proxy_url.clone());
+        let mut sources: Vec<RemoteRef> = Vec::new();
+        for (_, members) in &groups {
+            if let Some((_, skill)) = members.first() {
+                if let Ok(source) = RemoteRef::from_skill(skill) {
+                    sources.push(source);
+                }
+            }
+        }
+        let heads = remote_batch::resolve_heads(&transport, &sources);
 
         // Phase B: fetch and apply, Source by Source.
-        let mut refreshed_slots: HashSet<(RemoteIdentity, bool)> = HashSet::new();
         for (identity, members) in groups {
             let head = match heads.get(&identity) {
                 Some(Ok(head)) => Some(head.clone()),
@@ -1921,11 +1925,11 @@ pub async fn batch_update_skills(
                     // error so the list can show it, and the rest of the batch
                     // carries on.
                     for (skill_id, skill) in &members {
-                        let _ = store.update_skill_check_state(
+                        record_update_failure(
+                            &store,
                             skill_id,
                             skill.remote_revision.as_deref(),
-                            "error",
-                            Some(err),
+                            err,
                         );
                         failed.push(format!("{}: {err}", skill.name));
                     }
@@ -1934,25 +1938,24 @@ pub async fn batch_update_skills(
                 None => None,
             };
 
-            for (skill_id, skill) in members {
-                // Cache slots are per Source *and* per shape: a root install and
-                // a subdirectory install of one repository do not share a slot,
-                // so each shape refreshes its own before the siblings reuse it.
-                let slot = (
-                    identity.clone(),
-                    skill.source_subpath.as_deref().is_some_and(|s| !s.is_empty()),
-                );
-                let refresh = if refreshed_slots.insert(slot) {
-                    git_fetcher::CacheRefresh::IfStale
-                } else {
-                    git_fetcher::CacheRefresh::Skip
-                };
+            // Cache slots are per Source *and* per shape, so the plan refreshes
+            // each slot once and reuses it for that Source's siblings.
+            let group_sources: Vec<RemoteRef> = members
+                .iter()
+                .filter_map(|(_, skill)| RemoteRef::from_skill(skill).ok())
+                .collect();
+            let plan = remote_batch::plan_fetches(&group_sources);
+
+            for (at, (skill_id, skill)) in members.into_iter().enumerate() {
+                let refresh = plan
+                    .get(at)
+                    .copied()
+                    .unwrap_or(git_fetcher::CacheRefresh::Fetch);
                 let outcome = match prepare_update(
                     &store,
                     &skill_id,
                     &skill,
-                    proxy_url.as_deref(),
-                    None,
+                    &transport,
                     refresh,
                     head.as_deref(),
                 ) {
@@ -1961,16 +1964,30 @@ pub async fn batch_update_skills(
                     }
                     Err(err) => Err(err),
                 };
-                log_batch_update_outcome(&store, &skill_id, &skill.name, outcome.as_ref());
+                log_update_entry(
+                    &store,
+                    &skill_id,
+                    &skill.name,
+                    "git",
+                    match &outcome {
+                        Ok(UpdateOutcome::Held { pending, .. }) => UpdateAudit::Held {
+                            removed: pending.len(),
+                        },
+                        Ok(UpdateOutcome::Applied { content_changed }) => UpdateAudit::Applied {
+                            content_changed: *content_changed,
+                        },
+                        Err(err) => UpdateAudit::Failed(&err.message),
+                    },
+                );
                 if let Err(err) = &outcome {
                     // Same contract as the single-skill path: the row records
                     // why, so the list can show it instead of leaving the skill
                     // stuck on "updating".
-                    let _ = store.update_skill_check_state(
+                    record_update_failure(
+                        &store,
                         &skill_id,
                         skill.remote_revision.as_deref(),
-                        "error",
-                        Some(&err.message),
+                        &err.message,
                     );
                 }
 
@@ -2247,19 +2264,19 @@ pub fn update_git_skill_internal(
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Skill not found"))?;
 
-    if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+    if !is_git_channel(&skill.source_type) {
         return Err(AppError::invalid_input(
             "Only git-based skills can be updated",
         ));
     }
 
+    let transport = remote_batch::GitTransport::with_cancel(proxy_url.map(str::to_string), cancel);
     let prepared = prepare_update(
         store,
         skill.id.as_str(),
         &skill,
-        proxy_url,
-        cancel,
-        git_fetcher::CacheRefresh::IfStale,
+        &transport,
+        git_fetcher::CacheRefresh::Fetch,
         None,
     )?;
     // Applying is the only part that takes the central-repo lock, and it never
@@ -2280,12 +2297,7 @@ pub fn update_git_skill_internal(
             })
         }
         Err(e) => {
-            let _ = store.update_skill_check_state(
-                skill_id,
-                Some(&prepared.revision),
-                "error",
-                Some(&e.message),
-            );
+            record_update_failure(store, skill_id, Some(&prepared.revision), &e.message);
             Err(e)
         }
     }
@@ -2313,12 +2325,11 @@ fn prepare_update(
     store: &SkillStore,
     skill_id: &str,
     skill: &SkillRecord,
-    proxy_url: Option<&str>,
-    cancel: Option<&Arc<AtomicBool>>,
+    transport: &dyn remote_batch::RemoteTransport,
     refresh: git_fetcher::CacheRefresh,
     resolved_head: Option<&str>,
 ) -> Result<PreparedUpdate, AppError> {
-    if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+    if !is_git_channel(&skill.source_type) {
         return Err(AppError::invalid_input(
             "Only git-based skills can be updated",
         ));
@@ -2330,19 +2341,9 @@ fn prepare_update(
     // holds; a single update resolves its own.
     let revision = match resolved_head {
         Some(head) => head.to_string(),
-        None => git_fetcher::resolve_remote_revision(
-            &source.clone_url,
-            source.branch.as_deref(),
-            proxy_url,
-        )
-        .map_err(|e| {
+        None => transport.resolve_head(&source).map_err(|e| {
             let message = e.to_string();
-            let _ = store.update_skill_check_state(
-                skill_id,
-                skill.remote_revision.as_deref(),
-                "error",
-                Some(&message),
-            );
+            record_update_failure(store, skill_id, skill.remote_revision.as_deref(), &message);
             AppError::git(message)
         })?,
     };
@@ -2351,16 +2352,9 @@ fn prepare_update(
         .update_skill_update_status(skill_id, "updating")
         .map_err(AppError::db)?;
 
-    let checkout = git_fetcher::clone_repo_ref_scoped_with(
-        &source.clone_url,
-        source.branch.as_deref(),
-        source.subpath.as_deref(),
-        cancel,
-        proxy_url,
-        None,
-        refresh,
-    )
-    .map_err(AppError::classify_git_error)?;
+    let checkout = transport
+        .fetch_checkout(&source, refresh)
+        .map_err(AppError::classify_git_error)?;
 
     Ok(PreparedUpdate {
         source,
