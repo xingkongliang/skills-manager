@@ -553,6 +553,15 @@ struct UpdateReport {
     /// "already up to date".
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     held_back_removals: Vec<String>,
+    /// Present when the recorded path no longer holds the skill but its Source
+    /// still does: the strongest candidate. Not a failure and not a refresh —
+    /// re-pointing is the user's decision, and this CLI has no command for it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    moved_to: Option<String>,
+    /// The Source no longer holds this skill anywhere. Retrying cannot help;
+    /// the app offers detach or delete.
+    #[serde(default)]
+    source_gone: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1794,6 +1803,8 @@ fn run_update(
                             .iter()
                             .map(|p| format!("{}: {}", p.location, p.path))
                             .collect(),
+                        moved_to: r.moved.first().map(|candidate| candidate.subpath.clone()),
+                        source_gone: r.gone,
                     },
                     Err(e) => UpdateReport {
                         skill_id: skill.id.clone(),
@@ -1802,6 +1813,8 @@ fn run_update(
                         refreshed: false,
                         error: Some(e.message.clone()),
                         held_back_removals: Vec::new(),
+                        moved_to: None,
+                        source_gone: false,
                     },
                 }
             }
@@ -1817,6 +1830,8 @@ fn run_update(
                         .iter()
                         .map(|p| format!("{}: {}", p.location, p.path))
                         .collect(),
+                    moved_to: None,
+                    source_gone: false,
                 },
                 Err(e) => UpdateReport {
                     skill_id: skill.id.clone(),
@@ -1825,6 +1840,8 @@ fn run_update(
                     refreshed: false,
                     error: Some(e.message.clone()),
                     held_back_removals: Vec::new(),
+                    moved_to: None,
+                    source_gone: false,
                 },
             },
             other => UpdateReport {
@@ -1834,6 +1851,8 @@ fn run_update(
                 refreshed: false,
                 error: Some(format!("source type '{other}' cannot be refreshed")),
                 held_back_removals: Vec::new(),
+                moved_to: None,
+                source_gone: false,
             },
         };
         reports.push(report);

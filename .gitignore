@@ -38,3 +38,8 @@ CLAUDE.md
 AGENTS.md
 .loop-log
 
+
+# Agent-local tooling and scratch notes
+.pi/
+.codex/
+.workbuddy/

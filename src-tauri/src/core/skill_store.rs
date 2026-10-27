@@ -1,11 +1,12 @@
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use super::audit_log::{AuditDraft, AuditEntry, MAX_ENTRIES as AUDIT_MAX_ENTRIES};
 use super::crypto;
+use super::source_membership::MoveCandidate;
 
 /// Settings keys whose values are encrypted at rest with AES-256-GCM.
 const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url"];
@@ -53,6 +54,35 @@ pub struct SkillTargetRecord {
     /// to skip redundant Copy-mode resyncs (issue #153). `None` for rows
     /// written before this column existed, or when the source had no hash.
     pub source_hash: Option<String>,
+}
+
+/// One path an update was held back on, as stored in the database.
+///
+/// Deliberately not the command layer's `PendingRemoval`: the store is a core
+/// module and must not know about DTOs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRemovalRecord {
+    pub location: String,
+    pub path: String,
+}
+
+/// The exact question a held update asked: this revision, this list, this token.
+#[derive(Debug, Clone)]
+pub struct StoredPendingRemovals {
+    pub revision: String,
+    pub approval: String,
+    pub removals: Vec<PendingRemovalRecord>,
+}
+
+/// One stored removal joined with the skill it belongs to, for the review panel.
+#[derive(Debug, Clone)]
+pub struct PendingRemovalRow {
+    pub skill_id: String,
+    pub skill_name: String,
+    pub source: String,
+    pub revision: String,
+    pub location: String,
+    pub path: String,
 }
 
 /// One row of the pending-conflict projection (merge-engine design §4).
@@ -325,6 +355,162 @@ impl SkillStore {
              SET remote_revision = ?1, update_status = ?2, last_checked_at = ?3, last_check_error = ?4
              WHERE id = ?5",
             params![remote_revision, update_status, now, last_check_error, id],
+        )?;
+        // Candidates describe the last `moved` answer. Any other verdict means
+        // that answer is stale, so it goes with it; a fresh `moved` write is
+        // followed by `replace_skill_move_candidates`.
+        if update_status != "moved" {
+            conn.execute(
+                "DELETE FROM skill_move_candidates WHERE skill_id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Remember the locator's answer for a `moved` skill.
+    ///
+    /// A round's summary is gone once it returns, and the UI must still offer
+    /// the button after a restart, so the answer is cached here until the next
+    /// check state replaces it. One row per skill: the whole list is written and
+    /// read together, and only the UI needs it.
+    pub fn replace_skill_move_candidates(
+        &self,
+        id: &str,
+        candidates: &[MoveCandidate],
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let json = serde_json::to_string(candidates)?;
+        conn.execute(
+            "INSERT INTO skill_move_candidates (skill_id, candidates) VALUES (?1, ?2)
+             ON CONFLICT(skill_id) DO UPDATE SET candidates = excluded.candidates",
+            params![id, json],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_skill_move_candidates(&self, id: &str) -> Result<Vec<MoveCandidate>> {
+        let conn = self.conn.lock().unwrap();
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT candidates FROM skill_move_candidates WHERE skill_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match json {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub fn clear_skill_move_candidates(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM skill_move_candidates WHERE skill_id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// Replace the paths one held update would delete.
+    ///
+    /// The whole set is written together because the approval token covers the
+    /// whole set: a half-written list would name a question that was never
+    /// asked. `approval` is the token the panel shows, stored verbatim so the
+    /// existing single-skill comparison stays the gate.
+    pub fn replace_skill_pending_removals(
+        &self,
+        id: &str,
+        revision: &str,
+        approval: &str,
+        removals: &[PendingRemovalRecord],
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM skill_pending_removals WHERE skill_id = ?1",
+            params![id],
+        )?;
+        for removal in removals {
+            tx.execute(
+                "INSERT INTO skill_pending_removals
+                    (skill_id, revision, approval, location, path)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, revision, approval, removal.location, removal.path],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The stored question for one skill, or `None` when nothing is held.
+    pub fn get_skill_pending_removals(&self, id: &str) -> Result<Option<StoredPendingRemovals>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT revision, approval, location, path
+             FROM skill_pending_removals
+             WHERE skill_id = ?1
+             ORDER BY CASE WHEN location = 'library' THEN 0 ELSE 1 END, location, path",
+        )?;
+        let rows = stmt.query_map(params![id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                PendingRemovalRecord {
+                    location: row.get(2)?,
+                    path: row.get(3)?,
+                },
+            ))
+        })?;
+
+        let mut stored: Option<StoredPendingRemovals> = None;
+        for row in rows {
+            let (revision, approval, removal) = row?;
+            stored
+                .get_or_insert_with(|| StoredPendingRemovals {
+                    revision,
+                    approval,
+                    removals: Vec::new(),
+                })
+                .removals
+                .push(removal);
+        }
+        Ok(stored)
+    }
+
+    /// Every stored removal, joined with the skill's name and Source. The
+    /// library's rows come first within a skill because that is where the user
+    /// is most likely to keep something worth rescuing.
+    pub fn list_pending_removals(&self) -> Result<Vec<PendingRemovalRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT p.skill_id, s.name, COALESCE(s.source_ref_resolved, s.source_ref, ''),
+                    p.revision, p.location, p.path
+             FROM skill_pending_removals p
+             JOIN skills s ON s.id = p.skill_id
+             ORDER BY s.name, s.id,
+                      CASE WHEN p.location = 'library' THEN 0 ELSE 1 END,
+                      p.location, p.path",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PendingRemovalRow {
+                skill_id: row.get(0)?,
+                skill_name: row.get(1)?,
+                source: row.get(2)?,
+                revision: row.get(3)?,
+                location: row.get(4)?,
+                path: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn clear_skill_pending_removals(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM skill_pending_removals WHERE skill_id = ?1",
+            params![id],
         )?;
         Ok(())
     }

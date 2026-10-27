@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 8;
+const LATEST_VERSION: u32 = 10;
 
 /// Run all pending migrations on the database.
 ///
@@ -55,6 +55,8 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         5 => migrate_v5_to_v6(conn),
         6 => migrate_v6_to_v7(conn),
         7 => migrate_v7_to_v8(conn),
+        8 => migrate_v8_to_v9(conn),
+        9 => migrate_v9_to_v10(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -321,6 +323,53 @@ fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v8 → v9: remember where a moved Skill was found.
+///
+/// A round discovers the candidates and the UI needs them after a restart, when
+/// there is no checkout left to ask. One row per `moved` skill, holding the
+/// locator's answer as JSON: it is a cache of one computed answer, never a
+/// source of truth, and it is deleted by the same check-state write that leaves
+/// `moved`. The cascade keeps a deleted skill from leaving one behind.
+fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS skill_move_candidates (
+            skill_id TEXT PRIMARY KEY REFERENCES skills(id) ON DELETE CASCADE,
+            candidates TEXT NOT NULL
+        );
+        ",
+    )?;
+    Ok(())
+}
+
+/// v9 → v10: remember the file removals an update was held back on.
+///
+/// The paths and the approval token used to live only in the round's summary,
+/// so a screen that lists what each skill would delete would have to re-fetch
+/// every Source and recompute the list. One row per path keeps the locations
+/// (`library` or an agent key) explicit, which is how the panel knows where to
+/// go and rescue a file. `approval` is stored rather than recomputed so the
+/// token the user saw is exactly the token the single-skill update path checks;
+/// `revision` rides along as the second half of that question. The cascade
+/// means a deleted skill cannot leave rows behind.
+fn migrate_v9_to_v10(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS skill_pending_removals (
+            skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+            revision TEXT NOT NULL,
+            approval TEXT NOT NULL,
+            location TEXT NOT NULL,
+            path TEXT NOT NULL,
+            PRIMARY KEY (skill_id, location, path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_skill_pending_removals_skill
+            ON skill_pending_removals(skill_id);
+        ",
+    )?;
+    Ok(())
+}
+
 // ── Helpers ──
 
 fn add_column_if_missing(
@@ -389,6 +438,8 @@ mod tests {
         assert!(tables.contains(&"skill_tags".to_string()));
         assert!(tables.contains(&"scenario_skill_tools".to_string()));
         assert!(tables.contains(&"audit_log".to_string()));
+        assert!(tables.contains(&"skill_move_candidates".to_string()));
+        assert!(tables.contains(&"skill_pending_removals".to_string()));
     }
 
     #[test]

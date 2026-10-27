@@ -39,6 +39,11 @@ export interface ManagedSkill {
   targets: SkillTarget[];
   preset_ids: string[];
   tags: string[];
+  /**
+   * Where the last `moved` check found this skill in its Source. Empty for
+   * every other status; persisted so a restart can still offer the re-point.
+   */
+  move_candidates: MoveCandidate[];
 }
 
 export interface SkillTarget {
@@ -330,6 +335,14 @@ export interface UpdateSkillResult {
    * approves that list at that revision and nothing else.
    */
   removal_approval: string | null;
+  /**
+   * Where the Source says the skill went, strongest first. Empty unless the
+   * recorded path no longer holds it — the batch's `moved` bucket, for one
+   * skill. Nothing was written: re-pointing is the user's call.
+   */
+  moved: MoveCandidate[];
+  /** The Source no longer holds this skill anywhere. Not a failure. */
+  gone: boolean;
 }
 
 export interface PendingRemoval {
@@ -338,6 +351,45 @@ export interface PendingRemoval {
   path: string;
 }
 
+/**
+ * One skill's stored removals in one location. A skill appears once per
+ * location because that is how the panel groups the paths, while approval is
+ * still per skill and covers all of them.
+ */
+export interface PendingRemovalGroup {
+  skill_id: string;
+  skill_name: string;
+  /** The Source the skill came from, in the form `source_ref_resolved` stores. */
+  source: string;
+  /** The revision the stored list describes. */
+  revision: string;
+  /** `"library"`, or the agent key whose copy holds it. */
+  location: string;
+  paths: string[];
+}
+
+export interface FailedRemoval {
+  name: string;
+  message: string;
+}
+
+export interface ApproveRemovalsResult {
+  approved: number;
+  failed: FailedRemoval[];
+}
+
+/** Every skill the last update held back, with the paths it would delete. */
+export const listPendingRemovals = () =>
+  invoke<PendingRemovalGroup[]>("list_pending_removals");
+
+/**
+ * Approve the stored removal list for each skill. Each one goes through the
+ * normal single-skill update with the token it was stored with; a failure is
+ * reported per skill, never rolled back across skills.
+ */
+export const approveRemovals = (skillIds: string[]) =>
+  invoke<ApproveRemovalsResult>("approve_removals", { skillIds });
+
 /** `approvedRemovals` carries back `removal_approval` from a declined call. */
 export const updateSkill = (skillId: string, approvedRemovals?: string | null) =>
   invoke<UpdateSkillResult>("update_skill", {
@@ -345,16 +397,86 @@ export const updateSkill = (skillId: string, approvedRemovals?: string | null) =
     approvedRemovals: approvedRemovals ?? null,
   });
 
+/**
+ * Move a skill's source pointer to a path the Source proposed. This writes the
+ * pointer only: the library copy and its content hash are untouched.
+ */
+export const repointSkillSource = (skillId: string, subpath: string) =>
+  invoke<ManagedSkill>("repoint_skill_source", { skillId, subpath });
+
+export interface NewSkill {
+  name: string;
+  /** Where it sits in the repository, the form `source_subpath` takes. */
+  subpath: string;
+  source_ref_resolved: string;
+  branch: string | null;
+  /**
+   * Stable selection and dismissal key from the backend: Source identity
+   * (URL spellings folded, branch included) plus the name. Never rebuild it.
+   */
+  key: string;
+}
+
 export interface BatchUpdateSkillsResult {
   refreshed: number;
   unchanged: number;
   /** Skills left alone because updating would have removed files. */
   held_back: string[];
   failed: string[];
+  /** True when the user stopped the round; the counters describe what finished. */
+  cancelled: boolean;
+  /** How many paths an update would have removed across the held-back skills. */
+  held_back_paths: number;
+  /** Skills their Source still has, but no longer at the recorded path. */
+  moved_sources: MovedSource[];
+  /** Skills the Sources now hold that the library does not. Never installed automatically. */
+  new_skills: NewSkill[];
+  /** Skills their Source no longer has anywhere. */
+  gone_sources: string[];
+}
+
+/** One place a moved Skill may now live, with how sure the backend is. */
+export interface MoveCandidate {
+  /** Path inside the Source checkout, `/`-separated; empty means the root. */
+  subpath: string;
+  /** `high` means the directory's content hash equals the installed one. */
+  confidence: "high" | "low";
+  reason: "content_hash" | "directory_name" | "frontmatter_name";
+}
+
+/** A Skill whose recorded path no longer holds it, and where it could be now. */
+export interface MovedSource {
+  name: string;
+  /** Strongest first; more than one when only the name matched. */
+  candidates: MoveCandidate[];
 }
 
 export const batchUpdateSkills = (skillIds: string[]) =>
   invoke<BatchUpdateSkillsResult>("batch_update_skills", { skillIds });
+
+/** Stop a running batch update. Skills already finished stay finished. */
+export const cancelBatchUpdate = () => invoke<boolean>("cancel_batch_update");
+
+/** Stop offering these discovered skills; the next round filters them out. */
+export const dismissNewSkills = (keys: string[]) =>
+  invoke<void>("dismiss_new_skills", { keys });
+
+/**
+ * Install one skill the round discovered, from the Source and path it gave.
+ *
+ * Not a tree URL: the backend already has the branch and subpath separately,
+ * and a branch-less or non-GitHub Source does not survive the string form.
+ */
+export const installNewSkill = (
+  sourceRefResolved: string,
+  branch: string | null,
+  subpath: string
+) =>
+  invoke<void>("install_new_skill", {
+    sourceRefResolved,
+    branch,
+    subpath,
+  });
 
 export interface ReimportSkillResult {
   skill: ManagedSkill;
@@ -383,6 +505,15 @@ export const relinkLocalSkillSource = (
 
 export const detachLocalSkillSource = (skillId: string) =>
   invoke<ManagedSkill>("detach_local_skill_source", { skillId });
+
+/**
+ * Turn a Git-backed skill into a local one, keeping every file.
+ *
+ * The exit from `source_gone`: there is nothing left upstream to point at, so
+ * the library copy becomes the source of truth.
+ */
+export const detachSkillSource = (skillId: string) =>
+  invoke<ManagedSkill>("detach_skill_source", { skillId });
 
 export interface BatchImportResult {
   imported: number;

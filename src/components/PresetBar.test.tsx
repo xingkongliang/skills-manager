@@ -19,7 +19,7 @@ const skills = ["design", "testing"].map((id): ManagedSkill => ({
   source_revision: null, remote_revision: null, update_status: "local_only",
   last_checked_at: null, last_check_error: null, central_path: `/fixture/${id}`,
   enabled: true, created_at: 0, updated_at: 0, status: "ok", targets: [],
-  preset_ids: [preset.id], tags: [],
+  preset_ids: [preset.id], tags: [], move_candidates: [],
 }));
 
 let container: HTMLDivElement;

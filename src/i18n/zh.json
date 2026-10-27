@@ -371,7 +371,17 @@
       "available": "可更新",
       "error": "检查失败",
       "localOnly": "本地来源",
-      "sourceMissing": "原路径丢失"
+      "sourceMissing": "原路径丢失",
+      "moved": "上游已改名",
+      "sourceGone": "上游已删除"
+    },
+    "move": {
+      "choosePath": "有多个位置匹配，请选择新的路径："
+    },
+    "moveReason": {
+      "content_hash": "目录内容与已安装副本一致",
+      "directory_name": "目录名相同",
+      "frontmatter_name": "SKILL.md 名称相同"
     },
     "updateActions": {
       "check": "检查",
@@ -386,6 +396,9 @@
       "relinked": "已重新关联原路径",
       "detachSource": "转为本地副本",
       "detachedSource": "已取消原路径追踪",
+      "repoint": "重新指向来源",
+      "repointed": "来源已重新指向",
+      "useThisPath": "使用此路径",
       "alreadyUpToDate": "Skill 内容未变化（版本已同步）",
       "removalTitle": "这次更新会删除文件",
       "removalMessage": "更新 {{name}} 会移除 {{count}} 个新版本里没有的文件。如果其中有你自己的东西，先把它移到 skill 文件夹以外——目前还没有任何改动。",
@@ -426,10 +439,33 @@
       "tagDeleted": "标签已删除",
       "deleteConfirm": "确定从所有技能中移除标签「{{tag}}」吗？"
     },
+      "pendingRemovals": {
+    "review": "审阅 {{count}}",
+    "title": "{{count}} 个技能会删除文件",
+    "hint": "这些更新会移除 {{count}} 个文件。勾选并批准之前不会删除任何东西。",
+    "paths": "{{count}} 个文件",
+    "library": "库目录",
+    "expand": "展开文件",
+    "collapse": "收起文件",
+    "approve": "批准所选（{{count}}）",
+    "close": "以后再说",
+    "approved": "已更新 {{count}} 个技能",
+    "approveFailed": "{{count}} 个技能未批准；清单已刷新，请再看一次"
+  },
+  "newSkills": {
+        "title": "来源里有 {{count}} 个新技能",
+        "hint": "你的技能库还没有它们。不勾选就不会安装。",
+        "install": "安装 {{count}} 个",
+        "notNow": "以后再说",
+        "installed": "已安装 {{count}} 个技能"
+      },
     "selectMode": "多选",
     "selectedCount": "已选 {{count}} 个",
     "selectHint": "点击 Skill 开始选择",
     "batchUpdate": "更新 {{count}} 个",
+    "batchUpdatingProgress": "更新中 {{done}}/{{total}}",
+    "cancelBatchUpdate": "取消更新",
+    "batchUpdateCancelled": "已取消，完成 {{count}} 个",
     "batchUpdated": "已批量更新 {{count}} 个 Skill",
     "batchAlreadyUpToDate": "{{count}} 个 Skill 已是最新",
     "batchUpdateFailed": "{{count}} 个 Skill 更新失败",
@@ -458,6 +494,9 @@
       "clickToRemove": "点击标记为移除",
       "undoRemove": "点击保留此标签"
     },
+    "batchHeldBackPaths": "{{count}} 个未更新：更新会删除 {{paths}} 个文件（{{names}}…）",
+    "batchMovedSources": "{{count}} 个技能在上游搬了家（{{names}}…），首选位置：{{path}}，重指来源后即可继续更新",
+    "batchGoneSources": "{{count}} 个技能在上游已被删除（{{names}}…），可解除来源或删除，重试不会成功",
     "batchHeldBack": "有 {{count}} 个 skill 未更新——更新会删除文件（{{names}}）。逐个更新可以看到具体是哪些。",
     "batchSyncAgents": "同步到 Agent ({{count}})",
     "batchSynced": "已同步 {{count}} 项到 Agent",

@@ -371,7 +371,17 @@
       "available": "Update available",
       "error": "Check failed",
       "localOnly": "Local source",
-      "sourceMissing": "Source missing"
+      "sourceMissing": "Source missing",
+      "moved": "Moved upstream",
+      "sourceGone": "Deleted upstream"
+    },
+    "move": {
+      "choosePath": "Several places match this skill. Pick the new path:"
+    },
+    "moveReason": {
+      "content_hash": "content matches the installed copy",
+      "directory_name": "directory name matches",
+      "frontmatter_name": "SKILL.md name matches"
     },
     "updateActions": {
       "check": "Check",
@@ -386,6 +396,9 @@
       "relinked": "Source path relinked",
       "detachSource": "Keep local copy",
       "detachedSource": "Source tracking removed",
+      "repoint": "Repoint source",
+      "repointed": "Source re-pointed",
+      "useThisPath": "Use this path",
       "alreadyUpToDate": "Skill content unchanged (version synced)",
       "removalTitle": "This update removes files",
       "removalMessage": "Updating {{name}} will remove {{count}} file(s) that the new version does not have. If any of them are yours, move them somewhere outside the skill folder first — nothing has changed yet.",
@@ -426,10 +439,33 @@
       "tagDeleted": "Tag deleted",
       "deleteConfirm": "Remove the tag \"{{tag}}\" from all skills?"
     },
+      "pendingRemovals": {
+    "review": "Review {{count}}",
+    "title": "{{count}} skill(s) would delete files",
+    "hint": "These updates would remove {{count}} file(s). Nothing is deleted until you select a skill and approve.",
+    "paths": "{{count}} file(s)",
+    "library": "Library",
+    "expand": "Show files",
+    "collapse": "Hide files",
+    "approve": "Approve selected ({{count}})",
+    "close": "Not now",
+    "approved": "{{count}} skill(s) updated",
+    "approveFailed": "{{count}} skill(s) were not approved; the list has been refreshed — review it again"
+  },
+  "newSkills": {
+        "title": "{{count}} new skill(s) in your sources",
+        "hint": "Your library does not have these yet. Nothing is installed until you pick one.",
+        "install": "Install {{count}}",
+        "notNow": "Not now",
+        "installed": "{{count}} skill(s) installed"
+      },
     "selectMode": "Select",
     "selectedCount": "{{count}} selected",
     "selectHint": "Click skills to select",
     "batchUpdate": "Update {{count}}",
+    "batchUpdatingProgress": "Updating {{done}}/{{total}}",
+    "cancelBatchUpdate": "Cancel update",
+    "batchUpdateCancelled": "Cancelled after {{count}} updated",
     "batchUpdated": "{{count}} skills refreshed",
     "batchAlreadyUpToDate": "{{count}} skills already up to date",
     "batchUpdateFailed": "{{count}} skills failed to refresh",
@@ -458,6 +494,9 @@
       "clickToRemove": "Click to mark for removal",
       "undoRemove": "Click to keep this tag"
     },
+    "batchHeldBackPaths": "{{count}} not updated: the new version would delete {{paths}} file(s) ({{names}}…)",
+    "batchMovedSources": "{{count}} skills moved upstream ({{names}}…) — first candidate: {{path}}. Re-point them to keep updating",
+    "batchGoneSources": "{{count}} skills are gone from their Source ({{names}}…) — detach the source or delete them; retrying cannot help",
     "batchHeldBack": "{{count}} skill(s) were left alone — updating them would remove files ({{names}}). Update them one at a time to see what.",
     "batchSyncAgents": "Sync to agents ({{count}})",
     "batchSynced": "Synced {{count}} skill targets",
