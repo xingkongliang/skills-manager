@@ -370,7 +370,17 @@
       "available": "可更新",
       "error": "檢查失敗",
       "localOnly": "本機來源",
-      "sourceMissing": "原路徑遺失"
+      "sourceMissing": "原路徑遺失",
+      "moved": "上游已改名",
+      "sourceGone": "上游已刪除"
+    },
+    "move": {
+      "choosePath": "有多個位置匹配，請選擇新的路徑："
+    },
+    "moveReason": {
+      "content_hash": "目錄內容與已安裝副本一致",
+      "directory_name": "目錄名相同",
+      "frontmatter_name": "SKILL.md 名稱相同"
     },
     "updateActions": {
       "check": "檢查",
@@ -385,6 +395,9 @@
       "relinked": "已重新關聯原路徑",
       "detachSource": "轉為本機副本",
       "detachedSource": "已取消原路徑追蹤",
+      "repoint": "重新指向來源",
+      "repointed": "來源已重新指向",
+      "useThisPath": "使用此路徑",
       "alreadyUpToDate": "Skill 內容未變化（版本已同步）",
       "removalTitle": "這次更新會刪除檔案",
       "removalMessage": "更新 {{name}} 會移除 {{count}} 個新版本裡沒有的檔案。如果其中有你自己的東西，先把它移到 skill 資料夾以外——目前還沒有任何改動。",
@@ -424,6 +437,9 @@
     "selectedCount": "已選 {{count}} 個",
     "selectHint": "點擊 Skill 開始選擇",
     "batchUpdate": "更新 {{count}} 個",
+    "batchUpdatingProgress": "更新中 {{done}}/{{total}}",
+    "cancelBatchUpdate": "取消更新",
+    "batchUpdateCancelled": "已取消，完成 {{count}} 個",
     "batchUpdated": "已批次更新 {{count}} 個 Skill",
     "batchAlreadyUpToDate": "{{count}} 個 Skill 已是最新",
     "batchUpdateFailed": "{{count}} 個 Skill 更新失敗",
@@ -452,6 +468,9 @@
       "clickToRemove": "點擊標記為移除",
       "undoRemove": "點擊保留此標籤"
     },
+    "batchHeldBackPaths": "{{count}} 个未更新：更新会删除 {{paths}} 个文件（{{names}}…）",
+    "batchMovedSources": "{{count}} 個技能在上游搬了家（{{names}}…），首選位置：{{path}}，重指來源後即可繼續更新",
+    "batchGoneSources": "{{count}} 個技能在上游已被刪除（{{names}}…），可解除來源或刪除，重試不會成功",
     "batchHeldBack": "有 {{count}} 個 skill 未更新——更新會刪除檔案（{{names}}）。逐個更新可以看到具體是哪些。",
     "batchSyncAgents": "同步到 Agent ({{count}})",
     "batchSynced": "已同步 {{count}} 項到 Agent",

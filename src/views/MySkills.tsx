@@ -28,8 +28,10 @@ import {
   Share2,
   Tag,
   Trash2,
+  Unlink,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -50,10 +52,13 @@ import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
   ManagedSkill,
+  MoveCandidate,
   ToolInfo,
   GitBackupStatus,
   SkillToolToggle,
 } from "../lib/tauri";
+import { repointChoice } from "../lib/sourceRepoint";
+import { canRefresh, isUpdateAvailable, updatableSkills } from "../lib/updateSelection";
 import { getErrorMessage } from "../lib/error";
 import { normalizeSkillSearch, skillSearchMatches } from "../lib/skillSearch";
 import {
@@ -199,6 +204,9 @@ export function MySkills() {
   const [checkingSkillId, setCheckingSkillId] = useState<string | null>(null);
   const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null);
   const [batchUpdating, setBatchUpdating] = useState(false);
+  // A long round with only a spinner reads as "stuck": the round reports each
+  // skill it finishes, so the button can say how far it has got.
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [toolToggles, setToolToggles] = useState<SkillToolToggle[] | null>(null);
   const [togglingToolKey, setTogglingToolKey] = useState<string | null>(null);
   const [togglingTarget, setTogglingTarget] = useState<{ skillId: string; tool: string } | null>(null);
@@ -770,13 +778,27 @@ export function MySkills() {
     await Promise.all([refreshManagedSkills(), refreshTools()]);
   };
 
-  const handleBatchRefresh = async () => {
-    const refreshableSkills = skills.filter((skill) => selectedIds.has(skill.id) && canRefresh(skill));
-    if (refreshableSkills.length === 0) return;
+  useEffect(() => {
+    const unlistenPromise = listen<{ done: number; total: number }>(
+      "skill-update-progress",
+      (event) => setBatchProgress({ done: event.payload.done, total: event.payload.total })
+    );
+    return () => {
+      unlistenPromise
+        .then((unlisten) => unlisten())
+        .catch((error) => console.error("Failed to unlisten skill-update-progress:", error));
+    };
+  }, []);
 
+  const runBatchUpdate = async (ids: string[]) => {
+    if (ids.length === 0) return;
     setBatchUpdating(true);
+    setBatchProgress({ done: 0, total: ids.length });
     try {
-      const result = await api.batchUpdateSkills(refreshableSkills.map((skill) => skill.id));
+      const result = await api.batchUpdateSkills(ids);
+      if (result.cancelled) {
+        toast.info(t("mySkills.batchUpdateCancelled", { count: result.refreshed }));
+      }
       if (result.refreshed > 0) {
         toast.success(t("mySkills.batchUpdated", { count: result.refreshed }));
       }
@@ -785,9 +807,33 @@ export function MySkills() {
       }
       if (result.held_back.length > 0) {
         toast.warning(
-          t("mySkills.batchHeldBack", {
+          t("mySkills.batchHeldBackPaths", {
             count: result.held_back.length,
+            paths: result.held_back_paths,
             names: result.held_back.slice(0, 3).join("、"),
+          })
+        );
+      }
+      if (result.moved_sources.length > 0) {
+        // Not a failure: the Source renamed or moved these, so the advice is to
+        // re-point them. The strongest candidate path rides along, because a
+        // low-confidence guess must not be presented as an answer — the user
+        // confirms the path in ticket 04 before anything is written.
+        const first = result.moved_sources[0];
+        toast.warning(
+          t("mySkills.batchMovedSources", {
+            count: result.moved_sources.length,
+            names: result.moved_sources.slice(0, 3).map((moved) => moved.name).join("、"),
+            path: first.candidates[0]?.subpath ?? "",
+          })
+        );
+      }
+      if (result.gone_sources.length > 0) {
+        // Nothing left to retry: the Source deleted these outright.
+        toast.warning(
+          t("mySkills.batchGoneSources", {
+            count: result.gone_sources.length,
+            names: result.gone_sources.slice(0, 3).join("、"),
           })
         );
       }
@@ -799,7 +845,13 @@ export function MySkills() {
     } finally {
       await refreshManagedSkills();
       setBatchUpdating(false);
+      setBatchProgress(null);
     }
+  };
+
+  const handleBatchRefresh = () => {
+    const refreshableSkills = skills.filter((skill) => selectedIds.has(skill.id) && canRefresh(skill));
+    return runBatchUpdate(refreshableSkills.map((skill) => skill.id));
   };
 
   /** The update the user has been asked to confirm, and what it would remove. */
@@ -812,39 +864,8 @@ export function MySkills() {
     relinkSource?: string;
   } | null>(null);
 
-  const handleUpdateAvailableSkills = async () => {
-    const updatableSkills = skills.filter(
-      (skill) => skill.update_status === "update_available" && canRefresh(skill)
-    );
-    if (updatableSkills.length === 0) return;
-
-    setBatchUpdating(true);
-    try {
-      const result = await api.batchUpdateSkills(updatableSkills.map((skill) => skill.id));
-      if (result.refreshed > 0) {
-        toast.success(t("mySkills.batchUpdated", { count: result.refreshed }));
-      }
-      if (result.unchanged > 0) {
-        toast.info(t("mySkills.batchAlreadyUpToDate", { count: result.unchanged }));
-      }
-      if (result.held_back.length > 0) {
-        toast.warning(
-          t("mySkills.batchHeldBack", {
-            count: result.held_back.length,
-            names: result.held_back.slice(0, 3).join("、"),
-          })
-        );
-      }
-      if (result.failed.length > 0) {
-        toast.error(t("mySkills.batchUpdateFailed", { count: result.failed.length }));
-      }
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
-    } finally {
-      await refreshManagedSkills();
-      setBatchUpdating(false);
-    }
-  };
+  const handleUpdateAvailableSkills = () =>
+    runBatchUpdate(updatableSkills(skills).map((skill) => skill.id));
 
   const handleTogglePreset = async (skill: ManagedSkill) => {
     if (!viewedPreset) return;
@@ -901,17 +922,30 @@ export function MySkills() {
         toast.success(t("mySkills.updateActions.reimported"));
       } else {
         const result = await api.updateSkill(skill.id, approvedRemovals);
-        // Nothing was changed: the update would have taken away files the new
-        // version does not have. Show them and let the user decide (#256).
-        if (result.pending_removals.length > 0) {
+        // A move and a deletion are answers, not failures, and one skill is
+        // told the same way a batch is: same wording, count of one.
+        if (result.moved.length > 0) {
+          toast.warning(
+            t("mySkills.batchMovedSources", {
+              count: 1,
+              names: skill.name,
+              path: result.moved[0]?.subpath ?? "",
+            })
+          );
+        } else if (result.gone) {
+          toast.warning(
+            t("mySkills.batchGoneSources", { count: 1, names: skill.name })
+          );
+        } else if (result.pending_removals.length > 0) {
+          // Nothing was changed: the update would have taken away files the new
+          // version does not have. Show them and let the user decide (#256).
           setPendingRemoval({
             skill,
             removals: result.pending_removals,
             approval: result.removal_approval,
           });
           return;
-        }
-        if (result.content_changed) {
+        } else if (result.content_changed) {
           toast.success(t("mySkills.updateActions.updated"));
         } else {
           toast.info(t("mySkills.updateActions.alreadyUpToDate"));
@@ -964,7 +998,14 @@ export function MySkills() {
   const handleDetachSource = async (skill: ManagedSkill) => {
     setUpdatingSkillId(skill.id);
     try {
-      await api.detachLocalSkillSource(skill.id);
+      // Two detach paths share one action: a local skill drops its recorded
+      // source path, a Git skill drops its Source entirely and becomes local.
+      // Both keep every file.
+      if (skill.source_type === "local" || skill.source_type === "import") {
+        await api.detachLocalSkillSource(skill.id);
+      } else {
+        await api.detachSkillSource(skill.id);
+      }
       toast.success(t("mySkills.updateActions.detachedSource"));
       await refreshManagedSkills();
     } catch (error: unknown) {
@@ -974,6 +1015,87 @@ export function MySkills() {
       setUpdatingSkillId(null);
     }
   };
+
+  const handleRepointSource = async (skill: ManagedSkill, subpath: string) => {
+    setUpdatingSkillId(skill.id);
+    try {
+      await api.repointSkillSource(skill.id, subpath);
+      toast.success(t("mySkills.updateActions.repointed"));
+      await refreshManagedSkills();
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+      await refreshManagedSkills();
+    } finally {
+      setUpdatingSkillId(null);
+    }
+  };
+
+  /**
+   * The candidate paths, their reason, and the one control that follows them.
+   * A single high-confidence candidate re-points in one click; anything else
+   * lists every path so the click names the one the user picked.
+   */
+  const moveCandidates = (skill: ManagedSkill, layout: "grid" | "list") => {
+    if (isMultiSelect || skill.update_status !== "moved") return null;
+    const choice = repointChoice(skill.move_candidates);
+    if (choice.kind === "none") return null;
+    const busy = updatingSkillId === skill.id;
+
+    return (
+      <div
+        className={cn(
+          "flex flex-col gap-1",
+          layout === "grid" ? "mt-2" : "min-w-0 max-w-[42%] shrink-0"
+        )}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {choice.kind === "choose" && (
+          <span className="text-[11px] font-medium text-muted">
+            {t("mySkills.move.choosePath")}
+          </span>
+        )}
+        {skill.move_candidates.map((candidate) => (
+          <div
+            key={`${candidate.subpath}:${candidate.reason}`}
+            className="flex min-w-0 items-center gap-1.5"
+          >
+            <code
+              className={cn(
+                "truncate rounded-md bg-surface-hover px-1 py-0.5 font-mono text-[11px] text-secondary",
+                layout === "grid" ? "max-w-[60%]" : "max-w-[220px]"
+              )}
+              title={candidate.subpath || "."}
+            >
+              {candidate.subpath || "."}
+            </code>
+            <span className="shrink-0 text-[11px] text-faint">
+              {moveReasonLabel(candidate.reason)}
+            </span>
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleRepointSource(skill, candidate.subpath);
+              }}
+              disabled={busy}
+              className={cn(
+                "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50",
+                choice.kind === "oneClick"
+                  ? "bg-sky-500/12 text-sky-600 hover:bg-sky-500/20 dark:text-sky-400"
+                  : "border border-border-subtle text-secondary hover:bg-surface-hover"
+              )}
+            >
+              {choice.kind === "oneClick"
+                ? t("mySkills.updateActions.repoint")
+                : t("mySkills.updateActions.useThisPath")}
+            </button>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const moveReasonLabel = (reason: MoveCandidate["reason"]) =>
+    t(`mySkills.moveReason.${reason}`);
 
   const handleAddTag = async (skill: ManagedSkill, inputValue?: string) => {
     const trimmed = (inputValue ?? tagInput).trim();
@@ -1136,17 +1258,12 @@ export function MySkills() {
     }
   };
 
-  const canRefresh = (skill: ManagedSkill) =>
-    skill.source_type === "git" ||
-    skill.source_type === "skillssh" ||
-    ((skill.source_type === "local" || skill.source_type === "import") && !!skill.source_ref);
-
   const anyRefreshableSelected = useMemo(
     () => skills.some((skill) => selectedIds.has(skill.id) && canRefresh(skill)),
     [skills, selectedIds]
   );
   const availableUpdateCount = useMemo(
-    () => skills.filter((skill) => skill.update_status === "update_available" && canRefresh(skill)).length,
+    () => updatableSkills(skills).length,
     [skills]
   );
   const refreshableSelectedCount = useMemo(
@@ -1185,6 +1302,18 @@ export function MySkills() {
       return {
         label: t("mySkills.updateStatus.sourceMissing"),
         className: "bg-red-500/10 text-red-600 dark:text-red-300",
+      };
+    }
+    if (skill.update_status === "moved") {
+      return {
+        label: t("mySkills.updateStatus.moved"),
+        className: "bg-sky-500/12 text-sky-600 dark:text-sky-400",
+      };
+    }
+    if (skill.update_status === "source_gone") {
+      return {
+        label: t("mySkills.updateStatus.sourceGone"),
+        className: "bg-slate-500/12 text-slate-600 dark:text-slate-300",
       };
     }
     if (skill.update_status === "error") {
@@ -1277,8 +1406,21 @@ export function MySkills() {
               className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-accent-light transition-colors hover:bg-accent-bg disabled:opacity-50"
             >
               <RotateCcw className={cn("h-3.5 w-3.5", batchUpdating && "animate-spin")} />
-              {t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
+              {batchUpdating && batchProgress
+                ? t("mySkills.batchUpdatingProgress", {
+                    done: batchProgress.done,
+                    total: batchProgress.total,
+                  })
+                : t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
             </button>
+            {batchUpdating && (
+              <button
+                onClick={() => void api.cancelBatchUpdate()}
+                className="mr-2 rounded-md px-2.5 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+              >
+                {t("mySkills.cancelBatchUpdate")}
+              </button>
+            )}
             <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 self-center bg-border-subtle" />
             <button
               onClick={() => setViewMode("grid")}
@@ -1575,14 +1717,16 @@ export function MySkills() {
               ? skill.preset_ids.includes(viewedPreset.id)
               : false;
             const badge = statusBadge(skill);
-            const hasUpdate =
-              skill.update_status === "update_available" && canRefresh(skill);
+            const hasUpdate = isUpdateAvailable(skill);
             // The header pill is hidden in multi-select, so the body badge has to
             // take over — otherwise the update state vanishes entirely.
             const showUpdatePill = hasUpdate && !isMultiSelect;
             const isMissingLocalSource =
               skill.update_status === "source_missing"
               && (skill.source_type === "local" || skill.source_type === "import");
+            // Gone upstream: no update and no path to re-point at, so the two
+            // exits are keeping the copy (detach) or deleting the skill.
+            const isGoneSource = skill.update_status === "source_gone";
             const displayName = skillDisplayNames.get(skill.id) || skill.name;
 
             if (viewMode === "grid") {
@@ -1683,6 +1827,15 @@ export function MySkills() {
                                   onSelect: () => handleRefreshSkill(skill),
                                 }]
                               : []),
+                            ...(isGoneSource
+                              ? [{
+                                  key: "detach",
+                                  label: t("mySkills.updateActions.detachSource"),
+                                  icon: <Unlink className="h-3.5 w-3.5" />,
+                                  disabled: updatingSkillId === skill.id,
+                                  onSelect: () => handleDetachSource(skill),
+                                }]
+                              : []),
                             {
                               key: "delete",
                               label: t("common.delete"),
@@ -1706,6 +1859,7 @@ export function MySkills() {
                     <p className="text-[13px] leading-[18px] text-muted truncate">
                       {skill.description || "—"}
                     </p>
+                    {moveCandidates(skill, "grid")}
                     {((badge && !showUpdatePill) || conflictIds.has(skill.id)) && (
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
                         {conflictIds.has(skill.id) && (
@@ -1727,15 +1881,17 @@ export function MySkills() {
                             {badge.label}
                           </span>
                         )}
-                        {isMissingLocalSource && (
+                        {(isMissingLocalSource || isGoneSource) && (
                           <>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleRelinkSource(skill); }}
-                              disabled={updatingSkillId === skill.id}
-                              className="rounded-full border border-border-subtle px-2 py-0.5 text-[12px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
-                            >
-                              {t("mySkills.updateActions.relink")}
-                            </button>
+                            {isMissingLocalSource && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleRelinkSource(skill); }}
+                                disabled={updatingSkillId === skill.id}
+                                className="rounded-full border border-border-subtle px-2 py-0.5 text-[12px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
+                              >
+                                {t("mySkills.updateActions.relink")}
+                              </button>
+                            )}
                             <button
                               onClick={(e) => { e.stopPropagation(); handleDetachSource(skill); }}
                               disabled={updatingSkillId === skill.id}
@@ -1909,6 +2065,8 @@ export function MySkills() {
                   {skill.description || "—"}
                 </p>
 
+                {moveCandidates(skill, "list")}
+
                 <div className="flex shrink-0 items-center gap-1.5">
                   {skill.tags.map((tag) => (
                     <span
@@ -1976,15 +2134,17 @@ export function MySkills() {
                   )}
                 </div>
 
-                {isMissingLocalSource && !isMultiSelect && (
+                {(isMissingLocalSource || isGoneSource) && !isMultiSelect && (
                   <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleRelinkSource(skill); }}
-                      disabled={updatingSkillId === skill.id}
-                      className="rounded-md px-2 py-0.5 text-[13px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
-                    >
-                      {t("mySkills.updateActions.relink")}
-                    </button>
+                    {isMissingLocalSource && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleRelinkSource(skill); }}
+                        disabled={updatingSkillId === skill.id}
+                        className="rounded-md px-2 py-0.5 text-[13px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
+                      >
+                        {t("mySkills.updateActions.relink")}
+                      </button>
+                    )}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDetachSource(skill); }}
                       disabled={updatingSkillId === skill.id}
@@ -2021,6 +2181,15 @@ export function MySkills() {
                               icon: <RotateCcw className={cn("h-3.5 w-3.5", updatingSkillId === skill.id && "animate-spin")} />,
                               disabled: updatingSkillId === skill.id,
                               onSelect: () => handleRefreshSkill(skill),
+                            }]
+                          : []),
+                        ...(isGoneSource
+                          ? [{
+                              key: "detach",
+                              label: t("mySkills.updateActions.detachSource"),
+                              icon: <Unlink className="h-3.5 w-3.5" />,
+                              disabled: updatingSkillId === skill.id,
+                              onSelect: () => handleDetachSource(skill),
                             }]
                           : []),
                         {

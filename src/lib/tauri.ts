@@ -39,6 +39,11 @@ export interface ManagedSkill {
   targets: SkillTarget[];
   preset_ids: string[];
   tags: string[];
+  /**
+   * Where the last `moved` check found this skill in its Source. Empty for
+   * every other status; persisted so a restart can still offer the re-point.
+   */
+  move_candidates: MoveCandidate[];
 }
 
 export interface SkillTarget {
@@ -330,6 +335,14 @@ export interface UpdateSkillResult {
    * approves that list at that revision and nothing else.
    */
   removal_approval: string | null;
+  /**
+   * Where the Source says the skill went, strongest first. Empty unless the
+   * recorded path no longer holds it — the batch's `moved` bucket, for one
+   * skill. Nothing was written: re-pointing is the user's call.
+   */
+  moved: MoveCandidate[];
+  /** The Source no longer holds this skill anywhere. Not a failure. */
+  gone: boolean;
 }
 
 export interface PendingRemoval {
@@ -345,16 +358,50 @@ export const updateSkill = (skillId: string, approvedRemovals?: string | null) =
     approvedRemovals: approvedRemovals ?? null,
   });
 
+/**
+ * Move a skill's source pointer to a path the Source proposed. This writes the
+ * pointer only: the library copy and its content hash are untouched.
+ */
+export const repointSkillSource = (skillId: string, subpath: string) =>
+  invoke<ManagedSkill>("repoint_skill_source", { skillId, subpath });
+
 export interface BatchUpdateSkillsResult {
   refreshed: number;
   unchanged: number;
   /** Skills left alone because updating would have removed files. */
   held_back: string[];
   failed: string[];
+  /** True when the user stopped the round; the counters describe what finished. */
+  cancelled: boolean;
+  /** How many paths an update would have removed across the held-back skills. */
+  held_back_paths: number;
+  /** Skills their Source still has, but no longer at the recorded path. */
+  moved_sources: MovedSource[];
+  /** Skills their Source no longer has anywhere. */
+  gone_sources: string[];
+}
+
+/** One place a moved Skill may now live, with how sure the backend is. */
+export interface MoveCandidate {
+  /** Path inside the Source checkout, `/`-separated; empty means the root. */
+  subpath: string;
+  /** `high` means the directory's content hash equals the installed one. */
+  confidence: "high" | "low";
+  reason: "content_hash" | "directory_name" | "frontmatter_name";
+}
+
+/** A Skill whose recorded path no longer holds it, and where it could be now. */
+export interface MovedSource {
+  name: string;
+  /** Strongest first; more than one when only the name matched. */
+  candidates: MoveCandidate[];
 }
 
 export const batchUpdateSkills = (skillIds: string[]) =>
   invoke<BatchUpdateSkillsResult>("batch_update_skills", { skillIds });
+
+/** Stop a running batch update. Skills already finished stay finished. */
+export const cancelBatchUpdate = () => invoke<boolean>("cancel_batch_update");
 
 export interface ReimportSkillResult {
   skill: ManagedSkill;
@@ -383,6 +430,15 @@ export const relinkLocalSkillSource = (
 
 export const detachLocalSkillSource = (skillId: string) =>
   invoke<ManagedSkill>("detach_local_skill_source", { skillId });
+
+/**
+ * Turn a Git-backed skill into a local one, keeping every file.
+ *
+ * The exit from `source_gone`: there is nothing left upstream to point at, so
+ * the library copy becomes the source of truth.
+ */
+export const detachSkillSource = (skillId: string) =>
+  invoke<ManagedSkill>("detach_skill_source", { skillId });
 
 export interface BatchImportResult {
   imported: number;

@@ -1,11 +1,12 @@
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use super::audit_log::{AuditDraft, AuditEntry, MAX_ENTRIES as AUDIT_MAX_ENTRIES};
 use super::crypto;
+use super::source_membership::MoveCandidate;
 
 /// Settings keys whose values are encrypted at rest with AES-256-GCM.
 const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url"];
@@ -325,6 +326,60 @@ impl SkillStore {
              SET remote_revision = ?1, update_status = ?2, last_checked_at = ?3, last_check_error = ?4
              WHERE id = ?5",
             params![remote_revision, update_status, now, last_check_error, id],
+        )?;
+        // Candidates describe the last `moved` answer. Any other verdict means
+        // that answer is stale, so it goes with it; a fresh `moved` write is
+        // followed by `replace_skill_move_candidates`.
+        if update_status != "moved" {
+            conn.execute(
+                "DELETE FROM skill_move_candidates WHERE skill_id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Remember the locator's answer for a `moved` skill.
+    ///
+    /// A round's summary is gone once it returns, and the UI must still offer
+    /// the button after a restart, so the answer is cached here until the next
+    /// check state replaces it. One row per skill: the whole list is written and
+    /// read together, and only the UI needs it.
+    pub fn replace_skill_move_candidates(
+        &self,
+        id: &str,
+        candidates: &[MoveCandidate],
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let json = serde_json::to_string(candidates)?;
+        conn.execute(
+            "INSERT INTO skill_move_candidates (skill_id, candidates) VALUES (?1, ?2)
+             ON CONFLICT(skill_id) DO UPDATE SET candidates = excluded.candidates",
+            params![id, json],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_skill_move_candidates(&self, id: &str) -> Result<Vec<MoveCandidate>> {
+        let conn = self.conn.lock().unwrap();
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT candidates FROM skill_move_candidates WHERE skill_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match json {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub fn clear_skill_move_candidates(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM skill_move_candidates WHERE skill_id = ?1",
+            params![id],
         )?;
         Ok(())
     }
