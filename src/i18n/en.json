@@ -405,6 +405,27 @@
       "skillssh": "skills.sh"
     },
     "groupBySource": "Group by source",
+    "repairSources": "Fix broken sources",
+    "repairSourcesHint": "Scan local/import skills whose source path no longer exists, suggest same-named directories under a root you pick, and re-point them in batch. Each re-point refreshes the library copy from its new source; files only in the library are held back for individual approval.",
+    "editSource": "Edit source path",
+    "editSourceHint": "Re-point at a new source directory (local/import only; the library copy is refreshed from the source)",
+    "repairDialog": {
+      "title": "Repair broken source paths",
+      "intro": "The original paths below no longer exist. Pick a root folder to find same-named skill directories as suggestions. Re-pointing refreshes the library copy from the new source; files only in the library are held back — approve those by re-pointing the skill individually.",
+      "pickRoot": "Pick root folder",
+      "clearRoot": "Clear root",
+      "scanning": "Scanning broken sources…",
+      "noBroken": "No broken sources: every local/import skill's original path exists.",
+      "noSuggestion": "No same-named directory found",
+      "noSuggestionNoRoot": "No root picked, so no automatic suggestions; pick a path manually",
+      "chooseSuggestion": "Choose a suggestion…",
+      "pickManually": "Pick manually",
+      "selectedCount": "{{count}} selected",
+      "apply": "Re-link ({{count}})",
+      "allDone": "All source paths repaired ({{fixed}})",
+      "someFailed": "Fixed {{fixed}}; {{failed}} failed",
+      "failedHint": "{{count}} repairs failed (reason on each row) — adjust the path and press Re-link to retry"
+    },
     "sourcePicker": {
       "label": "Source",
       "clear": "Clear source filter",

@@ -391,6 +391,27 @@
       "removalConfirm": "仍然更新"
     },
     "gitConfigEntry": "同步設定",
+    "repairSources": "修復失效源",
+    "repairSourcesHint": "掃描原路徑已失效的本機/匯入技能，按同名目錄自動建議新路徑並批次重新關聯。重新關聯會用新源重新整理中央庫內容；庫內有而源沒有的檔案會先攔下，稍後逐個確認。",
+    "editSource": "改源路徑",
+    "editSourceHint": "重新指向新的源目錄（僅本機/匯入源；中央庫內容會隨源重新整理）",
+    "repairDialog": {
+      "title": "修復失效源路徑",
+      "intro": "以下技能的原路徑已不存在。選擇一個根目錄後，會按技能名查找同名技能目錄作為建議。重新關聯會用新源重新整理中央庫內容；庫內有而源沒有的檔案會先攔下，需逐個重新關聯確認。",
+      "pickRoot": "選擇根目錄",
+      "clearRoot": "清除根目錄",
+      "scanning": "正在掃描失效源…",
+      "noBroken": "沒有失效源：所有本機/匯入技能的原路徑都存在。",
+      "noSuggestion": "未找到同名目錄",
+      "noSuggestionNoRoot": "未指定根目錄，無法自動建議；可手動選擇路徑",
+      "chooseSuggestion": "選擇建議路徑…",
+      "pickManually": "手動選擇",
+      "selectedCount": "已選擇 {{count}} 項",
+      "apply": "重新關聯（{{count}}）",
+      "allDone": "當前的原路徑已經全部修復完了（{{fixed}} 個）",
+      "someFailed": "已修復 {{fixed}} 個，{{failed}} 個失敗",
+      "failedHint": "以下 {{count}} 個技能修復失敗（原因見各行），可修正路徑後點「重新關聯」重試"
+    },
     "filters": {
       "all": "全部",
       "enabled": "當前 Preset 已啟用",

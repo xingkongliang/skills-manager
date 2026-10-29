@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### User-facing
+- **Edit a local skill's source path, and repair broken sources in batch** — A local/import skill can be re-pointed at a new source folder from the detail panel, through the same guarded re-link as before: the library copy is refreshed from the new source, and files the library holds that the source does not are held back for approval. The toolbar gains a broken-source repair dialog that lists local/import skills whose source path no longer exists, suggests same-named skill directories under a folder you pick, and re-points the selected rows in batch.
+- **`skills-manager-cli skills set-source --local-path`** — The CLI can re-point a local/import skill at a local directory, with `--dry-run` and `content_changed` reporting like the git variant. A re-point that would remove library files is reported as held back, like in the app.
+
+### Developer & Governance
+- The relink command's body is extracted into `relink_local_skill_source_internal`, shared by the command, the CLI path, and the batch repair. `scan_broken_local_sources` and `relink_local_sources_batch` are new commands behind the same guards, and the batch reports per-row outcomes.
 ## [1.43.1] - 2026-10-27
 
 ### Release Overview

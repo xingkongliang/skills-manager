@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 用户可见更新
+- **改本地技能的源路径，批量修复失效源** — 本地/导入技能可以在详情面板直接改源路径，走原来的重新关联保护：库内容随新源刷新，库内有而源没有的文件先拦下待确认。工具栏新增「修复失效源」：列出原路径已不存在的本地/导入技能，按所选根目录建议同名技能目录，勾选批量重新关联。
+- **`skills-manager-cli skills set-source --local-path`** — CLI 可以把本地/导入技能重新指向本地目录，支持 `--dry-run`，`content_changed` 语义与 git 版一致。会删除库内文件的重新关联与 App 一样报告为暂缓。
+
+### 开发者与治理更新
+- 重新关联命令的实现体抽成 `relink_local_skill_source_internal`，命令、CLI 路径与批量修复共用。新增 `scan_broken_local_sources` 与 `relink_local_sources_batch` 两个命令，走同一套保护；批量按行返回结果。
 ## [1.43.1] - 2026-10-27
 
 ### 发布概览

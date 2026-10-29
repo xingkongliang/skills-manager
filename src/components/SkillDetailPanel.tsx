@@ -6,6 +6,7 @@ import {
   Github,
   HardDrive,
   Globe,
+  Pencil,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../utils";
@@ -37,6 +38,8 @@ interface Props {
   onToggleTool?: (tool: string, enabled: boolean) => void;
   projects?: Project[];
   onProjectsChanged?: () => void;
+  /** Opens the re-link flow (directory picker + removal approval) for this skill. */
+  onEditSource?: (skill: ManagedSkill) => void;
 }
 
 export function SkillDetailPanel({
@@ -48,6 +51,7 @@ export function SkillDetailPanel({
   onToggleTool,
   projects,
   onProjectsChanged,
+  onEditSource,
 }: Props) {
   if (!skill) return null;
 
@@ -71,6 +75,7 @@ export function SkillDetailPanel({
       onToggleTool={onToggleTool}
       projects={projects}
       onProjectsChanged={onProjectsChanged}
+      onEditSource={onEditSource}
     />
   );
 }
@@ -84,6 +89,7 @@ function SkillDetailPanelContent({
   onToggleTool,
   projects,
   onProjectsChanged,
+  onEditSource,
 }: {
   skill: ManagedSkill;
   onClose: () => void;
@@ -93,6 +99,7 @@ function SkillDetailPanelContent({
   onToggleTool?: (tool: string, enabled: boolean) => void;
   projects?: Project[];
   onProjectsChanged?: () => void;
+  onEditSource?: (skill: ManagedSkill) => void;
 }) {
   const { t } = useTranslation();
   const [doc, setDoc] = useState<SkillDocument | null>(null);
@@ -197,6 +204,9 @@ function SkillDetailPanelContent({
 
   const sourceTypeLabel = (type: string) => (type === "skillssh" ? "skills.sh" : type);
 
+  const canRelinkLocal =
+    skill.source_type === "local" || skill.source_type === "import";
+
   const metadataItems = [
     { label: t("mySkills.sourceType"), value: sourceTypeLabel(skill.source_type) },
     { label: t("mySkills.sourceRef"), value: skill.source_ref },
@@ -298,6 +308,19 @@ function SkillDetailPanelContent({
               </div>
             </div>
           )}
+        </div>
+      )}
+      {canRelinkLocal && (
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onEditSource?.(skill)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border-subtle px-2.5 py-1 text-[12px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
+          >
+            <Pencil className="h-3 w-3" />
+            {t("mySkills.editSource")}
+          </button>
+          <span className="text-[11px] text-faint">{t("mySkills.editSourceHint")}</span>
         </div>
       )}
     </>

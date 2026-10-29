@@ -384,6 +384,36 @@ export const relinkLocalSkillSource = (
 export const detachLocalSkillSource = (skillId: string) =>
   invoke<ManagedSkill>("detach_local_skill_source", { skillId });
 
+export interface BrokenLocalSourceEntry {
+  skill_id: string;
+  name: string;
+  old_source_ref: string;
+  /** Same-named valid skill directories under the scan root. */
+  suggestions: string[];
+}
+
+export interface BrokenLocalSourceScan {
+  root: string | null;
+  entries: BrokenLocalSourceEntry[];
+}
+
+export const scanBrokenLocalSources = (root?: string | null) =>
+  invoke<BrokenLocalSourceScan>("scan_broken_local_sources", { root: root ?? null });
+
+export interface RelinkSourceItem {
+  skill_id: string;
+  source_path: string;
+}
+
+export interface RelinkSourceItemResult {
+  skill_id: string;
+  ok: boolean;
+  error: string | null;
+}
+
+export const relinkLocalSourcesBatch = (items: RelinkSourceItem[]) =>
+  invoke<RelinkSourceItemResult[]>("relink_local_sources_batch", { items });
+
 export interface BatchImportResult {
   imported: number;
   skipped: number;

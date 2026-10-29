@@ -201,14 +201,21 @@ enum SkillsCommand {
         #[arg(long)]
         limit: Option<usize>,
     },
-    /// Re-point an installed skill at a git source in place, keeping its id,
-    /// tags, preset membership and deployments.
+    /// Re-point an installed skill at a source in place, keeping its id,
+    /// tags, preset membership and deployments. Exactly one of --git-url /
+    /// --local-path.
     SetSource {
         /// Skill ref (id / name / dir basename / central path)
         reference: String,
         /// Git URL or owner/repo, optionally a GitHub tree URL encoding branch and subpath
         #[arg(long = "git-url")]
-        git_url: String,
+        git_url: Option<String>,
+        /// Local directory to re-point a local/import skill at. The library
+        /// copy is refreshed from the new source, like the app's Relink; files
+        /// the library holds and the source does not are reported as held
+        /// back — approve those by re-pointing the skill in the app.
+        #[arg(long = "local-path")]
+        local_path: Option<String>,
         /// Subpath inside the repo. Pass "" if the skill is at the repo root.
         /// Overrides a subpath encoded in the URL.
         #[arg(long)]
@@ -968,24 +975,49 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
         SkillsCommand::SetSource {
             reference,
             git_url,
+            local_path,
             subpath,
             branch,
             force,
             dry_run,
         } => {
             let skill = resolve_skill(store, &reference)?;
-            let report = cmd::set_git_source_internal(
-                store,
-                &skill.id,
-                &git_url,
-                subpath.as_deref(),
-                branch.as_deref(),
-                store.proxy_url().as_deref(),
-                force,
-                dry_run,
-            )
-            .map_err(map_app_err)?;
-            print_json(&report, json);
+            match (git_url, local_path) {
+                (Some(_), Some(_)) => bail!("pass either --git-url or --local-path, not both"),
+                (None, None) => bail!("pass --git-url or --local-path"),
+                (Some(git_url), None) => {
+                    let report = cmd::set_git_source_internal(
+                        store,
+                        &skill.id,
+                        &git_url,
+                        subpath.as_deref(),
+                        branch.as_deref(),
+                        store.proxy_url().as_deref(),
+                        force,
+                        dry_run,
+                    )
+                    .map_err(map_app_err)?;
+                    print_json(&report, json);
+                }
+                (None, Some(local_path)) => {
+                    if subpath.is_some() {
+                        bail!("--subpath only applies to --git-url");
+                    }
+                    if branch.is_some() {
+                        bail!("--branch only applies to --git-url");
+                    }
+                    let report =
+                        cmd::set_local_source_internal(store, &skill.id, &local_path, None, dry_run)
+                            .map_err(map_app_err)?;
+                    if !report.held_back_removals.is_empty() {
+                        eprintln!(
+                            "held back: the re-point would remove {} file(s) the library has and the new source does not; approve by re-pointing this skill in the app",
+                            report.held_back_removals.len()
+                        );
+                    }
+                    print_json(&report, json);
+                }
+            }
         }
         SkillsCommand::Adopt {
             paths,

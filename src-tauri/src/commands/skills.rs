@@ -1879,98 +1879,386 @@ pub async fn relink_local_skill_source(
 ) -> Result<ReimportSkillResult, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let skill = store
-            .get_skill_by_id(&skill_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Skill not found"))?;
-
-        if !matches!(skill.source_type.as_str(), "local" | "import") {
-            return Err(AppError::invalid_input(
-                "Only local skills can relink source paths",
-            ));
-        }
-
-        let path = PathBuf::from(&source_path);
-        if !path.exists() {
-            return Err(AppError::not_found("Selected source path does not exist"));
-        }
-        if !is_valid_skill_dir(&path) {
-            return Err(AppError::invalid_input(
-                "Selected source path is not a valid skill directory",
-            ));
-        }
-
-        store
-            .update_skill_update_status(&skill_id, "updating")
-            .map_err(AppError::db)?;
-
-        let result = (|| -> Result<(Vec<PendingRemoval>, Option<String>), AppError> {
-            let _lock = RepoLock::acquire_foreground("relink local skill").map_err(AppError::db)?;
-            let staged_path = staged_path_for(&skill.central_path);
-            let install_result = installer::install_from_local_to_destination(
-                &path,
-                Some(&skill.name),
-                &staged_path,
-            )
-            .inspect_err(|_| {
-                let _ = remove_path_if_exists(&staged_path);
-            })
-            .map_err(AppError::io)?;
-            let staged_guard = StagedPathGuard::new(&staged_path, true);
-
-            // Picking a new source says which source to follow. It does not say
-            // to discard whatever has accumulated in the library since — same
-            // replacement, same guard.
-            let pending = pending_removals_for(&store, &skill, Some(&staged_path))?;
-            let approval = removal_approval_token(&source_path, &pending);
-            if !pending.is_empty() && approved_removals.as_deref() != Some(approval.as_str()) {
-                // Put back exactly what was there. Hardcoding a status loses
-                // `source_missing` — the only state relink is reachable from —
-                // so declining would hide the Relink and Detach buttons on the
-                // next refresh, and `check_state` would also clear the recorded
-                // error and check time that nothing here has re-established.
-                store
-                    .update_skill_update_status(&skill.id, &skill.update_status)
-                    .map_err(AppError::db)?;
-                return Ok((pending, Some(approval)));
-            }
-
-            swap_skill_directory(&staged_path, Path::new(&skill.central_path))?;
-            staged_guard.release();
-            store
-                .update_skill_after_reinstall(
-                    &skill.id,
-                    &skill.name,
-                    install_result.description.as_deref(),
-                    &skill.source_type,
-                    Some(&source_path),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(&install_result.content_hash),
-                    "local_only",
-                )
-                .map_err(AppError::db)?;
-            resync_copy_targets(&store, &skill.id)?;
-            sync_metadata::write_all_from_db_unlocked(&store).map_err(AppError::db)?;
-            Ok((Vec::new(), None))
-        })();
-
-        match result {
-            Ok((pending_removals, removal_approval)) => Ok(ReimportSkillResult {
-                skill: managed_skill_by_id(&store, &skill_id)?,
-                pending_removals,
-                removal_approval,
-            }),
-            Err(e) => {
-                let _ = store.update_skill_check_state(&skill_id, None, "error", Some(&e.message));
-                Err(e)
-            }
-        }
+        relink_local_skill_source_internal(
+            &store,
+            &skill_id,
+            &source_path,
+            approved_removals.as_deref(),
+        )
     })
     .await?
+}
+
+/// Shared body of [`relink_local_skill_source`]: install the new source into a
+/// staging directory, guard library-only files behind the removal approval, and
+/// swap the library copy over. Also drives the local-source repair flows — the
+/// CLI `set-source --local-path` and the broken-source batch repair.
+pub fn relink_local_skill_source_internal(
+    store: &SkillStore,
+    skill_id: &str,
+    source_path: &str,
+    approved_removals: Option<&str>,
+) -> Result<ReimportSkillResult, AppError> {
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+
+    if !matches!(skill.source_type.as_str(), "local" | "import") {
+        return Err(AppError::invalid_input(
+            "Only local skills can relink source paths",
+        ));
+    }
+
+    let path = PathBuf::from(source_path);
+    if !path.exists() {
+        return Err(AppError::not_found("Selected source path does not exist"));
+    }
+    if !is_valid_skill_dir(&path) {
+        return Err(AppError::invalid_input(
+            "Selected source path is not a valid skill directory",
+        ));
+    }
+
+    store
+        .update_skill_update_status(skill_id, "updating")
+        .map_err(AppError::db)?;
+
+    let result = (|| -> Result<(Vec<PendingRemoval>, Option<String>), AppError> {
+        let _lock = RepoLock::acquire_foreground("relink local skill").map_err(AppError::db)?;
+        let staged_path = staged_path_for(&skill.central_path);
+        let install_result = installer::install_from_local_to_destination(
+            &path,
+            Some(&skill.name),
+            &staged_path,
+        )
+        .inspect_err(|_| {
+            let _ = remove_path_if_exists(&staged_path);
+        })
+        .map_err(AppError::io)?;
+        let staged_guard = StagedPathGuard::new(&staged_path, true);
+
+        // Picking a new source says which source to follow. It does not say
+        // to discard whatever has accumulated in the library since — same
+        // replacement, same guard.
+        let pending = pending_removals_for(store, &skill, Some(&staged_path))?;
+        let approval = removal_approval_token(source_path, &pending);
+        if !pending.is_empty() && approved_removals != Some(approval.as_str()) {
+            // Put back exactly what was there. Hardcoding a status loses
+            // `source_missing` — the only state relink is reachable from —
+            // so declining would hide the Relink and Detach buttons on the
+            // next refresh, and `check_state` would also clear the recorded
+            // error and check time that nothing here has re-established.
+            store
+                .update_skill_update_status(&skill.id, &skill.update_status)
+                .map_err(AppError::db)?;
+            return Ok((pending, Some(approval)));
+        }
+
+        swap_skill_directory(&staged_path, Path::new(&skill.central_path))?;
+        staged_guard.release();
+        store
+            .update_skill_after_reinstall(
+                &skill.id,
+                &skill.name,
+                install_result.description.as_deref(),
+                &skill.source_type,
+                Some(source_path),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(&install_result.content_hash),
+                "local_only",
+            )
+            .map_err(AppError::db)?;
+        resync_copy_targets(store, &skill.id)?;
+        sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+        Ok((Vec::new(), None))
+    })();
+
+    match result {
+        Ok((pending_removals, removal_approval)) => Ok(ReimportSkillResult {
+            skill: managed_skill_by_id(store, skill_id)?,
+            pending_removals,
+            removal_approval,
+        }),
+        Err(e) => {
+            let _ = store.update_skill_check_state(skill_id, None, "error", Some(&e.message));
+            Err(e)
+        }
+    }
+}
+
+/// Result of re-pointing a local/import skill at a local directory (CLI).
+#[derive(Debug, Serialize)]
+pub struct SetLocalSourceResult {
+    pub skill_id: String,
+    pub name: String,
+    /// Source type before the change (`local` or `import`).
+    pub previous_source_type: String,
+    pub previous_source_ref: Option<String>,
+    pub source_path: String,
+    /// The new source's live hash against the hash recorded for the library
+    /// copy — what `update` would pull if you ran it after the re-point.
+    pub content_changed: bool,
+    pub dry_run: bool,
+    /// Files the library holds that the new source does not. Non-empty means
+    /// the re-point was declined and nothing changed; approve it by
+    /// re-pointing this skill individually, like on the update paths.
+    pub held_back_removals: Vec<PendingRemoval>,
+    pub removal_approval: Option<String>,
+}
+
+/// CLI counterpart of [`relink_local_skill_source_internal`] with the git
+/// `set-source` reporting shape (dry-run + `content_changed`).
+pub fn set_local_source_internal(
+    store: &SkillStore,
+    skill_id: &str,
+    source_path: &str,
+    approved_removals: Option<&str>,
+    dry_run: bool,
+) -> Result<SetLocalSourceResult, AppError> {
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+
+    if !matches!(skill.source_type.as_str(), "local" | "import") {
+        return Err(AppError::invalid_input(
+            "--local-path only applies to local/import skills; use --git-url for git sources",
+        ));
+    }
+
+    let path = PathBuf::from(source_path);
+    if !path.exists() {
+        return Err(AppError::not_found("Selected source path does not exist"));
+    }
+    if !is_valid_skill_dir(&path) {
+        return Err(AppError::invalid_input(
+            "Selected source path is not a valid skill directory",
+        ));
+    }
+
+    let live_hash = installer::hash_local_source(&path).map_err(AppError::io)?;
+    let content_changed = skill.content_hash.as_deref() != Some(live_hash.as_str());
+    let previous_source_type = skill.source_type.clone();
+    let previous_source_ref = skill.source_ref.clone();
+
+    if dry_run {
+        return Ok(SetLocalSourceResult {
+            skill_id: skill.id,
+            name: skill.name,
+            previous_source_type,
+            previous_source_ref,
+            source_path: source_path.to_string(),
+            content_changed,
+            dry_run: true,
+            held_back_removals: Vec::new(),
+            removal_approval: None,
+        });
+    }
+
+    let result =
+        relink_local_skill_source_internal(store, skill_id, source_path, approved_removals)?;
+    if result.pending_removals.is_empty() {
+        // Refresh the check state so the next `check` report reflects the new
+        // source instead of a stale `source_missing`.
+        let _ = check_skill_update_internal(store, skill_id, true, None);
+    }
+    Ok(SetLocalSourceResult {
+        skill_id: result.skill.id,
+        name: result.skill.name,
+        previous_source_type,
+        previous_source_ref,
+        source_path: source_path.to_string(),
+        content_changed,
+        dry_run: false,
+        held_back_removals: result.pending_removals,
+        removal_approval: result.removal_approval,
+    })
+}
+
+/// One broken local source found by [`scan_broken_local_sources_internal`].
+#[derive(Debug, Serialize)]
+pub struct BrokenLocalSourceEntry {
+    pub skill_id: String,
+    pub name: String,
+    pub old_source_ref: String,
+    /// Same-named valid skill directories under the scan root, best-effort.
+    pub suggestions: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BrokenLocalSourceScan {
+    pub root: Option<String>,
+    pub entries: Vec<BrokenLocalSourceEntry>,
+}
+
+/// List local/import skills whose recorded source path no longer exists.
+/// With `root`, additionally look for same-named valid skill directories
+/// under it and offer them as re-link suggestions.
+#[tauri::command]
+pub async fn scan_broken_local_sources(
+    root: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<BrokenLocalSourceScan, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_broken_local_sources_internal(&store, root)
+    })
+    .await?
+}
+
+pub fn scan_broken_local_sources_internal(
+    store: &SkillStore,
+    root: Option<String>,
+) -> Result<BrokenLocalSourceScan, AppError> {
+    let central_root = central_repo::skills_dir();
+    let mut entries = Vec::new();
+    for skill in store.get_all_skills().map_err(AppError::db)? {
+        if !matches!(skill.source_type.as_str(), "local" | "import") {
+            continue;
+        }
+        let Some(old_ref) = skill.source_ref.clone() else {
+            continue;
+        };
+        if Path::new(&old_ref).exists() {
+            continue;
+        }
+        let suggestions = root
+            .as_deref()
+            .map(|root| find_same_name_skill_dirs(Path::new(root), &skill.name, &central_root))
+            .unwrap_or_default();
+        entries.push(BrokenLocalSourceEntry {
+            skill_id: skill.id,
+            name: skill.name,
+            old_source_ref: old_ref,
+            suggestions,
+        });
+    }
+    Ok(BrokenLocalSourceScan { root, entries })
+}
+
+/// Look for valid skill directories named `skill_name` under `root`. Shallow
+/// (bounded depth), skips hidden/vendor trees and the central library itself —
+/// pointing a source back at its own central copy would make `update` reimport
+/// the skill from itself. Capped so a pathological tree cannot flood the list.
+fn find_same_name_skill_dirs(root: &Path, skill_name: &str, central_root: &Path) -> Vec<String> {
+    const MAX_DEPTH: usize = 8;
+    const MAX_HITS: usize = 5;
+    const SKIP_DIRS: &[&str] = &[
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "deps",
+        "skills-disabled",
+        "trash",
+    ];
+    if !root.is_dir() {
+        return Vec::new();
+    }
+    let mut hits = Vec::new();
+    for entry in WalkDir::new(root)
+        .max_depth(MAX_DEPTH)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            // The root itself stays walkable even when hidden (e.g. a user
+            // picking `~/.something` as the scan root).
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_string_lossy();
+            !name.starts_with('.') && !SKIP_DIRS.contains(&name.as_ref())
+        })
+    {
+        let Ok(entry) = entry else { continue };
+        if entry.depth() == 0 || !entry.file_type().is_dir() {
+            continue;
+        }
+        if entry.file_name().to_string_lossy() != skill_name {
+            continue;
+        }
+        if !is_valid_skill_dir(entry.path()) {
+            continue;
+        }
+        let path = entry.path();
+        if path.starts_with(central_root) {
+            continue;
+        }
+        hits.push(path.to_string_lossy().to_string());
+        if hits.len() >= MAX_HITS {
+            break;
+        }
+    }
+    hits
+}
+
+/// One row of [`relink_local_sources_batch`].
+#[derive(Debug, serde::Deserialize)]
+pub struct RelinkSourceItem {
+    pub skill_id: String,
+    pub source_path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RelinkSourceItemResult {
+    pub skill_id: String,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+/// Re-point many local/import skills at once, one
+/// [`relink_local_skill_source_internal`] per item. One failing or held-back
+/// item does not stop the rest — outcomes come back per row.
+#[tauri::command]
+pub async fn relink_local_sources_batch(
+    items: Vec<RelinkSourceItem>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<RelinkSourceItemResult>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        relink_local_sources_batch_internal(&store, &items)
+    })
+    .await?
+}
+
+pub fn relink_local_sources_batch_internal(
+    store: &SkillStore,
+    items: &[RelinkSourceItem],
+) -> Result<Vec<RelinkSourceItemResult>, AppError> {
+    let mut results = Vec::with_capacity(items.len());
+    for item in items {
+        let outcome = relink_local_skill_source_internal(
+            store,
+            &item.skill_id,
+            &item.source_path,
+            None,
+        );
+        results.push(match outcome {
+            Ok(r) if r.pending_removals.is_empty() => RelinkSourceItemResult {
+                skill_id: item.skill_id.clone(),
+                ok: true,
+                error: None,
+            },
+            Ok(r) => RelinkSourceItemResult {
+                skill_id: item.skill_id.clone(),
+                ok: false,
+                error: Some(format!(
+                    "re-point held back: it would remove {} file(s) the library has and the new source does not — approve by re-pointing this skill individually",
+                    r.pending_removals.len()
+                )),
+            },
+            Err(e) => RelinkSourceItemResult {
+                skill_id: item.skill_id.clone(),
+                ok: false,
+                error: Some(e.message),
+            },
+        });
+    }
+    Ok(results)
 }
 
 #[tauri::command]
@@ -3891,6 +4179,246 @@ mod tests {
         assert_eq!(k_a, "category-a/foo");
         assert_eq!(k_b, "category-b/foo");
     }
+
+    fn write_skill_md(dir: &Path, body: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("SKILL.md"), body).unwrap();
+    }
+
+    #[test]
+    fn set_local_source_dry_run_previews_and_apply_repoints_content() {
+        let repo = test_repo();
+        let origin_same = repo._tmp.path().join("origin-same");
+        write_skill_md(&origin_same, "---\nname: set-me\n---\nsame-body\n");
+        let origin_diff = repo._tmp.path().join("origin-diff");
+        write_skill_md(&origin_diff, "---\nname: set-me\n---\ndifferent-body\n");
+        let central = write_skill_dir("set-me");
+        fs::write(central.join("SKILL.md"), "---\nname: set-me\n---\nsame-body\n").unwrap();
+        let old_hash = crate::core::content_hash::hash_directory(&central).unwrap();
+        let gone = repo._tmp.path().join("gone");
+
+        let mut skill = sample_skill("local-set", "set-me", &central);
+        skill.source_type = "local".to_string();
+        skill.source_ref = Some(gone.to_string_lossy().to_string());
+        skill.content_hash = Some(old_hash.clone());
+        repo.store.insert_skill(&skill).unwrap();
+
+        // Dry-run against an identical source: no change reported, nothing written.
+        let dry = set_local_source_internal(
+            &repo.store,
+            "local-set",
+            &origin_same.to_string_lossy(),
+            None,
+            true,
+        )
+        .unwrap();
+        assert!(dry.dry_run);
+        assert!(!dry.content_changed);
+        assert!(dry.held_back_removals.is_empty());
+        let stored = repo.store.get_skill_by_id("local-set").unwrap().unwrap();
+        assert_eq!(
+            stored.source_ref.as_deref(),
+            Some(gone.to_string_lossy().as_ref())
+        );
+        assert_eq!(stored.content_hash.as_deref(), Some(old_hash.as_str()));
+
+        // Applying re-points and refreshes the library from the new source.
+        let applied = set_local_source_internal(
+            &repo.store,
+            "local-set",
+            &origin_diff.to_string_lossy(),
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(!applied.dry_run);
+        assert!(applied.content_changed);
+        assert!(applied.held_back_removals.is_empty());
+        let stored = repo.store.get_skill_by_id("local-set").unwrap().unwrap();
+        assert_eq!(
+            stored.source_ref.as_deref(),
+            Some(origin_diff.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            fs::read_to_string(central.join("SKILL.md")).unwrap(),
+            "---\nname: set-me\n---\ndifferent-body\n"
+        );
+        assert_ne!(stored.content_hash.as_deref(), Some(old_hash.as_str()));
+    }
+
+    #[test]
+    fn set_local_source_holds_back_removals_until_approved() {
+        let repo = test_repo();
+        let central = write_skill_dir("guarded");
+        fs::write(central.join("notes.md"), "kept in the library\n").unwrap();
+        let origin = repo._tmp.path().join("origin-guarded");
+        write_skill_md(&origin, "---\nname: guarded\n---\nnew-body\n");
+        let mut skill = sample_skill("guarded-1", "guarded", &central);
+        skill.source_type = "local".to_string();
+        skill.content_hash = Some(crate::core::content_hash::hash_directory(&central).unwrap());
+        repo.store.insert_skill(&skill).unwrap();
+
+        // The source has no notes.md: the re-point would remove it, so it is
+        // held back and nothing changes.
+        let held = set_local_source_internal(
+            &repo.store,
+            "guarded-1",
+            &origin.to_string_lossy(),
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(held.held_back_removals.len(), 1);
+        assert!(held.removal_approval.is_some());
+        let stored = repo.store.get_skill_by_id("guarded-1").unwrap().unwrap();
+        assert!(central.join("notes.md").exists());
+        assert_eq!(stored.source_ref.as_deref(), skill.source_ref.as_deref());
+        assert_eq!(stored.content_hash.as_deref(), skill.content_hash.as_deref());
+
+        // Approving applies the re-point and the removal.
+        let applied = relink_local_skill_source_internal(
+            &repo.store,
+            "guarded-1",
+            &origin.to_string_lossy(),
+            held.removal_approval.as_deref(),
+        )
+        .unwrap();
+        assert!(applied.pending_removals.is_empty());
+        assert!(!central.join("notes.md").exists());
+        assert_eq!(
+            fs::read_to_string(central.join("SKILL.md")).unwrap(),
+            "---\nname: guarded\n---\nnew-body\n"
+        );
+        let stored = repo.store.get_skill_by_id("guarded-1").unwrap().unwrap();
+        assert_eq!(
+            stored.source_ref.as_deref(),
+            Some(origin.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn set_local_source_refuses_git_skill() {
+        let repo = test_repo();
+        let central = write_skill_dir("git-skill");
+        let origin = repo._tmp.path().join("origin-dir");
+        write_skill_md(&origin, "---\nname: git-skill\n---\nbody\n");
+        let mut skill = sample_skill("git-1", "git-skill", &central);
+        skill.source_type = "git".to_string();
+        repo.store.insert_skill(&skill).unwrap();
+        let err = set_local_source_internal(
+            &repo.store,
+            "git-1",
+            &origin.to_string_lossy(),
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, crate::core::error::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn scan_broken_sources_lists_missing_and_suggests_same_name() {
+        let repo = test_repo();
+        // Healthy skill: existing source path must not appear.
+        let origin_ok = repo._tmp.path().join("origin-ok");
+        write_skill_md(&origin_ok, "---\nname: healthy\n---\nbody\n");
+        let central_ok = write_skill_dir("healthy");
+        let mut ok_skill = sample_skill("local-ok", "healthy", &central_ok);
+        ok_skill.source_type = "local".to_string();
+        ok_skill.source_ref = Some(origin_ok.to_string_lossy().to_string());
+        repo.store.insert_skill(&ok_skill).unwrap();
+
+        // Broken skill: source gone; a same-named dir sits under the scan root.
+        let root = repo._tmp.path().join("repro-root");
+        let suggested = root.join("category").join("broken-one");
+        write_skill_md(&suggested, "---\nname: broken-one\n---\nbody\n");
+        let central = write_skill_dir("broken-one");
+        let mut broken = sample_skill("local-broken", "broken-one", &central);
+        broken.source_type = "import".to_string();
+        broken.source_ref =
+            Some(repo._tmp.path().join("no-such-dir").to_string_lossy().to_string());
+        repo.store.insert_skill(&broken).unwrap();
+
+        // Root spans the whole tmp dir, so the central copy of `broken-one` is
+        // inside the walk — the central-library exclusion must keep it out.
+        let scan = scan_broken_local_sources_internal(
+            &repo.store,
+            Some(repo._tmp.path().to_string_lossy().to_string()),
+        )
+        .unwrap();
+        assert_eq!(scan.entries.len(), 1);
+        let entry = &scan.entries[0];
+        assert_eq!(entry.skill_id, "local-broken");
+        assert_eq!(
+            entry.suggestions,
+            vec![suggested.to_string_lossy().to_string()]
+        );
+
+        // Without a root the same list comes back with no suggestions.
+        let bare = scan_broken_local_sources_internal(&repo.store, None).unwrap();
+        assert_eq!(bare.entries.len(), 1);
+        assert!(bare.entries[0].suggestions.is_empty());
+    }
+
+    #[test]
+    fn relink_batch_reports_per_item_and_keeps_others() {
+        let repo = test_repo();
+        let central_a = write_skill_dir("batch-a");
+        let central_b = write_skill_dir("batch-b");
+        let origin_a = repo._tmp.path().join("batch-origin-a");
+        write_skill_md(&origin_a, "---\nname: batch-a\n---\nbody\n");
+        let mut a = sample_skill("batch-1", "batch-a", &central_a);
+        a.source_type = "local".to_string();
+        a.source_ref = Some(repo._tmp.path().join("missing-a").to_string_lossy().to_string());
+        repo.store.insert_skill(&a).unwrap();
+        let mut b = sample_skill("batch-2", "batch-b", &central_b);
+        b.source_type = "local".to_string();
+        b.source_ref = Some(repo._tmp.path().join("missing-b").to_string_lossy().to_string());
+        repo.store.insert_skill(&b).unwrap();
+
+        let results = relink_local_sources_batch_internal(
+            &repo.store,
+            &[
+                RelinkSourceItem {
+                    skill_id: "batch-1".to_string(),
+                    source_path: origin_a.to_string_lossy().to_string(),
+                },
+                RelinkSourceItem {
+                    skill_id: "batch-2".to_string(),
+                    source_path: "definitely/not/a/skill/dir".to_string(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results[0].ok);
+        assert!(!results[1].ok);
+        // The good row re-pointed and refreshed the library copy from its source.
+        assert_eq!(
+            repo.store
+                .get_skill_by_id("batch-1")
+                .unwrap()
+                .unwrap()
+                .source_ref
+                .as_deref(),
+            Some(origin_a.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            fs::read_to_string(central_a.join("SKILL.md")).unwrap(),
+            "---\nname: batch-a\n---\nbody\n"
+        );
+        // The failed row changed nothing.
+        assert_eq!(
+            repo.store
+                .get_skill_by_id("batch-2")
+                .unwrap()
+                .unwrap()
+                .source_ref
+                .as_deref(),
+            Some(repo._tmp.path().join("missing-b").to_string_lossy().as_ref())
+        );
+    }
+
 
     // ── RemoteKey dedup (batch check_all fan-out) ──
 

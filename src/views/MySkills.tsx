@@ -42,6 +42,7 @@ import { TagRenameDialog } from "../components/TagRenameDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
+import { BrokenSourceRepairDialog } from "../components/BrokenSourceRepairDialog";
 import { BatchSyncAgentDialog } from "../components/BatchSyncAgentDialog";
 import { SyncDots } from "../components/SyncDots";
 import { ToggleSwitch } from "../components/ToggleSwitch";
@@ -193,6 +194,7 @@ export function MySkills() {
   const refreshAfterDeleteRef = useRef<number | null>(null);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
+  const [brokenSourceRepairOpen, setBrokenSourceRepairOpen] = useState(false);
   const [batchSyncDialogOpen, setBatchSyncDialogOpen] = useState(false);
   const [batchToggling, setBatchToggling] = useState(false);
   const [checkingAll, setCheckingAll] = useState(false);
@@ -1279,6 +1281,16 @@ export function MySkills() {
               <RotateCcw className={cn("h-3.5 w-3.5", batchUpdating && "animate-spin")} />
               {t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
             </button>
+            <button
+              type="button"
+              onClick={() => setBrokenSourceRepairOpen(true)}
+              disabled={batchUpdating}
+              className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
+              title={t("mySkills.repairSourcesHint")}
+            >
+              <Wrench className="h-3.5 w-3.5" />
+              {t("mySkills.repairSources")}
+            </button>
             <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 self-center bg-border-subtle" />
             <button
               onClick={() => setViewMode("grid")}
@@ -2060,6 +2072,13 @@ export function MySkills() {
         onToggleTool={handleToggleSkillTool}
         projects={projects}
         onProjectsChanged={refreshProjects}
+        onEditSource={handleRelinkSource}
+      />
+
+      <BrokenSourceRepairDialog
+        open={brokenSourceRepairOpen}
+        onClose={() => setBrokenSourceRepairOpen(false)}
+        onRepaired={refreshManagedSkills}
       />
 
       <ConfirmDialog

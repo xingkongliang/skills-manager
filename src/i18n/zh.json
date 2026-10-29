@@ -405,6 +405,27 @@
       "skillssh": "skills.sh"
     },
     "groupBySource": "按来源分组",
+    "repairSources": "修复失效源",
+    "repairSourcesHint": "扫描原路径已失效的本地/导入技能，按同名目录自动建议新路径并批量重新关联。重新关联会用新源刷新中央库内容；库内有而源没有的文件会先拦下，稍后逐个确认。",
+    "editSource": "改源路径",
+    "editSourceHint": "重新指向新的源目录（仅本地/导入源；中央库内容会随源刷新）",
+    "repairDialog": {
+      "title": "修复失效源路径",
+      "intro": "以下技能的原路径已不存在。选择一个根目录后，会按技能名查找同名技能目录作为建议。重新关联会用新源刷新中央库内容；库内有而源没有的文件会先拦下，需逐个重新关联确认。",
+      "pickRoot": "选择根目录",
+      "clearRoot": "清除根目录",
+      "scanning": "正在扫描失效源…",
+      "noBroken": "没有失效源：所有本地/导入技能的原路径都存在。",
+      "noSuggestion": "未找到同名目录",
+      "noSuggestionNoRoot": "未指定根目录，无法自动建议；可手动选择路径",
+      "chooseSuggestion": "选择建议路径…",
+      "pickManually": "手动选择",
+      "selectedCount": "已选择 {{count}} 项",
+      "apply": "重新关联（{{count}}）",
+      "allDone": "当前的原路径已经全部修复完了（{{fixed}} 个）",
+      "someFailed": "已修复 {{fixed}} 个，{{failed}} 个失败",
+      "failedHint": "以下 {{count}} 个技能修复失败（原因见各行），可修正路径后点「重新关联」重试"
+    },
     "sourcePicker": {
       "label": "来源",
       "clear": "清除来源筛选",
