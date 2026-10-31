@@ -8,12 +8,15 @@ interface SkillMarkdownProps {
 }
 
 function stripMarkdownFrontmatter(content: string) {
-  if (!content.startsWith("---\n")) return content;
+  const opening = /^---\r?\n/.exec(content);
+  if (!opening) return content;
 
-  const end = content.indexOf("\n---\n", 4);
-  if (end === -1) return content;
+  const rest = content.slice(opening[0].length);
+  // Match a complete line, including an empty block or a delimiter at EOF.
+  const closing = /(?:^|\n)---(?:\r?\n|$)/.exec(rest);
+  if (!closing) return content;
 
-  return content.slice(end + 5).trimStart();
+  return rest.slice(closing.index + closing[0].length).trimStart();
 }
 
 export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
