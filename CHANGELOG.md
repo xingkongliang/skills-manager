@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.2] - 2026-11-01
+
+### Release Overview
+- Opening a skill no longer blanks the window on older macOS, launches and CLI commands stop re-reading every skill's files, and the skill preview hides metadata headers written with Windows line endings.
+
+### User-facing
+- **Opening a skill no longer turns the window black on older macOS** — On WebKit before Safari 16.4 (for example macOS Monterey without the latest Safari), showing a skill's SKILL.md hit a regular-expression feature that engine does not support, and the whole window went blank until the app was quit. Those systems now show the skill as plain Markdown: tables, checklists and strikethrough appear as text (#627, #613).
+- **Faster launches and CLI commands with large skills** — Every launch, and every `skills-manager-cli` command, re-read every file of every skill to see whether it had changed; one skill with 13,000 files made that about 90 seconds on Windows. A skill is now read again only when its files' names, sizes or modification times change. The first launch after updating still reads everything once (#628, #623).
+- **Skill preview hides Windows-style metadata headers** — The metadata header of a SKILL.md saved with Windows line endings, or one that ends the file, showed up in the preview, and an empty header hid the instructions up to the next `---` line. Thanks to @Jiandong7 (#620).
+
+### Developer & Governance
+- Database schema v9 adds `skill_content_stamps`, a local cache of each skill's file fingerprint and the hash it was recorded with. A fingerprint is stored only when every file was read and none changed during the read, and is ignored once the skill's recorded hash changes. Accepted limit: a rewrite that keeps both the size and the modification time reads as unchanged; the inode change time still catches it on macOS and Linux, not on Windows. As with earlier schema changes, an older version refuses a database this one has upgraded (#628).
+- `SkillMarkdown` probes regex lookbehind once at load. Vite 7 targets safari16, so esbuild turns remark-gfm's lookbehind literal into a runtime `new RegExp` that only fails when a document renders (#627).
 ## [1.43.1] - 2026-10-27
 
 ### Release Overview

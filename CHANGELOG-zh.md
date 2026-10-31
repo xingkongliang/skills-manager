@@ -5,6 +5,19 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.43.2] - 2026-11-01
+
+### 发布概览
+- 在较旧的 macOS 上打开 Skill 不再黑屏；启动和 CLI 命令不再每次重读所有 Skill 的文件；Skill 预览会隐藏以 Windows 换行保存的元数据头。
+
+### 用户可见更新
+- **较旧的 macOS 上打开 Skill 不再黑屏** — 在 Safari 16.4 之前的 WebKit 上（例如没升级 Safari 的 macOS Monterey），显示 SKILL.md 时用到了这个引擎不支持的正则特性，整个窗口变黑，只能退出应用。现在这类系统改用普通 Markdown 显示：表格、清单和删除线显示为纯文本（#627、#613）。
+- **大 Skill 不再拖慢启动和 CLI 命令** — 每次启动、每条 `skills-manager-cli` 命令，都会把每个 Skill 的所有文件重读一遍来判断是否改动；一个 13,000 个文件的 Skill 在 Windows 上要约 90 秒。现在只有文件的名称、大小或修改时间变了才重读。更新后第一次启动仍会完整读一遍（#628、#623）。
+- **Skill 预览隐藏 Windows 换行的元数据头** — 用 Windows 换行保存的 SKILL.md，或元数据头一直写到文件末尾时，元数据会显示在预览里；空的元数据头还会把下一行 `---` 之前的说明一起藏掉。感谢 @Jiandong7（#620）。
+
+### 开发者与治理更新
+- 数据库 schema 升到 v9，新增本地缓存表 `skill_content_stamps`，记录每个 Skill 的文件指纹和记录时对应的哈希。只有全部文件读取成功、读取期间没有变化时才写入；Skill 记录里的哈希一变，这份指纹就作废。已接受的边界：大小和修改时间都被保留的改写会被当成没变；macOS 和 Linux 上 inode 的变更时间能兜住，Windows 不能。和以往的 schema 变更一样，升级后的数据库旧版本无法打开（#628）。
+- `SkillMarkdown` 在加载时探测一次是否支持正则后行断言。Vite 7 的构建目标是 safari16，esbuild 会把 remark-gfm 里的后行断言字面量改写成运行时的 `new RegExp`，要到渲染文档时才报错（#627）。
 ## [1.43.1] - 2026-10-27
 
 ### 发布概览
