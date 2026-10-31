@@ -447,6 +447,27 @@ impl SkillStore {
         Ok(())
     }
 
+    /// `skill_id → (stamp, content_hash)` as the reindex last recorded them.
+    pub fn get_content_stamps(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT skill_id, stamp, content_hash FROM skill_content_stamps")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn set_content_stamp(&self, skill_id: &str, stamp: &str, content_hash: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO skill_content_stamps (skill_id, stamp, content_hash)
+             VALUES (?1, ?2, ?3)",
+            params![skill_id, stamp, content_hash],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_skill(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM skills WHERE id = ?1", params![id])?;

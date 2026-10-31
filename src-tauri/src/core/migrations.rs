@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 8;
+const LATEST_VERSION: u32 = 9;
 
 /// Run all pending migrations on the database.
 ///
@@ -55,6 +55,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         5 => migrate_v5_to_v6(conn),
         6 => migrate_v6_to_v7(conn),
         7 => migrate_v7_to_v8(conn),
+        8 => migrate_v8_to_v9(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -317,6 +318,22 @@ fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
     conn.execute(
         "DELETE FROM settings WHERE key = 'project_default_export_agents'",
         [],
+    )?;
+    Ok(())
+}
+
+/// v8 → v9: per-skill content stamps, so the startup reindex can skip
+/// re-reading a skill whose files have not changed (#623). A local cache only:
+/// a missing row means "hash it", and the row goes with its skill.
+fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS skill_content_stamps (
+            skill_id TEXT PRIMARY KEY REFERENCES skills(id) ON DELETE CASCADE,
+            stamp TEXT NOT NULL,
+            content_hash TEXT NOT NULL
+        );
+        ",
     )?;
     Ok(())
 }
