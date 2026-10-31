@@ -7,6 +7,21 @@ interface SkillMarkdownProps {
   className?: string;
 }
 
+// remark-gfm's autolink step compiles a regex with lookbehind on every render.
+// WebKit before Safari 16.4 (e.g. an un-updated macOS Monterey) rejects that
+// with a SyntaxError, which unmounts the whole app and leaves a blank window —
+// the symptom reported in #613. Such engines get plain Markdown instead: no
+// tables, task lists or strikethrough, but the skill is readable.
+const SUPPORTS_LOOKBEHIND = (() => {
+  try {
+    new RegExp("(?<=a)b");
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const REMARK_PLUGINS = SUPPORTS_LOOKBEHIND ? [remarkGfm] : [];
+
 function stripMarkdownFrontmatter(content: string) {
   const opening = /^---\r?\n/.exec(content);
   if (!opening) return content;
@@ -25,7 +40,7 @@ export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
   return (
     <article className={cn("mx-auto w-full max-w-[1240px] text-[13px] leading-6 text-secondary", className)}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={REMARK_PLUGINS}
         components={{
           h1: ({ className, ...props }) => (
             <h1
