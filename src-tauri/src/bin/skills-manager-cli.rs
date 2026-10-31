@@ -1751,6 +1751,31 @@ fn parse_skillssh_shorthand(s: &str) -> anyhow::Result<(String, String)> {
     }
 }
 
+/// Absolute, canonical form of an adopt source path.
+///
+/// `run_adopt` stores whatever `expand_path` returned as the skill's
+/// `source_ref`, and that string is later resolved against the CURRENT working
+/// directory when an update check looks for the original folder. A relative
+/// argument (`.claude/skills`, `AppData/Local/hermes/skills`) therefore wrote a
+/// record whose source can never be found again: `skills check` reported
+/// `source_missing` and the GUI showed the source as lost for every skill
+/// adopted that way.
+fn absolute_adopt_source(path: &Path) -> anyhow::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| anyhow!("cannot resolve {path:?} against the current directory: {e}"))?
+            .join(path)
+    };
+    // Canonical, so a later check compares real paths rather than `..`
+    // segments. A source that does not exist cannot be adopted anyway, so
+    // failing here is the honest outcome.
+    absolute
+        .canonicalize()
+        .map_err(|e| anyhow!("cannot resolve {absolute:?}: {e}"))
+}
+
 fn expand_path(s: &str) -> anyhow::Result<PathBuf> {
     if let Some(rest) = s.strip_prefix("~/") {
         let home = dirs_home()?;
@@ -1763,9 +1788,10 @@ fn expand_path(s: &str) -> anyhow::Result<PathBuf> {
 }
 
 fn dirs_home() -> anyhow::Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("HOME env var not set"))
+    // `HOME` is a Unix convention: Windows sets `USERPROFILE`, not `HOME`, so
+    // reading the variable directly made `skills adopt ~/...` fail there while
+    // the rest of the app (which goes through `dirs::home_dir()`) worked fine.
+    dirs::home_dir().ok_or_else(|| anyhow!("cannot determine the home directory"))
 }
 
 // ── update / check ────────────────────────────────────────────────────────
@@ -2204,7 +2230,8 @@ fn run_adopt(
     let mut skipped: Vec<AdoptCandidate> = Vec::new();
 
     for path in paths {
-        let path = expand_path(&path.to_string_lossy())?;
+        // Absolute, because this value becomes each adopted skill's `source_ref`.
+        let path = absolute_adopt_source(&expand_path(&path.to_string_lossy())?)?;
         if !path.is_dir() {
             skipped.push(AdoptCandidate {
                 path: path.to_string_lossy().to_string(),
@@ -3171,6 +3198,49 @@ fn print_json<T: Serialize>(value: &T, json: bool) {
 
 #[cfg(test)]
 mod tests {
+    use super::{absolute_adopt_source, expand_path};
+
+    /// A relative adopt argument used to be recorded as-is, which made every
+    /// later update check look in `$CWD/<arg>` and write `source_missing`.
+    #[test]
+    fn an_adopt_source_is_recorded_as_an_absolute_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: my-skill\n---\n").unwrap();
+
+        // The shape that produced the broken records: relative to the cwd.
+        let cwd = std::env::current_dir().unwrap();
+        let relative = skill_dir
+            .strip_prefix(&cwd)
+            .unwrap_or(&skill_dir)
+            .to_path_buf();
+        let resolved = absolute_adopt_source(&expand_path(&relative.to_string_lossy()).unwrap())
+            .expect("a source that exists must resolve");
+
+        assert!(resolved.is_absolute(), "got {resolved:?}");
+        assert_eq!(resolved, skill_dir.canonicalize().unwrap());
+    }
+
+    /// `~` still expands, and the recorded value is absolute either way.
+    #[test]
+    fn a_home_relative_adopt_source_becomes_absolute() {
+        let expanded = expand_path("~/").unwrap();
+        assert_eq!(expanded, super::dirs_home().unwrap());
+        assert!(absolute_adopt_source(&expanded).unwrap().is_absolute());
+    }
+
+    /// Failing loudly beats recording a source nobody can find again.
+    #[test]
+    fn a_missing_adopt_source_is_refused() {
+        let err = absolute_adopt_source(&expand_path("./definitely-not-here-4f21").unwrap())
+            .expect_err("a missing source must not be accepted");
+        assert!(
+            format!("{err}").contains("definitely-not-here-4f21"),
+            "{err}"
+        );
+    }
+
     /// An agent has to name the directory that is in the way and say the
     /// contents survived. Flattening the refusal into one sentence is what
     /// made that impossible, so the paths must reach the envelope as data.

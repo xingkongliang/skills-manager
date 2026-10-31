@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Vendors whose Windows state lives at `%LOCALAPPDATA%\<vendor>` rather than
+/// `~/.<vendor>`. See [`ToolAdapter::data_local_candidate`].
+const WINDOWS_DATA_LOCAL_VENDORS: &[&str] = &["hermes"];
 
 /// Top-level grouping for sidebar/overview display. Does not affect skill
 /// deployment, sync, or any other backend behavior — purely a UI taxonomy.
@@ -64,10 +68,57 @@ impl ToolAdapter {
     }
 
     fn candidate_paths(relative: &str) -> Vec<PathBuf> {
-        let mut candidates = vec![Self::home().join(relative)];
+        // The platform data dir only matters on Windows; elsewhere it is
+        // `~/.local/share`, where none of these tools live.
+        let data_local_dir = if cfg!(windows) {
+            dirs::data_local_dir()
+        } else {
+            None
+        };
+        Self::candidate_paths_in(
+            relative,
+            &Self::home(),
+            dirs::config_dir().as_deref(),
+            data_local_dir.as_deref(),
+        )
+    }
+
+    /// Vendors that root their state at `%LOCALAPPDATA%\<vendor>` on Windows
+    /// instead of `~/.<vendor>`. `~/.hermes` beside a real install is a legacy
+    /// leftover, so the platform data dir has to win when both exist.
+    fn data_local_candidate(relative: &str, data_local_dir: Option<&Path>) -> Option<PathBuf> {
+        let data_local_dir = data_local_dir?;
+        let mut parts = relative.splitn(2, '/');
+        let vendor = parts.next()?.strip_prefix('.')?;
+        let rest = parts.next().unwrap_or("");
+        if !WINDOWS_DATA_LOCAL_VENDORS.contains(&vendor) {
+            return None;
+        }
+        let base = data_local_dir.join(vendor);
+        if rest.is_empty() {
+            return Some(base);
+        }
+        Some(base.join(rest))
+    }
+
+    /// Pure form of [`Self::candidate_paths`] so the ordering rules can be
+    /// tested without reading the environment.
+    fn candidate_paths_in(
+        relative: &str,
+        home: &Path,
+        config_dir: Option<&Path>,
+        data_local_dir: Option<&Path>,
+    ) -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+
+        if let Some(path) = Self::data_local_candidate(relative, data_local_dir) {
+            candidates.push(path);
+        }
+
+        candidates.push(home.join(relative));
 
         if let Some(suffix) = relative.strip_prefix(".config/") {
-            if let Some(config_dir) = dirs::config_dir() {
+            if let Some(config_dir) = config_dir {
                 let config_path = config_dir.join(suffix);
                 if !candidates.contains(&config_path) {
                     candidates.push(config_path);
@@ -1081,12 +1132,48 @@ pub fn enabled_installed_adapters(
 #[cfg(test)]
 mod tests {
     use super::{
-        CustomToolDef, ToolCategory, all_tool_adapters, default_tool_adapters,
+        CustomToolDef, ToolAdapter, ToolCategory, all_tool_adapters, default_tool_adapters,
         find_adapter_with_store,
     };
     use crate::core::skill_store::SkillStore;
+    use std::path::PathBuf;
 
     use tempfile::tempdir;
+
+    #[test]
+    fn hermes_prefers_windows_data_dir_over_legacy_home_dir() {
+        let home = PathBuf::from("home");
+        let data_local = PathBuf::from("local-app-data");
+
+        let paths =
+            ToolAdapter::candidate_paths_in(".hermes/skills", &home, None, Some(&data_local));
+        assert_eq!(paths[0], data_local.join("hermes").join("skills"));
+        assert!(paths.contains(&home.join(".hermes/skills")));
+
+        // The detect dir has no trailing segment and must resolve too, or the
+        // agent reads as not installed on a machine that only has the platform
+        // dir.
+        let detect = ToolAdapter::candidate_paths_in(".hermes", &home, None, Some(&data_local));
+        assert_eq!(detect[0], data_local.join("hermes"));
+
+        // Non-Windows callers pass `None` and keep the home-relative path only.
+        let posix = ToolAdapter::candidate_paths_in(".hermes/skills", &home, None, None);
+        assert_eq!(posix, vec![home.join(".hermes/skills")]);
+    }
+
+    #[test]
+    fn data_local_mapping_leaves_home_based_agents_alone() {
+        let data_local = PathBuf::from("local-app-data");
+
+        assert_eq!(
+            ToolAdapter::data_local_candidate(".claude/skills", Some(&data_local)),
+            None
+        );
+        assert_eq!(
+            ToolAdapter::data_local_candidate(".openclaw/skills", Some(&data_local)),
+            None
+        );
+    }
 
     #[test]
     fn antigravity_uses_current_default_skills_path() {
