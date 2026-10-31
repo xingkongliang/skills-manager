@@ -791,6 +791,7 @@ fn teardown_before_exit(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    core::linux_display::ensure_display_backend();
     let pre_builder_start = Instant::now();
     let (store, startup_timings) =
         core::app_state::initialize_store().expect("Failed to initialize app state");
