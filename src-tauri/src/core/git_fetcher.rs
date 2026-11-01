@@ -1,7 +1,6 @@
 use super::git_command::git_command;
 use crate::core::central_repo;
 use crate::core::git_credentials;
-use crate::core::log_sanitize;
 use crate::core::skill_metadata;
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
@@ -1230,15 +1229,17 @@ pub fn resolve_remote_revision(
 /// are read with libgit2, which cannot lazily fetch a missing object the way
 /// git would in the partial repository that fetch leaves behind.
 ///
-/// Any failure — no filter support, an old revision the server no longer has,
-/// a missing path — just leaves that pair out, so the caller falls back to
-/// reporting an update. This can only ever suppress a false update.
+/// A pair whose path is missing, or is not a directory, just stays out of the
+/// result, so the caller reports an update for it. A failure of the comparison
+/// as a whole — the fetch did not go through, the temporary repository could
+/// not be made — is returned instead: whether that still allows reporting an
+/// update depends on why it failed, which is for the caller to judge (#582).
 pub fn unchanged_subtrees(
     url: &str,
     head: &str,
     installed: &HashSet<(String, String)>,
     proxy_url: Option<&str>,
-) -> HashSet<(String, String)> {
+) -> Result<HashSet<(String, String)>> {
     // Revisions reach the command line, so only full object ids get there.
     let is_object_id = |rev: &str| rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit());
     let pairs: Vec<&(String, String)> = installed
@@ -1246,7 +1247,7 @@ pub fn unchanged_subtrees(
         .filter(|(rev, subpath)| rev != head && is_object_id(rev) && !subpath.is_empty())
         .collect();
     if pairs.is_empty() || !is_object_id(head) {
-        return HashSet::new();
+        return Ok(HashSet::new());
     }
 
     let temp =
@@ -1293,16 +1294,7 @@ pub fn unchanged_subtrees(
             .collect())
     })();
     let _ = std::fs::remove_dir_all(&temp);
-    result.unwrap_or_else(|err| {
-        // A URL may carry `user:token@`, and git's stderr in `err` may repeat it.
-        log::info!(
-            "{}",
-            log_sanitize::sanitize(&format!(
-                "subtree comparison for {url} unavailable, reporting updates as before: {err}"
-            ))
-        );
-        HashSet::new()
-    })
+    result
 }
 
 pub fn checkout_revision(repo_dir: &Path, revision: &str) -> Result<()> {
