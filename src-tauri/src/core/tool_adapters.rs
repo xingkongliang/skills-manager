@@ -238,16 +238,22 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: Some(".opencode/skills".into()),
         },
         ToolAdapter {
+            // Antigravity (App / CLI / IDE) reads user-level skills from
+            // `~/.gemini/config/skills/` and workspace skills from
+            // `<workspace>/.agents/skills/`. `~/.gemini/antigravity/` is only
+            // the runtime appDataDir (brain/, scratch/, builtin/); the global
+            // skills there are legacy and no longer deployed to.
+            // See https://antigravity.google/docs/skills
             key: "antigravity".into(),
             display_name: "Antigravity".into(),
-            relative_skills_dir: ".gemini/antigravity/skills".into(),
+            relative_skills_dir: ".gemini/config/skills".into(),
             relative_detect_dir: ".gemini/antigravity".into(),
             additional_scan_dirs: vec![],
             override_skills_dir: None,
             category: ToolCategory::Coding,
             is_custom: false,
             recursive_scan: false,
-            project_relative_skills_dir: None,
+            project_relative_skills_dir: Some(".agents/skills".into()),
         },
         ToolAdapter {
             key: "amp".into(),
@@ -1095,7 +1101,12 @@ mod tests {
             .find(|adapter| adapter.key == "antigravity")
             .expect("antigravity adapter should exist");
 
-        assert_eq!(adapter.relative_skills_dir, ".gemini/antigravity/skills");
+        // https://antigravity.google/docs/skills: global skills live in
+        // `~/.gemini/config/skills`, workspace skills in `.agents/skills`.
+        assert_eq!(adapter.relative_skills_dir, ".gemini/config/skills");
+        assert_eq!(adapter.project_relative_skills_dir(), ".agents/skills");
+        // Detection still keys off the appDataDir Antigravity creates.
+        assert_eq!(adapter.relative_detect_dir, ".gemini/antigravity");
     }
 
     #[test]
