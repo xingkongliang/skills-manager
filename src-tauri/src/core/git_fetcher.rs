@@ -21,27 +21,24 @@ const CLONE_TIMEOUT_SECS: u64 = 300;
 /// Used by both `materialize_cached_repo` (writer) and `validate_clone_temp_path` (reader).
 pub const CLONE_TEMP_PREFIX: &str = "skills-manager-clone-";
 
+/// Whether a checkout must go out to the network first.
+///
+/// A batch that resolves each Source once fetches the cache slot on its first
+/// checkout and then reuses it for the siblings, instead of re-fetching the same
+/// repository once per skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheRefresh {
+    /// Bring the cached copy up to date before using it.
+    Fetch,
+    /// This batch already refreshed this slot; copy out of it as-is.
+    Reuse,
+}
+
 /// Callback type for reporting clone progress messages to the UI.
 pub type ProgressCallback = Box<dyn Fn(&str) + Send>;
 
-#[derive(Debug, Clone)]
-pub struct ParsedGitSource {
-    pub original_url: String,
-    pub clone_url: String,
-    pub branch: Option<String>,
-    pub subpath: Option<String>,
-}
-
-pub fn parse_git_source(url: &str) -> ParsedGitSource {
-    let trimmed = url.trim().to_string();
-    let (clone_url, branch, subpath) = normalize_url(&trimmed);
-
-    ParsedGitSource {
-        original_url: trimmed,
-        clone_url,
-        branch,
-        subpath,
-    }
+pub fn parse_git_source(url: &str) -> crate::core::remote_ref::RemoteRef {
+    crate::core::remote_ref::RemoteRef::from_url(url)
 }
 
 /// Validate that a URL uses an allowed scheme for git operations.
@@ -584,8 +581,24 @@ pub fn clone_repo_ref_scoped(
     proxy_url: Option<&str>,
     on_progress: Option<ProgressCallback>,
 ) -> Result<PathBuf> {
+    clone_repo_ref_scoped_with(
+        url, branch, subpath, cancel, proxy_url, on_progress, CacheRefresh::Fetch,
+    )
+}
+
+/// Same, but the caller states that this Source's cache slot was already
+/// refreshed in this batch. Only the copy-out remains, which is local.
+pub fn clone_repo_ref_scoped_with(
+    url: &str,
+    branch: Option<&str>,
+    subpath: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+    on_progress: Option<ProgressCallback>,
+    refresh: CacheRefresh,
+) -> Result<PathBuf> {
     if let Some(subpath) = sparse_pattern(subpath) {
-        match clone_repo_sparse(url, branch, &subpath, cancel, proxy_url, &on_progress) {
+        match clone_repo_sparse(url, branch, &subpath, cancel, proxy_url, &on_progress, refresh) {
             Ok(dir) => return Ok(dir),
             Err(e) if is_cancellation(&e) => return Err(e),
             Err(e) => {
@@ -596,7 +609,7 @@ pub fn clone_repo_ref_scoped(
         }
     }
 
-    clone_repo_full(url, branch, cancel, proxy_url, on_progress)
+    clone_repo_full(url, branch, cancel, proxy_url, on_progress, refresh)
 }
 
 /// Whether an error is a user cancellation rather than a fault worth retrying
@@ -650,6 +663,7 @@ fn clone_repo_sparse(
     cancel: Option<&Arc<AtomicBool>>,
     proxy_url: Option<&str>,
     on_progress: &Option<ProgressCallback>,
+    refresh: CacheRefresh,
 ) -> Result<PathBuf> {
     let cached_dir = repo_cache_dir_for(url, true);
     let _cache_lock = lock_repo_cache(&cached_dir, on_progress)?;
@@ -658,7 +672,8 @@ fn clone_repo_sparse(
     // expensive, and they are shared. The lock holds until this call's copy is
     // taken, so a later install re-scoping the worktree cannot disturb it.
     let reusable = cached_dir.exists()
-        && try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, on_progress)?;
+        && (refresh == CacheRefresh::Reuse
+            || try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, on_progress)?);
 
     if !reusable {
         let _ = std::fs::remove_dir_all(&cached_dir);
@@ -938,11 +953,15 @@ fn clone_repo_full(
     cancel: Option<&Arc<AtomicBool>>,
     proxy_url: Option<&str>,
     on_progress: Option<ProgressCallback>,
+    refresh: CacheRefresh,
 ) -> Result<PathBuf> {
     let cached_dir = repo_cache_dir(url);
     let _cache_lock = lock_repo_cache(&cached_dir, &on_progress)?;
 
     // Try cached repo first.
+    if cached_dir.exists() && refresh == CacheRefresh::Reuse {
+        return materialize_cached_repo(&cached_dir, cancel);
+    }
     if cached_dir.exists() {
         match try_update_cached_repo(&cached_dir, url, branch, proxy_url, cancel, &on_progress) {
             Ok(true) => return materialize_cached_repo(&cached_dir, cancel),
@@ -1328,7 +1347,7 @@ pub fn relative_subpath(repo_dir: &Path, skill_dir: &Path) -> Option<String> {
     }
 }
 
-fn normalize_url(url: &str) -> (String, Option<String>, Option<String>) {
+pub(crate) fn normalize_url(url: &str) -> (String, Option<String>, Option<String>) {
     let trimmed = url.trim();
 
     // Already a full URL. The prefix check mirrors validate_git_url's
@@ -1540,7 +1559,7 @@ fn split_tree_branch_path(path: &str, known_branches: &[String]) -> (String, Opt
 /// with multi-segment paths, queries `git ls-remote --heads` to resolve which
 /// segments belong to the branch and which to the subpath. Falls back to the
 /// optimistic (single-segment-branch) parse on network failure.
-pub fn parse_git_source_resolved(url: &str, proxy_url: Option<&str>) -> ParsedGitSource {
+pub fn parse_git_source_resolved(url: &str, proxy_url: Option<&str>) -> crate::core::remote_ref::RemoteRef {
     let mut parsed = parse_git_source(url);
     let original_url = parsed.original_url.clone();
 

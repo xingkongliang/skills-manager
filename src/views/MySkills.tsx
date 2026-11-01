@@ -30,6 +30,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -199,6 +200,9 @@ export function MySkills() {
   const [checkingSkillId, setCheckingSkillId] = useState<string | null>(null);
   const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null);
   const [batchUpdating, setBatchUpdating] = useState(false);
+  // A long round with only a spinner reads as "stuck": the round reports each
+  // skill it finishes, so the button can say how far it has got.
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [toolToggles, setToolToggles] = useState<SkillToolToggle[] | null>(null);
   const [togglingToolKey, setTogglingToolKey] = useState<string | null>(null);
   const [togglingTarget, setTogglingTarget] = useState<{ skillId: string; tool: string } | null>(null);
@@ -770,13 +774,27 @@ export function MySkills() {
     await Promise.all([refreshManagedSkills(), refreshTools()]);
   };
 
-  const handleBatchRefresh = async () => {
-    const refreshableSkills = skills.filter((skill) => selectedIds.has(skill.id) && canRefresh(skill));
-    if (refreshableSkills.length === 0) return;
+  useEffect(() => {
+    const unlistenPromise = listen<{ done: number; total: number }>(
+      "skill-update-progress",
+      (event) => setBatchProgress({ done: event.payload.done, total: event.payload.total })
+    );
+    return () => {
+      unlistenPromise
+        .then((unlisten) => unlisten())
+        .catch((error) => console.error("Failed to unlisten skill-update-progress:", error));
+    };
+  }, []);
 
+  const runBatchUpdate = async (ids: string[]) => {
+    if (ids.length === 0) return;
     setBatchUpdating(true);
+    setBatchProgress({ done: 0, total: ids.length });
     try {
-      const result = await api.batchUpdateSkills(refreshableSkills.map((skill) => skill.id));
+      const result = await api.batchUpdateSkills(ids);
+      if (result.cancelled) {
+        toast.info(t("mySkills.batchUpdateCancelled", { count: result.refreshed }));
+      }
       if (result.refreshed > 0) {
         toast.success(t("mySkills.batchUpdated", { count: result.refreshed }));
       }
@@ -785,9 +803,20 @@ export function MySkills() {
       }
       if (result.held_back.length > 0) {
         toast.warning(
-          t("mySkills.batchHeldBack", {
+          t("mySkills.batchHeldBackPaths", {
             count: result.held_back.length,
+            paths: result.held_back_paths,
             names: result.held_back.slice(0, 3).join("、"),
+          })
+        );
+      }
+      if (result.missing_sources.length > 0) {
+        // Not a failure to retry: the Source moved or renamed these, so the
+        // advice is to re-point them.
+        toast.warning(
+          t("mySkills.batchMissingSources", {
+            count: result.missing_sources.length,
+            names: result.missing_sources.slice(0, 3).join("、"),
           })
         );
       }
@@ -799,7 +828,13 @@ export function MySkills() {
     } finally {
       await refreshManagedSkills();
       setBatchUpdating(false);
+      setBatchProgress(null);
     }
+  };
+
+  const handleBatchRefresh = () => {
+    const refreshableSkills = skills.filter((skill) => selectedIds.has(skill.id) && canRefresh(skill));
+    return runBatchUpdate(refreshableSkills.map((skill) => skill.id));
   };
 
   /** The update the user has been asked to confirm, and what it would remove. */
@@ -812,38 +847,11 @@ export function MySkills() {
     relinkSource?: string;
   } | null>(null);
 
-  const handleUpdateAvailableSkills = async () => {
+  const handleUpdateAvailableSkills = () => {
     const updatableSkills = skills.filter(
       (skill) => skill.update_status === "update_available" && canRefresh(skill)
     );
-    if (updatableSkills.length === 0) return;
-
-    setBatchUpdating(true);
-    try {
-      const result = await api.batchUpdateSkills(updatableSkills.map((skill) => skill.id));
-      if (result.refreshed > 0) {
-        toast.success(t("mySkills.batchUpdated", { count: result.refreshed }));
-      }
-      if (result.unchanged > 0) {
-        toast.info(t("mySkills.batchAlreadyUpToDate", { count: result.unchanged }));
-      }
-      if (result.held_back.length > 0) {
-        toast.warning(
-          t("mySkills.batchHeldBack", {
-            count: result.held_back.length,
-            names: result.held_back.slice(0, 3).join("、"),
-          })
-        );
-      }
-      if (result.failed.length > 0) {
-        toast.error(t("mySkills.batchUpdateFailed", { count: result.failed.length }));
-      }
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
-    } finally {
-      await refreshManagedSkills();
-      setBatchUpdating(false);
-    }
+    return runBatchUpdate(updatableSkills.map((skill) => skill.id));
   };
 
   const handleTogglePreset = async (skill: ManagedSkill) => {
@@ -1277,8 +1285,21 @@ export function MySkills() {
               className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-accent-light transition-colors hover:bg-accent-bg disabled:opacity-50"
             >
               <RotateCcw className={cn("h-3.5 w-3.5", batchUpdating && "animate-spin")} />
-              {t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
+              {batchUpdating && batchProgress
+                ? t("mySkills.batchUpdatingProgress", {
+                    done: batchProgress.done,
+                    total: batchProgress.total,
+                  })
+                : t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
             </button>
+            {batchUpdating && (
+              <button
+                onClick={() => void api.cancelBatchUpdate()}
+                className="mr-2 rounded-md px-2.5 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+              >
+                {t("mySkills.cancelBatchUpdate")}
+              </button>
+            )}
             <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 self-center bg-border-subtle" />
             <button
               onClick={() => setViewMode("grid")}

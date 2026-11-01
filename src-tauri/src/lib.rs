@@ -1030,6 +1030,7 @@ pub fn run() {
             commands::skills::check_all_skill_updates,
             commands::skills::update_skill,
             commands::skills::batch_update_skills,
+            commands::skills::cancel_batch_update,
             commands::skills::reimport_local_skill,
             commands::skills::relink_local_skill_source,
             commands::skills::detach_local_skill_source,

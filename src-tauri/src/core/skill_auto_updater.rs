@@ -6,7 +6,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::commands::skills::{
-    check_skill_update_internal_with_remote, prefetch_skill_remote, update_git_skill_internal,
+    check_skill_update_internal_with_remote, prefetch_skill_remote, run_update_round,
+    UpdatePolicy,
 };
 use crate::core::repo_lock::RepoLock;
 use crate::core::skill_store::SkillStore;
@@ -160,6 +161,7 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     // running — is simply skipped; the next scheduled round picks it up.
     let (mut checked, mut available, mut updated, mut held_back, mut failed) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut available_ids: Vec<String> = Vec::new();
     for skill_id in ids {
         // Yield the lock to any waiting user-initiated operation before taking
         // it again for the next skill (see FOREGROUND_YIELD).
@@ -171,8 +173,8 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         // concurrent user-initiated operation with a 20s "busy" (#315).
         let prefetched = prefetch_skill_remote(store, &skill_id, true, proxy.as_deref());
 
-        // The check holds the repo lock; it must be released before applying,
-        // because update_git_skill_internal acquires the lock itself.
+        // The check holds the repo lock; the applying round takes it again per
+        // skill, so it must be released before the round starts.
         let status = {
             let _lock = match RepoLock::acquire("auto-update check") {
                 Ok(lock) => lock,
@@ -198,26 +200,37 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         available += 1;
 
         if apply {
-            match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None, None) {
-                Ok(result) if !result.pending_removals.is_empty() => {
-                    held_back += 1;
+            available_ids.push(skill_id.clone());
+        }
+    }
+
+    // One round for the whole batch: a Source is resolved once for all of its
+    // skills, and the library metadata is written once at the end, instead of
+    // once per skill inside this loop.
+    if apply && !available_ids.is_empty() {
+        match run_update_round(
+            store,
+            available_ids,
+            UpdatePolicy::yield_to_foreground(FOREGROUND_YIELD),
+        ) {
+            Ok(round) => {
+                updated += round.refreshed;
+                held_back += round.held_back.len();
+                failed += round.failed.len();
+                for name in &round.held_back {
                     log::info!(
-                        "skill auto-updater: holding back {skill_id} — updating would remove {} \
-                         path(s) the new version does not have; update it by hand to review",
-                        result.pending_removals.len()
-                    );
-                }
-                Ok(_) => updated += 1,
-                Err(err) => {
-                    failed += 1;
-                    log::warn!(
-                        "skill auto-updater: update failed for {skill_id}: {}",
-                        err.message
+                        "skill auto-updater: holding back {name} — updating would remove files \
+                         the new version does not have; update it by hand to review"
                     );
                 }
             }
+            Err(err) => {
+                failed += 1;
+                log::warn!("skill auto-updater: update round failed: {}", err.message);
+            }
         }
     }
+
     log::info!(
         "skill auto-updater: round done — checked={checked} available={available} updated={updated} held_back={held_back} failed={failed}"
     );
@@ -244,6 +257,16 @@ mod tests {
     #[test]
     fn is_due_when_no_history() {
         assert!(is_due(None, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn the_background_round_leaves_a_gap_and_the_foreground_one_does_not() {
+        // The gap is what lets a waiting user-initiated update win the lock.
+        assert!(UpdatePolicy::default().yield_between.is_none());
+        assert_eq!(
+            UpdatePolicy::yield_to_foreground(FOREGROUND_YIELD).yield_between,
+            Some(FOREGROUND_YIELD)
+        );
     }
 
     #[test]

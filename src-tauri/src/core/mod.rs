@@ -23,6 +23,8 @@ pub mod panic_log;
 pub mod path_guard;
 pub mod project_scanner;
 pub mod removals;
+pub mod remote_batch;
+pub mod remote_ref;
 pub mod repo_lock;
 pub mod scanner;
 pub mod scenario_service;
