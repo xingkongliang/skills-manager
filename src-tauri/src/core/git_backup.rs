@@ -1867,36 +1867,50 @@ fn run_git_env_killable(
     args: &[&str],
     envs: &[(String, String)],
 ) -> Result<String> {
+    run_git_env_killable_with_timeout(dir, args, envs, NETWORK_TIMEOUT)
+}
+
+/// Global `-c` flags applied to every network command, unconditionally.
+/// `http.*` settings are ignored by git for SSH remotes, so applying them
+/// to all network calls is safe and keeps stalled HTTP transfers failing
+/// early (~60s) while the `timeout` deadline bounds truly hung sessions.
+fn network_runner_global_args() -> Vec<&'static str> {
+    vec![
+        "-c",
+        "http.lowSpeedLimit=1000",
+        "-c",
+        "http.lowSpeedTime=60",
+    ]
+}
+
+/// Extra environment for the network runner. Intentionally empty: git gives
+/// `GIT_SSH_COMMAND` precedence over `core.sshCommand` and `GIT_SSH`, so
+/// injecting any SSH default would silently override the user's configured
+/// ssh (git 2.50). The `timeout` deadline already bounds a hung SSH session,
+/// so no SSH tuning belongs here. Kept as a function so tests can pin the
+/// "no injection" contract against regression.
+fn network_runner_extra_envs() -> Vec<(String, String)> {
+    Vec::new()
+}
+
+fn run_git_env_killable_with_timeout(
+    dir: &Path,
+    args: &[&str],
+    envs: &[(String, String)],
+    timeout: Duration,
+) -> Result<String> {
     use std::process::Stdio;
 
-    // Reviewer points 4/5: bound SSH connects and surface stalled HTTP
-    // transfers early — but never override explicit user configuration.
-    let has_ssh_env = envs.iter().any(|(k, _)| {
-        k.eq_ignore_ascii_case("GIT_SSH_COMMAND") || k.eq_ignore_ascii_case("GIT_SSH")
-    });
-    let has_ssh_config = args.windows(2).any(|w| {
-        w[0] == "-c" && w[1].trim_start().starts_with("core.sshCommand")
-    });
-    let mut extra_envs: Vec<(String, String)> = Vec::new();
-    if !has_ssh_env && !has_ssh_config {
-        extra_envs.push((
-            "GIT_SSH_COMMAND".to_string(),
-            "ssh -o BatchMode=yes -o ConnectTimeout=10".to_string(),
-        ));
-    }
-    let remote_url = args.iter().find(|a| a.contains("://"));
-    let is_http = remote_url
-        .map(|u| u.starts_with("http://") || u.starts_with("https://"))
-        .unwrap_or(false);
-
+    // Never inject SSH configuration (reviewer point 1) and never gate
+    // low-speed flags on the URL text (reviewer point 2): every backup call
+    // addresses `origin`, so sniffing args for `://` only ever matched the
+    // test.
     let mut cmd = git_command();
     cmd.arg("-C").arg(dir);
-    if is_http {
-        cmd.arg("-c")
-            .arg("http.lowSpeedLimit=1000")
-            .arg("-c")
-            .arg("http.lowSpeedTime=60");
+    for arg in network_runner_global_args() {
+        cmd.arg(arg);
     }
+    let extra_envs = network_runner_extra_envs();
     let mut child = cmd
         .args(args)
         .envs(envs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
@@ -1922,7 +1936,7 @@ fn run_git_env_killable(
         buf
     });
 
-    let deadline = Instant::now() + NETWORK_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Err(e) => {
@@ -1945,7 +1959,7 @@ fn run_git_env_killable(
                     anyhow::bail!(
                         "git {} timed out after {}s",
                         args.first().unwrap_or(&"?"),
-                        NETWORK_TIMEOUT.as_secs()
+                        timeout.as_secs()
                     );
                 }
                 std::thread::sleep(Duration::from_millis(100));
@@ -3607,12 +3621,17 @@ mod tests {
         }
     }
 
-    /// A stalled remote must fail within a bounded wait. A loopback listener
-    /// that accepts and never answers stalls the connection deterministically
-    /// on every OS — unlike TEST-NET-1, where Windows fails fast with "Could
-    /// not connect" and never reaches the kill path (reviewer point 2). No
-    /// assertion on error text: the killable runner's own timeout and git's
-    /// HTTP low-speed abort are both deadlines, not hangs.
+    /// A stalled remote must fail via the runner's own deadline, in seconds
+    /// — not via git's HTTP low-speed abort (~60s). A loopback listener that
+    /// accepts and never answers stalls the connection deterministically on
+    /// every OS — unlike TEST-NET-1, where Windows fails fast with "Could
+    /// not connect" and never reaches the kill path. No assertion on error
+    /// text: any failure within the bound proves the wait is bounded.
+    ///
+    /// The short `timeout` is the point: with low-speed abort at ~60s, only
+    /// the killable runner can fail a 5s wait, so a fast failure proves the
+    /// deadline path is reached (reviewer point 2). Production calls go
+    /// through `run_git_env_killable` with `NETWORK_TIMEOUT` (300s).
     #[test]
     fn network_command_against_a_stalled_remote_is_bounded() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -3628,17 +3647,51 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let url = format!("http://127.0.0.1:{port}/black-hole.git");
+        let timeout = std::time::Duration::from_secs(5);
         let start = std::time::Instant::now();
-        let _ = run_git_env(
+        let _ = run_git_env_killable_with_timeout(
             dir.path(),
             &["ls-remote", &url],
             &[("GIT_TERMINAL_PROMPT".to_string(), "0".to_string())],
+            timeout,
         )
         .expect_err("a stalled remote must fail");
         let elapsed = start.elapsed();
         assert!(
-            elapsed < NETWORK_TIMEOUT + std::time::Duration::from_secs(30),
+            elapsed >= timeout,
+            "must have waited out the deadline, not failed fast: {elapsed:?}"
+        );
+        assert!(
+            elapsed < timeout + std::time::Duration::from_secs(30),
             "killable wait overran: {elapsed:?}"
         );
+    }
+
+    /// The network runner must never inject SSH configuration: git gives
+    /// `GIT_SSH_COMMAND` precedence over `core.sshCommand` and `GIT_SSH`, so
+    /// any default would silently override the user's ssh (reviewer point 1).
+    #[test]
+    fn network_runner_does_not_inject_ssh_env() {
+        let extra = network_runner_extra_envs();
+        assert!(
+            extra.is_empty(),
+            "network runner must not inject env, got: {extra:?}"
+        );
+        for (k, _) in &extra {
+            assert!(
+                !k.eq_ignore_ascii_case("GIT_SSH_COMMAND") && !k.eq_ignore_ascii_case("GIT_SSH"),
+                "SSH override leaked into network runner env: {k}"
+            );
+        }
+    }
+
+    /// Low-speed flags apply to every network call, unconditionally: backup
+    /// calls address `origin`, so sniffing args for `://` only ever matched
+    /// the test (reviewer point 2). `http.*` is ignored for SSH remotes.
+    #[test]
+    fn network_runner_applies_low_speed_unconditionally() {
+        let args = network_runner_global_args();
+        assert!(args.contains(&"http.lowSpeedLimit=1000"));
+        assert!(args.contains(&"http.lowSpeedTime=60"));
     }
 }
