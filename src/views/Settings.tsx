@@ -1486,6 +1486,7 @@ export function Settings() {
                     { value: "en", label: "English" },
                     { value: "es", label: "Español" },
                     { value: "ko", label: "한국어" },
+                    { value: "fr", label: "Français" },
                   ].map((opt) => (
                     <option key={opt.value} value={opt.value}>
                       {opt.label}
