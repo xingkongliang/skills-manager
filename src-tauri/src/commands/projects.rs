@@ -1341,9 +1341,11 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    /// Cline, Warp and GitLab Duo share `.agents/skills` in a project, so their
-    /// row carries Cline's key. Cline being off must not take the directory away
-    /// from Warp; only all three being off does.
+    /// Several agents share `.agents/skills` in a project, and their row carries
+    /// the first one's key. That agent being off must not take the directory
+    /// away from Warp; only all of them being off does. Which agent comes first
+    /// changes as adapters are added (#605 put Antigravity ahead of Cline), so
+    /// the test reads it instead of naming it.
     #[test]
     fn a_shared_project_dir_stays_usable_while_another_agent_reads_it() {
         let tmp = tempdir().unwrap();
@@ -1375,15 +1377,26 @@ mod tests {
                 .expect("a row for the shared .agents/skills directory")
         };
 
-        store.set_setting("disabled_tools", r#"["cline"]"#).unwrap();
+        let disable = |store: &SkillStore, keys: &[String]| {
+            store
+                .set_setting("disabled_tools", &serde_json::to_string(keys).unwrap())
+                .unwrap();
+        };
+
+        let key = shared_row(&store).key;
+        assert_ne!(key, "warp", "the row must be keyed under another agent");
+        disable(&store, &[key.clone()]);
         let row = shared_row(&store);
-        assert_eq!(row.key, "cline");
+        assert_eq!(row.key, key);
         assert!(row.installed, "Warp is installed");
         assert!(row.enabled, "Warp still reads the directory");
 
-        store
-            .set_setting("disabled_tools", r#"["cline","warp","gitlab_duo"]"#)
-            .unwrap();
+        let sharing: Vec<String> = crate::core::tool_adapters::all_tool_adapters(&store)
+            .into_iter()
+            .filter(|adapter| adapter.project_relative_skills_dir() == ".agents/skills")
+            .map(|adapter| adapter.key)
+            .collect();
+        disable(&store, &sharing);
         assert!(!shared_row(&store).enabled, "nobody left to read it");
     }
 
