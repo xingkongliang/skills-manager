@@ -3218,7 +3218,7 @@ pub fn check_skill_update_internal_with_remote(
                     // resolved, and let the next round ask again.
                     if let Some(message) = comparison_error.filter(|_| {
                         skill.source_revision.as_deref() != Some(remote_revision.as_str())
-                            && installed_subtree(&skill, &git_source).is_some()
+                            && git_source.installed_subtree(&skill).is_some()
                     }) {
                         store
                             .update_skill_check_state(
