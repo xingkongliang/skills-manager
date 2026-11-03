@@ -609,7 +609,18 @@ pub fn clone_repo_ref_scoped_with(
         }
     }
 
-    clone_repo_full(url, branch, cancel, proxy_url, on_progress, refresh)
+    // The fallback uses a *different* cache slot from the one the caller's
+    // refresh plan was about: a sparse slot and the full slot are separate
+    // directories. Reusing the full slot on the strength of a plan that only
+    // refreshed the sparse one hands back a stale checkout, which then fails to
+    // pin the head the sparse slot resolved. Refreshing here is the safe
+    // reading of "decide for the slot actually used"; this path is the rare one.
+    let fallback_refresh = if refresh == CacheRefresh::Reuse {
+        CacheRefresh::Fetch
+    } else {
+        refresh
+    };
+    clone_repo_full(url, branch, cancel, proxy_url, on_progress, fallback_refresh)
 }
 
 /// Whether an error is a user cancellation rather than a fault worth retrying

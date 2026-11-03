@@ -1922,6 +1922,7 @@ pub const BATCH_UPDATE_CANCEL_KEY: &str = "update-batch";
 pub fn run_update_round(
     store: &SkillStore,
     skill_ids: Vec<String>,
+    transport: &dyn remote_batch::RemoteTransport,
     policy: UpdatePolicy<'_>,
 ) -> Result<BatchUpdateSkillsResult, AppError> {
     let total = skill_ids.len();
@@ -1931,7 +1932,6 @@ pub fn run_update_round(
     let mut missing_sources: Vec<String> = Vec::new();
     let mut refreshed = 0usize;
     let mut unchanged = 0usize;
-    let proxy_url = store.proxy_url();
     let mut failed = Vec::new();
     let mut held_back = Vec::new();
 
@@ -2005,8 +2005,6 @@ pub fn run_update_round(
         }
     }
 
-    let transport = remote_batch::GitTransport::new(proxy_url.clone());
-
     // Fetch and apply, Source by Source.
     for (_identity, members) in groups {
         if is_cancelled() {
@@ -2043,7 +2041,7 @@ pub fn run_update_round(
                 store,
                 skill_id,
                 skill,
-                &transport,
+                transport,
                 git_fetcher::CacheRefresh::Fetch,
                 None,
             );
@@ -2063,7 +2061,7 @@ pub fn run_update_round(
                         store,
                         skill_id,
                         skill,
-                        &transport,
+                        transport,
                         git_fetcher::CacheRefresh::Reuse,
                         head.as_deref(),
                     )
@@ -2075,11 +2073,19 @@ pub fn run_update_round(
         }
 
         for (at, (skill_id, skill)) in members.iter().enumerate() {
+            // Cancelling inside a Source matters as much as between them: one
+            // repository can hold twenty skills, and stopping must not finish
+            // all twenty because they share a group.
+            if is_cancelled() {
+                cancelled = true;
+                break;
+            }
             // A background round must not starve a user-initiated update: the
             // gap is longer than the foreground lock poll, so a waiter wins.
             if let Some(gap) = policy.yield_between {
                 std::thread::sleep(gap);
             }
+            report(done, &skill.name, true);
             let outcome = match prepared[at].take() {
                 Some(Ok(prepared)) => {
                     apply_prepared_update(store, skill, &prepared, None, false)
@@ -2126,6 +2132,8 @@ pub fn run_update_round(
                 }
                 Err(err) => failed.push(format!("{}: {}", skill.name, err.message)),
             }
+            done += 1;
+            report(done, &skill.name, false);
         }
     }
 
@@ -2184,9 +2192,12 @@ pub async fn batch_update_skills(
                 },
             );
         };
+        let transport =
+            remote_batch::GitTransport::with_cancel(store.proxy_url(), Some(&cancel));
         run_update_round(
             &store,
             skill_ids,
+            &transport,
             UpdatePolicy {
                 cancel: Some(cancel),
                 progress: Some(&emit),
@@ -2656,6 +2667,14 @@ fn apply_prepared_update(
                 )
                 .map_err(AppError::db)?;
             resync_copy_targets(store, &skill.id)?;
+            // Still inside the lock: a CLI command starting in the window
+            // between releasing it and the batch's final rewrite would reindex
+            // from the old snapshot and undo what this apply just recorded —
+            // the pointer of a skill the locator found in a new directory, for
+            // one. Writing this skill's own file first closes that window; the
+            // batch still pays for only one whole-library rewrite at the end.
+            sync_metadata::ensure_skill_metadata_unlocked(store, &skill.id)
+                .map_err(|err| AppError::db(err.to_string()))?;
             if flush_metadata {
                 sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
             }
@@ -2673,6 +2692,14 @@ fn apply_prepared_update(
                 .update_skill_check_state(&skill.id, Some(&revision), "up_to_date", None)
                 .map_err(AppError::db)?;
             resync_copy_targets(store, &skill.id)?;
+            // Still inside the lock: a CLI command starting in the window
+            // between releasing it and the batch's final rewrite would reindex
+            // from the old snapshot and undo what this apply just recorded —
+            // the pointer of a skill the locator found in a new directory, for
+            // one. Writing this skill's own file first closes that window; the
+            // batch still pays for only one whole-library rewrite at the end.
+            sync_metadata::ensure_skill_metadata_unlocked(store, &skill.id)
+                .map_err(|err| AppError::db(err.to_string()))?;
             if flush_metadata {
                 sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
             }
@@ -4284,10 +4311,11 @@ mod tests {
         (id.to_string(), skill)
     }
 
-    /// The whole point of the batch grouping: skills installed from different
-    /// subdirectories of one repository share a single resolution and fetch.
+    /// Grouping only: siblings of one repository land in one bucket. That the
+    /// bucket then costs one *fetch* is asserted at round level by
+    /// `one_round_fetches_each_source_once_and_copies_the_rest`.
     #[test]
-    fn a_batch_asks_each_source_once() {
+    fn grouping_collapses_subpath_siblings_into_one_source() {
         let loaded = vec![
             stored("a", "https://github.com/mattpocock/skills.git", None, Some("a")),
             stored("b", "https://github.com/mattpocock/skills.git", None, Some("b")),
@@ -4462,6 +4490,22 @@ mod tests {
             after_skill, before,
             "a skill inside a batch must not rewrite the whole library"
         );
+        // Still, its own record has to be on disk before the lock is released —
+        // a CLI reindex in that window would otherwise restore the old pointer.
+        let metadata_dir = crate::core::sync_metadata::metadata_dir();
+        let mirrored = walkdir::WalkDir::new(&metadata_dir)
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry.file_type().is_file())
+            .any(|entry| {
+                fs::read_to_string(entry.path())
+                    .map(|body| body.contains(&record.id))
+                    .unwrap_or(false)
+            });
+        assert!(
+            mirrored,
+            "apply must write this skill's own metadata, not only the batch's"
+        );
 
         let (record2, prepared2, _checkout2) = prepared_fixture(
             &repo,
@@ -4477,6 +4521,139 @@ mod tests {
         );
     }
 
+    // ── round-level harness: a transport that hands out fixtures ──
+
+    /// Records every checkout fetch and can trip the cancel flag itself, which
+    /// is how "cancel inside a Source" is observable without a real remote.
+    struct FixtureTransport {
+        checkouts: std::sync::Mutex<Vec<(String, git_fetcher::CacheRefresh)>>,
+        cancel_after: Option<usize>,
+        cancel: Option<Arc<AtomicBool>>,
+        /// Template copied for every fetch: production hands out a fresh copy
+        /// per call, and `PreparedUpdate` deletes its own on drop.
+        template: std::path::PathBuf,
+        alive: std::sync::Mutex<Vec<TempDir>>,
+    }
+
+    impl FixtureTransport {
+        fn new(dir: &std::path::Path) -> Self {
+            Self {
+                checkouts: std::sync::Mutex::new(Vec::new()),
+                cancel_after: None,
+                cancel: None,
+                template: dir.to_path_buf(),
+                alive: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn cancelling_after(mut self, n: usize, cancel: Arc<AtomicBool>) -> Self {
+            self.cancel_after = Some(n);
+            self.cancel = Some(cancel);
+            self
+        }
+
+        fn fetches(&self) -> Vec<(String, git_fetcher::CacheRefresh)> {
+            self.checkouts.lock().unwrap().clone()
+        }
+    }
+
+    impl crate::core::remote_batch::RemoteTransport for FixtureTransport {
+        fn fetch_checkout(
+            &self,
+            source: &RemoteRef,
+            _refresh: git_fetcher::CacheRefresh,
+        ) -> anyhow::Result<std::path::PathBuf> {
+            let mut checkouts = self.checkouts.lock().unwrap();
+            checkouts.push((source.clone_url.clone(), _refresh));
+            // The round must stop before the next skill once the flag is set,
+            // so tripping it here models pressing Stop during this checkout.
+            if let (Some(after), Some(cancel)) = (self.cancel_after, &self.cancel) {
+                if checkouts.len() >= after {
+                    cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            let copy = tempdir().unwrap();
+            copy_dir(&self.template, copy.path());
+            let path = copy.path().to_path_buf();
+            self.alive.lock().unwrap().push(copy);
+            Ok(path)
+        }
+    }
+
+    fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+        for entry in fs::read_dir(from).unwrap().flatten() {
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                fs::create_dir_all(&target).unwrap();
+                copy_dir(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), &target).unwrap();
+            }
+        }
+    }
+
+    /// A real (local) git checkout holding `skill/`, because prepare pins the
+    /// revision by reading it out of the checkout.
+    fn git_checkout_fixture() -> TempDir {
+        let dir = tempdir().unwrap();
+        write_tree(
+            &dir.path().join("skill"),
+            &[("SKILL.md", "---\nname: x\n---\nnew\n")],
+        );
+        let run = |args: &[&str]| {
+            let mut command = std::process::Command::new("git");
+            command.current_dir(dir.path()).args(args);
+            command
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com");
+            let out = command.output().expect("git runs");
+            assert!(out.status.success(), "git {:?}: {:?}", args, out);
+        };
+        run(&["init", "-q"]);
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "fixture"]);
+        dir
+    }
+
+    /// A git skill whose checkout fixture is `dir/skill`.
+    fn git_skill_for_round(
+        repo: &TestRepo,
+        id: &str,
+        source_url: &str,
+        dir: &std::path::Path,
+    ) -> SkillRecord {
+        let subpath = "skill";
+        let central = central_repo::skills_dir().join(id);
+        write_tree(&central, &[("SKILL.md", "---\nname: x\n---\nold\n")]);
+        let hash = crate::core::content_hash::hash_directory(&central).unwrap();
+        let record = SkillRecord {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            source_type: "git".to_string(),
+            source_ref: Some(source_url.to_string()),
+            source_ref_resolved: Some(source_url.to_string()),
+            source_subpath: Some(subpath.to_string()),
+            source_branch: None,
+            source_revision: Some("rev1".to_string()),
+            remote_revision: Some("rev1".to_string()),
+            central_path: central.to_string_lossy().to_string(),
+            content_hash: Some(hash),
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+            status: "ok".to_string(),
+            update_status: "update_available".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        repo.store.upsert_skill(&record).unwrap();
+        let _ = dir;
+        record
+    }
+
     #[test]
     fn a_cancelled_round_stops_before_touching_the_network() {
         let repo = test_repo();
@@ -4486,9 +4663,12 @@ mod tests {
             &[("a.txt", "new")],
         );
 
+        let checkout = tempdir().unwrap();
+        let transport = FixtureTransport::new(checkout.path());
         let summary = run_update_round(
             &repo.store,
             vec![record.id.clone()],
+            &transport,
             UpdatePolicy {
                 cancel: Some(Arc::new(AtomicBool::new(true))),
                 ..Default::default()
@@ -4501,6 +4681,100 @@ mod tests {
         // The library copy is untouched: the round never got as far as a skill.
         let central = std::path::Path::new(&record.central_path);
         assert_eq!(fs::read_to_string(central.join("a.txt")).unwrap(), "old");
+    }
+
+    #[test]
+    fn one_round_fetches_each_source_once_and_copies_the_rest() {
+        let repo = test_repo();
+        let checkout = git_checkout_fixture();
+        let transport = FixtureTransport::new(checkout.path());
+
+        let a1 = git_skill_for_round(&repo, "a1", "https://example.com/a.git", checkout.path());
+        let a2 = git_skill_for_round(&repo, "a2", "https://example.com/a.git", checkout.path());
+        let b1 = git_skill_for_round(&repo, "b1", "https://example.com/b.git", checkout.path());
+
+        let summary = run_update_round(
+            &repo.store,
+            vec![a1.id.clone(), a2.id.clone(), b1.id.clone()],
+            &transport,
+            UpdatePolicy::default(),
+        )
+        .unwrap();
+
+        let fetches = transport.fetches();
+        let network = fetches
+            .iter()
+            .filter(|(_, refresh)| *refresh == git_fetcher::CacheRefresh::Fetch)
+            .count();
+        assert_eq!(network, 2, "one fetch per Source, not one per skill");
+        assert_eq!(fetches.len(), 3, "the siblings still copy out of the cache");
+        assert!(summary.failed.is_empty(), "failures: {:?}", summary.failed);
+    }
+
+    #[test]
+    fn a_git_round_reports_progress_for_every_skill() {
+        let repo = test_repo();
+        let checkout = git_checkout_fixture();
+        let transport = FixtureTransport::new(checkout.path());
+        let a1 = git_skill_for_round(&repo, "g1", "https://example.com/g.git", checkout.path());
+        let a2 = git_skill_for_round(&repo, "g2", "https://example.com/g.git", checkout.path());
+
+        let seen = std::sync::Mutex::new(Vec::<(usize, usize, bool)>::new());
+        let sink = |progress: RoundProgress<'_>| {
+            seen.lock()
+                .unwrap()
+                .push((progress.done, progress.total, progress.started));
+        };
+
+        run_update_round(
+            &repo.store,
+            vec![a1.id.clone(), a2.id.clone()],
+            &transport,
+            UpdatePolicy {
+                progress: Some(&sink),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let events = seen.lock().unwrap().clone();
+        assert_eq!(events.len(), 4, "started and finished for each of two skills");
+        assert_eq!(events.iter().filter(|(_, _, started)| *started).count(), 2);
+        assert_eq!(events.last().copied(), Some((2, 2, false)));
+    }
+
+    #[test]
+    fn cancelling_inside_a_source_leaves_the_later_skills_alone() {
+        let repo = test_repo();
+        let checkout = git_checkout_fixture();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let transport =
+            FixtureTransport::new(checkout.path()).cancelling_after(1, cancel.clone());
+
+        let first = git_skill_for_round(&repo, "c1", "https://example.com/c.git", checkout.path());
+        let second = git_skill_for_round(&repo, "c2", "https://example.com/c.git", checkout.path());
+        let before = crate::core::content_hash::hash_directory(std::path::Path::new(
+            &second.central_path,
+        ))
+        .unwrap();
+
+        let summary = run_update_round(
+            &repo.store,
+            vec![first.id.clone(), second.id.clone()],
+            &transport,
+            UpdatePolicy {
+                cancel: Some(cancel),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(summary.cancelled, "the round says it was stopped");
+        let after = crate::core::content_hash::hash_directory(std::path::Path::new(
+            &second.central_path,
+        ))
+        .unwrap();
+        assert_eq!(after, before, "a skill after the stop was not touched");
     }
 
     // ── RemoteIdentity dedup (batch check_all fan-out) ──

@@ -208,9 +208,11 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     // skills, and the library metadata is written once at the end, instead of
     // once per skill inside this loop.
     if apply && !available_ids.is_empty() {
+        let transport = crate::core::remote_batch::GitTransport::new(proxy.clone());
         match run_update_round(
             store,
             available_ids,
+            &transport,
             UpdatePolicy::yield_to_foreground(FOREGROUND_YIELD),
         ) {
             Ok(round) => {
