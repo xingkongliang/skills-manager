@@ -1,7 +1,7 @@
 {
   "name": "skills-manager",
   "private": true,
-  "version": "1.43.2",
+  "version": "1.43.3",
   "license": "MIT",
   "type": "module",
   "scripts": {

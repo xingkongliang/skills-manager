@@ -5,6 +5,19 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.43.3] - 2026-11-03
+
+### 发布概览
+- 部署给 Antigravity 的 Skill 现在会放进它实际读取的目录。检查更新时遇到网络抖动，同一仓库的 Skill 不再全部显示有更新。项目里几个 Agent 共用的目录，只装了其中一部分 Agent 时也能正常使用。
+
+### 用户可见更新
+- **Antigravity 能找到部署的 Skill 了** — 之前 Antigravity 的 Skill 部署到 `~/.gemini/antigravity/skills`，新版 Antigravity 不读这个目录。现在全局 Skill 部署到 `~/.gemini/config/skills`（Antigravity 的 App、IDE 和 CLI 都读这里），项目 Skill 部署到 `<项目>/.agents/skills`。已部署给 Antigravity 的 Skill 会在下次同步时重新部署到新目录。旧目录里的链接会被删除，副本移到技能库的 `kept-copies/antigravity/` 下，和其他 Agent 目录变更时的处理一样。感谢 @ZhuYichuan（#605），也感谢更早在 #458 提出相同路径的 @zhirogo（#602、#461、#409、#217）。
+- **比较失败不再显示为有更新** — 对于从仓库里某个子目录安装的 Skill，检查更新时会再发一次请求，比较这个子目录和已安装的版本。这次请求失败时（比如网络连接断开），同一仓库的这类 Skill 会全部显示「Update」，角标、通知和自动更新也都据此行动。现在这些 Skill 会显示检查失败，保留已安装的版本，下次检查时再试。仍然可以在卡片上手动更新。感谢 @HengYangDS（#583、#582）。
+- **共用的项目目录保持可用** — 在项目工作区里，读同一个目录的 Agent 会合成一行，例如 Antigravity、Cline、Warp 和 GitLab Duo 都用 `.agents/skills`。之前这一行只看排在第一位的 Agent 是否已安装、已启用，所以以下几种情况都无法在这一行添加 Skill：没装 Cline 的 Warp 用户；和内置 Agent 共用目录的自定义 Agent；没装 TRAE IDE、又把 TRAE CN 的项目目录改成 `.trae/skills` 的用户。现在只要读这个目录的 Agent 里有一个已安装并启用，这一行就能使用。感谢 @GoodScholar 在 #489 中定位到这个问题（#633、#431、#632）。
+
+### 开发者与治理更新
+- 对于上面第二条里的那类 Skill，`skills-manager-cli skills check --json` 现在报 `error`，比较的报错放在 `last_check_error` 里，之前报的是 `update_available`。从仓库根目录安装的 Skill，以及已经在远端最新提交上的子目录 Skill，行为不变。没有新增状态（#583）。
+- `project_agent_targets_for_record` 现在根据项目目录与这一行相同的所有 adapter 来判断「已安装」「已启用」，而不只看这一行的 key 所属的 adapter。`export_skill_to_project` 按同一状态过滤。这一行仍用第一个 adapter 的 key。回归测试改为读取这个 key、不再写死，因为 #605 改变了排在第一位的 adapter（#633、#634）。
 ## [1.43.2] - 2026-11-01
 
 ### 发布概览
