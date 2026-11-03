@@ -430,6 +430,9 @@
     "selectedCount": "{{count}} selected",
     "selectHint": "Click skills to select",
     "batchUpdate": "Update {{count}}",
+    "batchUpdatingProgress": "Updating {{done}}/{{total}}",
+    "cancelBatchUpdate": "Cancel update",
+    "batchUpdateCancelled": "Cancelled after {{count}} updated",
     "batchUpdated": "{{count}} skills refreshed",
     "batchAlreadyUpToDate": "{{count}} skills already up to date",
     "batchUpdateFailed": "{{count}} skills failed to refresh",
@@ -458,6 +461,8 @@
       "clickToRemove": "Click to mark for removal",
       "undoRemove": "Click to keep this tag"
     },
+    "batchHeldBackPaths": "{{count}} not updated: the new version would delete {{paths}} file(s) ({{names}}…)",
+    "batchMissingSources": "{{count}} skills no longer exist at their recorded path — renamed or moved upstream ({{names}}…)",
     "batchHeldBack": "{{count}} skill(s) were left alone — updating them would remove files ({{names}}). Update them one at a time to see what.",
     "batchSyncAgents": "Sync to agents ({{count}})",
     "batchSynced": "Synced {{count}} skill targets",

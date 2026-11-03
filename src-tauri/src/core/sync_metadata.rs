@@ -111,7 +111,15 @@ where
     f()
 }
 
+/// Counts whole-library rewrites so tests can assert how often a batch pays for
+/// one. Test-only: the cost is a full rewrite plus an fsync per file.
+#[cfg(test)]
+pub(crate) static WRITE_ALL_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 pub(crate) fn write_all_from_db_unlocked(store: &SkillStore) -> Result<()> {
+    #[cfg(test)]
+    WRITE_ALL_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     ensure_metadata_dirs()?;
     write_schema()?;
     write_skill_records_from_db(store)?;
