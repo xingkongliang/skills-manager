@@ -15,6 +15,7 @@ export interface ToolInfo {
   project_relative_skills_dir: string | null;
   has_project_path_override: boolean;
   category: ToolCategory;
+  icon: string | null;
 }
 
 export interface ManagedSkill {
@@ -221,13 +222,18 @@ export const addCustomTool = (
   displayName: string,
   skillsDir: string,
   projectRelativeSkillsDir?: string,
+  icon?: string | null,
 ) =>
   invoke<void>("add_custom_tool", {
     key,
     displayName,
     skillsDir,
     projectRelativeSkillsDir: projectRelativeSkillsDir ?? null,
+    icon: icon ?? null,
   });
+
+export const setCustomToolIcon = (key: string, icon: string | null) =>
+  invoke<void>("set_custom_tool_icon", { key, icon });
 
 export const removeCustomTool = (key: string) =>
   invoke<void>("remove_custom_tool", { key });
