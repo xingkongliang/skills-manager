@@ -19,7 +19,6 @@ import {
   SquareCheck,
   Square,
   GripVertical,
-  CircleSlash,
   Circle,
   ChevronDown,
   ChevronRight,
@@ -47,7 +46,7 @@ import { SyncDots } from "../components/SyncDots";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { CardActionMenu } from "../components/CardActionMenu";
 import * as api from "../lib/tauri";
-import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
+import { getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
   ManagedSkill,
   ToolInfo,
@@ -56,9 +55,14 @@ import type {
 } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { normalizeSkillSearch, skillSearchMatches } from "../lib/skillSearch";
+import { channelsForSkills } from "../lib/skillChannels";
+import { ChannelPills } from "../components/ChannelPills";
+import { SourcePicker } from "../components/SourcePicker";
+import { TagFilterPills } from "../components/TagFilterPills";
 import {
   buildSourceGroups,
   getSkillSourceInfo,
+  sourceCandidates,
   type SkillSourceGroup,
 } from "../lib/skillSource";
 import {
@@ -176,7 +180,6 @@ export function MySkills() {
   // default would hide the only skill it holds without saving a row.
   const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({});
   const [sourceSelection, setSourceSelection] = useState<Set<string>>(new Set());
-  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
   // Which channel (`source_type`) a skill came through — git, skills.sh, a
   // site, a local install, an import. Distinct from the Source grouping below.
@@ -276,6 +279,13 @@ export function MySkills() {
     return next;
   };
 
+  // The Channel pills: the known channels always, plus any this build does not
+  // name, so a skill is never unreachable by the filter that claims to list it.
+  const channels = useMemo(() => channelsForSkills(skills), [skills]);
+
+  // Whether the untagged pill has anything to filter: an empty pill would lie.
+  const hasUntaggedSkill = useMemo(() => skills.some((s) => s.tags.length === 0), [skills]);
+
   // A filter can outlive the control that set it (the tag row hides itself once
   // no tag is left), so the empty state carries the way out. `filterMode` is
   // reset too — its control never hides, but a button labelled "clear filters"
@@ -313,7 +323,7 @@ export function MySkills() {
     return displayNames;
   }, [skills]);
 
-  const { filtered, sourceCandidates, preSelectionSourceGroups } = useMemo(() => {
+  const { filtered, sourceOptions, preSelectionSourceGroups } = useMemo(() => {
     const query = normalizeSkillSearch(search);
     const result = skills.filter((skill) => {
       const displayName = skillDisplayNames.get(skill.id) || skill.name;
@@ -363,15 +373,15 @@ export function MySkills() {
     // would remove the others from the menu the user needs in order to switch
     // sources.
     const groups = buildSourceGroups(result);
-    const candidates = groups.map(({ key, label, count }) => ({ key, label, count }));
+    const candidates = sourceCandidates(result);
 
     if (sourceSelection.size === 0) {
-      return { filtered: result, sourceCandidates: candidates, preSelectionSourceGroups: groups };
+      return { filtered: result, sourceOptions: candidates, preSelectionSourceGroups: groups };
     }
 
     return {
       filtered: result.filter((skill) => sourceSelection.has(getSkillSourceInfo(skill).key)),
-      sourceCandidates: candidates,
+      sourceOptions: candidates,
       preSelectionSourceGroups: groups,
     };
   }, [skills, skillDisplayNames, search, channelFilters, tagFilters, sourceSelection, filterMode, viewedPreset, presetSkillOrder]);
@@ -1330,124 +1340,35 @@ export function MySkills() {
       </div>
 
       <div className="flex flex-wrap items-center gap-1 px-1 -mt-2 -mb-3">
-        {(["local", "import", "git", "skillssh"] as const).map((channel) => (
-          <button
-            key={channel}
-            onClick={() => setChannelFilters(toggleFilter(channelFilters, channel))}
-            className={cn(
-              "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-              channelFilters.has(channel)
-                ? "bg-accent text-white dark:bg-accent dark:text-white"
-                : "bg-surface-hover text-muted hover:text-secondary"
-            )}
-          >
-            {t(`mySkills.sourceFilter.${channel}`)}
-          </button>
-        ))}
-        {/* Sources are picked from a menu, not rendered as pills: a library can
-            hold dozens of repos and directories. */}
-        <div className="relative">
-          <button
-            onClick={() => setSourceMenuOpen((open) => !open)}
-            aria-expanded={sourceMenuOpen}
-            disabled={sourceCandidates.length === 0}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors disabled:opacity-40",
-              sourceSelection.size > 0
-                ? "bg-accent text-white dark:bg-accent dark:text-white"
-                : "bg-surface-hover text-muted hover:text-secondary"
-            )}
-          >
-            <FolderTree className="h-3 w-3" />
-            {t("mySkills.sourcePicker.label")}
-            {sourceSelection.size > 0 && ` (${sourceSelection.size})`}
-          </button>
-          {sourceMenuOpen && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setSourceMenuOpen(false)} />
-              {/* overscroll-contain stops a wheel that reaches the end of the
-                  list from scrolling the page underneath it. */}
-              <div className="absolute left-0 top-full z-50 mt-1 max-h-72 w-64 overflow-y-auto overscroll-contain rounded-lg border border-border bg-surface py-1 shadow-2xl">
-                {sourceSelection.size > 0 && (
-                  <button
-                    onClick={() => setSourceSelection(new Set())}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-muted hover:bg-surface-hover hover:text-secondary"
-                  >
-                    <X className="h-3 w-3" />
-                    {t("mySkills.sourcePicker.clear")}
-                  </button>
-                )}
-                {sourceCandidates.map((candidate) => {
-                  const label = candidate.label || t("mySkills.sourcePicker.unknownSource");
-                  const checked = sourceSelection.has(candidate.key);
-                  return (
-                    <button
-                      key={candidate.key}
-                      onClick={() =>
-                        setSourceSelection((prev) => toggleFilter(prev, candidate.key))
-                      }
-                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-secondary hover:bg-surface-hover"
-                      title={label}
-                    >
-                      {checked ? (
-                        <SquareCheck className="h-3.5 w-3.5 shrink-0 text-accent" />
-                      ) : (
-                        <Square className="h-3.5 w-3.5 shrink-0 text-faint" />
-                      )}
-                      <span className="min-w-0 flex-1 truncate">{label}</span>
-                      <span className="shrink-0 text-[11px] text-faint">{candidate.count}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </div>
-        {allTags.length > 0 && (
+        <ChannelPills
+          channels={channels}
+          selected={channelFilters}
+          onToggle={(channel) => setChannelFilters(toggleFilter(channelFilters, channel))}
+          className="gap-1"
+        />
+        <SourcePicker
+          candidates={sourceOptions}
+          selected={sourceSelection}
+          onChange={setSourceSelection}
+        />
+        {(allTags.length > 0 || hasUntaggedSkill) && (
           <>
             <span className="mx-0.5 h-3 w-px bg-border-subtle" />
-            {skills.some((s) => s.tags.length === 0) && (() => {
-              const isActive = tagFilters.has(UNTAGGED_FILTER);
-              return (
-                <button
-                  onClick={() => setTagFilters(toggleFilter(tagFilters, UNTAGGED_FILTER))}
-                  className={cn(
-                    "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-                    isActive
-                      ? "bg-surface-active text-primary"
-                      : "border border-dashed border-border text-muted hover:text-secondary"
-                  )}
-                  title={t("mySkills.tags.untagged")}
-                >
-                  <CircleSlash className="h-3 w-3" />
-                  {t("mySkills.tags.untagged")}
-                </button>
-              );
-            })()}
-            {allTags.map((tag) => {
-              const isActive = tagFilters.has(tag);
-              return (
-                <button
-                  key={tag}
-                  onClick={() => setTagFilters(toggleFilter(tagFilters, tag))}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setTagMenu({
-                      tag,
-                      x: Math.min(e.clientX, window.innerWidth - 160),
-                      y: Math.min(e.clientY, window.innerHeight - 90),
-                    });
-                  }}
-                  title={t("mySkills.tags.manageHint")}
-                  className={cn(
-                    "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-                    isActive ? getTagActiveColor(tag, allTags) : getTagColor(tag, allTags)
-                  )}
-                >
-                  {tag}
-                </button>
-              );
-            })}
+            <TagFilterPills
+              tags={allTags}
+              selected={tagFilters}
+              onToggle={(tag) => setTagFilters(toggleFilter(tagFilters, tag))}
+              onClear={() => setTagFilters(new Set())}
+              hasUntagged={hasUntaggedSkill}
+              onTagContextMenu={(tag, event) =>
+                setTagMenu({
+                  tag,
+                  x: Math.min(event.clientX, window.innerWidth - 160),
+                  y: Math.min(event.clientY, window.innerHeight - 90),
+                })
+              }
+              className="gap-1"
+            />
           </>
         )}
       </div>
