@@ -129,6 +129,31 @@ It is also an ordinary published skill, so it can be installed without the app:
 npx skills add xingkongliang/skills-manager
 ```
 
+### MCP server
+
+The same commands are also an MCP server, so a client that speaks the protocol can drive the library without the `manage-skills` skill:
+
+```bash
+skills-manager-cli mcp
+```
+
+It speaks JSON-RPC 2.0 over stdio and exposes one tool per command — `skills_list`, `skills_deploy`, `presets_deploy`, `git_status`, and the rest. Every tool returns the CLI's `--json` output, and its arguments are checked against the tool's schema: an unknown key or a wrongly typed value is refused instead of ignored. The tools that support `dry_run` say so in their schema; `skills_remove`, `tags_delete` and `presets_delete` still refuse without `yes: true`, and a refusal names the path or flag that would let the call through.
+
+Register it with any MCP client that can launch a stdio server:
+
+```json
+{
+  "mcpServers": {
+    "skills-manager": {
+      "command": "/Users/you/.skills-manager/bin/skills-manager-cli",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The command is the path the app publishes (see [Where the binary lives](#where-the-binary-lives)); use `skills-manager-cli` if it is on your PATH. To manage a library other than the default, pass `--skills-root <path>` before `mcp`.
+
 ## Backup & Multi-Device Sync
 
 The **Backup** page (sidebar) keeps your skill library versioned in a Git repository. One device gets versioned backup with restorable snapshots; several devices connected to the same repository stay in sync with each other automatically. The remote stays a plain Git repository — you can `git clone` it anywhere, no lock-in.
