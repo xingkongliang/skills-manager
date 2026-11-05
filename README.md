@@ -137,7 +137,7 @@ The same commands are also an MCP server, so a client that speaks the protocol c
 skills-manager-cli mcp
 ```
 
-It speaks JSON-RPC 2.0 over stdio and exposes one tool per command — `skills_list`, `skills_deploy`, `presets_deploy`, `git_status`, and the rest. Every tool returns the CLI's `--json` output. Mutating tools take `dry_run`; destructive ones (`skills_remove`, `tags_delete`, `presets_delete`) still refuse without `yes: true`, and a refusal names the path or flag that would let the call through.
+It speaks JSON-RPC 2.0 over stdio and exposes one tool per command — `skills_list`, `skills_deploy`, `presets_deploy`, `git_status`, and the rest. Every tool returns the CLI's `--json` output, and its arguments are checked against the tool's schema: an unknown key or a wrongly typed value is refused instead of ignored. The tools that support `dry_run` say so in their schema; `skills_remove`, `tags_delete` and `presets_delete` still refuse without `yes: true`, and a refusal names the path or flag that would let the call through.
 
 Register it with any MCP client that can launch a stdio server:
 

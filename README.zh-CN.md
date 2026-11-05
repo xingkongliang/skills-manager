@@ -133,7 +133,7 @@ npx skills add xingkongliang/skills-manager
 skills-manager-cli mcp
 ```
 
-它通过 stdio 讲 JSON-RPC 2.0，每个命令对应一个工具——`skills_list`、`skills_deploy`、`presets_deploy`、`git_status` 等。所有工具返回 CLI 的 `--json` 输出。会改动内容的工具支持 `dry_run`；删除类工具（`skills_remove`、`tags_delete`、`presets_delete`）仍然必须带 `yes: true`，拒绝时会指出让它通过的路径或参数。
+它通过 stdio 讲 JSON-RPC 2.0，每个命令对应一个工具——`skills_list`、`skills_deploy`、`presets_deploy`、`git_status` 等。所有工具返回 CLI 的 `--json` 输出，参数会按工具的 schema 校验：未知字段或类型不对的值会被拒绝，而不是被忽略。支持 `dry_run` 的工具会在 schema 中列出它；删除类工具（`skills_remove`、`tags_delete`、`presets_delete`）仍然必须带 `yes: true`，拒绝时会指出让它通过的路径或参数。
 
 在任何能启动 stdio 服务的 MCP 客户端里注册：
 

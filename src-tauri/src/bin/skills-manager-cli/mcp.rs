@@ -21,6 +21,7 @@
 //! - **No new dependencies.** The transport is newline-delimited JSON-RPC 2.0,
 //!   which is a `read_line` loop plus `serde_json`.
 
+use std::ffi::OsString;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -38,8 +39,10 @@ const INSTRUCTIONS: &str = "\
 Skills Manager owns the user's shared agent-skill library and the per-agent \
 deployments made from it. Prefer these tools over writing into an agent's \
 skills folder: they keep the source, tags, preset membership and update state \
-intact. Every result is the CLI's JSON output. Mutating tools take `dry_run`; \
-destructive tools also need `yes: true`, and will refuse without it.";
+intact. Every result is the CLI's JSON output. Arguments are validated against \
+each tool's schema; the tools that take `dry_run` are the ones whose schema \
+lists it, and `skills_remove`, `tags_delete` and `presets_delete` refuse \
+without `yes: true`.";
 
 /// Run the stdio server until stdin closes.
 pub fn serve(skills_root: Option<PathBuf>) -> Result<()> {
@@ -78,14 +81,16 @@ struct CliOutput {
 /// The child's arguments. `--skills-root` and `--json` are global flags, so
 /// they go before the subcommand; clap accepts them there and the order is
 /// what keeps a tool call reading the same library the parent was pointed at.
-fn child_args(skills_root: Option<&Path>, args: &[String]) -> Vec<String> {
-    let mut child = Vec::with_capacity(args.len() + 3);
+fn child_args(skills_root: Option<&Path>, args: &[String]) -> Vec<OsString> {
+    let mut child: Vec<OsString> = Vec::with_capacity(args.len() + 3);
     if let Some(root) = skills_root {
-        child.push("--skills-root".to_string());
-        child.push(root.display().to_string());
+        child.push("--skills-root".into());
+        // OsString, not display(): a non-UTF-8 library path must reach the
+        // child exactly as the CLI received it.
+        child.push(root.as_os_str().to_os_string());
     }
-    child.push("--json".to_string());
-    child.extend(args.iter().cloned());
+    child.push("--json".into());
+    child.extend(args.iter().map(OsString::from));
     child
 }
 
@@ -157,6 +162,13 @@ fn call_tool(
         .get("arguments")
         .and_then(Value::as_object)
         .unwrap_or(&no_args);
+
+    let Some(spec) = tools().into_iter().find(|tool| tool.name == name) else {
+        return rpc_error(id, -32602, &format!("unknown tool: {name}"));
+    };
+    if let Err(err) = validate_args(&spec.schema, args) {
+        return rpc_error(id, -32602, &err.to_string());
+    }
 
     let argv = match tool_argv(name, args) {
         Ok(argv) => argv,
@@ -746,6 +758,85 @@ fn schema(properties: Value, required: &[&str]) -> Value {
     })
 }
 
+// ── argument validation ───────────────────────────────────────────────────
+
+/// Enforce the schema that `tools/list` advertises. Without this, a misspelt
+/// `dry_run` (or `"dry_run": "true"`) is silently dropped and the call
+/// mutates for real, which is exactly the direction a caller must not be able
+/// to get wrong.
+fn validate_args(schema: &Value, args: &Map<String, Value>) -> Result<()> {
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    for (key, value) in args {
+        let Some(property) = properties.get(key) else {
+            bail!("unknown argument `{key}`");
+        };
+        validate_value(key, property, value)?;
+    }
+
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        for key in required.iter().filter_map(Value::as_str) {
+            if !args.contains_key(key) {
+                bail!("missing required argument `{key}`");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_value(key: &str, property: &Value, value: &Value) -> Result<()> {
+    match property
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("string")
+    {
+        "string" => {
+            let Some(text) = value.as_str() else {
+                bail!("`{key}` must be a string");
+            };
+            if let Some(allowed) = property.get("enum").and_then(Value::as_array) {
+                if !allowed.iter().any(|item| item.as_str() == Some(text)) {
+                    let names: Vec<&str> = allowed.iter().filter_map(Value::as_str).collect();
+                    bail!("`{key}` must be one of: {}", names.join(", "));
+                }
+            }
+            Ok(())
+        }
+        "boolean" => {
+            if value.is_boolean() {
+                Ok(())
+            } else {
+                bail!("`{key}` must be a boolean")
+            }
+        }
+        "integer" => {
+            let Some(number) = value.as_u64() else {
+                bail!("`{key}` must be a positive integer");
+            };
+            if let Some(minimum) = property.get("minimum").and_then(Value::as_u64) {
+                if number < minimum {
+                    bail!("`{key}` must be at least {minimum}");
+                }
+            }
+            Ok(())
+        }
+        "array" => {
+            let Some(items) = value.as_array() else {
+                bail!("`{key}` must be an array of strings");
+            };
+            if items.iter().any(|item| !item.is_string()) {
+                bail!("`{key}` must contain only strings");
+            }
+            Ok(())
+        }
+        other => bail!("`{key}` has an unsupported schema type `{other}`"),
+    }
+}
+
 // ── argument mapping ──────────────────────────────────────────────────────
 
 /// Translate a tool call into arguments for this binary. Kept separate from
@@ -788,7 +879,7 @@ fn tool_argv(tool: &str, args: &Map<String, Value>) -> Result<Vec<String>> {
         "skills_list" => {
             words!("skills", "list");
             optional(&mut argv, "--query", a.text("query"));
-            for tag in a.list("tags") {
+            for tag in a.list("tags")? {
                 flag(&mut argv, "--tag", tag);
             }
             optional(&mut argv, "--preset", a.text("preset"));
@@ -810,29 +901,25 @@ fn tool_argv(tool: &str, args: &Map<String, Value>) -> Result<Vec<String>> {
         "skills_install" => {
             words!("skills", "install");
             argv.push(a.required("reference")?);
-            switch(
-                &mut argv,
-                "--local",
-                a.text("kind").as_deref() == Some("local"),
-            );
-            switch(&mut argv, "--git", a.text("kind").as_deref() == Some("git"));
-            switch(
-                &mut argv,
-                "--skillssh",
-                a.text("kind").as_deref() == Some("skillssh"),
-            );
+            match a.text("kind").as_deref() {
+                None => {}
+                Some("local") => argv.push("--local".into()),
+                Some("git") => argv.push("--git".into()),
+                Some("skillssh") => argv.push("--skillssh".into()),
+                Some(other) => bail!("`kind` must be local, git or skillssh, not `{other}`"),
+            }
             optional(&mut argv, "--name", a.text("name"));
             switch(&mut argv, "--sync", a.flag("sync"));
             optional(&mut argv, "--sync-preset", a.text("sync_preset"));
         }
         "skills_update" => {
             words!("skills", "update");
-            optional_positional(&mut argv, a.text("reference"));
+            optional_positional(&mut argv, "reference", a.text("reference"))?;
             switch(&mut argv, "--all", a.flag("all"));
         }
         "skills_check" => {
             words!("skills", "check");
-            optional_positional(&mut argv, a.text("reference"));
+            optional_positional(&mut argv, "reference", a.text("reference"))?;
             switch(&mut argv, "--all", a.flag("all"));
             switch(&mut argv, "--force", a.flag("force"));
         }
@@ -894,7 +981,7 @@ fn tool_argv(tool: &str, args: &Map<String, Value>) -> Result<Vec<String>> {
 
         "tags_list" => {
             words!("skills", "tag", "list");
-            optional_positional(&mut argv, a.text("reference"));
+            optional_positional(&mut argv, "reference", a.text("reference"))?;
         }
         "tags_add" | "tags_remove" | "tags_set" => {
             let verb = tool.trim_start_matches("tags_");
@@ -953,7 +1040,7 @@ fn tool_argv(tool: &str, args: &Map<String, Value>) -> Result<Vec<String>> {
             words!("presets");
             argv.push(verb.to_string());
             argv.push(a.required("reference")?);
-            for agent in a.list("agents") {
+            for agent in a.list("agents")? {
                 flag(&mut argv, "--agent", agent);
             }
             switch(&mut argv, "--dry-run", a.flag("dry_run"));
@@ -961,7 +1048,7 @@ fn tool_argv(tool: &str, args: &Map<String, Value>) -> Result<Vec<String>> {
         "presets_status" => {
             words!("presets", "status");
             argv.push(a.required("reference")?);
-            for agent in a.list("agents") {
+            for agent in a.list("agents")? {
                 flag(&mut argv, "--agent", agent);
             }
         }
@@ -1029,10 +1116,21 @@ fn switch(argv: &mut Vec<String>, name: &str, on: bool) {
     }
 }
 
-fn optional_positional(argv: &mut Vec<String>, value: Option<String>) {
-    if let Some(value) = value {
-        argv.push(value);
+/// A positional that starts with `-` is a flag to clap, not a value. Without
+/// this, `references: ["alpha", "--yes"]` would reach `skills remove` as
+/// `--yes` and skip the confirmation the tool exists to require.
+fn no_leading_dash(key: &str, value: String) -> Result<String> {
+    if value.starts_with('-') {
+        bail!("`{key}` must not start with '-' (the CLI would read it as a flag)");
     }
+    Ok(value)
+}
+
+fn optional_positional(argv: &mut Vec<String>, key: &str, value: Option<String>) -> Result<()> {
+    if let Some(value) = value {
+        argv.push(no_leading_dash(key, value)?);
+    }
+    Ok(())
 }
 
 struct Args<'a>(&'a Map<String, Value>);
@@ -1056,31 +1154,42 @@ impl<'a> Args<'a> {
         }
     }
 
-    fn list(&self, key: &str) -> Vec<String> {
-        self.0
-            .get(key)
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
+    fn list(&self, key: &str) -> Result<Vec<String>> {
+        let Some(value) = self.0.get(key) else {
+            return Ok(Vec::new());
+        };
+        if value.is_null() {
+            return Ok(Vec::new());
+        }
+        let items = value
+            .as_array()
+            .ok_or_else(|| anyhow!("`{key}` must be an array of strings"))?;
+        items
+            .iter()
+            .map(|item| {
+                item.as_str()
                     .map(str::to_string)
-                    .collect()
+                    .ok_or_else(|| anyhow!("`{key}` must contain only strings"))
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     fn required(&self, key: &str) -> Result<String> {
-        self.text(key)
-            .ok_or_else(|| anyhow!("missing required string argument `{key}`"))
+        let value = self
+            .text(key)
+            .ok_or_else(|| anyhow!("missing required string argument `{key}`"))?;
+        no_leading_dash(key, value)
     }
 
     fn required_list(&self, key: &str) -> Result<Vec<String>> {
-        let values = self.list(key);
+        let values = self.list(key)?;
         if values.is_empty() {
             return Err(anyhow!("missing required argument `{key}`"));
         }
-        Ok(values)
+        values
+            .into_iter()
+            .map(|value| no_leading_dash(key, value))
+            .collect()
     }
 }
 
@@ -1090,6 +1199,10 @@ mod tests {
 
     fn map(value: Value) -> Map<String, Value> {
         value.as_object().cloned().unwrap()
+    }
+
+    fn argv(tool: &str, args: Value) -> Vec<String> {
+        tool_argv(tool, &map(args)).unwrap()
     }
 
     /// Every advertised tool must reach the CLI. A name in `tools()` with no
@@ -1108,6 +1221,123 @@ mod tests {
     fn unknown_tools_are_rejected() {
         let err = tool_argv("skills_teleport", &Map::new()).unwrap_err();
         assert!(err.to_string().contains("unknown tool"));
+    }
+
+    /// The flag spellings are the fragile part: clap turns `deployed_to` into
+    /// `--deployed-to`, and a typo here only shows up at the first call.
+    #[test]
+    fn skills_list_maps_every_filter() {
+        assert_eq!(
+            argv(
+                "skills_list",
+                json!({
+                    "query": "x",
+                    "tags": ["a", "b"],
+                    "preset": "p",
+                    "deployed_to": "codex",
+                    "untagged": true,
+                    "no_preset": true,
+                    "source": "git"
+                })
+            ),
+            [
+                "skills",
+                "list",
+                "--query",
+                "x",
+                "--tag",
+                "a",
+                "--tag",
+                "b",
+                "--preset",
+                "p",
+                "--deployed-to",
+                "codex",
+                "--untagged",
+                "--no-preset",
+                "--source",
+                "git"
+            ]
+        );
+    }
+
+    #[test]
+    fn install_kind_is_validated() {
+        assert_eq!(
+            argv("skills_install", json!({ "reference": "x", "kind": "git" })),
+            ["skills", "install", "x", "--git"]
+        );
+        assert!(
+            tool_argv(
+                "skills_install",
+                &map(json!({ "reference": "x", "kind": "bogus" }))
+            )
+            .is_err(),
+            "an unknown kind must not fall back to detection"
+        );
+    }
+
+    #[test]
+    fn list_arguments_must_be_strings() {
+        assert!(
+            tool_argv(
+                "skills_deploy",
+                &map(json!({ "references": ["a", 2], "agents": ["codex"] }))
+            )
+            .is_err(),
+            "a non-string list item must be rejected, not dropped"
+        );
+    }
+
+    #[test]
+    fn positional_values_cannot_smuggle_flags() {
+        // `--yes` as a reference would otherwise reach clap as the
+        // confirmation flag and delete the skill without one.
+        let err = tool_argv(
+            "skills_remove",
+            &map(json!({ "references": ["alpha", "--yes"] })),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("must not start with '-'"));
+    }
+
+    #[test]
+    fn arguments_are_checked_against_the_schema() {
+        let deploy = tools()
+            .into_iter()
+            .find(|tool| tool.name == "skills_deploy")
+            .unwrap();
+        assert!(validate_args(
+            &deploy.schema,
+            &map(json!({ "references": ["a"], "agents": ["x"], "dry_run": true }))
+        )
+        .is_ok());
+        // A string "true" is not a boolean; that is the difference between a
+        // dry run and the real thing.
+        assert!(validate_args(
+            &deploy.schema,
+            &map(json!({ "references": ["a"], "agents": ["x"], "dry_run": "true" }))
+        )
+        .is_err());
+        // A misspelt key must not be ignored.
+        assert!(validate_args(
+            &deploy.schema,
+            &map(json!({ "references": ["a"], "agents": ["x"], "dryrun": true }))
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn malformed_arguments_are_a_protocol_error() {
+        let reply = handle_message(
+            &json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                    "params": {"name": "skills_deploy",
+                               "arguments": {"references": ["a"], "agents": ["x"],
+                                             "dry_run": "true"}}}),
+            &mut |_| unreachable!("a malformed call must not run the CLI"),
+        )
+        .unwrap();
+        assert_eq!(reply["error"]["code"], -32602);
     }
 
     /// MCP clients key tools by name, and the spec allows only these
@@ -1206,21 +1436,13 @@ mod tests {
         let argv = ["skills".to_string(), "list".to_string()];
         assert_eq!(
             child_args(Some(root), &argv),
-            vec![
-                "--skills-root".to_string(),
-                "/tmp/library".to_string(),
-                "--json".to_string(),
-                "skills".to_string(),
-                "list".to_string()
-            ]
+            ["--skills-root", "/tmp/library", "--json", "skills", "list"]
+                .map(OsString::from)
+                .to_vec()
         );
         assert_eq!(
             child_args(None, &argv),
-            vec![
-                "--json".to_string(),
-                "skills".to_string(),
-                "list".to_string()
-            ]
+            ["--json", "skills", "list"].map(OsString::from).to_vec()
         );
     }
 
