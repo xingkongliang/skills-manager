@@ -125,6 +125,31 @@ Dashboard 上有一个一次性入口：勾选哪些 Agent 可以这么做，应
 npx skills add xingkongliang/skills-manager
 ```
 
+### MCP 服务
+
+同一套命令同时是一个 MCP 服务，支持该协议的客户端无需 `manage-skills` 也能管理技能库：
+
+```bash
+skills-manager-cli mcp
+```
+
+它通过 stdio 讲 JSON-RPC 2.0，每个命令对应一个工具——`skills_list`、`skills_deploy`、`presets_deploy`、`git_status` 等。所有工具返回 CLI 的 `--json` 输出。会改动内容的工具支持 `dry_run`；删除类工具（`skills_remove`、`tags_delete`、`presets_delete`）仍然必须带 `yes: true`，拒绝时会指出让它通过的路径或参数。
+
+在任何能启动 stdio 服务的 MCP 客户端里注册：
+
+```json
+{
+  "mcpServers": {
+    "skills-manager": {
+      "command": "/Users/you/.skills-manager/bin/skills-manager-cli",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+命令就是应用发布的那个路径（见[二进制放在哪](#二进制放在哪)）；如果已在 PATH 上，直接写 `skills-manager-cli` 即可。要管理默认库以外的库，在 `mcp` 前加 `--skills-root <路径>`。
+
 ## 备份与多设备同步
 
 侧边栏的 **备份** 页把技能库托管在一个 Git 仓库里：单台设备是带版本历史、可恢复快照的备份；多台设备连接同一仓库时会自动保持一致。远端始终是纯 Git 仓库——随时可以 `git clone` 走，没有锁定。

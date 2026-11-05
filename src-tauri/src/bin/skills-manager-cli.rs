@@ -13,6 +13,9 @@ use app_lib::core::{
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
+#[path = "skills-manager-cli/mcp.rs"]
+mod mcp;
+
 #[derive(Parser, Debug)]
 #[command(name = "skills-manager-cli")]
 #[command(about = "Shared-core CLI for skills-manager", version)]
@@ -34,6 +37,8 @@ enum Commands {
     #[command(alias = "scenarios")]
     Presets(PresetArgs),
     Git(GitArgs),
+    /// Serve this CLI as a Model Context Protocol server over stdio.
+    Mcp,
 }
 
 #[derive(Args, Debug)]
@@ -706,6 +711,14 @@ fn main() {
 }
 
 fn run(cli: Cli) -> anyhow::Result<()> {
+    if let Commands::Mcp = &cli.command {
+        // No store here: the server only turns MCP calls into child commands,
+        // and each child opens the library itself. Holding a store (and its
+        // lock) for as long as the agent keeps the server alive is the thing
+        // this avoids.
+        return mcp::serve(cli.skills_root.clone());
+    }
+
     if let Commands::Repo(RepoArgs {
         command: command @ (RepoCommand::SetPath { .. } | RepoCommand::ResetPath),
     }) = &cli.command
@@ -739,6 +752,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Skills(args) => run_skills(args, &store, cli.json),
         Commands::Presets(args) => run_presets(args, &store, cli.json),
         Commands::Git(args) => run_git(args, &store, cli.skills_root.is_some(), cli.json),
+        Commands::Mcp => unreachable!("handled before the store is opened"),
     }
 }
 
