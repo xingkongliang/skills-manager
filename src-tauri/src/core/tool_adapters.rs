@@ -704,7 +704,9 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             category: ToolCategory::Coding,
             is_custom: false,
             recursive_scan: false,
-            project_relative_skills_dir: None,
+            // https://docs.trae.cn/solo_skills: project skills are read from
+            // `.trae/skills`; only the global directory is `~/.trae-cn/skills`.
+            project_relative_skills_dir: Some(".trae/skills".into()),
         },
         ToolAdapter {
             key: "zencoder".into(),
@@ -1107,6 +1109,22 @@ mod tests {
         assert_eq!(adapter.project_relative_skills_dir(), ".agents/skills");
         // Detection still keys off the appDataDir Antigravity creates.
         assert_eq!(adapter.relative_detect_dir, ".gemini/antigravity");
+    }
+
+    #[test]
+    fn trae_cn_uses_expected_default_paths() {
+        let adapter = default_tool_adapters()
+            .into_iter()
+            .find(|adapter| adapter.key == "trae_cn")
+            .expect("trae_cn adapter should exist");
+
+        assert_eq!(adapter.relative_skills_dir, ".trae-cn/skills");
+        assert_eq!(adapter.relative_detect_dir, ".trae-cn");
+        assert_eq!(
+            adapter.project_relative_skills_dir.as_deref(),
+            Some(".trae/skills")
+        );
+        assert_eq!(adapter.project_relative_skills_dir(), ".trae/skills");
     }
 
     #[test]
