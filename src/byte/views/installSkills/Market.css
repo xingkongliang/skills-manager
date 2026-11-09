@@ -1,0 +1,37 @@
+/* Layout styles for the ByteDance skills market. */
+.bytedance-tabs {
+  @apply flex gap-1 border-b border-border-subtle;
+}
+.bytedance-tab {
+  @apply mr-4 flex items-center gap-1.5 border-b-2 border-transparent px-1 pb-1.5 text-[13px] font-medium text-muted transition-colors outline-none hover:text-tertiary;
+}
+.bytedance-tab-active {
+  @apply border-accent text-accent;
+}
+.bytedance-controls {
+  @apply flex flex-col gap-3;
+}
+.bytedance-search-row {
+  @apply flex flex-col gap-2 lg:flex-row lg:items-center;
+}
+.bytedance-grid {
+  @apply grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3;
+}
+.bytedance-card {
+  @apply flex flex-col gap-3 p-3.5;
+}
+.bytedance-card-heading {
+  @apply flex items-start justify-between gap-2;
+}
+.bytedance-card-footer {
+  @apply mt-auto flex flex-wrap items-center justify-between gap-2;
+}
+.bytedance-description {
+  @apply line-clamp-3 text-[13px] text-muted;
+}
+.bytedance-status {
+  @apply flex flex-wrap items-center justify-center gap-2 p-6 text-[13px] text-muted;
+}
+.bytedance-pagination {
+  @apply mt-5 flex flex-wrap items-center justify-center gap-3 text-[13px] text-muted;
+}

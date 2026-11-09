@@ -474,7 +474,7 @@
   },
   "install": {
     "title": "Install Skills",
-    "browseMarket": "Leaderboard",
+    "browseMarket": "Agent Buddy",
     "localInstall": "Local Install",
     "gitInstall": "Git Install",
     "hot": "Hot",
@@ -1143,5 +1143,16 @@
     "exportLogsDone": "Logs saved to {{path}}",
     "exportLogsFailed": "Failed to export logs.",
     "reload": "Reload"
+  },
+  "bytedance": {
+    "refresh": "Refresh",
+    "all": "All",
+    "biweekly": "Biweekly",
+    "monthly": "Monthly",
+    "search": "Search ByteDance skills...",
+    "web": "View on ByteDance Skills",
+    "downloads": "Downloads",
+    "unavailable": "Unavailable",
+    "cancelling": "Cancelling..."
   }
 }

@@ -7,6 +7,7 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
 pub mod commands;
 pub mod core;
+pub mod bytedance;
 
 /// Shared flag: when true, CloseRequested should NOT be prevented.
 pub static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -1000,6 +1001,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            bytedance::commands::fetch_bytedance_skills,
+            bytedance::commands::install_from_bytedance,
+            bytedance::commands::cancel_bytedance_install,
             // Tools
             commands::tools::get_tool_status,
             commands::tools::set_tool_enabled,

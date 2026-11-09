@@ -474,7 +474,7 @@
   },
   "install": {
     "title": "安装 Skills",
-    "browseMarket": "浏览榜单",
+    "browseMarket": "Agent Buddy",
     "localInstall": "本地安装",
     "gitInstall": "Git 安装",
     "hot": "热门",
@@ -1143,5 +1143,16 @@
     "exportLogsDone": "日志已保存到 {{path}}",
     "exportLogsFailed": "导出日志失败。",
     "reload": "重新加载"
+  },
+  "bytedance": {
+    "refresh": "刷新",
+    "all": "全部",
+    "biweekly": "双周",
+    "monthly": "月度",
+    "search": "搜索字节技能市场...",
+    "web": "在字节技能平台查看",
+    "downloads": "下载量",
+    "unavailable": "不可安装",
+    "cancelling": "正在取消..."
   }
 }
