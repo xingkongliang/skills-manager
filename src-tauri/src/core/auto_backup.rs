@@ -222,13 +222,15 @@ pub(crate) fn run_round_blocking(store: &SkillStore) -> Outcome {
     if git_backup::ensure_no_interrupted_git_operation(&skills_dir).is_err() {
         return Outcome::Skipped("interrupted git operation");
     }
-
-    // See the true remote state (3d-γ): rounds are debounced, so one quiet
-    // fetch per round is cheap; offline it just leaves the refs stale.
+    // Fetch under the lock: a lockless fetch into this directory races
+    // clone/reclone, which replace the directory outright. The killable
+    // runner (300s deadline) bounds the hang, and the off-lock
+    // `ls-remote` batch checks in `commands/skills.rs` Phase A already keep
+    // "check all" off the shared lock, so the status read below sees the
+    // true remote state.
     if let Err(e) = git_backup::fetch_remote(&skills_dir) {
         log::debug!("auto backup: fetch failed (continuing offline): {e:#}");
     }
-
     let status = match git_backup::get_status(&skills_dir) {
         Ok(status) => status,
         Err(e) => return Outcome::Failed(format!("{e:#}")),
