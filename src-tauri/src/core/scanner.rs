@@ -86,7 +86,9 @@ fn collect_skill_dirs_recursive(
 }
 
 /// Build a `DiscoveredSkillRecord` for `path` and push it onto `discovered`,
-/// unless `path` is already tracked in `managed_paths`.
+/// unless `path` is already tracked in `managed_paths` or already recorded.
+/// Several agents read the same directory (e.g. `~/.agents/skills`), so the
+/// first agent that finds a skill keeps it and the rest skip it.
 fn push_discovered(
     adapter_key: &str,
     path: PathBuf,
@@ -94,7 +96,7 @@ fn push_discovered(
     discovered: &mut Vec<DiscoveredSkillRecord>,
 ) {
     let path_str = path.to_string_lossy().to_string();
-    if managed_paths.contains(&path_str) {
+    if managed_paths.contains(&path_str) || discovered.iter().any(|d| d.found_path == path_str) {
         return;
     }
     let name = skill_metadata::infer_skill_name(&path);
@@ -407,6 +409,49 @@ mod tests {
             plan.discovered[0].found_path,
             plugin_skills.join("packaged-skill").to_string_lossy()
         );
+    }
+
+    #[test]
+    fn a_directory_shared_by_several_agents_is_listed_once() {
+        // #641: Codex, GitHub Copilot, Pi and others all read
+        // `~/.agents/skills`; one skill there was listed once per agent.
+        let tmp = tempdir().unwrap();
+        let shared = tmp.path().join("shared");
+        write_skill(&shared.join("foo"));
+
+        let adapter = |key: &str| tool_adapters::ToolAdapter {
+            key: key.into(),
+            display_name: key.into(),
+            relative_skills_dir: String::new(),
+            relative_detect_dir: String::new(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: Some(shared.to_string_lossy().to_string()),
+            is_custom: true,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+            category: Default::default(),
+        };
+        // The third agent reaches the directory through an additional scan
+        // dir, the way GitHub Copilot does.
+        let elsewhere = tmp.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let via_extra_dir = tool_adapters::ToolAdapter {
+            override_skills_dir: Some(elsewhere.to_string_lossy().to_string()),
+            additional_scan_dirs: vec![shared.to_string_lossy().to_string()],
+            ..adapter("c")
+        };
+
+        let plan =
+            scan_local_skills_with_adapters(&[], &[adapter("a"), adapter("b"), via_extra_dir])
+                .unwrap();
+        assert_eq!(plan.tools_scanned, 3);
+        assert_eq!(plan.skills_found, 1);
+        assert_eq!(plan.discovered.len(), 1);
+        assert_eq!(plan.discovered[0].tool, "a");
+
+        let groups = group_discovered(&plan.discovered);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].locations.len(), 1);
     }
 
     #[test]
