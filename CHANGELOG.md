@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.4] - 2026-11-10
+
+### Release Overview
+- Three fixes: TRAE CN project skills land in the folder TRAE CN reads, a stuck backup no longer blocks update checks indefinitely, and a skill in a folder several agents share appears once when scanning local skills.
+
+### User-facing
+- **TRAE CN project skills go where TRAE CN reads them** — In a project workspace, skills for TRAE CN were deployed to `<project>/.trae-cn/skills`, which TRAE CN does not read; only its global folder is `~/.trae-cn/skills`. They now go to `<project>/.trae/skills`, and TRAE CN shares that row with TRAE IDE, which reads the same folder. Skills that earlier versions put in `.trae-cn/skills` are left there: add them to the project again, and the old folder can be deleted. Thanks to @zhirogo (#645, #632, #247).
+- **A stuck backup no longer blocks update checks indefinitely** — When the backup remote stopped answering during a background backup (for example an SSH connection that never replies), the backup kept the library locked, and every update check failed with "skills repository is busy" for as long as it stayed stuck. Git commands that reach the backup remote now give up after 300 seconds and report an error, so update checks wait at most five minutes. Your own SSH configuration is used as before. Thanks to @Carlo1911 (#585).
+- **Each skill appears once when scanning local skills** — Several agents read the same folder; Codex, GitHub Copilot, Pi and others all read `~/.agents/skills`. Scan Local Skills listed a skill in that folder once for each of them, so one skill showed up with six identical locations. Each folder is now listed once, under the first agent that finds it (#646, #641).
+
+### Developer & Governance
+- Network git in the backup repository (fetch, push, pull, ls-remote, clone) now runs through a killable wait with a 300s deadline, matching the clone timeout, with `GIT_TERMINAL_PROMPT=0`, a closed stdin and an HTTP low-speed abort. No `GIT_SSH_COMMAND` is injected. The auto-backup fetch stays inside `RepoLock`, because a fetch outside it races a clone that replaces the directory, so this bounds the hang rather than removing the busy errors (#585).
+- `scanner::push_discovered` skips a path that is already recorded, so the scan's `skills_found` and discovered list count each path once, under the first adapter that finds it. Later adapters no longer hash the same directory again (#646).
+- The `trae_cn` adapter now has `project_relative_skills_dir = ".trae/skills"`; it used to fall back to its global `.trae-cn/skills`. Nothing is migrated (#645).
 ## [1.43.3] - 2026-11-03
 
 ### Release Overview

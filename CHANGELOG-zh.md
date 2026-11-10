@@ -5,6 +5,20 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.43.4] - 2026-11-10
+
+### 发布概览
+- 三项修复：TRAE CN 的项目 Skill 放进它实际读取的目录；备份卡住时不再无限期挡住检查更新；扫描本地 Skill 时，几个 Agent 共用目录里的 Skill 只出现一次。
+
+### 用户可见更新
+- **TRAE CN 的项目 Skill 放进它读取的目录** — 在项目工作区里，TRAE CN 的 Skill 之前部署到 `<项目>/.trae-cn/skills`，TRAE CN 并不读这个目录；`~/.trae-cn/skills` 只是它的全局目录。现在部署到 `<项目>/.trae/skills`，TRAE CN 和读同一目录的 TRAE IDE 合成一行。旧版本放进 `.trae-cn/skills` 的 Skill 不会被移走：请在项目里重新添加，旧目录可以删除。感谢 @zhirogo（#645、#632、#247）。
+- **备份卡住不再无限期挡住检查更新** — 后台备份时，如果备份远端不再响应（例如 SSH 连接一直没有回应），备份会一直锁着技能库，期间每次检查更新都报「skills repository is busy」。现在连接备份远端的 git 命令超过 300 秒就放弃并报错，检查更新最多等五分钟。你自己的 SSH 配置照常生效。感谢 @Carlo1911（#585）。
+- **扫描本地 Skill 时每个 Skill 只出现一次** — 有些目录被好几个 Agent 共用，例如 Codex、GitHub Copilot、Pi 等都读 `~/.agents/skills`。「扫描本地 Skills 并导入」会为每个 Agent 各列一次这个目录里的 Skill，一个 Skill 能显示六个相同的位置。现在每个目录只列一次，记在最先找到它的 Agent 名下（#646、#641）。
+
+### 开发者与治理更新
+- 备份仓库里的联网 git（fetch、push、pull、ls-remote、clone）改为走可强制结束的等待，期限 300 秒，与克隆超时一致；同时设置 `GIT_TERMINAL_PROMPT=0`、关闭 stdin，并在 HTTP 速度过低时中止。不注入 `GIT_SSH_COMMAND`。自动备份的 fetch 仍在 `RepoLock` 内执行，因为锁外的 fetch 会和替换整个目录的克隆竞争，所以这次改动是给卡住设了上限，而不是消除「busy」报错（#585）。
+- `scanner::push_discovered` 会跳过已经记录过的路径，扫描结果里的 `skills_found` 和发现列表对每个路径只计一次，记在最先找到它的 adapter 名下。后面的 adapter 不再重复计算同一目录的哈希（#646）。
+- `trae_cn` adapter 新增 `project_relative_skills_dir = ".trae/skills"`，之前回落到它的全局目录 `.trae-cn/skills`。不做迁移（#645）。
 ## [1.43.3] - 2026-11-03
 
 ### 发布概览
