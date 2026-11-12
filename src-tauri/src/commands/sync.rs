@@ -1052,6 +1052,18 @@ mod tests {
             sync_skill_to_tool_internal(&store, "s1", "agent_b").is_err(),
             "s2's row must not vouch for deploying s1 over it"
         );
+        // The batch accepts any agreeing row of another agent, so only the
+        // same-skill requirement stands between s2's deployment and s1.
+        assert!(
+            scenario_service::apply_skills_to_tools(
+                &store,
+                &["s1".to_string()],
+                &["agent_b".to_string()],
+                scenario_service::BatchApplyMode::Add,
+            )
+            .is_err(),
+            "s2's row must not vouch for a batch deploy of s1 either"
+        );
         assert_eq!(
             fs::read_to_string(target.join("unique.txt")).unwrap(),
             "other skill"
