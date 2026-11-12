@@ -667,7 +667,7 @@ pub fn prepare_project_record(store: &SkillStore, path: &Path) -> Result<Project
         return Err(AppError::invalid_input("Directory does not exist"));
     }
     let canonical = std::fs::canonicalize(path)?;
-    let canonical_string = canonical.to_string_lossy().to_string();
+    let canonical_string = strip_verbatim_prefix(&canonical.to_string_lossy());
     let existing = store.get_all_projects().map_err(AppError::db)?;
     if let Some(project) = existing.iter().find(|project| {
         project.path == canonical_string
@@ -696,6 +696,24 @@ pub fn prepare_project_record(store: &SkillStore, path: &Path) -> Result<Project
         created_at: now,
         updated_at: now,
     })
+}
+
+/// `canonicalize` on Windows returns a verbatim path (`\\?\C:\repo`). In a
+/// verbatim path `/` is not a separator, so joining a project-relative
+/// directory such as `.agents/skills` onto it names something that cannot
+/// exist. Store the ordinary form, as the dunce crate does for drive and UNC
+/// paths. Paths on other platforms never carry the prefix.
+fn strip_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            return rest.to_string();
+        }
+    }
+    path.to_string()
 }
 
 pub fn add_project_internal(store: &SkillStore, path: String) -> Result<ProjectDto, AppError> {
@@ -2645,6 +2663,18 @@ mod add_project_tests {
         assert!(err.to_string().contains("Directory does not exist"));
         assert!(!missing.exists());
         assert!(store.get_all_projects().unwrap().is_empty());
+    }
+
+    /// The stored path must not keep Windows' verbatim prefix: `/` in a
+    /// project-relative dir like `.agents/skills` is not a separator there.
+    #[test]
+    fn stored_project_paths_drop_the_windows_verbatim_prefix() {
+        use super::strip_verbatim_prefix as strip;
+        assert_eq!(strip(r"\\?\C:\Users\me\repo"), r"C:\Users\me\repo");
+        assert_eq!(strip(r"\\?\UNC\server\share\repo"), r"\\server\share\repo");
+        // Verbatim forms that have no ordinary spelling are kept.
+        assert_eq!(strip(r"\\?\Volume{0}\repo"), r"\\?\Volume{0}\repo");
+        assert_eq!(strip("/Users/me/repo"), "/Users/me/repo");
     }
 
     /// `/a/b`, `/a/b/` and `/a/x/../b` are one project. The raw-string UNIQUE
