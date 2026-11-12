@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::{
-    central_repo,
+    central_repo, content_hash,
     error::{AppError, TargetConflictDetail},
     skill_store::{ScenarioRecord, SkillStore, SkillTargetRecord},
     sync_engine, sync_metadata, tool_adapters,
@@ -331,9 +331,13 @@ pub(crate) fn recorded_target_is_current(
 ///
 /// Known gap: on a case-insensitive filesystem two spellings of the final
 /// component still key differently. That is the same lexical assumption the
-/// rest of this module makes about `target_path`, and erring here only costs a
-/// refusal, never a deletion.
-fn ownership_key(path: &Path, memo: &mut HashMap<PathBuf, PathBuf>) -> PathBuf {
+/// rest of this module makes about `target_path`. It is not harmless
+/// everywhere: in the batch deploy, a contradicting row spelled with a
+/// different case is not pooled, so the remaining rows can authorize a
+/// replacement the contradiction should have blocked (pre-existing, H review
+/// item 5). Outside the batch, rows of other agents only ever adopt, so there
+/// the gap costs a refusal or an extra row, never a deletion.
+pub(crate) fn ownership_key(path: &Path, memo: &mut HashMap<PathBuf, PathBuf>) -> PathBuf {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return path.to_path_buf();
     };
@@ -348,6 +352,201 @@ fn ownership_key(path: &Path, memo: &mut HashMap<PathBuf, PathBuf>) -> PathBuf {
         }
     };
     canonical_parent.join(name)
+}
+
+/// What our records say we put at each target path, pooled across every row
+/// that names it — the one ownership judgment every deploy path asks.
+///
+/// Ownership belongs to the path, not to the `(skill, tool)` pair. When several
+/// agents share a skills directory, a row for any of them is evidence about the
+/// object there; otherwise the agent without its own row refuses a directory we
+/// demonstrably wrote for its neighbour (#363 review, cluster 37 A5). The
+/// evidence is narrow on purpose:
+///
+/// - Every row naming the object must agree on the mode. Contradictory rows
+///   mean we do not know what we put there, so they vouch for nothing —
+///   taking whichever came first would let a stale `copy` row authorize
+///   deleting a real directory that replaced our link.
+/// - Every row naming the object must belong to the skill being deployed. A
+///   row of another skill on the same path is that skill's deployment, not
+///   evidence for this one.
+///
+/// Rows are pooled from the whole table, not just the pairs being deployed:
+/// `skill_targets` is unique on `(skill_id, tool)`, not on `target_path`, so a
+/// row nobody selected can still be a claim on the same object. They are keyed
+/// by directory entry rather than by path string, so a row spelled differently
+/// (symlinked ancestor, `..`) still counts as evidence about the same object.
+struct PathEvidence {
+    memo: HashMap<PathBuf, PathBuf>,
+    /// `(skill_id, tool, mode)` of every row, by the directory entry it names.
+    rows: HashMap<PathBuf, Vec<(String, String, String)>>,
+    /// What this run itself wrote, as `(skill_id, mode)`. It outranks the
+    /// rows: they describe the previous deployment, this describes what is on
+    /// disk right now, and preferring them would make the second agent on a
+    /// shared path refuse the directory the first one just created after a
+    /// mode change.
+    written: HashMap<PathBuf, (String, String)>,
+}
+
+/// What [`PathEvidence`] says about one target, for one `(skill, tool)` pair.
+#[derive(Debug, PartialEq, Eq)]
+enum Evidence {
+    /// This agent's own row for this skill, or this run's own write: may
+    /// replace what it recorded.
+    Own(String),
+    /// Only other agents' rows for this skill. Outside a user-initiated batch
+    /// these may adopt an identical copy, never replace one: the other agent's
+    /// own skip check is what preserves edits made in its copy, and borrowing
+    /// its row to rewrite the directory would undo that (H review, item 1).
+    Borrowed(String),
+    /// Nothing vouches for the object.
+    Unvouched,
+}
+
+impl Evidence {
+    /// Both tiers, for the batch deploy: the user selected these pairs and
+    /// confirmed the batch, so any agreeing row authorizes replacement.
+    fn any_mode(&self) -> Option<&str> {
+        match self {
+            Evidence::Own(mode) | Evidence::Borrowed(mode) => Some(mode),
+            Evidence::Unvouched => None,
+        }
+    }
+}
+
+impl PathEvidence {
+    fn new(rows: &[SkillTargetRecord]) -> Self {
+        let mut memo = HashMap::new();
+        let mut by_key: HashMap<PathBuf, Vec<(String, String, String)>> = HashMap::new();
+        for row in rows {
+            let key = ownership_key(Path::new(&row.target_path), &mut memo);
+            by_key.entry(key).or_default().push((
+                row.skill_id.clone(),
+                row.tool.clone(),
+                row.mode.clone(),
+            ));
+        }
+        Self {
+            memo,
+            rows: by_key,
+            written: HashMap::new(),
+        }
+    }
+
+    fn judge(&mut self, skill_id: &str, tool: &str, target: &Path) -> Evidence {
+        let key = ownership_key(target, &mut self.memo);
+        if let Some((writer, mode)) = self.written.get(&key) {
+            return if writer == skill_id {
+                Evidence::Own(mode.clone())
+            } else {
+                Evidence::Unvouched
+            };
+        }
+        let Some(rows) = self.rows.get(&key) else {
+            return Evidence::Unvouched;
+        };
+        let Some((_, _, first_mode)) = rows.first() else {
+            return Evidence::Unvouched;
+        };
+        if !rows
+            .iter()
+            .all(|(owner, _, mode)| owner == skill_id && mode == first_mode)
+        {
+            return Evidence::Unvouched;
+        }
+        if rows.iter().any(|(_, row_tool, _)| row_tool == tool) {
+            Evidence::Own(first_mode.clone())
+        } else {
+            Evidence::Borrowed(first_mode.clone())
+        }
+    }
+
+    fn wrote(&mut self, skill_id: &str, target: &Path, mode: sync_engine::SyncMode) {
+        let key = ownership_key(target, &mut self.memo);
+        self.written
+            .insert(key, (skill_id.to_string(), mode.as_str().to_string()));
+    }
+
+    fn has_written(&mut self, target: &Path) -> bool {
+        let key = ownership_key(target, &mut self.memo);
+        self.written.contains_key(&key)
+    }
+
+    /// Another skill was written there earlier in this run. A dry run has to
+    /// treat that path as occupied, because the real run will find it so.
+    fn written_by_other_skill(&mut self, skill_id: &str, target: &Path) -> bool {
+        let key = ownership_key(target, &mut self.memo);
+        self.written
+            .get(&key)
+            .is_some_and(|(writer, _)| writer != skill_id)
+    }
+}
+
+/// What a deploy outside the batch does with [`PathEvidence::judge`]'s answer.
+enum DeployStep {
+    /// Write, replacing only what this recorded mode authorizes (`None`:
+    /// nothing of the user's may be destroyed).
+    Write(Option<String>),
+    /// The directory already holds exactly the library's content and another
+    /// agent sharing it recorded it: add this agent's row, touch nothing.
+    Adopt(String),
+}
+
+fn deploy_step(evidence: Evidence, source: &Path, target: &Path) -> DeployStep {
+    match evidence {
+        Evidence::Own(mode) => DeployStep::Write(Some(mode)),
+        Evidence::Borrowed(mode) if copy_matches_library(&mode, source, target) => {
+            DeployStep::Adopt(mode)
+        }
+        // A link to the source, or nothing at all, is still written: neither
+        // destroys anything. Anything else is refused, as it always was.
+        Evidence::Borrowed(_) | Evidence::Unvouched => DeployStep::Write(None),
+    }
+}
+
+/// Whether a borrowed copy-mode directory holds exactly the library's content,
+/// compared the way the stranded-skill backfill does (`hash_directory` on both
+/// sides, failing closed).
+///
+/// The hash skips `.gitignore`, caches and the like, so equal hashes do not
+/// prove the copy is unedited (#593). That is acceptable here only because
+/// adopting writes nothing: a wrong answer adds a row, it never deletes.
+fn copy_matches_library(mode: &str, source: &Path, target: &Path) -> bool {
+    mode == "copy"
+        && matches!(
+            sync_engine::classify_target(target, Some(source)),
+            Ok(sync_engine::TargetState::RealDir)
+        )
+        && source.is_dir()
+        && matches!(
+            (
+                content_hash::hash_directory(target),
+                content_hash::hash_directory(source),
+            ),
+            (Ok(deployed), Ok(library)) if deployed == library
+        )
+}
+
+/// The row recording an adopted directory: nothing was written, so its mode
+/// is the borrowed evidence's and its hash the library's it was compared to.
+fn adopted_target_record(
+    skill_id: &str,
+    tool: &str,
+    target: &Path,
+    mode: String,
+    source_hash: Option<String>,
+) -> SkillTargetRecord {
+    SkillTargetRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        skill_id: skill_id.to_string(),
+        tool: tool.to_string(),
+        target_path: target.to_string_lossy().to_string(),
+        mode,
+        status: "ok".to_string(),
+        synced_at: Some(chrono::Utc::now().timestamp_millis()),
+        last_error: None,
+        source_hash,
+    }
 }
 
 /// Authorization for a deployment write: a `skill_targets` row claiming this
@@ -390,9 +589,9 @@ pub fn sync_desired_targets(
     desired_targets: &[ScenarioSyncTarget],
 ) -> Result<Vec<TargetConflict>, AppError> {
     let batch_start = Instant::now();
-    let existing_targets: HashMap<(String, String), SkillTargetRecord> = store
-        .get_all_targets()
-        .map_err(AppError::db)?
+    let all_targets = store.get_all_targets().map_err(AppError::db)?;
+    let mut evidence = PathEvidence::new(&all_targets);
+    let existing_targets: HashMap<(String, String), SkillTargetRecord> = all_targets
         .into_iter()
         .map(|target| ((target.skill_id.clone(), target.tool.clone()), target))
         .collect();
@@ -405,12 +604,6 @@ pub fn sync_desired_targets(
     for desired in desired_targets {
         let target_start = Instant::now();
         let key = (desired.skill_id.clone(), desired.tool.clone());
-        // A row claiming exactly this path is what lets us replace a copy-mode
-        // directory; anything else must be left alone (#363).
-        let recorded_mode = existing_targets
-            .get(&key)
-            .filter(|existing| PathBuf::from(&existing.target_path) == desired.target)
-            .map(|existing| existing.mode.clone());
         if let Some(existing) = existing_targets.get(&key) {
             let target_path = PathBuf::from(&existing.target_path);
             if target_path != desired.target {
@@ -468,6 +661,33 @@ pub fn sync_desired_targets(
             }
         }
 
+        // This agent's own row is what lets us replace a copy-mode directory;
+        // another agent's row on a shared directory only lets us adopt an
+        // identical copy. Anything else must be left alone (#363, `PathEvidence`).
+        let recorded_mode = match deploy_step(
+            evidence.judge(&desired.skill_id, &desired.tool, &desired.target),
+            &desired.source,
+            &desired.target,
+        ) {
+            DeployStep::Write(mode) => mode,
+            DeployStep::Adopt(mode) => {
+                let record = adopted_target_record(
+                    &desired.skill_id,
+                    &desired.tool,
+                    &desired.target,
+                    mode,
+                    desired.source_hash.clone(),
+                );
+                if let Err(e) = store.insert_target(&record) {
+                    log::warn!(
+                        "Failed to insert adopted target for skill {}: {e}",
+                        desired.skill_id
+                    );
+                }
+                synced_count += 1;
+                continue;
+            }
+        };
         match sync_engine::sync_skill(
             &desired.source,
             &desired.target,
@@ -475,6 +695,7 @@ pub fn sync_desired_targets(
             replace_policy(recorded_mode.as_deref()),
         ) {
             Ok(actual_mode) => {
+                evidence.wrote(&desired.skill_id, &desired.target, actual_mode);
                 let now = chrono::Utc::now().timestamp_millis();
                 let target_record = SkillTargetRecord {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -547,31 +768,40 @@ pub fn preflight_scenario_sync_targets(
     store: &SkillStore,
     desired_targets: &[ScenarioSyncTarget],
 ) -> Result<(), AppError> {
-    let existing_targets = store.get_all_targets().map_err(AppError::db)?;
+    let mut evidence = PathEvidence::new(&store.get_all_targets().map_err(AppError::db)?);
     let mut conflicts = Vec::new();
     for desired in desired_targets {
-        let recorded_mode = existing_targets
-            .iter()
-            .find(|existing| {
-                existing.skill_id == desired.skill_id
-                    && existing.tool == desired.tool
-                    && PathBuf::from(&existing.target_path) == desired.target
-            })
-            .map(|existing| existing.mode.as_str());
-        if let Err(error) = sync_engine::preflight_replace(
+        // The real run will find another skill's deployment here even though
+        // the disk does not show it yet.
+        if evidence.written_by_other_skill(&desired.skill_id, &desired.target) {
+            conflicts.push(TargetConflictDetail {
+                path: desired.target.display().to_string(),
+                reason: sync_engine::ReplacePolicy::NoClobber.describe().to_string(),
+            });
+            continue;
+        }
+        let recorded_mode = match deploy_step(
+            evidence.judge(&desired.skill_id, &desired.tool, &desired.target),
+            &desired.source,
+            &desired.target,
+        ) {
+            DeployStep::Write(mode) => mode,
+            DeployStep::Adopt(_) => continue,
+        };
+        match sync_engine::preflight_replace(
             &desired.source,
             &desired.target,
             desired.mode,
-            replace_policy(recorded_mode),
+            replace_policy(recorded_mode.as_deref()),
         ) {
-            if let Some(refused) = error.downcast_ref::<sync_engine::ReplaceRefused>() {
-                conflicts.push(TargetConflictDetail {
+            Ok(()) => evidence.wrote(&desired.skill_id, &desired.target, desired.mode),
+            Err(error) => match error.downcast_ref::<sync_engine::ReplaceRefused>() {
+                Some(refused) => conflicts.push(TargetConflictDetail {
                     path: refused.target.display().to_string(),
                     reason: refused.reason.to_string(),
-                });
-            } else {
-                return Err(AppError::io(error));
-            }
+                }),
+                None => return Err(AppError::io(error)),
+            },
         }
     }
     if conflicts.is_empty() {
@@ -723,9 +953,9 @@ pub fn sync_skill_to_active_scenario(
             let source = PathBuf::from(&skill.central_path);
             let target_name = sync_engine::target_dir_name(&source, &skill.name);
             let old_targets = store.get_targets_for_skill(skill_id).unwrap_or_default();
+            let mut evidence = PathEvidence::new(&store.get_all_targets().map_err(AppError::db)?);
             for adapter in &adapters {
                 let target = deployment_target(adapter, &target_name, skill_id, &old_targets);
-                let mut recorded_mode: Option<String> = None;
                 if let Some(old) = old_targets.iter().find(|t| t.tool == adapter.key) {
                     let old_path = PathBuf::from(&old.target_path);
                     if old_path != target {
@@ -746,8 +976,6 @@ pub fn sync_skill_to_active_scenario(
                             release_abandoned_target(&old_path, &old.mode, &adapter.key);
                         }
                         let _ = store.delete_target(skill_id, &adapter.key);
-                    } else {
-                        recorded_mode = Some(old.mode.clone());
                     }
                 }
 
@@ -764,6 +992,28 @@ pub fn sync_skill_to_active_scenario(
                 ) {
                     continue;
                 }
+                // As in `sync_desired_targets`: another agent sharing this
+                // skills directory may hold a row that lets us adopt it.
+                let recorded_mode = match deploy_step(
+                    evidence.judge(skill_id, &adapter.key, &target),
+                    &source,
+                    &target,
+                ) {
+                    DeployStep::Write(mode) => mode,
+                    DeployStep::Adopt(mode) => {
+                        let record = adopted_target_record(
+                            skill_id,
+                            &adapter.key,
+                            &target,
+                            mode,
+                            skill.content_hash.clone(),
+                        );
+                        if let Err(e) = store.insert_target(&record) {
+                            log::warn!("Failed to insert adopted target for skill {skill_id}: {e}");
+                        }
+                        continue;
+                    }
+                };
                 match sync_engine::sync_skill(
                     &source,
                     &target,
@@ -771,6 +1021,7 @@ pub fn sync_skill_to_active_scenario(
                     replace_policy(recorded_mode.as_deref()),
                 ) {
                     Ok(actual_mode) => {
+                        evidence.wrote(skill_id, &target, actual_mode);
                         let now = chrono::Utc::now().timestamp_millis();
                         let target_record = super::skill_store::SkillTargetRecord {
                             id: uuid::Uuid::new_v4().to_string(),
@@ -1030,14 +1281,24 @@ pub fn sync_single_skill_to_tool(
     };
     let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
     let mode = sync_engine::sync_mode_for_tool(tool, configured_mode.as_deref());
-    let recorded_mode = match intent {
-        DeployIntent::AdoptExisting(_) => None,
-        DeployIntent::Managed => existing_targets
-            .iter()
-            .find(|existing| {
-                existing.tool == tool && PathBuf::from(&existing.target_path) == target
-            })
-            .map(|existing| existing.mode.clone()),
+    // Another agent sharing this skills directory may hold the only row for
+    // the path (`PathEvidence`). That row lets this agent adopt an identical
+    // copy, not replace one.
+    let step = match intent {
+        DeployIntent::AdoptExisting(_) => DeployStep::Write(None),
+        DeployIntent::Managed => {
+            let all_targets = store.get_all_targets().map_err(AppError::db)?;
+            let evidence = PathEvidence::new(&all_targets).judge(skill_id, tool, &target);
+            deploy_step(evidence, &source, &target)
+        }
+    };
+    let recorded_mode = match step {
+        DeployStep::Write(mode) => mode,
+        DeployStep::Adopt(mode) => {
+            let record =
+                adopted_target_record(skill_id, tool, &target, mode, skill.content_hash.clone());
+            return store.insert_target(&record).map_err(AppError::db);
+        }
     };
     let policy = match intent {
         DeployIntent::AdoptExisting(_) => sync_engine::ReplacePolicy::UserConfirmed,
@@ -1272,48 +1533,9 @@ fn apply_add(
         )));
     }
 
-    // Ownership belongs to the path, not to the (skill, tool) pair. When two
-    // agents share a skills directory, a row for either one vouches for the
-    // object there, so evidence is pooled per path before judging — otherwise
-    // the pair without its own row would refuse a target we demonstrably own.
-    // Pool the distinct recorded modes per path, then keep the evidence only
-    // when they agree. Contradictory rows must refuse, exactly as in the
-    // removal path — taking whichever one came first would let a stale `copy`
-    // row authorize deleting a real directory, and HashMap order is not even
-    // deterministic about which one that is.
-    // Pooled from every existing row that lands on a planned path, not just
-    // from the pairs in this batch: `skill_targets` is unique on
-    // `(skill_id, tool)`, not on `target_path`, so a row we did not select can
-    // still be a claim on the same object — and a contradictory one.
-    // Keyed by directory entry rather than by path string, so a row spelled
-    // differently (symlinked ancestor, `..`) but naming the same object still
-    // counts as evidence about it.
-    let mut key_memo: HashMap<PathBuf, PathBuf> = HashMap::new();
-    let planned_keys: HashSet<PathBuf> = plan
-        .iter()
-        .map(|pair| ownership_key(&pair.target, &mut key_memo))
-        .collect();
-    let mut modes_by_key: HashMap<PathBuf, HashSet<&str>> = HashMap::new();
-    for row in &existing_targets {
-        let key = ownership_key(Path::new(row.target_path.as_str()), &mut key_memo);
-        if planned_keys.contains(&key) {
-            modes_by_key.entry(key).or_default().insert(row.mode.as_str());
-        }
-    }
-    let evidence_by_key: HashMap<&PathBuf, &str> = modes_by_key
-        .iter()
-        .filter_map(|(key, modes)| {
-            let mut it = modes.iter();
-            match (it.next(), it.next()) {
-                (Some(only), None) => Some((key, *only)),
-                _ => None,
-            }
-        })
-        .collect();
-    let evidence_for = |target: &Path, memo: &mut HashMap<PathBuf, PathBuf>| -> Option<&str> {
-        let key = ownership_key(target, memo);
-        evidence_by_key.get(&key).copied()
-    };
+    // Shared skills directories: a row of another agent on the same path
+    // vouches for it, see `PathEvidence`.
+    let mut evidence = PathEvidence::new(&existing_targets);
     let mut preflighted: HashSet<&Path> = HashSet::new();
     for pair in &plan {
         if !preflighted.insert(pair.target.as_path()) {
@@ -1323,7 +1545,11 @@ fn apply_add(
             &pair.source,
             &pair.target,
             pair.mode,
-            replace_policy(evidence_for(&pair.target, &mut key_memo)),
+            replace_policy(
+                evidence
+                    .judge(&pair.skill.id, &pair.tool_key, &pair.target)
+                    .any_mode(),
+            ),
         ) {
             // Keep the refusal's own path and reason: the caller may be an
             // agent that has to name the directory in the way and offer the
@@ -1368,11 +1594,6 @@ fn apply_add(
     let mut synced = 0usize;
     let mut failed = 0usize;
     let mut left = 0usize;
-    // Several tools can resolve to one skills directory, so two pairs of this
-    // batch may write the same path. The second one has no row of its own yet,
-    // and without this it would refuse the directory the first one just created
-    // (only visible in copy mode — a symlink already points at the source).
-    let mut written_in_batch: HashMap<&Path, String> = HashMap::new();
     for pair in &plan {
         let PlannedPair {
             skill,
@@ -1382,19 +1603,10 @@ fn apply_add(
             mode,
         } = pair;
         let skill_id = &skill.id;
-        // What this batch just wrote outranks the row: the row describes the
-        // previous deployment, the batch describes what is on disk right now.
-        // Preferring the row would make the second pair on a shared path refuse
-        // the directory the first pair created after a mode change.
-        // Same precedence the preflight used, and deliberately NOT falling back
-        // to this pair's own `recorded_mode`: that would reinstate a row the
-        // conflict rule above just rejected as ambiguous.
-        let effective_mode = written_in_batch
-            .get(target.as_path())
-            .map(String::as_str)
-            .or_else(|| evidence_for(target, &mut key_memo));
-        // What this batch just wrote at a shared path is not this pair's record.
-        if !written_in_batch.contains_key(target.as_path()) {
+        // Several tools can resolve to one skills directory, so two pairs of
+        // this batch may write the same path. What this batch just wrote there
+        // is not this pair's record, so it must not be skipped as current.
+        if !evidence.has_written(target) {
             let own_record = existing_targets.iter().find(|row| {
                 row.skill_id == *skill_id
                     && row.tool == *tool_key
@@ -1411,9 +1623,10 @@ fn apply_add(
                 continue;
             }
         }
-        match sync_engine::sync_skill(source, target, *mode, replace_policy(effective_mode)) {
+        let recorded = evidence.judge(skill_id, tool_key, target);
+        match sync_engine::sync_skill(source, target, *mode, replace_policy(recorded.any_mode())) {
             Ok(actual_mode) => {
-                written_in_batch.insert(target.as_path(), actual_mode.as_str().to_string());
+                evidence.wrote(skill_id, target, actual_mode);
                 let now = chrono::Utc::now().timestamp_millis();
                 let target_record = SkillTargetRecord {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -1501,10 +1714,13 @@ fn apply_remove(
     // with an error, because the rows above are already gone — returning Err
     // here would leave callers thinking nothing happened. So on a read error,
     // keep every path and stop.
+    // Keyed by directory entry, as deployment pools them: a surviving row that
+    // reaches the same directory through a symlinked parent still uses it.
+    let mut key_memo: HashMap<PathBuf, PathBuf> = HashMap::new();
     let still_referenced: HashSet<PathBuf> = match store.get_all_targets() {
         Ok(rows) => rows
             .into_iter()
-            .map(|t| PathBuf::from(&t.target_path))
+            .map(|t| ownership_key(Path::new(&t.target_path), &mut key_memo))
             .collect(),
         Err(e) => {
             log::warn!(
@@ -1536,7 +1752,7 @@ fn apply_remove(
     let mut removed = 0usize;
     let mut preserved = 0usize;
     for (path, recorded_modes) in candidates {
-        if still_referenced.contains(path) {
+        if still_referenced.contains(&ownership_key(path, &mut key_memo)) {
             log::debug!(
                 "apply_skills_to_tools(Remove): keeping {} (still referenced by another target)",
                 path.display()
