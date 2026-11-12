@@ -1457,7 +1457,7 @@ fn ensure_removable(store: &SkillStore, record: &ProjectRecord, target: &Path) -
             let matched = find_best_center_match(variant, &all_managed);
             let status = classify_sync_status(variant, matched);
             (!removal_is_safe(variant, matched, &status))
-                .then(|| format!("has content not in the library (sync status: {status})"))
+                .then(|| unsafe_removal_reason(&status))
         }
     };
     match reason {
@@ -1809,7 +1809,28 @@ fn removal_is_safe(
             }
         });
     }
+    // A real copy needs equal hashes *and* nothing the library copy lacks:
+    // the hash skips `.gitignore`, `.git` and links, so equal hashes alone
+    // would let those go with it (#593). An unreadable entry is not proof of
+    // absence, so an error here is unsafe too.
     sync_status == "in_sync"
+        && matched.is_some_and(|managed| {
+            crate::core::removals::removed_paths(
+                Path::new(&variant.path),
+                Path::new(&managed.central_path),
+            )
+            .is_ok_and(|extra| extra.is_empty())
+        })
+}
+
+/// Why a copy is not safe to remove. An in-sync copy can only be unsafe
+/// because it holds entries the hash does not see.
+fn unsafe_removal_reason(sync_status: &str) -> String {
+    if sync_status == "in_sync" {
+        "has content not in the library (files the library copy lacks, such as .gitignore, .git or links)".to_string()
+    } else {
+        format!("has content not in the library (sync status: {sync_status})")
+    }
 }
 
 /// The project copies of library skills `skill_ids` that an undeploy would
@@ -1881,10 +1902,7 @@ pub fn project_removal_conflicts(plan: &[ProjectRemovalTarget]) -> Option<AppErr
         .filter(|target| !target.safe)
         .map(|target| TargetConflictDetail {
             path: target.path.clone(),
-            reason: format!(
-                "has content not in the library (sync status: {})",
-                target.sync_status
-            ),
+            reason: unsafe_removal_reason(&target.sync_status),
         })
         .collect();
     if conflicts.is_empty() {
@@ -3100,6 +3118,45 @@ mod project_plan_tests {
         delete_project_skill_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).unwrap();
         assert!(fs::symlink_metadata(&link).is_err());
         assert!(Path::new(&demo.central_path).join("SKILL.md").is_file(), "the library copy survives");
+    }
+
+    /// Equal hashes do not prove a copy holds nothing of its own: the hash
+    /// skips `.gitignore`, `.git` and links (#593). Anything in the copy that
+    /// the library copy lacks makes the removal unsafe.
+    #[cfg(unix)]
+    #[test]
+    fn undeploy_refuses_an_in_sync_copy_holding_entries_the_library_lacks() {
+        let fx = fixture(&["claude_code"]);
+        fx.store.set_setting("sync_mode", "copy").unwrap();
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let copy = fx.repo.join(".claude/skills/demo");
+        let extras: [(&str, fn(&Path)); 3] = [
+            (".gitignore", |copy| fs::write(copy.join(".gitignore"), "secrets/\n").unwrap()),
+            (".git", |copy| {
+                fs::create_dir_all(copy.join(".git")).unwrap();
+                fs::write(copy.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+            }),
+            ("link", |copy| std::os::unix::fs::symlink("/tmp", copy.join("link")).unwrap()),
+        ];
+
+        for (label, add_extra) in extras {
+            let _ = fs::remove_dir_all(&copy);
+            let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap();
+            apply_project_deploy(&fx.store, &plan).unwrap();
+            add_extra(&copy);
+
+            let removal = plan_project_undeploy(&fx.store, &fx.project_id, &ids(&[&demo]), &[]).unwrap();
+            assert_eq!(removal[0].sync_status, "in_sync", "{label}: the hash cannot see it");
+            assert!(!removal[0].safe, "{label}: must not be safe");
+            assert!(delete_project_skill_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).is_err(), "{label}");
+            assert!(copy.exists(), "{label}: kept");
+        }
+
+        // A plain copy with nothing extra is still removable.
+        fs::remove_dir_all(&copy).unwrap();
+        let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap();
+        apply_project_deploy(&fx.store, &plan).unwrap();
+        assert!(plan_project_undeploy(&fx.store, &fx.project_id, &ids(&[&demo]), &[]).unwrap()[0].safe);
     }
 
     #[test]
