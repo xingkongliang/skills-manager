@@ -1718,6 +1718,38 @@ pub fn plan_project_deploy(
             });
         }
     }
+
+    // Two library skills whose directories share a name (`a/demo`, `b/demo`)
+    // would both be written to one project directory; only the first would
+    // land. Refuse the batch instead of reporting both as created.
+    let mut collisions: Vec<TargetConflictDetail> = Vec::new();
+    for (index, target) in plan.iter().enumerate() {
+        if target.state != ProjectDeployState::Create {
+            continue;
+        }
+        if let Some(earlier) = plan[..index].iter().find(|earlier| {
+            earlier.state == ProjectDeployState::Create
+                && earlier.path == target.path
+                && earlier.skill_id != target.skill_id
+        }) {
+            collisions.push(TargetConflictDetail {
+                path: target.path.clone(),
+                reason: format!(
+                    "skills \"{}\" and \"{}\" would both be written here",
+                    earlier.skill, target.skill
+                ),
+            });
+        }
+    }
+    if !collisions.is_empty() {
+        return Err(AppError::target_conflict(
+            format!(
+                "Refusing to deploy: {} project target(s) would receive two different skills",
+                collisions.len()
+            ),
+            collisions,
+        ));
+    }
     Ok(plan)
 }
 
@@ -2930,6 +2962,35 @@ mod project_plan_tests {
         let gui = export_skill_to_project_internal(&fx.store, demo.id.clone(), fx.project_id.clone(), Some(vec!["claude_code".into()]));
         assert!(gui.unwrap_err().to_string().contains("already exists"));
         assert_eq!(fs::read_to_string(squatter.join("SKILL.md")).unwrap(), before);
+    }
+
+    /// Review finding 5: two library skills whose directories share a name
+    /// (`a/demo`, `b/demo`) would both land in `<project>/.claude/skills/demo`.
+    /// The batch is refused before anything is written.
+    #[test]
+    fn deploy_refuses_two_skills_that_land_on_the_same_directory() {
+        let fx = fixture(&["claude_code"]);
+        let mut skills = Vec::new();
+        for (id, group, body) in [("s-a", "a", "# A's demo"), ("s-b", "b", "# B's demo")] {
+            let central = central_repo::skills_dir().join(group).join("demo");
+            write_skill(&central, "demo", body);
+            let mut record = library_skill(&fx, &format!("{id}-tmp"), &format!("{group}-tmp"), body);
+            fs::remove_dir_all(&record.central_path).unwrap();
+            fx.store.delete_skill(&record.id).unwrap();
+            record.id = id.to_string();
+            record.name = format!("{group}-demo");
+            record.central_path = central.to_string_lossy().to_string();
+            fx.store.insert_skill(&record).unwrap();
+            skills.push(record);
+        }
+
+        let err = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&skills[0], &skills[1]]), &["claude_code".into()])
+            .expect_err("two skills on one directory");
+        let target = fx.repo.join(".claude/skills/demo");
+        assert_eq!(conflict_paths(&err), vec![target.to_string_lossy().to_string()]);
+        let reason = &err.details.as_ref().unwrap().conflicts[0].reason;
+        assert!(reason.contains("a-demo") && reason.contains("b-demo"), "{reason}");
+        assert!(fs::symlink_metadata(&target).is_err());
     }
 
     #[test]
