@@ -3539,14 +3539,10 @@ fn undeploy_from_project(
     let mut targets = Vec::new();
     for target in &plan {
         if !dry_run {
-            project_cmd::delete_project_skill_internal(
-                store,
-                record.id.clone(),
-                target.relative_path.clone(),
-                target.agent.clone(),
-                force,
-            )
-            .map_err(map_app_err)?;
+            // The planned path, not a lookup by name: the enabled and
+            // disabled slots can hold different things.
+            project_cmd::remove_planned_project_copy(store, &record.id, target, force)
+                .map_err(map_app_err)?;
             store.log_audit(
                 AuditDraft::new("undeploy")
                     .skill(target.skill_id.clone(), target.skill.clone())
@@ -4528,6 +4524,26 @@ mod project_tests {
         assert_eq!(envelope_code(&err), "TARGET_CONFLICT");
         let ok = import_from_project(&fx.store, &repo, "demo", "test_agent", true, true).unwrap();
         assert_eq!(ok.result.action, project_cmd::ProjectImportAction::Overwrite);
+    }
+
+    /// Review finding 1: the CLI must delete the copy it planned and checked
+    /// (the disabled one), never the unrelated files in the enabled slot, and
+    /// report that path.
+    #[test]
+    fn undeploy_removes_the_planned_copy_not_the_enabled_slot() {
+        let fx = fixture();
+        let disabled = fx.repo.join(".test/skills-disabled/demo");
+        fs::create_dir_all(&disabled).unwrap();
+        fs::copy(fx.tmp.path().join("central/demo/SKILL.md"), disabled.join("SKILL.md")).unwrap();
+        let junk = fx.repo.join(".test/skills/demo");
+        fs::create_dir_all(&junk).unwrap();
+        fs::write(junk.join("notes.txt"), "mine").unwrap();
+
+        let report = undeploy_from_project(&fx.store, &repo_ref(&fx), &["demo".into()], None, &[], false, false).unwrap();
+        assert_eq!(report.targets.len(), 1);
+        assert_eq!(PathBuf::from(&report.targets[0].path), disabled);
+        assert!(!disabled.exists(), "the planned copy is removed");
+        assert_eq!(fs::read_to_string(junk.join("notes.txt")).unwrap(), "mine");
     }
 
     #[test]

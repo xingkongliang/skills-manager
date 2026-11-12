@@ -1377,9 +1377,10 @@ pub async fn delete_project_skill(
     .await?
 }
 
-/// Remove one skill directory from a project workspace. Without `force`,
-/// refuses a copy that may hold content the library does not have, or one
-/// that is not a recognizable skill.
+/// Remove one skill directory from a project workspace: the enabled copy if
+/// there is one, else the disabled one (the slot the GUI has always picked).
+/// Without `force`, refuses unless that very directory is a recognizable
+/// skill that is safe to remove.
 pub fn delete_project_skill_internal(
     store: &SkillStore,
     project_id: String,
@@ -1392,41 +1393,7 @@ pub fn delete_project_skill_internal(
     let record = get_project_record(store, &project_id)?;
     ensure_workspace_path_exists(&record)?;
 
-    if !force {
-        let group_key = map_to_group_key(store, &record, agent.clone());
-        let configs = agent_skill_configs(store);
-        let variants = read_workspace_skills(&record, &configs);
-        let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        let variant = variants
-            .iter()
-            .find(|v| v.agent == group_key && v.relative_path == skill_relative_path);
-        let refusal = match variant {
-            None => Some((
-                PathBuf::from(&record.path).join(&skill_relative_path),
-                "is not a recognizable skill directory".to_string(),
-            )),
-            Some(variant) => {
-                let status = classify_sync_status(variant, find_best_center_match(variant, &all_managed));
-                (!removal_is_safe(variant, &status)).then(|| {
-                    (
-                        PathBuf::from(&variant.path),
-                        format!("has content not in the library (sync status: {status})"),
-                    )
-                })
-            }
-        };
-        if let Some((path, reason)) = refusal {
-            return Err(AppError::target_conflict(
-                "Refusing to remove a project skill copy that may hold content not in the library",
-                vec![TargetConflictDetail {
-                    path: path.to_string_lossy().to_string(),
-                    reason,
-                }],
-            ));
-        }
-    }
-
-    let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
+    let (skills_root, disabled_root) = resolve_agent_skills_roots(store, &record, &agent)
         .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
     let skills_dir = skills_root.join(&skill_relative_path);
     let disabled_dir = disabled_root
@@ -1445,8 +1412,63 @@ pub fn delete_project_skill_internal(
     };
 
     ensure_dir_within_root(&target, &target_root)?;
+    // Check the directory that is about to go, not one found by name: the
+    // enabled and disabled slots can hold different things.
+    if !force {
+        ensure_removable(store, &record, &target)?;
+    }
     remove_workspace_skill_target(&target)?;
     Ok(())
+}
+
+/// Remove exactly the copy a removal plan named. Without `force`, the copy is
+/// checked again first.
+pub fn remove_planned_project_copy(
+    store: &SkillStore,
+    project_id: &str,
+    target: &ProjectRemovalTarget,
+    force: bool,
+) -> Result<(), AppError> {
+    let record = get_project_record(store, project_id)?;
+    ensure_workspace_path_exists(&record)?;
+    let group = project_agent_group(store, &record, &target.agent)
+        .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", target.agent)))?;
+    let path = PathBuf::from(&target.path);
+    let root = std::iter::once(PathBuf::from(&group.skills_root))
+        .chain(group.disabled_root.clone())
+        .find(|root| path.starts_with(root))
+        .ok_or_else(|| AppError::invalid_input("Invalid skill directory path"))?;
+    ensure_dir_within_root(&path, &root)?;
+    if !force {
+        ensure_removable(store, &record, &path)?;
+    }
+    remove_workspace_skill_target(&path)
+}
+
+/// Refuse unless what sits at `target` is a scanned project skill whose
+/// removal cannot lose content the library lacks.
+fn ensure_removable(store: &SkillStore, record: &ProjectRecord, target: &Path) -> Result<(), AppError> {
+    let configs = agent_skill_configs(store);
+    let variants = read_workspace_skills(record, &configs);
+    let all_managed = store.get_all_skills().map_err(AppError::db)?;
+    let reason = match variants.iter().find(|v| Path::new(&v.path) == target) {
+        None => Some("is not a recognizable skill directory".to_string()),
+        Some(variant) => {
+            let status = classify_sync_status(variant, find_best_center_match(variant, &all_managed));
+            (!removal_is_safe(variant, &status))
+                .then(|| format!("has content not in the library (sync status: {status})"))
+        }
+    };
+    match reason {
+        None => Ok(()),
+        Some(reason) => Err(AppError::target_conflict(
+            "Refusing to remove a project skill copy that may hold content not in the library",
+            vec![TargetConflictDetail {
+                path: target.to_string_lossy().to_string(),
+                reason,
+            }],
+        )),
+    }
 }
 
 // ── Planning shared by the project commands and the projects CLI ──────────
@@ -2978,6 +3000,48 @@ mod project_plan_tests {
         fs::write(junk.join("notes.txt"), "mine").unwrap();
         let err = delete_project_skill_internal(&fx.store, fx.project_id.clone(), "junk".into(), "claude_code".into(), false).unwrap_err();
         assert_eq!(conflict_paths(&err).len(), 1);
+        assert!(junk.join("notes.txt").is_file());
+    }
+
+    /// The enabled slot holds the user's unrelated files; the disabled slot
+    /// holds an in-sync copy. Whatever passes the check must be what is
+    /// removed: the unrelated files are never touched without force.
+    #[test]
+    fn a_removal_deletes_exactly_the_copy_it_checked() {
+        let fx = fixture(&["claude_code"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let disabled = fx.repo.join(".claude/skills-disabled/demo");
+        fs::create_dir_all(&disabled).unwrap();
+        fs::copy(Path::new(&demo.central_path).join("SKILL.md"), disabled.join("SKILL.md")).unwrap();
+        let junk = fx.repo.join(".claude/skills/demo");
+        fs::create_dir_all(&junk).unwrap();
+        fs::write(junk.join("notes.txt"), "mine").unwrap();
+
+        // By relative path: the slot that would be deleted is the junk one,
+        // which is not a recognizable skill, so it is refused.
+        let err = delete_project_skill_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).unwrap_err();
+        assert_eq!(conflict_paths(&err), vec![junk.to_string_lossy().to_string()]);
+        assert!(junk.join("notes.txt").is_file());
+    }
+
+    /// Same layout, removing through the plan: the planned copy is the
+    /// disabled one, and only it goes.
+    #[test]
+    fn a_planned_removal_deletes_exactly_the_planned_copy() {
+        let fx = fixture(&["claude_code"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let disabled = fx.repo.join(".claude/skills-disabled/demo");
+        fs::create_dir_all(&disabled).unwrap();
+        fs::copy(Path::new(&demo.central_path).join("SKILL.md"), disabled.join("SKILL.md")).unwrap();
+        let junk = fx.repo.join(".claude/skills/demo");
+        fs::create_dir_all(&junk).unwrap();
+        fs::write(junk.join("notes.txt"), "mine").unwrap();
+
+        let plan = plan_project_undeploy(&fx.store, &fx.project_id, &ids(&[&demo]), &[]).unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!(PathBuf::from(&plan[0].path), disabled);
+        remove_planned_project_copy(&fx.store, &fx.project_id, &plan[0], false).unwrap();
+        assert!(!disabled.exists());
         assert!(junk.join("notes.txt").is_file());
     }
 
