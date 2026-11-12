@@ -1131,5 +1131,15 @@
       "deletedLocalBatch": "{{count}} local skills deleted",
       "deleteLocalBatchFailed": "{{count}} local skills failed to delete"
     }
+  },
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "description": "The window hit an unexpected error. Reload to continue. If it keeps happening, copy the details below into a GitHub issue.",
+    "copy": "Copy details",
+    "copied": "Copied",
+    "exportLogs": "Export logs",
+    "exportLogsDone": "Logs saved to {{path}}",
+    "exportLogsFailed": "Failed to export logs.",
+    "reload": "Reload"
   }
 }
