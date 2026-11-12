@@ -905,4 +905,212 @@ mod tests {
             "second"
         );
     }
+
+    /// Two agents on one skills directory, copy mode, and skill `s1` whose
+    /// deployment directory is `shared/demo`.
+    fn shared_dir_with_one_skill() -> (tempfile::TempDir, SkillStore, PathBuf) {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let shared = tmp.path().join("shared");
+        fs::create_dir_all(&shared).unwrap();
+        configure_two_custom_tools_sharing_a_dir(&store, &shared);
+        let dir = write_skill_dir(&tmp.path().join("central"), "demo", "library");
+        store
+            .insert_skill(&sample_skill("s1", "demo", &dir))
+            .unwrap();
+        (tmp, store, shared.join("demo"))
+    }
+
+    fn recorded_tools(store: &SkillStore, skill_id: &str) -> Vec<String> {
+        let mut tools: Vec<String> = store
+            .get_targets_for_skill(skill_id)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.tool)
+            .collect();
+        tools.sort();
+        tools
+    }
+
+    /// Cluster 37 A5: deploying one agent at a time to two agents that share
+    /// a skills directory refused the second one in copy mode — the
+    /// directory the first one wrote has no row of the second agent's. The
+    /// skill detail sheet then showed "pending sync" for it forever.
+    #[test]
+    fn shared_skills_dir_deploys_to_both_agents_one_at_a_time() {
+        let (_tmp, store, target) = shared_dir_with_one_skill();
+
+        sync_skill_to_tool_internal(&store, "s1", "agent_a").unwrap();
+        sync_skill_to_tool_internal(&store, "s1", "agent_b")
+            .expect("the directory agent_a's deployment wrote must not be refused");
+
+        assert_eq!(recorded_tools(&store, "s1"), ["agent_a", "agent_b"]);
+        for row in store.get_targets_for_skill("s1").unwrap() {
+            assert_eq!(PathBuf::from(&row.target_path), target);
+            assert_eq!(row.mode, "copy");
+        }
+        assert_eq!(
+            fs::read_to_string(target.join("unique.txt")).unwrap(),
+            "library"
+        );
+    }
+
+    fn add_active_preset(store: &SkillStore, skill_ids: &[&str]) {
+        store
+            .insert_scenario(&ScenarioRecord {
+                id: "p".to_string(),
+                name: "P".to_string(),
+                description: None,
+                icon: None,
+                sort_order: 0,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        for skill_id in skill_ids {
+            store.add_skill_to_scenario("p", skill_id).unwrap();
+        }
+        store.set_active_scenario("p").unwrap();
+    }
+
+    /// The preset paths deploy pair by pair too: switching to a preset, the
+    /// startup sync, and adding a skill to the active preset.
+    #[test]
+    fn shared_skills_dir_preset_sync_deploys_to_both_agents() {
+        for active_only in [false, true] {
+            let (_tmp, store, target) = shared_dir_with_one_skill();
+            add_active_preset(&store, &["s1"]);
+
+            if active_only {
+                scenario_service::sync_skill_to_active_scenario(&store, "p", "s1").unwrap();
+            } else {
+                let refusals = scenario_service::sync_scenario_skills(&store, "p").unwrap();
+                assert!(refusals.is_empty(), "{refusals:?}");
+            }
+
+            assert_eq!(
+                recorded_tools(&store, "s1"),
+                ["agent_a", "agent_b"],
+                "active_only={active_only}"
+            );
+            assert!(target.join("unique.txt").exists());
+        }
+
+        // `presets sync --tool agent_b` (and its `--dry-run` preflight) after
+        // agent_a alone was deployed.
+        let (_tmp, store, _target) = shared_dir_with_one_skill();
+        add_active_preset(&store, &["s1"]);
+        sync_skill_to_tool_internal(&store, "s1", "agent_a").unwrap();
+        let only_b: Vec<_> = scenario_service::collect_scenario_sync_targets(&store, "p")
+            .unwrap()
+            .into_iter()
+            .filter(|target| target.tool == "agent_b")
+            .collect();
+        scenario_service::preflight_scenario_sync_targets(&store, &only_b)
+            .expect("the dry run must agree with the sync");
+        let refusals = scenario_service::sync_desired_targets(&store, &only_b).unwrap();
+        assert!(refusals.is_empty(), "{refusals:?}");
+        assert_eq!(recorded_tools(&store, "s1"), ["agent_a", "agent_b"]);
+    }
+
+    /// Another agent's row vouches for the directory only when it records
+    /// this skill at this path. Content we have no record of, or another
+    /// skill's deployment on the same path, is still refused and left alone.
+    #[test]
+    fn shared_skills_dir_still_refuses_content_that_is_not_this_skills_deployment() {
+        // Nothing recorded there at all: the user's own directory.
+        let (_tmp, store, target) = shared_dir_with_one_skill();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("mine.txt"), "USER").unwrap();
+        assert!(sync_skill_to_tool_internal(&store, "s1", "agent_b").is_err());
+        assert_eq!(fs::read_to_string(target.join("mine.txt")).unwrap(), "USER");
+        assert!(recorded_tools(&store, "s1").is_empty());
+
+        // Another library skill deployed by agent_a to the same path (its
+        // central directory has the same basename).
+        let (tmp, store, target) = shared_dir_with_one_skill();
+        let other = write_skill_dir(&tmp.path().join("central-2"), "demo", "other skill");
+        store
+            .insert_skill(&sample_skill("s2", "demo", &other))
+            .unwrap();
+        sync_skill_to_tool_internal(&store, "s2", "agent_a").unwrap();
+        assert!(
+            sync_skill_to_tool_internal(&store, "s1", "agent_b").is_err(),
+            "s2's row must not vouch for deploying s1 over it"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("unique.txt")).unwrap(),
+            "other skill"
+        );
+        assert!(recorded_tools(&store, "s1").is_empty());
+        assert_eq!(recorded_tools(&store, "s2"), ["agent_a"]);
+
+        // The same two skills in one preset sync: whichever deploys first owns
+        // the path for the rest of the run, the other is refused.
+        let (tmp, store, target) = shared_dir_with_one_skill();
+        let other = write_skill_dir(&tmp.path().join("central-2"), "demo", "other skill");
+        store
+            .insert_skill(&sample_skill("s2", "demo", &other))
+            .unwrap();
+        add_active_preset(&store, &["s1", "s2"]);
+        let refusals = scenario_service::sync_scenario_skills(&store, "p").unwrap();
+        assert!(!refusals.is_empty(), "one of the two skills must be refused");
+        let s1_tools = recorded_tools(&store, "s1");
+        let s2_tools = recorded_tools(&store, "s2");
+        let (winner, loser) = if s1_tools.is_empty() {
+            (s2_tools, s1_tools)
+        } else {
+            (s1_tools, s2_tools)
+        };
+        assert_eq!(winner, ["agent_a", "agent_b"]);
+        assert!(loser.is_empty(), "the refused skill must have no rows");
+        let on_disk = fs::read_to_string(target.join("unique.txt")).unwrap();
+        let expected = if recorded_tools(&store, "s1").is_empty() {
+            "other skill"
+        } else {
+            "library"
+        };
+        assert_eq!(on_disk, expected, "the directory must hold the recorded skill");
+    }
+
+    /// Removing one agent of a shared directory keeps the directory and the
+    /// other agent's record; removing the last one deletes the directory.
+    /// Every removal path: the workspace/list toggle, the detail-sheet toggle
+    /// of the active preset, and the batch remove behind the tray and CLI.
+    #[test]
+    fn shared_skills_dir_removal_keeps_the_other_agents_deployment() {
+        type Remove = fn(&SkillStore, &str, &str) -> Result<(), AppError>;
+        let removals: [(&str, Remove); 3] = [
+            ("unsync_skill_from_tool", unsync_skill_from_tool_internal),
+            ("preset toggle off", unsync_skill_for_tool_in_preset),
+            ("batch remove", |store, skill_id, tool| {
+                scenario_service::apply_skills_to_tools(
+                    store,
+                    &[skill_id.to_string()],
+                    &[tool.to_string()],
+                    scenario_service::BatchApplyMode::Remove,
+                )
+            }),
+        ];
+        for (name, remove) in removals {
+            let (_tmp, store, target) = shared_dir_with_one_skill();
+            sync_skill_to_tool_internal(&store, "s1", "agent_a").unwrap();
+            sync_skill_to_tool_internal(&store, "s1", "agent_b").unwrap();
+
+            remove(&store, "s1", "agent_a").unwrap();
+            assert_eq!(recorded_tools(&store, "s1"), ["agent_b"], "{name}");
+            assert_eq!(
+                fs::read_to_string(target.join("unique.txt")).unwrap(),
+                "library",
+                "{name}: agent_b's deployment must survive"
+            );
+
+            remove(&store, "s1", "agent_b").unwrap();
+            assert!(recorded_tools(&store, "s1").is_empty(), "{name}");
+            assert!(
+                fs::symlink_metadata(&target).is_err(),
+                "{name}: the last agent's removal must delete the directory"
+            );
+        }
+    }
 }
