@@ -3,7 +3,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
-use app_lib::commands::{presets as preset_cmd, skills as cmd, tools as tool_cmd};
+use app_lib::commands::{
+    presets as preset_cmd, projects as project_cmd, skills as cmd, tools as tool_cmd,
+};
 use app_lib::core::{
     app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
     installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
@@ -34,6 +36,7 @@ enum Commands {
     #[command(alias = "scenarios")]
     Presets(PresetArgs),
     Git(GitArgs),
+    Projects(ProjectsArgs),
 }
 
 #[derive(Args, Debug)]
@@ -356,6 +359,86 @@ enum PresetCommand {
         preset: String,
         #[arg(required = true)]
         skills: Vec<String>,
+    },
+}
+
+#[derive(Args, Debug)]
+struct ProjectsArgs {
+    #[command(subcommand)]
+    command: ProjectsCommand,
+}
+
+/// `<project>` is a project id, its path (any spelling of it, `.` included)
+/// or its exact name.
+#[derive(Subcommand, Debug)]
+enum ProjectsCommand {
+    /// List registered project workspaces.
+    List,
+    /// Show a project's agent directories and the skills found in them.
+    Show {
+        project: String,
+        /// Only list skills in this agent's project directory.
+        #[arg(long = "agent", value_name = "AGENT")]
+        agent: Option<String>,
+    },
+    /// Register a project directory. Creates .claude/skills and
+    /// .claude/skills-disabled inside it, as the app does.
+    Add {
+        path: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Unregister a project. Its files are not touched.
+    Remove {
+        project: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Deploy library skills (or a preset's current skills) into a project.
+    /// Refuses the whole batch if any target holds something else.
+    #[command(group(clap::ArgGroup::new("what").required(true).args(["skills", "preset"])))]
+    Deploy {
+        project: String,
+        skills: Vec<String>,
+        /// Deploy every skill the preset holds now. No lasting link is made.
+        #[arg(long, conflicts_with = "skills")]
+        preset: Option<String>,
+        #[arg(long = "agent", alias = "to", value_name = "AGENT", required = true)]
+        agents: Vec<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove a library skill's copies from a project. Without --agent, from
+    /// every agent directory of the project. Refuses copies that may hold
+    /// content not in the library unless --force.
+    #[command(group(clap::ArgGroup::new("what").required(true).args(["skills", "preset"])))]
+    Undeploy {
+        project: String,
+        skills: Vec<String>,
+        #[arg(long, conflicts_with = "skills")]
+        preset: Option<String>,
+        #[arg(long = "agent", alias = "from", value_name = "AGENT")]
+        agents: Vec<String>,
+        /// Also remove copies that are not in sync with the library.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Copy a skill from a project into the library. Refuses to overwrite a
+    /// differing library copy unless --force.
+    Import {
+        project: String,
+        /// Path under the agent's project skills directory, as `projects show`
+        /// reports it in `relative_path`.
+        relative_path: String,
+        #[arg(long = "agent", value_name = "AGENT", required = true)]
+        agent: String,
+        /// Overwrite the library copy when its content differs.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -706,6 +789,8 @@ fn main() {
 }
 
 fn run(cli: Cli) -> anyhow::Result<()> {
+    reject_skills_root_for_projects(&cli)?;
+
     if let Commands::Repo(RepoArgs {
         command: command @ (RepoCommand::SetPath { .. } | RepoCommand::ResetPath),
     }) = &cli.command
@@ -739,6 +824,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Skills(args) => run_skills(args, &store, cli.json),
         Commands::Presets(args) => run_presets(args, &store, cli.json),
         Commands::Git(args) => run_git(args, &store, cli.skills_root.is_some(), cli.json),
+        Commands::Projects(args) => run_projects(args, &store, cli.json),
     }
 }
 
@@ -3037,6 +3123,499 @@ fn resolve_scenario(
     }
 }
 
+// ── projects ──────────────────────────────────────────────────────────────
+
+/// `--skills-root` opens a separate, namespaced library database, which has
+/// no projects; running a project command there would report an empty list
+/// or "not registered" for every real project.
+fn reject_skills_root_for_projects(cli: &Cli) -> anyhow::Result<()> {
+    if matches!(cli.command, Commands::Projects(_)) && cli.skills_root.is_some() {
+        bail!(
+            "projects commands cannot be combined with --skills-root: it opens a separate library database that has no projects"
+        );
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectListItem {
+    #[serde(flatten)]
+    project: project_cmd::ProjectDto,
+    path_exists: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectShowAgent {
+    key: String,
+    display_name: String,
+    shared_by: Vec<String>,
+    skills_dir: String,
+    installed: bool,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectShowReport {
+    project: ProjectListItem,
+    agents: Vec<ProjectShowAgent>,
+    skills: Vec<app_lib::core::project_scanner::ProjectSkillInfo>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectAddReport {
+    ok: bool,
+    dry_run: bool,
+    /// None on a dry run: nothing was registered.
+    project_id: Option<String>,
+    name: String,
+    path: String,
+    created_dirs: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectRemoveReport {
+    ok: bool,
+    dry_run: bool,
+    project_id: String,
+    name: String,
+    path: String,
+    removed: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectTargetReport {
+    skill: String,
+    agent: String,
+    shared_by: Vec<String>,
+    path: String,
+    result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sync_status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectDeploymentReport {
+    ok: bool,
+    action: String,
+    dry_run: bool,
+    project_id: String,
+    project_path: String,
+    agents: Vec<String>,
+    preset: Option<String>,
+    skill_count: usize,
+    pair_count: usize,
+    changed_pairs: usize,
+    skills: Vec<String>,
+    targets: Vec<ProjectTargetReport>,
+    /// Undeploy only: requested skills with no copy in the selected directories.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    not_deployed: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectImportReport {
+    ok: bool,
+    dry_run: bool,
+    #[serde(flatten)]
+    result: project_cmd::ProjectImportResult,
+}
+
+fn run_projects(args: ProjectsArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> {
+    match args.command {
+        ProjectsCommand::List => print_json(&list_projects(store)?, json),
+        ProjectsCommand::Show { project, agent } => {
+            print_json(&show_project(store, &project, agent.as_deref())?, json)
+        }
+        ProjectsCommand::Add { path, dry_run } => print_json(&add_project(store, &path, dry_run)?, json),
+        ProjectsCommand::Remove { project, dry_run } => {
+            let record = resolve_project(store, &project)?;
+            if !dry_run {
+                project_cmd::remove_project_internal(store, record.id.clone()).map_err(map_app_err)?;
+            }
+            print_json(
+                &ProjectRemoveReport {
+                    ok: true,
+                    dry_run,
+                    project_id: record.id,
+                    name: record.name,
+                    path: record.path,
+                    removed: !dry_run,
+                },
+                json,
+            );
+        }
+        ProjectsCommand::Deploy {
+            project,
+            skills,
+            preset,
+            agents,
+            dry_run,
+        } => print_json(
+            &deploy_to_project(store, &project, &skills, preset.as_deref(), &agents, dry_run)?,
+            json,
+        ),
+        ProjectsCommand::Undeploy {
+            project,
+            skills,
+            preset,
+            agents,
+            force,
+            dry_run,
+        } => print_json(
+            &undeploy_from_project(
+                store,
+                &project,
+                &skills,
+                preset.as_deref(),
+                &agents,
+                force,
+                dry_run,
+            )?,
+            json,
+        ),
+        ProjectsCommand::Import {
+            project,
+            relative_path,
+            agent,
+            force,
+            dry_run,
+        } => print_json(
+            &import_from_project(store, &project, &relative_path, &agent, force, dry_run)?,
+            json,
+        ),
+    }
+    Ok(())
+}
+
+fn list_projects(store: &SkillStore) -> anyhow::Result<Vec<ProjectListItem>> {
+    Ok(project_cmd::get_projects_internal(store)
+        .map_err(map_app_err)?
+        .into_iter()
+        .map(|project| ProjectListItem {
+            path_exists: Path::new(&project.path).is_dir(),
+            project,
+        })
+        .collect())
+}
+
+/// Resolve `<project>`: id, then path (compared canonicalized, so `.` and
+/// trailing slashes work), then exact name. A path that is a directory but
+/// not registered gets told how to register it.
+fn resolve_project(
+    store: &SkillStore,
+    reference: &str,
+) -> anyhow::Result<app_lib::core::skill_store::ProjectRecord> {
+    let projects = store.get_all_projects()?;
+    if let Some(project) = projects.iter().find(|project| project.id == reference) {
+        return Ok(project.clone());
+    }
+
+    let canonical = dunce::canonicalize(reference).ok();
+    if let Some(project) = projects.iter().find(|project| {
+        project.path == reference
+            || canonical.as_ref().is_some_and(|canonical| {
+                dunce::canonicalize(&project.path).is_ok_and(|path| &path == canonical)
+            })
+    }) {
+        return Ok(project.clone());
+    }
+
+    let by_name: Vec<_> = projects.iter().filter(|project| project.name == reference).collect();
+    match by_name.as_slice() {
+        [project] => Ok((*project).clone()),
+        [] => match canonical.filter(|path| path.is_dir()) {
+            Some(path) => bail!(
+                "project not registered: {}; run `projects add {}` first",
+                path.display(),
+                path.display()
+            ),
+            None => bail!("project not found: {reference}; run `projects list` to see registered projects"),
+        },
+        candidates => bail!(
+            "project name is ambiguous: {reference}; use an id or path. Candidates: {}",
+            candidates
+                .iter()
+                .map(|project| format!("{} (id: {}, path: {})", project.name, project.id, project.path))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+    }
+}
+
+fn show_project(
+    store: &SkillStore,
+    reference: &str,
+    agent: Option<&str>,
+) -> anyhow::Result<ProjectShowReport> {
+    let record = resolve_project(store, reference)?;
+    let project = list_projects(store)?
+        .into_iter()
+        .find(|item| item.project.id == record.id)
+        .ok_or_else(|| anyhow!("project summary missing"))?;
+    let groups = project_cmd::project_agent_groups(store, &record);
+    let agents = project_cmd::get_project_agent_targets_internal(store, record.id.clone())
+        .map_err(map_app_err)?
+        .into_iter()
+        .filter_map(|row| {
+            let group = groups.iter().find(|group| group.key == row.key)?;
+            Some(ProjectShowAgent {
+                shared_by: group.shared_by.clone(),
+                skills_dir: group.skills_root.clone(),
+                key: row.key,
+                display_name: row.display_name,
+                installed: row.installed,
+                enabled: row.enabled,
+            })
+        })
+        .collect();
+    let filter = match agent {
+        Some(agent) => Some(
+            project_cmd::project_agent_group(store, &record, agent)
+                .ok_or_else(|| anyhow!("unknown agent for this project: {agent}"))?
+                .key,
+        ),
+        None => None,
+    };
+    let skills = project_cmd::get_project_skills_internal(store, record.id.clone())
+        .map_err(map_app_err)?
+        .into_iter()
+        .filter(|skill| filter.as_ref().is_none_or(|key| &skill.agent == key))
+        .collect();
+    Ok(ProjectShowReport {
+        project,
+        agents,
+        skills,
+    })
+}
+
+fn add_project(store: &SkillStore, path: &Path, dry_run: bool) -> anyhow::Result<ProjectAddReport> {
+    let record = project_cmd::prepare_project_record(store, path).map_err(map_app_err)?;
+    let claude = Path::new(&record.path).join(".claude");
+    let created_dirs: Vec<String> = [claude.join("skills"), claude.join("skills-disabled")]
+        .into_iter()
+        .filter(|dir| !dir.is_dir())
+        .map(|dir| dir.to_string_lossy().to_string())
+        .collect();
+    let project_id = if dry_run {
+        None
+    } else {
+        // Pass what the caller gave, not the stored spelling: preparing the
+        // stored spelling again could resolve to a different directory on
+        // Windows (`\\?\C:\repo.` and `C:\repo`).
+        let dto = project_cmd::add_project_internal(store, path.to_string_lossy().to_string())
+            .map_err(map_app_err)?;
+        Some(dto.id)
+    };
+    Ok(ProjectAddReport {
+        ok: true,
+        dry_run,
+        project_id,
+        name: record.name,
+        path: record.path,
+        created_dirs,
+    })
+}
+
+/// Library skill ids from explicit refs, or a preset's current members.
+fn project_skill_selection(
+    store: &SkillStore,
+    references: &[String],
+    preset: Option<&str>,
+) -> anyhow::Result<(Vec<app_lib::core::skill_store::SkillRecord>, Option<String>)> {
+    match preset {
+        Some(preset) => {
+            let scenario = resolve_scenario(store, preset)?;
+            let skills = store.get_skills_for_scenario(&scenario.id)?;
+            if skills.is_empty() {
+                bail!("preset has no skills: {}", scenario.name);
+            }
+            Ok((skills, Some(scenario.name)))
+        }
+        None => Ok((resolve_skill_references(store, references)?, None)),
+    }
+}
+
+fn dedup_keys(keys: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for key in keys {
+        if !out.contains(key) {
+            out.push(key.clone());
+        }
+    }
+    out
+}
+
+fn deploy_to_project(
+    store: &SkillStore,
+    reference: &str,
+    references: &[String],
+    preset: Option<&str>,
+    agents: &[String],
+    dry_run: bool,
+) -> anyhow::Result<ProjectDeploymentReport> {
+    let record = resolve_project(store, reference)?;
+    let (skills, preset_name) = project_skill_selection(store, references, preset)?;
+    let skill_ids: Vec<String> = skills.iter().map(|skill| skill.id.clone()).collect();
+    let agents = dedup_keys(agents);
+
+    let plan = project_cmd::plan_project_deploy(store, &record.id, &skill_ids, &agents)
+        .map_err(map_app_err)?;
+    if let Some(conflict) = project_cmd::project_deploy_conflicts(&plan) {
+        return Err(map_app_err(conflict));
+    }
+    if !dry_run {
+        project_cmd::apply_project_deploy(store, &plan).map_err(map_app_err)?;
+    }
+
+    let mut targets = Vec::new();
+    for target in &plan {
+        let created = target.state == project_cmd::ProjectDeployState::Create;
+        if created && !dry_run {
+            if std::fs::symlink_metadata(&target.path).is_err() {
+                bail!("deployment incomplete: {} was not written", target.path);
+            }
+            store.log_audit(
+                AuditDraft::new("deploy")
+                    .skill(target.skill_id.clone(), target.skill.clone())
+                    .tool(target.agent.clone())
+                    .detail(format!("project {}", record.path))
+                    .ok(),
+            );
+        }
+        targets.push(ProjectTargetReport {
+            skill: target.skill.clone(),
+            agent: target.agent.clone(),
+            shared_by: target.shared_by.clone(),
+            path: target.path.clone(),
+            result: match (created, dry_run) {
+                (true, true) => "would_create",
+                (true, false) => "created",
+                (false, _) => "already_deployed",
+            }
+            .to_string(),
+            sync_status: target.sync_status.clone(),
+        });
+    }
+
+    Ok(ProjectDeploymentReport {
+        ok: true,
+        action: "deploy".to_string(),
+        dry_run,
+        project_id: record.id,
+        project_path: record.path,
+        agents,
+        preset: preset_name,
+        skill_count: skills.len(),
+        pair_count: plan.len(),
+        changed_pairs: targets.iter().filter(|t| t.result != "already_deployed").count(),
+        skills: skills.into_iter().map(|skill| skill.name).collect(),
+        targets,
+        not_deployed: Vec::new(),
+    })
+}
+
+fn undeploy_from_project(
+    store: &SkillStore,
+    reference: &str,
+    references: &[String],
+    preset: Option<&str>,
+    agents: &[String],
+    force: bool,
+    dry_run: bool,
+) -> anyhow::Result<ProjectDeploymentReport> {
+    let record = resolve_project(store, reference)?;
+    let (skills, preset_name) = project_skill_selection(store, references, preset)?;
+    let skill_ids: Vec<String> = skills.iter().map(|skill| skill.id.clone()).collect();
+    let agents = dedup_keys(agents);
+
+    let plan = project_cmd::plan_project_undeploy(store, &record.id, &skill_ids, &agents)
+        .map_err(map_app_err)?;
+    if !force {
+        if let Some(conflict) = project_cmd::project_removal_conflicts(&plan) {
+            return Err(map_app_err(conflict));
+        }
+    }
+
+    let mut targets = Vec::new();
+    for target in &plan {
+        if !dry_run {
+            // The planned path, not a lookup by name: the enabled and
+            // disabled slots can hold different things.
+            project_cmd::remove_planned_project_copy(store, &record.id, target, force)
+                .map_err(map_app_err)?;
+            store.log_audit(
+                AuditDraft::new("undeploy")
+                    .skill(target.skill_id.clone(), target.skill.clone())
+                    .tool(target.agent.clone())
+                    .detail(format!("project {}", record.path))
+                    .ok(),
+            );
+        }
+        targets.push(ProjectTargetReport {
+            skill: target.skill.clone(),
+            agent: target.agent.clone(),
+            shared_by: target.shared_by.clone(),
+            path: target.path.clone(),
+            result: if dry_run { "would_remove" } else { "removed" }.to_string(),
+            sync_status: Some(target.sync_status.clone()),
+        });
+    }
+    let not_deployed = skills
+        .iter()
+        .filter(|skill| !plan.iter().any(|target| target.skill_id == skill.id))
+        .map(|skill| skill.name.clone())
+        .collect();
+
+    Ok(ProjectDeploymentReport {
+        ok: true,
+        action: "undeploy".to_string(),
+        dry_run,
+        project_id: record.id,
+        project_path: record.path,
+        agents,
+        preset: preset_name,
+        skill_count: skills.len(),
+        pair_count: targets.len(),
+        changed_pairs: targets.len(),
+        skills: skills.into_iter().map(|skill| skill.name).collect(),
+        targets,
+        not_deployed,
+    })
+}
+
+fn import_from_project(
+    store: &SkillStore,
+    reference: &str,
+    relative_path: &str,
+    agent: &str,
+    force: bool,
+    dry_run: bool,
+) -> anyhow::Result<ProjectImportReport> {
+    let record = resolve_project(store, reference)?;
+    let result = if dry_run {
+        let plan = project_cmd::plan_project_import(store, &record.id, relative_path, agent)
+            .map_err(map_app_err)?;
+        if let Some(refusal) = project_cmd::project_import_refusal(&plan, force) {
+            return Err(map_app_err(refusal));
+        }
+        plan
+    } else {
+        project_cmd::import_project_skill_to_center_internal(
+            store,
+            record.id.clone(),
+            relative_path.to_string(),
+            agent.to_string(),
+            force,
+        )
+        .map_err(map_app_err)?
+    };
+    Ok(ProjectImportReport {
+        ok: true,
+        dry_run,
+        result,
+    })
+}
+
 // ── git ───────────────────────────────────────────────────────────────────
 
 fn run_git(
@@ -3723,5 +4302,257 @@ mod tests {
             .unwrap()
             .remove(0);
         assert!(report.skipped);
+    }
+}
+
+#[cfg(test)]
+mod project_tests {
+    use super::*;
+    use app_lib::core::skill_store::SkillRecord;
+    use app_lib::core::tool_adapters::{CustomToolDef, ToolCategory};
+    use std::fs;
+    use tempfile::{tempdir, TempDir};
+
+    struct Fx {
+        tmp: TempDir,
+        store: SkillStore,
+        repo: PathBuf,
+    }
+
+    fn write_skill(dir: &Path, name: &str, body: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("SKILL.md"), format!("---\nname: {name}\n---\n{body}\n")).unwrap();
+    }
+
+    /// A store with a custom agent whose project directory is `.test/skills`,
+    /// one library skill `demo`, and one registered project.
+    fn fixture() -> Fx {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        tool_service::set_custom_tools(
+            &store,
+            &[CustomToolDef {
+                key: "test_agent".to_string(),
+                display_name: "Test Agent".to_string(),
+                skills_dir: tmp.path().join("agent-skills").to_string_lossy().to_string(),
+                project_relative_skills_dir: Some(".test/skills".to_string()),
+                category: ToolCategory::Coding,
+            }],
+        )
+        .unwrap();
+        let central = tmp.path().join("central/demo");
+        write_skill(&central, "demo", "# Demo");
+        store
+            .insert_skill(&SkillRecord {
+                id: "skill-demo".to_string(),
+                name: "demo".to_string(),
+                description: None,
+                source_type: "local".to_string(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: central.to_string_lossy().to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: 1,
+                updated_at: 1,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        project_cmd::add_project_internal(&store, repo.to_string_lossy().to_string()).unwrap();
+        let repo = dunce::canonicalize(&repo).unwrap();
+        Fx { tmp, store, repo }
+    }
+
+    fn repo_ref(fx: &Fx) -> String {
+        fx.repo.to_string_lossy().to_string()
+    }
+
+    fn envelope_code(err: &anyhow::Error) -> String {
+        error_envelope(err)["code"].as_str().unwrap().to_string()
+    }
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("skills-manager-cli").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn parses_project_commands() {
+        assert!(parse(&["projects", "deploy", ".", "demo", "--agent", "codex", "--dry-run"]).is_ok());
+        assert!(parse(&["projects", "deploy", ".", "--preset", "Web", "--to", "codex"]).is_ok());
+        assert!(parse(&["projects", "deploy", ".", "demo"]).is_err(), "--agent is required");
+        assert!(parse(&["projects", "deploy", ".", "--agent", "codex"]).is_err(), "skills or --preset");
+        assert!(
+            parse(&["projects", "deploy", ".", "demo", "--preset", "Web", "--agent", "codex"]).is_err(),
+            "skills and --preset are exclusive"
+        );
+        assert!(parse(&["projects", "undeploy", ".", "demo"]).is_ok(), "--agent is optional");
+        assert!(parse(&["projects", "undeploy", ".", "demo", "--force", "--from", "codex"]).is_ok());
+        assert!(parse(&["projects", "import", ".", "mine"]).is_err(), "--agent is required");
+        assert!(parse(&["--json", "projects", "show", ".", "--agent", "codex"]).is_ok());
+    }
+
+    /// `--skills-root` opens another database, which has no projects.
+    #[test]
+    fn projects_commands_refuse_skills_root() {
+        let cli = parse(&["--skills-root", "/tmp/elsewhere", "projects", "list"]).unwrap();
+        let err = reject_skills_root_for_projects(&cli).unwrap_err();
+        assert!(err.to_string().contains("--skills-root"));
+        let other = parse(&["--skills-root", "/tmp/elsewhere", "skills", "list"]).unwrap();
+        assert!(reject_skills_root_for_projects(&other).is_ok());
+        let plain = parse(&["projects", "list"]).unwrap();
+        assert!(reject_skills_root_for_projects(&plain).is_ok());
+    }
+
+    #[test]
+    fn resolve_project_accepts_any_spelling_and_explains_an_unregistered_dir() {
+        let fx = fixture();
+        let id = fx.store.get_all_projects().unwrap()[0].id.clone();
+        for spelling in [repo_ref(&fx), format!("{}/", repo_ref(&fx)), id.clone(), "repo".to_string()] {
+            assert_eq!(resolve_project(&fx.store, &spelling).unwrap().id, id, "{spelling}");
+        }
+        let other = fx.tmp.path().join("other");
+        fs::create_dir_all(&other).unwrap();
+        let err = resolve_project(&fx.store, &other.to_string_lossy()).unwrap_err();
+        assert!(err.to_string().contains("projects add"), "{err}");
+        let err = resolve_project(&fx.store, "nope").unwrap_err();
+        assert!(err.to_string().contains("projects list"), "{err}");
+    }
+
+    #[test]
+    fn project_dry_runs_write_nothing() {
+        let fx = fixture();
+        let repo = repo_ref(&fx);
+        let target = fx.repo.join(".test/skills/demo");
+
+        // add --dry-run: no row, no directories.
+        let fresh = fx.tmp.path().join("fresh");
+        fs::create_dir_all(&fresh).unwrap();
+        let report = add_project(&fx.store, &fresh, true).unwrap();
+        assert!(report.project_id.is_none());
+        assert_eq!(report.created_dirs.len(), 2);
+        assert!(!fresh.join(".claude").exists());
+        assert_eq!(fx.store.get_all_projects().unwrap().len(), 1);
+
+        // deploy --dry-run: reported, not written.
+        let report = deploy_to_project(&fx.store, &repo, &["demo".into()], None, &["test_agent".into()], true).unwrap();
+        assert_eq!(report.targets[0].result, "would_create");
+        assert!(fs::symlink_metadata(&target).is_err());
+        assert!(fx.store.list_audit(None).unwrap().is_empty());
+
+        // a real deploy, so there is something to undeploy.
+        let report = deploy_to_project(&fx.store, &repo, &["demo".into()], None, &["test_agent".into()], false).unwrap();
+        assert_eq!(report.targets[0].result, "created");
+        assert!(target.join("SKILL.md").is_file());
+        let audits = fx.store.list_audit(None).unwrap().len();
+
+        // undeploy --dry-run: reported, not removed.
+        let report = undeploy_from_project(&fx.store, &repo, &["demo".into()], None, &[], false, true).unwrap();
+        assert_eq!(report.targets[0].result, "would_remove");
+        assert!(target.join("SKILL.md").is_file());
+        assert_eq!(fx.store.list_audit(None).unwrap().len(), audits);
+
+        // import --dry-run of a project-only skill: no library row.
+        write_skill(&fx.repo.join(".test/skills/mine"), "mine", "# Mine");
+        let report = import_from_project(&fx.store, &repo, "mine", "test_agent", false, true).unwrap();
+        assert_eq!(report.result.action, project_cmd::ProjectImportAction::Create);
+        assert_eq!(fx.store.get_all_skills().unwrap().len(), 1);
+
+        // remove --dry-run: still registered.
+        let mut cli = parse(&["projects", "remove", &repo, "--dry-run"]).unwrap();
+        let Commands::Projects(args) = std::mem::replace(&mut cli.command, Commands::Repo(RepoArgs { command: RepoCommand::Status })) else {
+            unreachable!()
+        };
+        run_projects(args, &fx.store, true).unwrap();
+        assert_eq!(fx.store.get_all_projects().unwrap().len(), 1);
+    }
+
+    /// Something else sits where the skill would go: the dry run must refuse
+    /// with the machine-readable conflict, exactly as the real run would.
+    #[test]
+    fn deploy_refuses_a_foreign_directory_in_dry_run_and_real_run() {
+        let fx = fixture();
+        let squatter = fx.repo.join(".test/skills/demo");
+        fs::create_dir_all(&squatter).unwrap();
+        fs::write(squatter.join("notes.txt"), "not a skill").unwrap();
+
+        for dry_run in [true, false] {
+            let err = deploy_to_project(&fx.store, &repo_ref(&fx), &["demo".into()], None, &["test_agent".into()], dry_run).unwrap_err();
+            assert_eq!(envelope_code(&err), "TARGET_CONFLICT", "dry_run={dry_run}: {err:#}");
+        }
+        assert_eq!(fs::read_to_string(squatter.join("notes.txt")).unwrap(), "not a skill");
+    }
+
+    #[test]
+    fn undeploy_refuses_an_edited_copy_in_dry_run_and_removes_it_with_force() {
+        let fx = fixture();
+        fx.store.set_setting("sync_mode", "copy").unwrap();
+        let repo = repo_ref(&fx);
+        deploy_to_project(&fx.store, &repo, &["demo".into()], None, &["test_agent".into()], false).unwrap();
+        let copy = fx.repo.join(".test/skills/demo");
+        fs::write(copy.join("SKILL.md"), "---\nname: demo\n---\n# Edited\n").unwrap();
+
+        for dry_run in [true, false] {
+            let err = undeploy_from_project(&fx.store, &repo, &["demo".into()], None, &[], false, dry_run).unwrap_err();
+            assert_eq!(envelope_code(&err), "TARGET_CONFLICT", "dry_run={dry_run}");
+            assert!(copy.join("SKILL.md").is_file());
+        }
+        let report = undeploy_from_project(&fx.store, &repo, &["demo".into()], None, &[], true, false).unwrap();
+        assert_eq!(report.targets[0].result, "removed");
+        assert!(!copy.exists());
+    }
+
+    /// The dry run of an import that would overwrite a differing library copy
+    /// refuses it the way the real run does.
+    #[test]
+    fn import_dry_run_refuses_an_overwrite_without_force() {
+        let fx = fixture();
+        fx.store.set_setting("sync_mode", "copy").unwrap();
+        let repo = repo_ref(&fx);
+        deploy_to_project(&fx.store, &repo, &["demo".into()], None, &["test_agent".into()], false).unwrap();
+        fs::write(fx.repo.join(".test/skills/demo/SKILL.md"), "---\nname: demo\n---\n# Better\n").unwrap();
+
+        let err = import_from_project(&fx.store, &repo, "demo", "test_agent", false, true).unwrap_err();
+        assert_eq!(envelope_code(&err), "TARGET_CONFLICT");
+        let ok = import_from_project(&fx.store, &repo, "demo", "test_agent", true, true).unwrap();
+        assert_eq!(ok.result.action, project_cmd::ProjectImportAction::Overwrite);
+    }
+
+    /// Review finding 1: the CLI must delete the copy it planned and checked
+    /// (the disabled one), never the unrelated files in the enabled slot, and
+    /// report that path.
+    #[test]
+    fn undeploy_removes_the_planned_copy_not_the_enabled_slot() {
+        let fx = fixture();
+        let disabled = fx.repo.join(".test/skills-disabled/demo");
+        fs::create_dir_all(&disabled).unwrap();
+        fs::copy(fx.tmp.path().join("central/demo/SKILL.md"), disabled.join("SKILL.md")).unwrap();
+        let junk = fx.repo.join(".test/skills/demo");
+        fs::create_dir_all(&junk).unwrap();
+        fs::write(junk.join("notes.txt"), "mine").unwrap();
+
+        let report = undeploy_from_project(&fx.store, &repo_ref(&fx), &["demo".into()], None, &[], false, false).unwrap();
+        assert_eq!(report.targets.len(), 1);
+        assert_eq!(PathBuf::from(&report.targets[0].path), disabled);
+        assert!(!disabled.exists(), "the planned copy is removed");
+        assert_eq!(fs::read_to_string(junk.join("notes.txt")).unwrap(), "mine");
+    }
+
+    #[test]
+    fn deploy_is_idempotent_and_reports_already_deployed() {
+        let fx = fixture();
+        let repo = repo_ref(&fx);
+        deploy_to_project(&fx.store, &repo, &["demo".into()], None, &["test_agent".into()], false).unwrap();
+        let again = deploy_to_project(&fx.store, &repo, &["demo".into()], None, &["test_agent".into()], false).unwrap();
+        assert_eq!(again.targets[0].result, "already_deployed");
+        assert_eq!(again.changed_pairs, 0);
     }
 }

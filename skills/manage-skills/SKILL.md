@@ -1,6 +1,6 @@
 ---
 name: manage-skills
-description: Manage the user's shared agent-skill library via skills-manager-cli — install, update, remove, deploy or undeploy skills per agent, manage presets, organize tags, search, and adopt existing skills. Use this whenever the user wants Claude Code, Codex, Cursor, or another agent to gain or lose a skill, wants to organize the central library, or asks what is installed or deployed. Prefer this over direct agent-folder installs because Skills Manager preserves source metadata, preset membership, updates, and cross-agent deployment state.
+description: Manage the user's shared agent-skill library via skills-manager-cli — install, update, remove, deploy or undeploy skills per agent or into a project's own agent directories, manage presets, organize tags, search, and adopt existing skills. Use this whenever the user wants Claude Code, Codex, Cursor, or another agent to gain or lose a skill (globally or in one repo), wants to organize the central library, or asks what is installed or deployed. Prefer this over direct agent-folder installs because Skills Manager preserves source metadata, preset membership, updates, and cross-agent deployment state.
 ---
 
 ## Before doing anything
@@ -67,6 +67,18 @@ Tell the user which path is in the way, that its contents are untouched, and
 offer the two ways out: adopt it into the library (`skills adopt`), or move it
 aside and retry. Never delete it for them.
 
+The project commands refuse the same way, with these `reason`s:
+
+| reason | from | what to tell the user |
+|---|---|---|
+| `exists and is not this library skill` | `projects deploy` | that directory holds something else; it was left alone and nothing in the batch was written |
+| `skills "…" (…) and "…" (…) would both be written here` | `projects deploy` | two library skills have the same directory name and only one can live there; ask the user which one, then deploy just that one |
+| `has content not in the library (…)` | `projects undeploy` | the project copy may have edits, extra files (`.gitignore`, `.git`, links) or be a link the user made to somewhere else; `projects import` it first, or remove it with `--force` only if they say it can go |
+| `library copy differs from the project copy` | `projects import` | importing would overwrite the library version; `--force` only if they want the project version to win |
+| `another copy of this skill also differs from the library` | `projects import` | several agents' copies were edited differently; they must pick one by hand |
+
+Never add `--force` on your own.
+
 ## Mental model
 
 There's **one central library** at `~/.skills-manager/skills/` that all agents share. Each skill has source metadata, preset membership, tags, and zero or more real deployments in agent directories. A **preset** is a reusable group; several presets may be deployed at the same time.
@@ -75,6 +87,8 @@ Keep these three states separate:
 - **Library**: install/remove controls whether Skills Manager owns the skill.
 - **Preset membership**: `presets add-skill/remove-skill` organizes the library only.
 - **Deployment**: `skills deploy/undeploy` and `presets deploy/undeploy` control what an agent can actually see.
+
+**Project deployments are a separate thing.** `projects deploy` puts a library skill into one project's agent directory (e.g. `<repo>/.claude/skills`). It is not recorded as a deployment: `skills status` and `deployed_to` never show it; read it with `projects show`. Deploying a preset into a project copies its current members once and makes no lasting link.
 
 Internally, presets are still stored as scenarios for backward-compatible Git Backup. The CLI and UI call them presets.
 
@@ -297,6 +311,36 @@ The no-`--agent` defaults intentionally differ: deploy targets all installed, en
 
 Preset create/update/delete and add-skill/remove-skill are organization-only CLI operations. They never deploy or undeploy agent files implicitly.
 
+## Projects
+
+A project must be registered before any project command touches it. `<project>` is an id, the project's path (any spelling; `.` works when you are in it), or its exact name.
+
+```bash
+"$SM" --json projects list                     # registered projects; path_exists=false means the folder is gone
+"$SM" projects add .                           # register the current repo (creates .claude/skills and .claude/skills-disabled)
+"$SM" --json projects show .                   # agent directories (with shared_by) and the skills found in them
+"$SM" --json projects show . --agent codex
+
+"$SM" projects deploy . <skill>... --agent claude_code --dry-run
+"$SM" projects deploy . <skill>... --agent claude_code
+"$SM" projects deploy . --preset "Web Dev" --agent claude_code --agent codex
+
+"$SM" projects undeploy . <skill>... --agent claude_code --dry-run
+"$SM" projects undeploy . <skill>...           # every agent directory in the project
+
+"$SM" projects import . <relative_path> --agent claude_code --dry-run
+"$SM" projects import . <relative_path> --agent claude_code
+
+"$SM" projects remove . --dry-run              # unregister only; files stay
+```
+
+- `deploy` needs at least one `--agent`, and the agent must be installed and enabled. Re-running it is safe: a target that already holds this skill reports `already_deployed` with its `sync_status`.
+- Several agents can read one project directory (`.agents/skills` is read by Cline, Warp, GitLab Duo and others). Any of their keys works; `shared_by` in the output says who else sees the change, and `agent` is the key the directory is filed under.
+- `undeploy` only removes copies that match a library skill. A skill that exists only in the project (`sync_status: project_only`) is never removed by the CLI; tell the user to delete it in the app if they want it gone.
+- `import` takes the `relative_path` that `projects show` reports. `action` is `create` (new library skill), `overwrite` or `unchanged`.
+- If a project path no longer exists (`path_exists: false`), `deploy`, `undeploy` and `import` are refused. Ask the user whether it moved; do not `projects add` a new path on their behalf. `projects remove` still works to unregister it.
+- Project commands cannot be combined with `--skills-root`.
+
 ## Health check
 
 When sync misbehaves or a command errors in a confusing way:
@@ -330,6 +374,18 @@ Use `agents disable <agent>` when the user wants the whole Agent integration tur
 
 The `preset_ids`, `presets`, `deployed_to`, `tags`, and `source_type` fields are usually the most informative. The legacy `enabled` field is not deployment state.
 
+### "Add skill X to this repo for Claude Code"
+
+1. `projects show .`. If it says the project is not registered, run `projects add .` (tell the user it creates `.claude/skills`).
+2. `projects deploy . X --agent claude_code --dry-run`, then the same without `--dry-run`.
+3. If X is not in the library yet, install it first (`skills install`), without deploying it globally unless asked.
+
+### "Save the skill I wrote in this repo to my library"
+
+1. `projects show .` and find its `relative_path` and `agent`.
+2. `projects import . <relative_path> --agent <agent> --dry-run`. If it is refused, report the paths (see the refusal table above).
+3. Run it without `--dry-run`.
+
 ### "Pull in the skills already installed in my agent directories"
 
 1. `skills adopt ~/.claude/skills --dry-run` (and any other agent dirs the user mentions) — show the candidate list.
@@ -351,4 +407,6 @@ Report which skills actually refreshed (`refreshed: true` in the JSON) vs which 
 - **Preset membership changed but agent files did not** → membership is organization only. Follow with `presets deploy` or `skills deploy` when the user also asked to make it visible.
 - **No active preset** only affects legacy `skills sync` / `presets apply`; additive deploy commands do not require one.
 - **Adopted skills can't be `update`d from git** → `npx skills add` and manual `git clone` don't leave source metadata, so adopt has to treat them as `local`. Re-point them with `skills set-source`. Do **not** reach for `adopt --git-url` here: adopt only ever creates new library entries, and it fails *late* — `--dry-run` returns `ok: true` with the skill sitting in `skipped`, and only the real run errors with `--git-url requires exactly one adoptable skill, found 0`. Do **not** remove-then-reinstall either — that drops the skill id, and with it the tags, preset membership and every per-agent deployment.
-- Use `--dry-run` before bulk remove, tag delete, preset delete, deploy, or undeploy operations. Use `check` before `update`.
+- **Deployed into a project but `skills status` does not show it** → expected. Project deployments are read with `projects show`.
+- **`projects ...` says "project not registered"** → run `projects add <path>` only if the user wants that folder managed.
+- Use `--dry-run` before bulk remove, tag delete, preset delete, deploy, or undeploy operations, including the `projects` ones. Use `check` before `update`.

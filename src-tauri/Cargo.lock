@@ -4951,6 +4951,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs 5.0.1",
+ "dunce",
  "fs2",
  "gethostname",
  "git2",

@@ -17,6 +17,8 @@ tauri-build = { version = "2.5.4", features = [] }
 
 [dependencies]
 serde_json = "1.0"
+# Canonical paths without the Windows verbatim prefix where that is safe.
+dunce = "1.0.5"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.10.0", features = ["tray-icon"] }
