@@ -1131,5 +1131,15 @@
       "deletedLocalBatch": "已删除 {{count}} 个本地 Skill",
       "deleteLocalBatchFailed": "{{count}} 个本地 Skill 删除失败"
     }
+  },
+  "errorBoundary": {
+    "title": "出错了",
+    "description": "窗口遇到了意外错误，重新加载即可继续。如果反复出现，请把下面的错误信息复制到 GitHub issue 里。",
+    "copy": "复制错误信息",
+    "copied": "已复制",
+    "exportLogs": "导出日志",
+    "exportLogsDone": "日志已保存到 {{path}}",
+    "exportLogsFailed": "导出日志失败。",
+    "reload": "重新加载"
   }
 }
