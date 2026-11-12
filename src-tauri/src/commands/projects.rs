@@ -2925,14 +2925,16 @@ mod project_plan_tests {
         skills.iter().map(|s| s.id.clone()).collect()
     }
 
-    fn conflict_paths(err: &AppError) -> Vec<String> {
+    /// Compared as paths, not strings: on Windows a conflict path mixes `\` with
+    /// the `/` of an agent directory such as `.claude/skills`.
+    fn conflict_paths(err: &AppError) -> Vec<PathBuf> {
         assert_eq!(err.kind, crate::core::error::ErrorKind::TargetConflict, "{err}");
         err.details
             .as_ref()
             .unwrap()
             .conflicts
             .iter()
-            .map(|c| c.path.clone())
+            .map(|c| PathBuf::from(&c.path))
             .collect()
     }
 
@@ -2976,7 +2978,7 @@ mod project_plan_tests {
         let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap();
         assert_eq!(plan[0].state, ProjectDeployState::Conflict);
         let err = project_deploy_conflicts(&plan).expect("a conflict");
-        assert_eq!(conflict_paths(&err), vec![squatter.to_string_lossy().to_string()]);
+        assert_eq!(conflict_paths(&err), vec![squatter.clone()]);
 
         // The GUI path refuses as well, and the directory is untouched.
         let gui = export_skill_to_project_internal(&fx.store, demo.id.clone(), fx.project_id.clone(), Some(vec!["claude_code".into()]));
@@ -3007,7 +3009,7 @@ mod project_plan_tests {
         let err = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&skills[0], &skills[1]]), &["claude_code".into()])
             .expect_err("two skills on one directory");
         let target = fx.repo.join(".claude/skills/demo");
-        assert_eq!(conflict_paths(&err), vec![target.to_string_lossy().to_string()]);
+        assert_eq!(conflict_paths(&err), vec![target.clone()]);
         let reason = &err.details.as_ref().unwrap().conflicts[0].reason;
         assert!(reason.contains("a-demo") && reason.contains("b-demo"), "{reason}");
         assert!(
@@ -3077,7 +3079,7 @@ mod project_plan_tests {
         let removal = plan_project_undeploy(&fx.store, &fx.project_id, &ids(&[&demo]), &[]).unwrap();
         assert_eq!(removal.len(), 1);
         assert!(!removal[0].safe, "status {}", removal[0].sync_status);
-        assert_eq!(conflict_paths(&project_removal_conflicts(&removal).unwrap()), vec![copy.to_string_lossy().to_string()]);
+        assert_eq!(conflict_paths(&project_removal_conflicts(&removal).unwrap()), vec![copy.clone()]);
 
         let err = delete_project_skill_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).unwrap_err();
         assert_eq!(conflict_paths(&err).len(), 1);
@@ -3150,7 +3152,7 @@ mod project_plan_tests {
         // By relative path: the slot that would be deleted is the junk one,
         // which is not a recognizable skill, so it is refused.
         let err = delete_project_skill_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).unwrap_err();
-        assert_eq!(conflict_paths(&err), vec![junk.to_string_lossy().to_string()]);
+        assert_eq!(conflict_paths(&err), vec![junk.clone()]);
         assert!(junk.join("notes.txt").is_file());
     }
 
@@ -3343,7 +3345,7 @@ mod project_plan_tests {
 
         assert_eq!(plan_project_import(&fx.store, &fx.project_id, "demo", "claude_code").unwrap().action, ProjectImportAction::Overwrite);
         let err = import_project_skill_to_center_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).unwrap_err();
-        assert_eq!(conflict_paths(&err), vec![demo.central_path.clone()]);
+        assert_eq!(conflict_paths(&err), vec![PathBuf::from(&demo.central_path)]);
         assert_eq!(fs::read_to_string(&library_file).unwrap(), before, "refused import must not write");
 
         let done = import_project_skill_to_center_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), true).unwrap();
