@@ -36,7 +36,7 @@ import { AgentToggleSection, type AgentToggleItem } from "../components/AgentTog
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { ProjectAgentDots } from "../components/ProjectAgentDots";
 import { PresetBar } from "../components/PresetBar";
-import { SkillMarkdown } from "../components/SkillMarkdown";
+import { SkillFileBrowser } from "../components/SkillFileBrowser";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import { enabledInstalledAgentKeys, getDefaultExportAgents } from "../lib/exportAgents";
@@ -1598,6 +1598,8 @@ export function ProjectDetail() {
       {/* Skill Document Detail Panel */}
       {detailSkill && project && (
         <ProjectSkillDetailPanel
+          key={getSkillKey(detailSkill)}
+          projectId={project.id}
           skill={detailSkill}
           targets={exportTargets}
           togglingAgent={
@@ -1689,6 +1691,7 @@ export function ProjectDetail() {
 
 function ProjectSkillDetailPanel({
   skill,
+  projectId,
   targets,
   togglingAgent,
   onToggleAgent,
@@ -1699,6 +1702,7 @@ function ProjectSkillDetailPanel({
   onClose,
 }: {
   skill: ProjectSkillGroup;
+  projectId: string;
   targets: ProjectAgentTarget[];
   togglingAgent: string | null;
   onToggleAgent: (agentKey: string, enabled: boolean) => void;
@@ -1710,6 +1714,7 @@ function ProjectSkillDetailPanel({
 }) {
   const { t } = useTranslation();
   const [contentTab, setContentTab] = useState<"local" | "diff" | "center">("local");
+  const [centerVisited, setCenterVisited] = useState(false);
   const supportsCenterDiff = skill.centerSkillIds.length > 0;
   const toggleItems: AgentToggleItem[] = targets.map((target) => {
     const variant = skill.variants.find((item) => item.agent === target.key);
@@ -1791,14 +1796,14 @@ function ProjectSkillDetailPanel({
             <button
               key={tab}
               type="button"
-              onClick={() => setContentTab(tab)}
+              onClick={() => { setContentTab(tab); if (tab === "center") setCenterVisited(true); }}
               className={cn(
                 "rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
                 contentTab === tab
                   ? "bg-accent text-white"
                   : "bg-surface-hover text-muted hover:text-secondary"
               )}
-              disabled={(tab === "diff" || tab === "center") && centerDocLoading}
+              disabled={tab === "diff" && centerDocLoading}
             >
               {tab === "local"
                 ? t("mySkills.docTabs.local")
@@ -1810,29 +1815,19 @@ function ProjectSkillDetailPanel({
         </div>
       )}
 
-      {docLoading ? (
+      <div className={contentTab === "local" ? "" : "hidden"}>
+        <SkillFileBrowser target={{ kind: "project", project_id: projectId, agent: skill.primaryVariant.agent, skill_relative_path: skill.primaryVariant.relative_path }} active={contentTab === "local"} description={skill.description ?? undefined} />
+      </div>
+      {centerVisited && skill.centerSkillIds[0] && <div className={contentTab === "center" ? "" : "hidden"}>
+        <SkillFileBrowser target={{ kind: "managed", skill_id: skill.centerSkillIds[0], origin: "local" }} active={contentTab === "center"} description={skill.description ?? undefined} />
+      </div>}
+      {contentTab === "diff" && (docLoading || centerDocLoading ? (
         <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
-      ) : contentTab === "diff" ? (
-        docContent && centerDocContent ? (
-          <DocumentDiffViewer original={docContent} updated={centerDocContent} />
-        ) : centerDocLoading ? (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
-        ) : (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
-        )
-      ) : contentTab === "center" ? (
-        centerDocLoading ? (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
-        ) : centerDocContent ? (
-          <SkillMarkdown content={centerDocContent} />
-        ) : (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
-        )
-      ) : docContent ? (
-        <SkillMarkdown content={docContent} />
+      ) : docContent && centerDocContent ? (
+        <DocumentDiffViewer original={docContent} updated={centerDocContent} />
       ) : (
-        <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
-      )}
+        <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+      ))}
     </DetailSheet>
   );
 }

@@ -803,6 +803,9 @@ pub fn run() {
     tauri::Builder::default()
         .manage(store)
         .manage(cancel_registry)
+        .manage(Arc::new(core::skill_browser::BrowserSessionStore::default()))
+        .manage(Arc::new(core::translation_cache::TranslationCache::default()))
+        .manage(Arc::new(core::translation_transport::TranslationTransport::default()))
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             restore_main_window(app);
         }))
@@ -1000,6 +1003,19 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::translation::translate_skill_blocks,
+            commands::translation::cancel_skill_translation,
+            commands::translation::get_translation_cache,
+            commands::translation::put_translation_cache,
+            commands::translation::clear_translation_cache,
+            commands::file_browser::open_skill_browser,
+            commands::file_browser::cancel_open_skill_browser,
+            commands::file_browser::close_skill_browser,
+            commands::file_browser::list_skill_directory,
+            commands::file_browser::read_skill_file,
+            commands::file_browser::resolve_skill_link,
+            commands::file_browser::reveal_skill_file,
+            commands::file_browser::open_skill_file_external,
             // Tools
             commands::tools::get_tool_status,
             commands::tools::set_tool_enabled,

@@ -4947,6 +4947,7 @@ version = "1.43.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
+ "base64 0.22.1",
  "caseless",
  "chrono",
  "clap",
@@ -4959,6 +4960,7 @@ dependencies = [
  "image",
  "junction",
  "keyring",
+ "libc",
  "log",
  "notify",
  "rand 0.8.5",

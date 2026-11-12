@@ -66,6 +66,68 @@ export interface SkillDocument {
   central_path: string;
 }
 
+export type SkillBrowserTarget =
+  | { kind: "managed"; skill_id: string; origin: "local" | "source" }
+  | { kind: "project"; project_id: string; agent: string; skill_relative_path: string }
+  | { kind: "global"; agent: string; skill_relative_path: string };
+export interface SkillBrowserSession {
+  session_id: string;
+  source_label: string;
+  revision: string | null;
+  default_path: string | null;
+  read_only: boolean;
+}
+export interface SkillFileEntry {
+  relative_path: string;
+  name: string;
+  kind: "directory" | "file" | "symlink";
+  size_bytes: number | null;
+  preview_kind: string | null;
+  accessible: boolean;
+}
+export interface SkillDirectoryPage {
+  entries: SkillFileEntry[];
+  next_cursor: number | null;
+  truncated: boolean;
+}
+export interface SkillFilePreview {
+  relative_path: string;
+  content_hash: string | null;
+  size_bytes: number;
+  mime: string;
+  kind: "markdown" | "text" | "image" | "unsupported";
+  content: string | null;
+  base64: string | null;
+  reason: "binary" | "too_large" | "encoding" | "format" | null;
+}
+export interface SkillResolvedLink {
+  relative_path: string;
+  fragment: string | null;
+  directory: boolean;
+}
+export const openSkillBrowser = (target: SkillBrowserTarget, requestId: string) =>
+  invoke<SkillBrowserSession>("open_skill_browser", { target, requestId });
+export const cancelOpenSkillBrowser = (requestId: string) => invoke<void>("cancel_open_skill_browser", { requestId });
+export const closeSkillBrowser = (sessionId: string) => invoke<void>("close_skill_browser", { sessionId });
+export const listSkillDirectory = (sessionId: string, relativePath: string, cursor: number | null = null) =>
+  invoke<SkillDirectoryPage>("list_skill_directory", { sessionId, relativePath, cursor });
+export const readSkillFile = (sessionId: string, relativePath: string) =>
+  invoke<SkillFilePreview>("read_skill_file", { sessionId, relativePath });
+export const resolveSkillLink = (sessionId: string, fromPath: string, href: string) =>
+  invoke<SkillResolvedLink>("resolve_skill_link", { sessionId, fromPath, href });
+export const revealSkillFile = (sessionId: string, relativePath: string) => invoke<void>("reveal_skill_file", { sessionId, relativePath });
+export const openSkillFileExternal = (sessionId: string, relativePath: string) => invoke<void>("open_skill_file_external", { sessionId, relativePath });
+
+export interface TranslationCacheEntry { cache_key: string; text: string; target_language: string }
+export interface TranslationCacheResult { epoch: number; entries: TranslationCacheEntry[]; persistent: boolean }
+export interface TranslationResponse { results: { text: string | null }[]; error: string | null; retry_after_ms: number | null }
+export const translateSkillBlocks = (sessionId: string, requestId: string, texts: string[], targetLanguage: string) =>
+  invoke<TranslationResponse>("translate_skill_blocks", { sessionId, requestId, texts, targetLanguage });
+export const cancelSkillTranslation = (requestId: string) => invoke<void>("cancel_skill_translation", { requestId });
+export const getTranslationCache = (keys: string[]) => invoke<TranslationCacheResult>("get_translation_cache", { keys });
+export const putTranslationCache = (entries: TranslationCacheEntry[], epoch: number) => invoke<boolean>("put_translation_cache", { entries, epoch });
+export const clearTranslationCache = () => invoke<number>("clear_translation_cache");
+
 export interface SourceSkillDocument {
   skill_id: string;
   filename: string;
