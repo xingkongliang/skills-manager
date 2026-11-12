@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
@@ -63,10 +63,14 @@ fn unsync_skill_for_tool_in_preset(
         .map_err(AppError::db)?;
     if let Some(target) = targets.iter().find(|target| target.tool == tool) {
         // Same survivor check as `unsync_skill_from_tool`: another tool
-        // sharing this skills directory keeps its deployment.
-        let still_referenced = targets
-            .iter()
-            .any(|other| other.tool != tool && other.target_path == target.target_path);
+        // sharing this skills directory keeps its deployment, under whatever
+        // spelling of the path it recorded.
+        let mut memo = std::collections::HashMap::new();
+        let key = scenario_service::ownership_key(Path::new(&target.target_path), &mut memo);
+        let still_referenced = targets.iter().any(|other| {
+            other.tool != tool
+                && scenario_service::ownership_key(Path::new(&other.target_path), &mut memo) == key
+        });
         if still_referenced {
             return store.delete_target(skill_id, tool).map_err(AppError::db);
         }
@@ -134,13 +138,18 @@ fn unsync_skill_from_tool_internal(
         // that is staying. `apply_remove` has this survivor check;
         // without it here, switching agent A off deletes agent B's
         // live deployment.
+        // Compared as directory entries, the way deployment pools them: an
+        // agent reaching this directory through a symlinked parent still uses it.
+        let mut memo = std::collections::HashMap::new();
+        let key = scenario_service::ownership_key(&target_path, &mut memo);
         let still_referenced = store
             .get_all_targets()
             .map_err(AppError::db)?
             .into_iter()
             .any(|other| {
-                other.target_path == target.target_path
-                    && !(other.skill_id == skill_id && other.tool == tool)
+                !(other.skill_id == skill_id && other.tool == tool)
+                    && scenario_service::ownership_key(Path::new(&other.target_path), &mut memo)
+                        == key
             });
         if still_referenced {
             log::debug!(
@@ -429,12 +438,17 @@ mod tests {
     /// single filesystem object be claimed by several `skill_targets` rows
     /// (the table is unique on `(skill_id, tool)`, not on `target_path`).
     fn configure_two_custom_tools_sharing_a_dir(store: &SkillStore, shared: &std::path::Path) {
-        let custom_tools: Vec<CustomToolDef> = ["agent_a", "agent_b"]
-            .into_iter()
-            .map(|key| CustomToolDef {
+        configure_custom_tools(store, &[("agent_a", shared), ("agent_b", shared)]);
+    }
+
+    /// Custom agents `(key, skills dir)`, every built-in disabled, copy mode.
+    fn configure_custom_tools(store: &SkillStore, tools: &[(&str, &std::path::Path)]) {
+        let custom_tools: Vec<CustomToolDef> = tools
+            .iter()
+            .map(|(key, dir)| CustomToolDef {
                 key: key.to_string(),
                 display_name: key.to_string(),
-                skills_dir: shared.to_string_lossy().to_string(),
+                skills_dir: dir.to_string_lossy().to_string(),
                 project_relative_skills_dir: None,
                 category: Default::default(),
             })
@@ -1054,7 +1068,10 @@ mod tests {
             .unwrap();
         add_active_preset(&store, &["s1", "s2"]);
         let refusals = scenario_service::sync_scenario_skills(&store, "p").unwrap();
-        assert!(!refusals.is_empty(), "one of the two skills must be refused");
+        assert!(
+            !refusals.is_empty(),
+            "one of the two skills must be refused"
+        );
         let s1_tools = recorded_tools(&store, "s1");
         let s2_tools = recorded_tools(&store, "s2");
         let (winner, loser) = if s1_tools.is_empty() {
@@ -1070,7 +1087,10 @@ mod tests {
         } else {
             "library"
         };
-        assert_eq!(on_disk, expected, "the directory must hold the recorded skill");
+        assert_eq!(
+            on_disk, expected,
+            "the directory must hold the recorded skill"
+        );
     }
 
     /// Removing one agent of a shared directory keeps the directory and the
@@ -1111,6 +1131,285 @@ mod tests {
                 fs::symlink_metadata(&target).is_err(),
                 "{name}: the last agent's removal must delete the directory"
             );
+        }
+    }
+
+    /// `.DS_Store` is left out of the content hash, so it does not stop an
+    /// adoption, and a rewrite of the directory would drop it.
+    fn plant_sentinel(target: &std::path::Path) {
+        fs::write(target.join(".DS_Store"), "sentinel").unwrap();
+    }
+
+    fn sentinel_survived(target: &std::path::Path) -> bool {
+        target.join(".DS_Store").exists()
+    }
+
+    /// H review item 1. Agent A's copy is current, so A's own skip check
+    /// keeps the edits the user made in it. Agent B shares the directory and
+    /// has no row. Borrowing A's row must not let the unattended startup sync
+    /// (or a single-agent deploy) delete those edits; on `main` B refused.
+    #[test]
+    fn borrowed_row_never_overwrites_an_edited_shared_copy() {
+        for per_pair in [false, true] {
+            let (_tmp, store, target) = shared_dir_with_one_skill();
+            let mut skill = store.get_skill_by_id("s1").unwrap().unwrap();
+            skill.content_hash = Some("h1".to_string());
+            store.upsert_skill(&skill).unwrap();
+            add_active_preset(&store, &["s1"]);
+            sync_skill_to_tool_internal(&store, "s1", "agent_a").unwrap();
+            fs::write(target.join("unique.txt"), "USER EDIT").unwrap();
+
+            if per_pair {
+                assert!(sync_skill_to_tool_internal(&store, "s1", "agent_b").is_err());
+            } else {
+                let refusals = scenario_service::sync_scenario_skills(&store, "p").unwrap();
+                assert_eq!(refusals.len(), 1, "B must be refused: {refusals:?}");
+            }
+
+            assert_eq!(
+                fs::read_to_string(target.join("unique.txt")).unwrap(),
+                "USER EDIT",
+                "per_pair={per_pair}"
+            );
+            assert_eq!(
+                recorded_tools(&store, "s1"),
+                ["agent_a"],
+                "per_pair={per_pair}"
+            );
+        }
+    }
+
+    /// When the shared copy is exactly the library's content, the agent
+    /// without a row adopts it: a row is added, the directory is not rebuilt.
+    #[test]
+    fn borrowed_row_adopts_an_identical_shared_copy_without_rewriting_it() {
+        type Deploy = fn(&SkillStore) -> Result<(), AppError>;
+        let deploys: [(&str, Deploy); 3] = [
+            ("single agent", |store| {
+                sync_skill_to_tool_internal(store, "s1", "agent_b")
+            }),
+            ("preset sync", |store| {
+                let refusals = scenario_service::sync_scenario_skills(store, "p")?;
+                assert!(refusals.is_empty(), "{refusals:?}");
+                Ok(())
+            }),
+            ("active preset add", |store| {
+                scenario_service::sync_skill_to_active_scenario(store, "p", "s1")
+            }),
+        ];
+        for (name, deploy) in deploys {
+            let (_tmp, store, target) = shared_dir_with_one_skill();
+            // Recorded hash = library hash, so A's own copy is current and the
+            // preset sync skips it: only B's step can touch the directory.
+            let mut skill = store.get_skill_by_id("s1").unwrap().unwrap();
+            skill.content_hash = Some("h1".to_string());
+            store.upsert_skill(&skill).unwrap();
+            add_active_preset(&store, &["s1"]);
+            sync_skill_to_tool_internal(&store, "s1", "agent_a").unwrap();
+            plant_sentinel(&target);
+
+            deploy(&store).unwrap();
+
+            assert_eq!(
+                recorded_tools(&store, "s1"),
+                ["agent_a", "agent_b"],
+                "{name}"
+            );
+            let b = store
+                .get_targets_for_skill("s1")
+                .unwrap()
+                .into_iter()
+                .find(|row| row.tool == "agent_b")
+                .unwrap();
+            assert_eq!(b.mode, "copy", "{name}");
+            assert_eq!(PathBuf::from(&b.target_path), target, "{name}");
+            assert!(
+                sentinel_survived(&target),
+                "{name}: the directory was rewritten"
+            );
+        }
+    }
+
+    /// A copy that fell behind the library (not edited by the user) is
+    /// refreshed by its own agent and then adopted by the other, whichever
+    /// comes first in the startup sync. Order A→B settles in one run; B→A
+    /// refuses B once and adopts on the next run.
+    #[test]
+    fn a_stale_shared_copy_converges_in_either_order() {
+        for b_first in [false, true] {
+            let (_tmp, store, target) = shared_dir_with_one_skill();
+            let mut skill = store.get_skill_by_id("s1").unwrap().unwrap();
+            skill.content_hash = Some("h1".to_string());
+            store.upsert_skill(&skill).unwrap();
+            add_active_preset(&store, &["s1"]);
+            sync_skill_to_tool_internal(&store, "s1", "agent_a").unwrap();
+            // The library moves on; A's copy is now stale but unedited.
+            fs::write(PathBuf::from(&skill.central_path).join("unique.txt"), "v2").unwrap();
+            skill.content_hash = Some("h2".to_string());
+            store.upsert_skill(&skill).unwrap();
+
+            let run = || {
+                let mut desired =
+                    scenario_service::collect_scenario_sync_targets(&store, "p").unwrap();
+                desired.sort_by(|x, y| x.tool.cmp(&y.tool));
+                if b_first {
+                    desired.reverse();
+                }
+                scenario_service::sync_desired_targets(&store, &desired).unwrap()
+            };
+            let first = run();
+            if b_first {
+                assert_eq!(first.len(), 1, "B refuses the stale copy once");
+                assert_eq!(recorded_tools(&store, "s1"), ["agent_a"]);
+                assert!(run().is_empty(), "the next run adopts");
+            } else {
+                assert!(first.is_empty(), "{first:?}");
+            }
+            assert_eq!(
+                recorded_tools(&store, "s1"),
+                ["agent_a", "agent_b"],
+                "b_first={b_first}"
+            );
+            assert_eq!(fs::read_to_string(target.join("unique.txt")).unwrap(), "v2");
+        }
+    }
+
+    /// Contradictory rows for this skill (one agent recorded copy, another
+    /// symlink) vouch for nothing. A third agent sharing the directory must
+    /// not replace the real directory there — neither in the batch, where
+    /// any agreeing row would authorize it, nor by adopting it.
+    #[test]
+    fn contradictory_rows_refuse_a_third_agent_on_a_shared_dir() {
+        for content in ["library", "USER"] {
+            let tmp = tempdir().unwrap();
+            let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+            let shared = tmp.path().join("shared");
+            fs::create_dir_all(&shared).unwrap();
+            configure_custom_tools(
+                &store,
+                &[
+                    ("agent_a", &shared),
+                    ("agent_b", &shared),
+                    ("agent_c", &shared),
+                ],
+            );
+            let dir = write_skill_dir(&tmp.path().join("central"), "demo", "library");
+            store
+                .insert_skill(&sample_skill("s1", "demo", &dir))
+                .unwrap();
+            let target = write_skill_dir(&shared, "demo", content);
+            plant_sentinel(&target);
+            for (tool, mode) in [("agent_a", "copy"), ("agent_b", "symlink")] {
+                store
+                    .insert_target(&SkillTargetRecord {
+                        id: format!("t-{tool}"),
+                        skill_id: "s1".to_string(),
+                        tool: tool.to_string(),
+                        target_path: target.to_string_lossy().to_string(),
+                        mode: mode.to_string(),
+                        status: "ok".to_string(),
+                        synced_at: Some(1),
+                        last_error: None,
+                        source_hash: None,
+                    })
+                    .unwrap();
+            }
+
+            assert!(
+                sync_skill_to_tool_internal(&store, "s1", "agent_c").is_err(),
+                "content={content}: single agent"
+            );
+            assert!(
+                scenario_service::apply_skills_to_tools(
+                    &store,
+                    &["s1".to_string()],
+                    &["agent_c".to_string()],
+                    scenario_service::BatchApplyMode::Add,
+                )
+                .is_err(),
+                "content={content}: batch"
+            );
+            assert!(sentinel_survived(&target), "content={content}");
+            assert_eq!(
+                fs::read_to_string(target.join("unique.txt")).unwrap(),
+                content
+            );
+            assert_eq!(recorded_tools(&store, "s1"), ["agent_a", "agent_b"]);
+        }
+    }
+
+    /// The dry run must refuse what the real run refuses: two skills whose
+    /// directories share a name, aimed at one path that does not exist yet.
+    /// The disk shows nothing in the way; the real run writes the first one
+    /// and then refuses the second.
+    #[test]
+    fn preset_preflight_refuses_what_the_run_will_refuse() {
+        let (tmp, store, _target) = shared_dir_with_one_skill();
+        let other = write_skill_dir(&tmp.path().join("central-2"), "demo", "other skill");
+        store
+            .insert_skill(&sample_skill("s2", "demo", &other))
+            .unwrap();
+        add_active_preset(&store, &["s1", "s2"]);
+        let desired = scenario_service::collect_scenario_sync_targets(&store, "p").unwrap();
+
+        let preflight = scenario_service::preflight_scenario_sync_targets(&store, &desired);
+        let refusals = scenario_service::sync_desired_targets(&store, &desired).unwrap();
+
+        assert!(!refusals.is_empty());
+        assert!(
+            preflight.is_err(),
+            "the dry run passed a sync that refused {refusals:?}"
+        );
+    }
+
+    /// H review item 2. Deployment treats `/alias/skills/demo` and
+    /// `/real/skills/demo` as one directory when `/alias` links to `/real`, so
+    /// removal must too: removing A must not delete what B still uses.
+    #[cfg(unix)]
+    #[test]
+    fn removal_through_a_symlinked_parent_keeps_the_other_agents_directory() {
+        type Remove = fn(&SkillStore, &str, &str) -> Result<(), AppError>;
+        let removals: [(&str, Remove); 3] = [
+            ("unsync_skill_from_tool", unsync_skill_from_tool_internal),
+            ("preset toggle off", unsync_skill_for_tool_in_preset),
+            ("batch remove", |store, skill_id, tool| {
+                scenario_service::apply_skills_to_tools(
+                    store,
+                    &[skill_id.to_string()],
+                    &[tool.to_string()],
+                    scenario_service::BatchApplyMode::Remove,
+                )
+            }),
+        ];
+        for (name, remove) in removals {
+            let tmp = tempdir().unwrap();
+            let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+            let real = tmp.path().join("real").join("skills");
+            fs::create_dir_all(&real).unwrap();
+            std::os::unix::fs::symlink(tmp.path().join("real"), tmp.path().join("alias")).unwrap();
+            let alias = tmp.path().join("alias").join("skills");
+            configure_custom_tools(&store, &[("agent_a", &real), ("agent_b", &alias)]);
+            let dir = write_skill_dir(&tmp.path().join("central"), "demo", "library");
+            store
+                .insert_skill(&sample_skill("s1", "demo", &dir))
+                .unwrap();
+            sync_skill_to_tool_internal(&store, "s1", "agent_a").unwrap();
+            sync_skill_to_tool_internal(&store, "s1", "agent_b").unwrap();
+            assert_eq!(
+                recorded_tools(&store, "s1"),
+                ["agent_a", "agent_b"],
+                "{name}"
+            );
+
+            remove(&store, "s1", "agent_a").unwrap();
+            assert!(
+                real.join("demo/unique.txt").exists(),
+                "{name}: agent_b's directory was deleted"
+            );
+            assert_eq!(recorded_tools(&store, "s1"), ["agent_b"], "{name}");
+
+            remove(&store, "s1", "agent_b").unwrap();
+            assert!(fs::symlink_metadata(real.join("demo")).is_err(), "{name}");
         }
     }
 }
