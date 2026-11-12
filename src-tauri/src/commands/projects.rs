@@ -7,10 +7,14 @@ use std::time::Instant;
 use serde::Serialize;
 use tauri::State;
 
+use crate::core::error::TargetConflictDetail;
+use crate::core::repo_lock::RepoLock;
+use crate::core::audit_log::AuditDraft;
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
 use crate::core::timing::should_log_first_or_slow;
 use crate::core::{
-    error::AppError, file_manager, installer, project_scanner, sync_engine, tool_adapters,
+    error::AppError, file_manager, installer, project_scanner, sync_engine, sync_metadata,
+    tool_adapters,
 };
 
 #[derive(Serialize, Default, Debug)]
@@ -1021,37 +1025,47 @@ pub async fn import_project_skill_to_center(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        import_project_skill_to_center_internal(&store, project_id, skill_relative_path, agent)
+        // "Update to center" is the user's explicit overwrite; the frontend
+        // already refuses when several copies differ (pushSkillToCenterAndAlign).
+        import_project_skill_to_center_internal(
+            &store,
+            project_id,
+            skill_relative_path,
+            agent,
+            true,
+        )
+        .map(|_| ())
     })
     .await?
 }
 
+/// Push a project skill into the library: overwrite the library skill it
+/// matches, or create a new local skill. Without `force`, refuses to overwrite
+/// a library copy whose content differs. A copy already in sync is left alone.
 pub fn import_project_skill_to_center_internal(
     store: &SkillStore,
     project_id: String,
     skill_relative_path: String,
     agent: String,
-) -> Result<(), AppError> {
-    ensure_safe_skill_relative_path(&skill_relative_path)?;
+    force: bool,
+) -> Result<ProjectImportResult, AppError> {
+    let (mut outcome, skill) =
+        resolve_project_import(store, &project_id, &skill_relative_path, &agent)?;
+    if let Some(refusal) = project_import_refusal(&outcome, force) {
+        return Err(refusal);
+    }
+    if outcome.action == ProjectImportAction::Unchanged {
+        return Ok(outcome);
+    }
 
-    let record = store
-        .get_project_by_id(&project_id)
-        .map_err(AppError::db)?
-        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-    let configs = agent_skill_configs(&store);
-    let skills = read_workspace_skills(&record, &configs);
-    let skill = skills
-        .iter()
-        .find(|s| s.relative_path == skill_relative_path && s.agent == agent)
-        .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
-
+    // The CLI and the app can write the library at the same time.
+    let _lock = RepoLock::acquire_foreground("import project skill").map_err(AppError::io)?;
     let source_path = PathBuf::from(&skill.path);
     let all_managed = store.get_all_skills().unwrap_or_default();
     // Use the same matching logic as the UI (find_best_center_match) to
     // stay consistent with sync-status display. After updating, bind
     // source_ref so future imports match by exact path.
-    if let Some(existing) = find_best_center_match(skill, &all_managed) {
+    if let Some(existing) = find_best_center_match(&skill, &all_managed) {
         let result = installer::install_from_local_to_destination(
             &source_path,
             Some(&existing.name),
@@ -1082,7 +1096,18 @@ pub fn import_project_skill_to_center_internal(
                 .update_skill_source_ref(&existing.id, &skill.path)
                 .map_err(AppError::db)?;
         }
-        return Ok(());
+        sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::io)?;
+        store.log_audit(
+            AuditDraft::new("import")
+                .skill(existing.id.clone(), existing.name.clone())
+                .detail(format!("from project copy {}", skill.path))
+                .ok(),
+        );
+        outcome.action = ProjectImportAction::Overwrite;
+        outcome.skill_id = Some(existing.id.clone());
+        outcome.name = existing.name.clone();
+        outcome.central_path = Some(existing.central_path.clone());
+        return Ok(outcome);
     }
 
     let result =
@@ -1114,8 +1139,19 @@ pub fn import_project_skill_to_center_internal(
     };
 
     store.insert_skill(&skill_record).map_err(AppError::db)?;
+    sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::io)?;
+    store.log_audit(
+        AuditDraft::new("import")
+            .skill(id.clone(), result.name.clone())
+            .detail(format!("from project copy {}", skill.path))
+            .ok(),
+    );
 
-    Ok(())
+    outcome.action = ProjectImportAction::Create;
+    outcome.skill_id = Some(id);
+    outcome.name = result.name;
+    outcome.central_path = Some(skill_record.central_path);
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -1153,10 +1189,7 @@ pub fn export_skill_to_project_internal(
     project_id: String,
     agents: Option<Vec<String>>,
 ) -> Result<(), AppError> {
-    let project = store
-        .get_project_by_id(&project_id)
-        .map_err(AppError::db)?
-        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+    let project = get_project_record(store, &project_id)?;
 
     let skill = store
         .get_skill_by_id(&skill_id)
@@ -1177,15 +1210,20 @@ pub fn export_skill_to_project_internal(
         requested_agent_keys
     } else {
         let available_targets: std::collections::HashSet<String> =
-            project_agent_targets_for_record(&store, &project)
+            project_agent_targets_for_record(store, &project)
                 .into_iter()
                 .filter(|target| target.installed && target.enabled)
                 .map(|target| target.key)
                 .collect();
-        let filtered = requested_agent_keys
-            .into_iter()
-            .filter(|key| available_targets.contains(key))
-            .collect::<Vec<_>>();
+        // A shared directory's row carries one member's key; map the others
+        // onto it so naming any agent that reads the directory works.
+        let mut filtered: Vec<String> = Vec::new();
+        for key in requested_agent_keys {
+            let key = map_to_group_key(store, &project, key);
+            if available_targets.contains(&key) && !filtered.contains(&key) {
+                filtered.push(key);
+            }
+        }
         if filtered.is_empty() {
             return Err(AppError::invalid_input(
                 "No enabled installed agents selected for this project",
@@ -1194,56 +1232,19 @@ pub fn export_skill_to_project_internal(
         filtered
     };
 
-    for agent_key in &agent_keys {
-        let (skills_root, disabled_root) =
-            resolve_agent_skills_roots(&store, &project, agent_key)
-                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
-        let target_dir = skills_root.join(&dir_name);
-
-        if target_dir.strip_prefix(&skills_root).is_err() {
-            return Err(AppError::invalid_input("Invalid skill directory path"));
-        }
-
-        if target_dir.exists()
-            || disabled_root
-                .as_ref()
-                .map(|path| path.join(&dir_name).exists())
-                .unwrap_or(false)
-        {
-            return Err(AppError::invalid_input(format!(
-                "Skill \"{}\" already exists in this workspace for agent {}",
-                skill.name, agent_key
-            )));
-        }
+    let plan = plan_project_deploy(store, &project_id, &[skill_id], &agent_keys)?;
+    // The GUI only offers "add" where nothing is there yet, so anything in the
+    // way, even this same skill, is refused as before.
+    if let Some(occupied) = plan
+        .iter()
+        .find(|target| target.state != ProjectDeployState::Create)
+    {
+        return Err(AppError::invalid_input(format!(
+            "Skill \"{}\" already exists in this workspace for agent {}",
+            skill.name, occupied.agent
+        )));
     }
-
-    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-    // Two agents can resolve to the same project skills root, in which case
-    // the second pass would find the directory the first just wrote and
-    // refuse it. The artifact is already correct, so skip instead.
-    let mut written: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    for agent_key in &agent_keys {
-        let (skills_root, _) = resolve_agent_skills_roots(&store, &project, agent_key)
-            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
-        let target_dir = skills_root.join(&dir_name);
-        if !written.insert(target_dir.clone()) {
-            continue;
-        }
-        std::fs::create_dir_all(&skills_root)?;
-        let mode = sync_engine::sync_mode_for_tool(agent_key, configured_mode.as_deref());
-        // NoClobber: the loop above already refused every pre-existing
-        // target, so nothing here should need replacing. Belt and braces —
-        // `exists()` misses dangling links and is racy against this write.
-        sync_engine::sync_skill(
-            &source,
-            &target_dir,
-            mode,
-            sync_engine::ReplacePolicy::NoClobber,
-        )
-        .map_err(AppError::io)?;
-    }
-
-    Ok(())
+    apply_project_deploy(store, &plan)
 }
 
 #[tauri::command]
@@ -1353,23 +1354,61 @@ pub async fn delete_project_skill(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        delete_project_skill_internal(&store, project_id, skill_relative_path, agent)
+        // The frontend has already asked before removing a copy that is not
+        // in sync (confirmUnsyncedRemoval), so the guard below is the CLI's.
+        delete_project_skill_internal(&store, project_id, skill_relative_path, agent, true)
     })
     .await?
 }
 
+/// Remove one skill directory from a project workspace. Without `force`,
+/// refuses a copy that may hold content the library does not have, or one
+/// that is not a recognizable skill.
 pub fn delete_project_skill_internal(
     store: &SkillStore,
     project_id: String,
     skill_relative_path: String,
     agent: String,
+    force: bool,
 ) -> Result<(), AppError> {
     ensure_safe_skill_relative_path(&skill_relative_path)?;
 
-    let record = store
-        .get_project_by_id(&project_id)
-        .map_err(AppError::db)?
-        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+    let record = get_project_record(store, &project_id)?;
+    ensure_workspace_path_exists(&record)?;
+
+    if !force {
+        let group_key = map_to_group_key(store, &record, agent.clone());
+        let configs = agent_skill_configs(store);
+        let variants = read_workspace_skills(&record, &configs);
+        let all_managed = store.get_all_skills().map_err(AppError::db)?;
+        let variant = variants
+            .iter()
+            .find(|v| v.agent == group_key && v.relative_path == skill_relative_path);
+        let refusal = match variant {
+            None => Some((
+                PathBuf::from(&record.path).join(&skill_relative_path),
+                "is not a recognizable skill directory".to_string(),
+            )),
+            Some(variant) => {
+                let status = classify_sync_status(variant, find_best_center_match(variant, &all_managed));
+                (!removal_is_safe(variant, &status)).then(|| {
+                    (
+                        PathBuf::from(&variant.path),
+                        format!("has content not in the library (sync status: {status})"),
+                    )
+                })
+            }
+        };
+        if let Some((path, reason)) = refusal {
+            return Err(AppError::target_conflict(
+                "Refusing to remove a project skill copy that may hold content not in the library",
+                vec![TargetConflictDetail {
+                    path: path.to_string_lossy().to_string(),
+                    reason,
+                }],
+            ));
+        }
+    }
 
     let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
         .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
@@ -1392,6 +1431,529 @@ pub fn delete_project_skill_internal(
     ensure_dir_within_root(&target, &target_root)?;
     remove_workspace_skill_target(&target)?;
     Ok(())
+}
+
+// ── Planning shared by the project commands and the projects CLI ──────────
+//
+// The GUI decides a lot in the frontend before it calls a project command: it
+// only offers "add" where nothing sits in the way, and it asks before removing
+// a copy that is not in sync. The CLI has no such frontend, so the checks it
+// needs live here, where a dry run and the real run read the same answer.
+
+fn get_project_record(store: &SkillStore, project_id: &str) -> Result<ProjectRecord, AppError> {
+    store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))
+}
+
+/// A workspace whose folder is gone scans as "no skills", and a deploy into it
+/// would `create_dir_all` the project back into existence. Refuse instead.
+fn ensure_workspace_path_exists(rec: &ProjectRecord) -> Result<(), AppError> {
+    if Path::new(&rec.path).is_dir() {
+        Ok(())
+    } else {
+        Err(AppError::invalid_input(format!(
+            "Project path does not exist: {}",
+            rec.path
+        )))
+    }
+}
+
+/// One project skills directory and the agents that read it. `key` is the
+/// agent the directory's row is filed under (the first registered adapter
+/// that reads it), which is the key project scans report as `agent`.
+#[derive(Serialize, Clone, Debug)]
+pub struct ProjectAgentGroup {
+    pub key: String,
+    pub shared_by: Vec<String>,
+    pub skills_root: String,
+    #[serde(skip)]
+    pub disabled_root: Option<PathBuf>,
+}
+
+/// Resolve any agent key to the project directory it writes into. Warp, Cline
+/// and GitLab Duo all read `.agents/skills`, and the row is filed under one of
+/// them, so a caller naming another member must land on the same directory
+/// instead of being told the agent is not available.
+pub fn project_agent_group(
+    store: &SkillStore,
+    rec: &ProjectRecord,
+    agent: &str,
+) -> Option<ProjectAgentGroup> {
+    if rec.workspace_type == "linked" {
+        let key = linked_workspace_agent_key(rec);
+        if key != agent {
+            return None;
+        }
+        return Some(ProjectAgentGroup {
+            shared_by: vec![key.clone()],
+            key,
+            skills_root: rec.path.clone(),
+            disabled_root: rec.disabled_path.as_ref().map(PathBuf::from),
+        });
+    }
+
+    let adapters = tool_adapters::all_tool_adapters(store);
+    let dir = adapters
+        .iter()
+        .find(|adapter| adapter.key == agent)?
+        .project_relative_skills_dir()
+        .to_string();
+    if dir.is_empty() {
+        return None;
+    }
+    let key = agent_skill_configs(store)
+        .into_iter()
+        .find(|config| config.relative_skills_dir == dir)?
+        .key;
+    let shared_by = adapters
+        .iter()
+        .filter(|adapter| adapter.project_relative_skills_dir() == dir)
+        .map(|adapter| adapter.key.clone())
+        .collect();
+    let (skills_root, disabled_root) = resolve_agent_skills_roots(store, rec, &key)?;
+    Some(ProjectAgentGroup {
+        key,
+        shared_by,
+        skills_root: skills_root.to_string_lossy().to_string(),
+        disabled_root,
+    })
+}
+
+/// Every directory group of a workspace, in the order its rows are listed.
+pub fn project_agent_groups(store: &SkillStore, rec: &ProjectRecord) -> Vec<ProjectAgentGroup> {
+    if rec.workspace_type == "linked" {
+        return project_agent_group(store, rec, &linked_workspace_agent_key(rec))
+            .into_iter()
+            .collect();
+    }
+    agent_skill_configs(store)
+        .into_iter()
+        .filter_map(|config| project_agent_group(store, rec, &config.key))
+        .collect()
+}
+
+fn map_to_group_key(store: &SkillStore, rec: &ProjectRecord, agent: String) -> String {
+    project_agent_group(store, rec, &agent)
+        .map(|group| group.key)
+        .unwrap_or(agent)
+}
+
+/// The scanned copy of a skill directory for one directory group. Exact match
+/// first; on a case-insensitive filesystem the directory may differ in case.
+fn find_variant<'a>(
+    variants: &'a [project_scanner::ProjectSkillInfo],
+    agent: &str,
+    relative_path: &str,
+) -> Option<&'a project_scanner::ProjectSkillInfo> {
+    variants
+        .iter()
+        .find(|v| v.agent == agent && v.relative_path == relative_path)
+        .or_else(|| {
+            variants.iter().find(|v| {
+                v.agent == agent && v.relative_path.eq_ignore_ascii_case(relative_path)
+            })
+        })
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectDeployState {
+    Create,
+    AlreadyDeployed,
+    Conflict,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ProjectDeployTarget {
+    pub skill_id: String,
+    pub skill: String,
+    pub agent: String,
+    pub shared_by: Vec<String>,
+    pub path: String,
+    pub state: ProjectDeployState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_status: Option<String>,
+    #[serde(skip)]
+    source: PathBuf,
+}
+
+/// Decide, without writing, what deploying `skill_ids` to `agents` in a
+/// project would do for each (skill, directory) pair: create it, find this
+/// very skill already there, or find something else in the way.
+///
+/// Agents must be installed and enabled (any member of a shared directory
+/// counts, as in the project's agent rows); linked workspaces accept only
+/// their own key.
+pub fn plan_project_deploy(
+    store: &SkillStore,
+    project_id: &str,
+    skill_ids: &[String],
+    agents: &[String],
+) -> Result<Vec<ProjectDeployTarget>, AppError> {
+    let project = get_project_record(store, project_id)?;
+    ensure_workspace_path_exists(&project)?;
+    if agents.is_empty() {
+        return Err(AppError::invalid_input("No agent selected"));
+    }
+
+    let rows = project_agent_targets_for_record(store, &project);
+    let mut groups: Vec<ProjectAgentGroup> = Vec::new();
+    for agent in agents {
+        let group = project_agent_group(store, &project, agent)
+            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
+        if project.workspace_type != "linked" {
+            let row = rows
+                .iter()
+                .find(|row| row.key == group.key)
+                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
+            if !row.installed {
+                return Err(AppError::invalid_input(format!(
+                    "Agent is not installed: {}",
+                    agent
+                )));
+            }
+            if !row.enabled {
+                return Err(AppError::invalid_input(format!("Agent is disabled: {}", agent)));
+            }
+        }
+        if !groups.iter().any(|existing| existing.key == group.key) {
+            groups.push(group);
+        }
+    }
+
+    let configs = agent_skill_configs(store);
+    let variants = read_workspace_skills(&project, &configs);
+    let all_managed = store.get_all_skills().map_err(AppError::db)?;
+
+    let mut plan = Vec::new();
+    for skill_id in skill_ids {
+        let skill = store
+            .get_skill_by_id(skill_id)
+            .map_err(AppError::db)?
+            .ok_or_else(|| AppError::not_found("Skill not found"))?;
+        let source = PathBuf::from(&skill.central_path);
+        let dir_name = sync_engine::target_dir_name(&source, &skill.name);
+        ensure_safe_skill_relative_path(&dir_name)?;
+
+        for group in &groups {
+            let enabled_path = Path::new(&group.skills_root).join(&dir_name);
+            let disabled_path = group.disabled_root.as_ref().map(|root| root.join(&dir_name));
+            // symlink_metadata, not exists(): a dangling link is in the way too.
+            let occupied = std::iter::once(enabled_path.clone())
+                .chain(disabled_path)
+                .find(|path| std::fs::symlink_metadata(path).is_ok());
+
+            let (state, sync_status, path) = match occupied {
+                None => (ProjectDeployState::Create, None, enabled_path),
+                Some(path) => {
+                    let variant = find_variant(&variants, &group.key, &dir_name);
+                    let matched = variant.and_then(|v| find_best_center_match(v, &all_managed));
+                    match (variant, matched) {
+                        (Some(variant), Some(matched)) if matched.id == skill.id => (
+                            ProjectDeployState::AlreadyDeployed,
+                            Some(classify_sync_status(variant, Some(matched))),
+                            path,
+                        ),
+                        _ => (ProjectDeployState::Conflict, None, path),
+                    }
+                }
+            };
+            plan.push(ProjectDeployTarget {
+                skill_id: skill.id.clone(),
+                skill: skill.name.clone(),
+                agent: group.key.clone(),
+                shared_by: group.shared_by.clone(),
+                path: path.to_string_lossy().to_string(),
+                state,
+                sync_status,
+                source: source.clone(),
+            });
+        }
+    }
+    Ok(plan)
+}
+
+/// The refusal for a deploy plan that has something else in the way, in the
+/// shape the CLI envelope and the frontend already read. `None` when clear.
+pub fn project_deploy_conflicts(plan: &[ProjectDeployTarget]) -> Option<AppError> {
+    let conflicts: Vec<TargetConflictDetail> = plan
+        .iter()
+        .filter(|target| target.state == ProjectDeployState::Conflict)
+        .map(|target| TargetConflictDetail {
+            path: target.path.clone(),
+            reason: "exists and is not this library skill".to_string(),
+        })
+        .collect();
+    if conflicts.is_empty() {
+        return None;
+    }
+    Some(AppError::target_conflict(
+        format!(
+            "Refusing to deploy: {} of {} project target(s) already hold something else",
+            conflicts.len(),
+            plan.len()
+        ),
+        conflicts,
+    ))
+}
+
+/// Write the `Create` targets of a plan. Callers decide first what to do about
+/// conflicts and existing copies; NoClobber still refuses anything that
+/// appeared since the plan was made.
+pub fn apply_project_deploy(
+    store: &SkillStore,
+    plan: &[ProjectDeployTarget],
+) -> Result<(), AppError> {
+    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+    // Two agents can resolve to the same project skills root; write it once.
+    let mut written: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for target in plan
+        .iter()
+        .filter(|target| target.state == ProjectDeployState::Create)
+    {
+        let target_dir = PathBuf::from(&target.path);
+        if !written.insert(target_dir.clone()) {
+            continue;
+        }
+        if let Some(parent) = target_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mode = sync_engine::sync_mode_for_tool(&target.agent, configured_mode.as_deref());
+        sync_engine::sync_skill(
+            &target.source,
+            &target_dir,
+            mode,
+            sync_engine::ReplacePolicy::NoClobber,
+        )
+        .map_err(AppError::io)?;
+    }
+    Ok(())
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ProjectRemovalTarget {
+    pub skill_id: String,
+    pub skill: String,
+    pub agent: String,
+    pub shared_by: Vec<String>,
+    pub relative_path: String,
+    pub path: String,
+    pub sync_status: String,
+    /// False when the copy may hold content the library does not have.
+    pub safe: bool,
+}
+
+/// Only a hash match proves a copy holds nothing of its own; `center_newer`
+/// is reached after the hashes already differed (see pushSkillToCenterAndAlign
+/// in ProjectDetail.tsx). A symlink holds no content of its own either.
+fn removal_is_safe(variant: &project_scanner::ProjectSkillInfo, sync_status: &str) -> bool {
+    sync_status == "in_sync"
+        || std::fs::symlink_metadata(&variant.path)
+            .is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+/// The project copies of library skills `skill_ids` that an undeploy would
+/// remove. Empty `agents` means every directory of the project. Agents that
+/// are disabled or uninstalled are accepted, so stale copies can be cleaned.
+/// Copies that match no library skill (`project_only`) are never listed.
+pub fn plan_project_undeploy(
+    store: &SkillStore,
+    project_id: &str,
+    skill_ids: &[String],
+    agents: &[String],
+) -> Result<Vec<ProjectRemovalTarget>, AppError> {
+    let project = get_project_record(store, project_id)?;
+    ensure_workspace_path_exists(&project)?;
+
+    let groups = if agents.is_empty() {
+        project_agent_groups(store, &project)
+    } else {
+        let mut groups: Vec<ProjectAgentGroup> = Vec::new();
+        for agent in agents {
+            let group = project_agent_group(store, &project, agent)
+                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
+            if !groups.iter().any(|existing| existing.key == group.key) {
+                groups.push(group);
+            }
+        }
+        groups
+    };
+    for skill_id in skill_ids {
+        if store.get_skill_by_id(skill_id).map_err(AppError::db)?.is_none() {
+            return Err(AppError::not_found("Skill not found"));
+        }
+    }
+
+    let configs = agent_skill_configs(store);
+    let variants = read_workspace_skills(&project, &configs);
+    let all_managed = store.get_all_skills().map_err(AppError::db)?;
+
+    let mut plan = Vec::new();
+    for variant in &variants {
+        let Some(group) = groups.iter().find(|group| group.key == variant.agent) else {
+            continue;
+        };
+        let Some(matched) = find_best_center_match(variant, &all_managed) else {
+            continue;
+        };
+        if !skill_ids.contains(&matched.id) {
+            continue;
+        }
+        let sync_status = classify_sync_status(variant, Some(matched));
+        plan.push(ProjectRemovalTarget {
+            skill_id: matched.id.clone(),
+            skill: matched.name.clone(),
+            agent: group.key.clone(),
+            shared_by: group.shared_by.clone(),
+            relative_path: variant.relative_path.clone(),
+            path: variant.path.clone(),
+            safe: removal_is_safe(variant, &sync_status),
+            sync_status,
+        });
+    }
+    Ok(plan)
+}
+
+/// The refusal for removals that could lose content. `None` when all are safe.
+pub fn project_removal_conflicts(plan: &[ProjectRemovalTarget]) -> Option<AppError> {
+    let conflicts: Vec<TargetConflictDetail> = plan
+        .iter()
+        .filter(|target| !target.safe)
+        .map(|target| TargetConflictDetail {
+            path: target.path.clone(),
+            reason: format!(
+                "has content not in the library (sync status: {})",
+                target.sync_status
+            ),
+        })
+        .collect();
+    if conflicts.is_empty() {
+        return None;
+    }
+    Some(AppError::target_conflict(
+        format!(
+            "Refusing to remove {} project skill copy(ies) that may hold content not in the library",
+            conflicts.len()
+        ),
+        conflicts,
+    ))
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectImportAction {
+    Create,
+    Unchanged,
+    Overwrite,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ProjectImportResult {
+    pub action: ProjectImportAction,
+    pub skill_id: Option<String>,
+    pub name: String,
+    pub central_path: Option<String>,
+    pub agent: String,
+    pub relative_path: String,
+    pub path: String,
+}
+
+/// Find the project copy an import reads and decide what it would do to the
+/// library. Refuses when more than one copy of the skill in the project holds
+/// content the library lacks: there is then no copy that is safe to push, the
+/// rule pushSkillToCenterAndAlign (ProjectDetail.tsx) enforces in the GUI.
+fn resolve_project_import(
+    store: &SkillStore,
+    project_id: &str,
+    skill_relative_path: &str,
+    agent: &str,
+) -> Result<(ProjectImportResult, project_scanner::ProjectSkillInfo), AppError> {
+    ensure_safe_skill_relative_path(skill_relative_path)?;
+    let project = get_project_record(store, project_id)?;
+    ensure_workspace_path_exists(&project)?;
+    let group_key = map_to_group_key(store, &project, agent.to_string());
+
+    let configs = agent_skill_configs(store);
+    let variants = read_workspace_skills(&project, &configs);
+    let skill = variants
+        .iter()
+        .find(|s| s.relative_path == skill_relative_path && s.agent == group_key)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
+    let all_managed = store.get_all_skills().map_err(AppError::db)?;
+
+    let key = skill.relative_path.to_lowercase();
+    let unsynced: Vec<&project_scanner::ProjectSkillInfo> = variants
+        .iter()
+        .filter(|v| v.relative_path.to_lowercase() == key)
+        .filter(|v| classify_sync_status(v, find_best_center_match(v, &all_managed)) != "in_sync")
+        .collect();
+    if unsynced.len() > 1 {
+        return Err(AppError::target_conflict(
+            format!(
+                "Refusing to import: {} copies of this skill in the project hold content not in the library, so no single copy is safe to push",
+                unsynced.len()
+            ),
+            unsynced
+                .iter()
+                .map(|v| TargetConflictDetail {
+                    path: v.path.clone(),
+                    reason: "another copy of this skill also differs from the library".to_string(),
+                })
+                .collect(),
+        ));
+    }
+
+    let matched = find_best_center_match(&skill, &all_managed);
+    let action = match matched {
+        None => ProjectImportAction::Create,
+        Some(managed) if classify_sync_status(&skill, Some(managed)) == "in_sync" => {
+            ProjectImportAction::Unchanged
+        }
+        Some(_) => ProjectImportAction::Overwrite,
+    };
+    Ok((
+        ProjectImportResult {
+            action,
+            skill_id: matched.map(|m| m.id.clone()),
+            name: matched.map(|m| m.name.clone()).unwrap_or_else(|| skill.name.clone()),
+            central_path: matched.map(|m| m.central_path.clone()),
+            agent: group_key,
+            relative_path: skill.relative_path.clone(),
+            path: skill.path.clone(),
+        },
+        skill,
+    ))
+}
+
+/// The refusal an import plan meets without `force`: overwriting a library
+/// copy whose content differs. Shared so a dry run refuses what the run would.
+pub fn project_import_refusal(plan: &ProjectImportResult, force: bool) -> Option<AppError> {
+    if plan.action != ProjectImportAction::Overwrite || force {
+        return None;
+    }
+    Some(AppError::target_conflict(
+        format!(
+            "Refusing to overwrite the library copy of \"{}\": its content differs from the project copy",
+            plan.name
+        ),
+        vec![TargetConflictDetail {
+            path: plan.central_path.clone().unwrap_or_default(),
+            reason: "library copy differs from the project copy".to_string(),
+        }],
+    ))
+}
+
+/// What importing a project skill would do, without writing anything.
+pub fn plan_project_import(
+    store: &SkillStore,
+    project_id: &str,
+    skill_relative_path: &str,
+    agent: &str,
+) -> Result<ProjectImportResult, AppError> {
+    resolve_project_import(store, project_id, skill_relative_path, agent).map(|(plan, _)| plan)
 }
 
 #[cfg(test)]
@@ -2104,5 +2666,331 @@ mod add_project_tests {
             assert!(err.to_string().contains(&first.id), "{spelling}: {err}");
         }
         assert_eq!(store.get_all_projects().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod project_plan_tests {
+    use super::*;
+    use crate::core::{central_repo, content_hash};
+    use std::fs;
+    use tempfile::{tempdir, TempDir};
+
+    struct Fixture {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        _tmp: TempDir,
+        store: SkillStore,
+        project_id: String,
+        repo: PathBuf,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            central_repo::set_test_base_dir_override(None);
+        }
+    }
+
+    /// A store with one registered project. Path overrides make the named
+    /// agents count as installed on any machine.
+    fn fixture(installed_agents: &[&str]) -> Fixture {
+        let guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        let overrides: serde_json::Map<String, serde_json::Value> = installed_agents
+            .iter()
+            .map(|key| {
+                let dir = tmp.path().join("global").join(key);
+                (key.to_string(), serde_json::Value::String(dir.to_string_lossy().to_string()))
+            })
+            .collect();
+        store
+            .set_setting("custom_tool_paths", &serde_json::Value::Object(overrides).to_string())
+            .unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let project_id = add_project_internal(&store, repo.to_string_lossy().to_string())
+            .unwrap()
+            .id;
+        let repo = fs::canonicalize(&repo).unwrap();
+        Fixture { _guard: guard, _tmp: tmp, store, project_id, repo }
+    }
+
+    fn write_skill(dir: &Path, name: &str, body: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: test\n---\n{body}\n"),
+        )
+        .unwrap();
+    }
+
+    /// A library skill in the (test) central skills directory.
+    fn library_skill(fx: &Fixture, id: &str, dir: &str, body: &str) -> SkillRecord {
+        let central = central_repo::skills_dir().join(dir);
+        write_skill(&central, dir, body);
+        let hash = content_hash::hash_entries(&content_hash::list_content_files(&central));
+        let record = SkillRecord {
+            id: id.to_string(),
+            name: dir.to_string(),
+            description: None,
+            source_type: "local".to_string(),
+            source_ref: None,
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: central.to_string_lossy().to_string(),
+            content_hash: Some(hash),
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        fx.store.insert_skill(&record).unwrap();
+        record
+    }
+
+    fn ids(skills: &[&SkillRecord]) -> Vec<String> {
+        skills.iter().map(|s| s.id.clone()).collect()
+    }
+
+    fn conflict_paths(err: &AppError) -> Vec<String> {
+        assert_eq!(err.kind, crate::core::error::ErrorKind::TargetConflict, "{err}");
+        err.details
+            .as_ref()
+            .unwrap()
+            .conflicts
+            .iter()
+            .map(|c| c.path.clone())
+            .collect()
+    }
+
+    #[test]
+    fn deploy_plan_creates_then_recognizes_the_same_skill_without_writing_on_plan() {
+        let fx = fixture(&["claude_code"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let target = fx.repo.join(".claude/skills/demo");
+
+        let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].state, ProjectDeployState::Create);
+        assert!(fs::symlink_metadata(&target).is_err(), "planning must not write");
+
+        apply_project_deploy(&fx.store, &plan).unwrap();
+        assert!(target.join("SKILL.md").is_file());
+
+        let again = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap();
+        assert_eq!(again[0].state, ProjectDeployState::AlreadyDeployed);
+        assert_eq!(again[0].sync_status.as_deref(), Some("in_sync"));
+
+        // The GUI path keeps refusing anything already there, as before.
+        let gui = export_skill_to_project_internal(&fx.store, demo.id.clone(), fx.project_id.clone(), None);
+        assert!(gui.unwrap_err().to_string().contains("already exists"));
+    }
+
+    /// The directory name is taken, but by another library skill's content:
+    /// deploying must not report it as done, and must not touch it.
+    #[test]
+    fn deploy_refuses_a_same_named_directory_that_belongs_to_another_skill() {
+        let fx = fixture(&["claude_code"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let other = library_skill(&fx, "s-other", "other", "# Other");
+        let squatter = fx.repo.join(".claude/skills/demo");
+        fs::create_dir_all(squatter.parent().unwrap()).unwrap();
+        // Byte-identical to `other`, so its unique hash names `other`.
+        fs::create_dir_all(&squatter).unwrap();
+        fs::copy(Path::new(&other.central_path).join("SKILL.md"), squatter.join("SKILL.md")).unwrap();
+        let before = fs::read_to_string(squatter.join("SKILL.md")).unwrap();
+
+        let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap();
+        assert_eq!(plan[0].state, ProjectDeployState::Conflict);
+        let err = project_deploy_conflicts(&plan).expect("a conflict");
+        assert_eq!(conflict_paths(&err), vec![squatter.to_string_lossy().to_string()]);
+
+        // The GUI path refuses as well, and the directory is untouched.
+        let gui = export_skill_to_project_internal(&fx.store, demo.id.clone(), fx.project_id.clone(), Some(vec!["claude_code".into()]));
+        assert!(gui.unwrap_err().to_string().contains("already exists"));
+        assert_eq!(fs::read_to_string(squatter.join("SKILL.md")).unwrap(), before);
+    }
+
+    #[test]
+    fn deploy_refuses_a_directory_that_is_not_a_skill() {
+        let fx = fixture(&["claude_code"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let squatter = fx.repo.join(".claude/skills/demo");
+        fs::create_dir_all(&squatter).unwrap();
+        fs::write(squatter.join("notes.txt"), "mine").unwrap();
+
+        let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap();
+        assert_eq!(plan[0].state, ProjectDeployState::Conflict);
+        assert!(project_deploy_conflicts(&plan).is_some());
+    }
+
+    /// Warp reads `.agents/skills`, whose row is filed under another agent.
+    /// Naming Warp must reach that directory, from the CLI and the GUI path.
+    #[test]
+    fn any_agent_reading_a_shared_directory_can_deploy_into_it() {
+        let fx = fixture(&["warp"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let rep = project_agent_group(&fx.store, &get_project_record(&fx.store, &fx.project_id).unwrap(), "warp").unwrap();
+        assert_ne!(rep.key, "warp", "the row must be filed under another agent for this test to mean anything");
+        assert!(rep.shared_by.contains(&"warp".to_string()));
+
+        let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["warp".into()]).unwrap();
+        assert_eq!(plan[0].agent, rep.key);
+        assert_eq!(PathBuf::from(&plan[0].path), fx.repo.join(".agents/skills/demo"));
+
+        export_skill_to_project_internal(&fx.store, demo.id.clone(), fx.project_id.clone(), Some(vec!["warp".into()])).unwrap();
+        assert!(fx.repo.join(".agents/skills/demo/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn a_missing_project_folder_is_refused_and_not_recreated() {
+        let fx = fixture(&["claude_code"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        fs::remove_dir_all(&fx.repo).unwrap();
+
+        let err = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap_err();
+        assert!(err.to_string().contains("Project path does not exist"), "{err}");
+        let gui = export_skill_to_project_internal(&fx.store, demo.id.clone(), fx.project_id.clone(), None);
+        assert!(gui.unwrap_err().to_string().contains("Project path does not exist"));
+        assert!(!fx.repo.exists(), "the project folder must not be recreated");
+        assert!(plan_project_undeploy(&fx.store, &fx.project_id, &ids(&[&demo]), &[]).is_err());
+        assert!(plan_project_import(&fx.store, &fx.project_id, "demo", "claude_code").is_err());
+    }
+
+    /// A copied deployment the user edited holds content the library lacks.
+    #[test]
+    fn undeploy_refuses_a_copy_that_is_not_in_sync_unless_forced() {
+        let fx = fixture(&["claude_code"]);
+        fx.store.set_setting("sync_mode", "copy").unwrap();
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap();
+        apply_project_deploy(&fx.store, &plan).unwrap();
+        let copy = fx.repo.join(".claude/skills/demo");
+        fs::write(copy.join("SKILL.md"), "---\nname: demo\n---\n# Edited in the project\n").unwrap();
+
+        let removal = plan_project_undeploy(&fx.store, &fx.project_id, &ids(&[&demo]), &[]).unwrap();
+        assert_eq!(removal.len(), 1);
+        assert!(!removal[0].safe, "status {}", removal[0].sync_status);
+        assert_eq!(conflict_paths(&project_removal_conflicts(&removal).unwrap()), vec![copy.to_string_lossy().to_string()]);
+
+        let err = delete_project_skill_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).unwrap_err();
+        assert_eq!(conflict_paths(&err).len(), 1);
+        assert!(copy.join("SKILL.md").is_file(), "a refused removal deletes nothing");
+
+        delete_project_skill_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), true).unwrap();
+        assert!(!copy.exists());
+    }
+
+    #[test]
+    fn undeploy_removes_an_in_sync_copy_and_only_this_skills_copies() {
+        let fx = fixture(&["claude_code"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let other = library_skill(&fx, "s-other", "other", "# Other");
+        let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo, &other]), &["claude_code".into()]).unwrap();
+        apply_project_deploy(&fx.store, &plan).unwrap();
+        // A skill written in the project, matching nothing in the library.
+        write_skill(&fx.repo.join(".claude/skills/mine"), "mine", "# Mine");
+
+        let removal = plan_project_undeploy(&fx.store, &fx.project_id, &ids(&[&demo]), &[]).unwrap();
+        assert_eq!(removal.len(), 1);
+        assert_eq!(removal[0].relative_path, "demo");
+        assert!(removal[0].safe);
+        assert!(fx.repo.join(".claude/skills/demo").exists(), "planning must not delete");
+
+        delete_project_skill_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).unwrap();
+        assert!(!fx.repo.join(".claude/skills/demo").exists());
+        assert!(fx.repo.join(".claude/skills/other").exists());
+        assert!(fx.repo.join(".claude/skills/mine").exists());
+    }
+
+    /// Without force, a project-only skill (nothing in the library holds its
+    /// content) cannot be deleted through the shared path.
+    #[test]
+    fn delete_without_force_refuses_a_project_only_skill() {
+        let fx = fixture(&["claude_code"]);
+        write_skill(&fx.repo.join(".claude/skills/mine"), "mine", "# Mine");
+        let err = delete_project_skill_internal(&fx.store, fx.project_id.clone(), "mine".into(), "claude_code".into(), false).unwrap_err();
+        assert_eq!(conflict_paths(&err).len(), 1);
+        assert!(fx.repo.join(".claude/skills/mine/SKILL.md").is_file());
+    }
+
+    /// A directory the scanner does not recognize as a skill (no SKILL.md)
+    /// cannot be judged, so without force it is not deleted either.
+    #[test]
+    fn delete_without_force_refuses_a_directory_that_is_not_a_skill() {
+        let fx = fixture(&["claude_code"]);
+        let junk = fx.repo.join(".claude/skills/junk");
+        fs::create_dir_all(&junk).unwrap();
+        fs::write(junk.join("notes.txt"), "mine").unwrap();
+        let err = delete_project_skill_internal(&fx.store, fx.project_id.clone(), "junk".into(), "claude_code".into(), false).unwrap_err();
+        assert_eq!(conflict_paths(&err).len(), 1);
+        assert!(junk.join("notes.txt").is_file());
+    }
+
+    #[test]
+    fn import_creates_a_library_skill_with_metadata_and_audit() {
+        let fx = fixture(&["claude_code"]);
+        write_skill(&fx.repo.join(".claude/skills/mine"), "mine", "# Mine");
+        assert!(!sync_metadata::has_complete_skill_snapshot());
+
+        let plan = plan_project_import(&fx.store, &fx.project_id, "mine", "claude_code").unwrap();
+        assert_eq!(plan.action, ProjectImportAction::Create);
+        assert!(fx.store.get_all_skills().unwrap().is_empty(), "planning must not write the library");
+
+        let done = import_project_skill_to_center_internal(&fx.store, fx.project_id.clone(), "mine".into(), "claude_code".into(), false).unwrap();
+        assert_eq!(done.action, ProjectImportAction::Create);
+        let skills = fx.store.get_all_skills().unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(Some(skills[0].id.clone()), done.skill_id);
+        assert!(Path::new(&skills[0].central_path).join("SKILL.md").is_file());
+        assert!(fx.store.list_audit(None).unwrap().iter().any(|e| e.action == "import"));
+        assert!(sync_metadata::has_complete_skill_snapshot(), "sync metadata must be written");
+
+        let again = plan_project_import(&fx.store, &fx.project_id, "mine", "claude_code").unwrap();
+        assert_eq!(again.action, ProjectImportAction::Unchanged);
+    }
+
+    #[test]
+    fn import_needs_force_to_overwrite_a_differing_library_copy() {
+        let fx = fixture(&["claude_code"]);
+        fx.store.set_setting("sync_mode", "copy").unwrap();
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap();
+        apply_project_deploy(&fx.store, &plan).unwrap();
+        fs::write(fx.repo.join(".claude/skills/demo/SKILL.md"), "---\nname: demo\n---\n# Better\n").unwrap();
+        let library_file = Path::new(&demo.central_path).join("SKILL.md");
+        let before = fs::read_to_string(&library_file).unwrap();
+
+        assert_eq!(plan_project_import(&fx.store, &fx.project_id, "demo", "claude_code").unwrap().action, ProjectImportAction::Overwrite);
+        let err = import_project_skill_to_center_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).unwrap_err();
+        assert_eq!(conflict_paths(&err), vec![demo.central_path.clone()]);
+        assert_eq!(fs::read_to_string(&library_file).unwrap(), before, "refused import must not write");
+
+        let done = import_project_skill_to_center_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), true).unwrap();
+        assert_eq!(done.action, ProjectImportAction::Overwrite);
+        assert!(fs::read_to_string(&library_file).unwrap().contains("# Better"));
+    }
+
+    /// Two agents' copies both differ from the library: pushing either would
+    /// make the other look stale and invite overwriting it.
+    #[test]
+    fn import_refuses_when_several_copies_differ_even_with_force() {
+        let fx = fixture(&["claude_code", "cursor"]);
+        write_skill(&fx.repo.join(".claude/skills/mine"), "mine", "# Claude edit");
+        write_skill(&fx.repo.join(".cursor/skills/mine"), "mine", "# Cursor edit");
+
+        for force in [false, true] {
+            let err = import_project_skill_to_center_internal(&fx.store, fx.project_id.clone(), "mine".into(), "claude_code".into(), force).unwrap_err();
+            assert_eq!(conflict_paths(&err).len(), 2, "force={force}");
+        }
+        assert!(plan_project_import(&fx.store, &fx.project_id, "mine", "cursor").is_err());
+        assert!(fx.store.get_all_skills().unwrap().is_empty());
     }
 }
