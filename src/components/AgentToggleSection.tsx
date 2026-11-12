@@ -38,7 +38,12 @@ export function AgentToggleSection({
 
   const availableItems = items.filter((item) => item.isAvailable);
   const unavailableItems = items.filter((item) => !item.isAvailable);
-  const syncedAvailableCount = availableItems.filter((item) => item.deployed).length;
+  // Counts the rows drawn with the green tick, so the summary and the icons
+  // below it never disagree. A copy deployed by another preset but turned off
+  // in the one being viewed is drawn as off and is not counted here.
+  const syncedAvailableCount = availableItems.filter(
+    (item) => agentToggleState(item, showPendingSync) === "deployed"
+  ).length;
 
   return (
     <div className={cn("rounded-xl border border-border-subtle", className)}>

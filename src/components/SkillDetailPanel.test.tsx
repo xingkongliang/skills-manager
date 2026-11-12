@@ -85,9 +85,10 @@ describe("SkillDetailPanel agent toggles (#384)", () => {
     expect(row("codex").dataset.state).toBe("deployed");
     expect(row("claude_code").dataset.state).toBe("pending");
     expect(row("gemini_cli").dataset.state).toBe("off");
-    // Counted from deployment, not intent: codex and gemini_cli have files.
-    // Three agents are enabled, so a count from intent would read 3.
-    expect(document.body.textContent).toContain('mySkills.syncSummary{"synced":2,"total":4}');
+    // Counts the green rows: only codex is both enabled and deployed. A count
+    // from intent would read 3 (three agents are enabled), and a count from
+    // deployment alone would read 2 (gemini_cli has files but is turned off).
+    expect(document.body.textContent).toContain('mySkills.syncSummary{"synced":1,"total":4}');
   });
 
   it("deploys a pending row when clicked", async () => {
