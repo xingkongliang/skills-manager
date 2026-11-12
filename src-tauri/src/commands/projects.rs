@@ -13,7 +13,7 @@ use crate::core::{
     error::AppError, file_manager, installer, project_scanner, sync_engine, tool_adapters,
 };
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Debug)]
 pub struct SyncHealthDto {
     pub in_sync: usize,
     pub project_newer: usize,
@@ -22,7 +22,7 @@ pub struct SyncHealthDto {
     pub project_only: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct ProjectDto {
     pub id: String,
     pub name: String,
@@ -650,29 +650,40 @@ pub async fn add_project(
     tauri::async_runtime::spawn_blocking(move || add_project_internal(&store, path)).await?
 }
 
-pub fn add_project_internal(store: &SkillStore, path: String) -> Result<ProjectDto, AppError> {
-    let project_path = Path::new(&path);
-    if !project_path.is_dir() {
+/// Validate a directory for registration and build its record without
+/// touching the disk or the database, so a dry run sees the same refusals as
+/// the real add.
+///
+/// The path is stored canonicalized and compared canonicalized: the `path`
+/// column is UNIQUE on the raw string, so `/a/b`, `/a/b/` and a symlink to it
+/// used to register as three projects, and a byte-identical repeat surfaced
+/// only as a database error.
+pub fn prepare_project_record(store: &SkillStore, path: &Path) -> Result<ProjectRecord, AppError> {
+    if !path.is_dir() {
         return Err(AppError::invalid_input("Directory does not exist"));
     }
-    let claude_dir = project_path.join(".claude");
-    let skills_dir = claude_dir.join("skills");
-    let disabled_dir = claude_dir.join("skills-disabled");
+    let canonical = std::fs::canonicalize(path)?;
+    let canonical_string = canonical.to_string_lossy().to_string();
+    let existing = store.get_all_projects().map_err(AppError::db)?;
+    if let Some(project) = existing.iter().find(|project| {
+        project.path == canonical_string
+            || std::fs::canonicalize(&project.path).is_ok_and(|p| p == canonical)
+    }) {
+        return Err(AppError::invalid_input(format!(
+            "Project '{}' is already registered at {} (id: {})",
+            project.name, project.path, project.id
+        )));
+    }
 
-    // Support initializing an empty project directory as a managed project.
-    std::fs::create_dir_all(&skills_dir)?;
-    std::fs::create_dir_all(&disabled_dir)?;
-
-    let name = project_path
+    let name = canonical
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
-
     let now = chrono::Utc::now().timestamp_millis();
-    let record = ProjectRecord {
+    Ok(ProjectRecord {
         id: uuid::Uuid::new_v4().to_string(),
         name,
-        path: path.clone(),
+        path: canonical_string,
         workspace_type: "project".to_string(),
         linked_agent_key: None,
         linked_agent_name: None,
@@ -680,7 +691,16 @@ pub fn add_project_internal(store: &SkillStore, path: String) -> Result<ProjectD
         sort_order: 0,
         created_at: now,
         updated_at: now,
-    };
+    })
+}
+
+pub fn add_project_internal(store: &SkillStore, path: String) -> Result<ProjectDto, AppError> {
+    let record = prepare_project_record(store, Path::new(&path))?;
+    let claude_dir = Path::new(&record.path).join(".claude");
+
+    // Support initializing an empty project directory as a managed project.
+    std::fs::create_dir_all(claude_dir.join("skills"))?;
+    std::fs::create_dir_all(claude_dir.join("skills-disabled"))?;
 
     store.insert_project(&record).map_err(AppError::db)?;
     let all_managed = store.get_all_skills().map_err(AppError::db)?;
@@ -2025,5 +2045,64 @@ mod tests {
         assert_eq!(err.kind, ErrorKind::InvalidInput);
         assert!(real_enabled.join("SKILL.md").exists());
         assert!(real_disabled.join("SKILL.md").exists());
+    }
+}
+
+#[cfg(test)]
+mod add_project_tests {
+    use super::add_project_internal;
+    use crate::core::skill_store::SkillStore;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn add_project_creates_skill_roots_and_stores_the_canonical_path() {
+        let tmp = tempdir().unwrap();
+        let project_dir = tmp.path().join("repo");
+        fs::create_dir(&project_dir).unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+
+        let dto = add_project_internal(&store, project_dir.to_string_lossy().to_string()).unwrap();
+
+        let canonical = fs::canonicalize(&project_dir).unwrap();
+        assert_eq!(dto.path, canonical.to_string_lossy());
+        assert_eq!(dto.name, "repo");
+        assert!(project_dir.join(".claude/skills").is_dir());
+        assert!(project_dir.join(".claude/skills-disabled").is_dir());
+        assert_eq!(store.get_all_projects().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn add_project_rejects_a_missing_directory_without_side_effects() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        let missing = tmp.path().join("missing");
+
+        let err = add_project_internal(&store, missing.to_string_lossy().to_string()).unwrap_err();
+
+        assert!(err.to_string().contains("Directory does not exist"));
+        assert!(!missing.exists());
+        assert!(store.get_all_projects().unwrap().is_empty());
+    }
+
+    /// `/a/b`, `/a/b/` and `/a/x/../b` are one project. The raw-string UNIQUE
+    /// column let the spellings through as separate rows.
+    #[test]
+    fn add_project_rejects_another_spelling_of_a_registered_path() {
+        let tmp = tempdir().unwrap();
+        let project_dir = tmp.path().join("repo");
+        fs::create_dir(&project_dir).unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        let first = add_project_internal(&store, project_dir.to_string_lossy().to_string()).unwrap();
+
+        for spelling in [
+            format!("{}/", project_dir.to_string_lossy()),
+            project_dir.join("..").join("repo").to_string_lossy().to_string(),
+        ] {
+            let err = add_project_internal(&store, spelling.clone()).unwrap_err();
+            assert!(err.to_string().contains("already registered"), "{spelling}: {err}");
+            assert!(err.to_string().contains(&first.id), "{spelling}: {err}");
+        }
+        assert_eq!(store.get_all_projects().unwrap().len(), 1);
     }
 }
