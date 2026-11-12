@@ -1,11 +1,28 @@
 use std::sync::Arc;
 use tauri::State;
+use crate::core::translation_provider::{TranslationConfig, TranslationSettings, TranslationSettingsView};
 use crate::core::{error::AppError, skill_browser::BrowserSessionStore, skill_store::SkillStore, translation_cache::{CacheEntry, CacheResult, TranslationCache}, translation_transport::{TranslationResponse, TranslationTransport}};
 
 #[tauri::command]
-pub async fn translate_skill_blocks(session_id: String, request_id: String, texts: Vec<String>, target_language: String, sessions: State<'_, Arc<BrowserSessionStore>>, transport: State<'_, Arc<TranslationTransport>>, store: State<'_, Arc<SkillStore>>) -> Result<TranslationResponse, AppError> {
+pub async fn translate_skill_blocks(session_id: String, request_id: String, texts: Vec<String>, target_language: String, expected_namespace: String, sessions: State<'_, Arc<BrowserSessionStore>>, transport: State<'_, Arc<TranslationTransport>>, store: State<'_, Arc<SkillStore>>) -> Result<TranslationResponse, AppError> {
     let _session = sessions.get(&session_id)?;
-    transport.translate(request_id, texts, target_language, store.proxy_url()).await
+    let config = TranslationConfig::load(&store)?;
+    if config.namespace() != expected_namespace { return Err(AppError::invalid_input("reader.translationConfigChanged")); }
+    transport.translate_configured(request_id, texts, target_language, store.proxy_url(), config).await
+}
+
+#[tauri::command]
+pub async fn get_translation_settings(store: State<'_, Arc<SkillStore>>) -> Result<TranslationSettingsView, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || TranslationConfig::load(&store).map(|config| config.view())).await?
+}
+
+#[tauri::command]
+pub async fn save_translation_settings(settings: TranslationSettings, api_key: Option<String>, store: State<'_, Arc<SkillStore>>, transport: State<'_, Arc<TranslationTransport>>) -> Result<TranslationSettingsView, AppError> {
+    let store = store.inner().clone();
+    let view = tauri::async_runtime::spawn_blocking(move || TranslationConfig::save(&store, settings, api_key)).await??;
+    transport.cancel_all();
+    Ok(view)
 }
 
 #[tauri::command]

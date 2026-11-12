@@ -13,10 +13,11 @@ interface Options {
   blocks: TranslationBlock[]; sessionId: string; target: string; signal: AbortSignal;
   backend: TranslationBackend; onResult(id: string, result: BlockResult): void;
   priority?: (id: string) => boolean; onMemoryCache?: () => void;
+  cacheNamespace?: string;
 }
 
-async function cacheKey(block: TranslationBlock, target: string) {
-  const identity = JSON.stringify(["google", "batchexecute-v1", "auto", target, "normalization-v1", block.tokens, block.request]);
+async function cacheKey(block: TranslationBlock, target: string, namespace?: string) {
+  const identity = JSON.stringify([namespace ?? "google", "batchexecute-v1", "auto", target, "normalization-v1", block.tokens, block.request]);
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity));
   return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -55,7 +56,7 @@ async function requestWithRetry(texts: string[], options: Options): Promise<Tran
 export async function runReaderTranslation(options: Options) {
   const { blocks, signal, backend, target, onResult } = options;
   const publish = (ids: string[], result: BlockResult) => { if (!signal.aborted) ids.forEach((id) => onResult(id, result)); };
-  const keyed = await Promise.all(blocks.filter((b) => !b.skipped && b.request).map(async (block) => ({ block, key: await cacheKey(block, target) })));
+  const keyed = await Promise.all(blocks.filter((b) => !b.skipped && b.request).map(async (block) => ({ block, key: await cacheKey(block, target, options.cacheNamespace) })));
   if (signal.aborted) return;
   const groups = new Map<string, { block: TranslationBlock; ids: string[]; pieces: string[]; results: (string | null)[]; failed: boolean }>();
   for (const { block, key } of keyed) {

@@ -13,6 +13,18 @@ function backend(): TranslationBackend & { calls: string[][]; saved: string[] } 
 }
 
 describe("reader translation lifecycle", () => {
+  it("isolates cached translations when the configured provider or model changes", async () => {
+    const api = backend();
+    const cache = new Map<string, string>();
+    api.readCache = async (keys) => ({ epoch: 1, persistent: true, entries: keys.filter((key) => cache.has(key)).map((key) => ({ cache_key: key, text: cache.get(key)!, target_language: "zh-CN" })) });
+    api.writeCache = async (entries) => { entries.forEach((entry) => cache.set(entry.cache_key, entry.text)); return true; };
+    const options = { blocks: buildTranslationPlan("Read the instructions.").blocks, sessionId: "s", target: "zh-CN", signal: new AbortController().signal, backend: api, onResult: () => {} };
+    await runReaderTranslation({ ...options, cacheNamespace: "codex:model-a" });
+    await runReaderTranslation({ ...options, cacheNamespace: "codex:model-a" });
+    expect(api.calls).toHaveLength(1);
+    await runReaderTranslation({ ...options, cacheNamespace: "api:model-b" });
+    expect(api.calls).toHaveLength(2);
+  });
   it("deduplicates identical blocks and restores protected code before caching", async () => {
     const api = backend(); const translated: Record<string, string> = {};
     const plan = buildTranslationPlan("Read `SKILL.md` first.\n\nRead `SKILL.md` first.");

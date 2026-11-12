@@ -1,4 +1,4 @@
-//! Google-specific transport: no arbitrary URLs, headers or credentials from JS.
+//! Translation request lifecycle and Google fallback. AI providers use saved backend settings.
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -6,6 +6,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::{Notify, Semaphore};
 use crate::core::error::AppError;
+use super::translation_provider::{Provider, TranslationConfig};
 
 const ENDPOINT: &str = "https://translate.google.com/_/TranslateWebserverUi/data/batchexecute";
 const MAX_RESPONSE: usize = 2 * 1024 * 1024;
@@ -62,6 +63,9 @@ impl TranslationTransport {
         token.notify_one();
     }
     pub async fn translate(&self, request_id: String, texts: Vec<String>, target: String, proxy: Option<String>) -> Result<TranslationResponse, AppError> {
+        self.translate_configured(request_id, texts, target, proxy, TranslationConfig::default()).await
+    }
+    pub async fn translate_configured(&self, request_id: String, texts: Vec<String>, target: String, proxy: Option<String>, config: TranslationConfig) -> Result<TranslationResponse, AppError> {
         validate_batch(&texts, &target)?;
         if request_id.is_empty() || request_id.len() > 128 { return Err(AppError::invalid_input("reader.translationInvalidRequest")); }
         let token = {
@@ -75,7 +79,13 @@ impl TranslationTransport {
         let result = tokio::select! {
             biased;
             _ = token.notified() => Err(AppError::cancelled("reader.cancelled")),
-            value = self.send(texts, target, proxy) => value,
+            value = async {
+                if config.settings.provider == Provider::Google { self.send(texts, target, proxy).await }
+                else {
+                    let _permit = self.gate.acquire().await.map_err(|_| AppError::cancelled("reader.cancelled"))?;
+                    config.translate(texts, target, proxy).await
+                }
+            } => value,
         };
         self.requests.lock().unwrap().remove(&request_id);
         result
