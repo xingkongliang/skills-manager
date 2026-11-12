@@ -666,12 +666,13 @@ pub fn prepare_project_record(store: &SkillStore, path: &Path) -> Result<Project
     if !path.is_dir() {
         return Err(AppError::invalid_input("Directory does not exist"));
     }
-    let canonical = std::fs::canonicalize(path)?;
-    let canonical_string = strip_verbatim_prefix(&canonical.to_string_lossy());
+    let canonical = dunce::canonicalize(path)?;
+    let stored = stored_project_path(&canonical, &std::path::absolute(path)?);
+    let canonical_string = stored.to_string_lossy().to_string();
     let existing = store.get_all_projects().map_err(AppError::db)?;
     if let Some(project) = existing.iter().find(|project| {
         project.path == canonical_string
-            || std::fs::canonicalize(&project.path).is_ok_and(|p| p == canonical)
+            || dunce::canonicalize(&project.path).is_ok_and(|p| p == canonical)
     }) {
         return Err(AppError::invalid_input(format!(
             "Project '{}' is already registered at {} (id: {})",
@@ -698,22 +699,19 @@ pub fn prepare_project_record(store: &SkillStore, path: &Path) -> Result<Project
     })
 }
 
-/// `canonicalize` on Windows returns a verbatim path (`\\?\C:\repo`). In a
-/// verbatim path `/` is not a separator, so joining a project-relative
-/// directory such as `.agents/skills` onto it names something that cannot
-/// exist. Store the ordinary form, as the dunce crate does for drive and UNC
-/// paths. Paths on other platforms never carry the prefix.
-fn strip_verbatim_prefix(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
-        return format!(r"\\{rest}");
+/// The path to store for a project. On Windows `canonicalize` returns a
+/// verbatim path (`\\?\C:\repo`), in which `/` is not a separator, so joining
+/// a project-relative directory such as `.agents/skills` onto it names
+/// nothing. `dunce::canonicalize` drops the prefix only where that keeps the
+/// same meaning (plain drive paths); it keeps `\\?\UNC\…` and names Windows
+/// would reinterpret (`repo.`, `CON`). For those, store the absolute form of
+/// what the caller gave, which is what was stored before canonicalization.
+fn stored_project_path(canonical: &Path, absolute_input: &Path) -> PathBuf {
+    if canonical.to_string_lossy().starts_with(r"\\?\") {
+        absolute_input.to_path_buf()
+    } else {
+        canonical.to_path_buf()
     }
-    if let Some(rest) = path.strip_prefix(r"\\?\") {
-        let bytes = rest.as_bytes();
-        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-            return rest.to_string();
-        }
-    }
-    path.to_string()
 }
 
 pub fn add_project_internal(store: &SkillStore, path: String) -> Result<ProjectDto, AppError> {
@@ -2644,7 +2642,7 @@ mod add_project_tests {
 
         let dto = add_project_internal(&store, project_dir.to_string_lossy().to_string()).unwrap();
 
-        let canonical = fs::canonicalize(&project_dir).unwrap();
+        let canonical = dunce::canonicalize(&project_dir).unwrap();
         assert_eq!(dto.path, canonical.to_string_lossy());
         assert_eq!(dto.name, "repo");
         assert!(project_dir.join(".claude/skills").is_dir());
@@ -2667,14 +2665,33 @@ mod add_project_tests {
 
     /// The stored path must not keep Windows' verbatim prefix: `/` in a
     /// project-relative dir like `.agents/skills` is not a separator there.
+    /// dunce strips it from drive paths; it keeps UNC shares verbatim, so
+    /// those fall back to the caller's own absolute spelling.
     #[test]
-    fn stored_project_paths_drop_the_windows_verbatim_prefix() {
-        use super::strip_verbatim_prefix as strip;
-        assert_eq!(strip(r"\\?\C:\Users\me\repo"), r"C:\Users\me\repo");
-        assert_eq!(strip(r"\\?\UNC\server\share\repo"), r"\\server\share\repo");
-        // Verbatim forms that have no ordinary spelling are kept.
-        assert_eq!(strip(r"\\?\Volume{0}\repo"), r"\\?\Volume{0}\repo");
-        assert_eq!(strip("/Users/me/repo"), "/Users/me/repo");
+    fn stored_project_paths_never_keep_a_verbatim_prefix_dunce_left() {
+        use super::stored_project_path as stored;
+        use std::path::Path;
+        assert_eq!(
+            stored(Path::new(r"\\?\UNC\server\share\repo"), Path::new(r"\\server\share\repo")),
+            Path::new(r"\\server\share\repo")
+        );
+        assert_eq!(
+            stored(Path::new("/private/tmp/repo"), Path::new("/tmp/repo")),
+            Path::new("/private/tmp/repo"),
+            "an ordinary canonical path is stored canonical"
+        );
+    }
+
+    /// dunce's own rules, which only exist on Windows: a drive path loses the
+    /// prefix; a name Windows would reinterpret keeps it.
+    #[cfg(windows)]
+    #[test]
+    fn dunce_simplifies_only_what_keeps_its_meaning() {
+        use std::path::Path;
+        assert_eq!(dunce::simplified(Path::new(r"\\?\C:\Users\me\repo")), Path::new(r"C:\Users\me\repo"));
+        assert_eq!(dunce::simplified(Path::new(r"\\?\C:\repo.")), Path::new(r"\\?\C:\repo."));
+        assert_eq!(dunce::simplified(Path::new(r"\\?\C:\CON\x")), Path::new(r"\\?\C:\CON\x"));
+        assert_eq!(dunce::simplified(Path::new(r"\\?\UNC\server\share\repo")), Path::new(r"\\?\UNC\server\share\repo"));
     }
 
     /// `/a/b`, `/a/b/` and `/a/x/../b` are one project. The raw-string UNIQUE
@@ -2742,7 +2759,7 @@ mod project_plan_tests {
         let project_id = add_project_internal(&store, repo.to_string_lossy().to_string())
             .unwrap()
             .id;
-        let repo = fs::canonicalize(&repo).unwrap();
+        let repo = dunce::canonicalize(&repo).unwrap();
         Fixture { _guard: guard, _tmp: tmp, store, project_id, repo }
     }
 

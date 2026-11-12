@@ -3310,13 +3310,11 @@ fn resolve_project(
         return Ok(project.clone());
     }
 
-    let canonical = Path::new(reference).canonicalize().ok();
+    let canonical = dunce::canonicalize(reference).ok();
     if let Some(project) = projects.iter().find(|project| {
         project.path == reference
             || canonical.as_ref().is_some_and(|canonical| {
-                Path::new(&project.path)
-                    .canonicalize()
-                    .is_ok_and(|path| &path == canonical)
+                dunce::canonicalize(&project.path).is_ok_and(|path| &path == canonical)
             })
     }) {
         return Ok(project.clone());
@@ -3401,7 +3399,11 @@ fn add_project(store: &SkillStore, path: &Path, dry_run: bool) -> anyhow::Result
     let project_id = if dry_run {
         None
     } else {
-        let dto = project_cmd::add_project_internal(store, record.path.clone()).map_err(map_app_err)?;
+        // Pass what the caller gave, not the stored spelling: preparing the
+        // stored spelling again could resolve to a different directory on
+        // Windows (`\\?\C:\repo.` and `C:\repo`).
+        let dto = project_cmd::add_project_internal(store, path.to_string_lossy().to_string())
+            .map_err(map_app_err)?;
         Some(dto.id)
     };
     Ok(ProjectAddReport {
@@ -4370,7 +4372,7 @@ mod project_tests {
         let repo = tmp.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
         project_cmd::add_project_internal(&store, repo.to_string_lossy().to_string()).unwrap();
-        let repo = repo.canonicalize().unwrap();
+        let repo = dunce::canonicalize(&repo).unwrap();
         Fx { tmp, store, repo }
     }
 
