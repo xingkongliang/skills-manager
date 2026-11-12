@@ -1680,6 +1680,15 @@ pub fn plan_project_deploy(
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Skill not found"))?;
         let source = PathBuf::from(&skill.central_path);
+        // The write copies or links this directory; without it the run fails,
+        // so the plan (and with it a dry run) fails first.
+        if !source.is_dir() {
+            return Err(AppError::not_found(format!(
+                "Library copy of \"{}\" is missing: {}",
+                skill.name,
+                source.display()
+            )));
+        }
         let dir_name = sync_engine::target_dir_name(&source, &skill.name);
         ensure_safe_skill_relative_path(&dir_name)?;
 
@@ -2022,6 +2031,12 @@ fn resolve_project_import(
     }
 
     let matched = find_best_center_match(&skill, &all_managed);
+    if matched.is_none() {
+        // The same name check install_from_local applies to a new skill, so
+        // a dry run refuses a name the import itself would refuse.
+        installer::resolve_local_skill_name(Path::new(&skill.path), Some(&skill.name))
+            .map_err(|e| AppError::invalid_input(e.to_string()))?;
+    }
     let action = match matched {
         None => ProjectImportAction::Create,
         Some(managed) if classify_sync_status(&skill, Some(managed)) == "in_sync" => {
@@ -3252,6 +3267,35 @@ mod project_plan_tests {
         assert_eq!(conflict_paths(&err).len(), 1);
         let library = central_repo::skills_dir().join("mine/SKILL.md");
         assert!(fs::read_to_string(library).unwrap().contains("Someone else's version"));
+    }
+
+    /// Review finding 7: a dry run must fail where the run certainly will.
+    /// A library skill whose own directory is gone cannot be deployed.
+    #[test]
+    fn deploy_plan_refuses_a_library_skill_whose_directory_is_missing() {
+        let fx = fixture(&["claude_code"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        fs::remove_dir_all(&demo.central_path).unwrap();
+
+        let err = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()])
+            .expect_err("the run would fail, so the plan must");
+        assert!(err.to_string().contains(&demo.central_path), "{err}");
+        assert!(fs::symlink_metadata(fx.repo.join(".claude/skills/demo")).is_err());
+    }
+
+    /// A skill name the installer rejects (`...` is empty once trailing dots
+    /// go) fails the import plan as it fails the import.
+    #[test]
+    fn import_plan_refuses_a_name_the_installer_rejects() {
+        let fx = fixture(&["claude_code"]);
+        write_skill(&fx.repo.join(".claude/skills/dots"), "...", "# Dots");
+
+        let real = import_project_skill_to_center_internal(&fx.store, fx.project_id.clone(), "dots".into(), "claude_code".into(), false);
+        assert!(real.is_err(), "the installer rejects the name");
+        let err = plan_project_import(&fx.store, &fx.project_id, "dots", "claude_code")
+            .expect_err("the plan must refuse what the run refuses");
+        assert!(err.to_string().contains("Invalid skill name"), "{err}");
+        assert!(fx.store.get_all_skills().unwrap().is_empty());
     }
 
     #[test]
