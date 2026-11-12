@@ -362,6 +362,8 @@
     "agentToggleDisabled": "{{agent}} disabled",
     "agentToggleNotInstalled": "Not installed",
     "agentToggleDisabledGlobally": "Disabled in Settings",
+    "agentTogglePendingSync": "Pending sync",
+    "agentTogglePendingSyncHint": "Enabled in this preset but not deployed to this agent yet. Click to deploy.",
     "agentUnavailableCount": "{{count}} unavailable",
     "updateStatus": {
       "unknown": "Unknown",

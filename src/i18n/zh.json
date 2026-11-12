@@ -362,6 +362,8 @@
     "agentToggleDisabled": "{{agent}} 已关闭",
     "agentToggleNotInstalled": "未安装",
     "agentToggleDisabledGlobally": "已在设置中禁用",
+    "agentTogglePendingSync": "待同步",
+    "agentTogglePendingSyncHint": "已在此 Preset 中启用，但还没有部署到这个 Agent。点击即部署。",
     "agentUnavailableCount": "{{count}} 个不可用",
     "updateStatus": {
       "unknown": "未知",
