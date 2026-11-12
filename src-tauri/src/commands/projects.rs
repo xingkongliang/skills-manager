@@ -1065,6 +1065,11 @@ pub fn import_project_skill_to_center_internal(
     agent: String,
     force: bool,
 ) -> Result<ProjectImportResult, AppError> {
+    // The CLI and the app can write the library at the same time, so the
+    // destination is resolved and authorized under the lock: a plan made
+    // before it could miss a same-named skill another writer just installed
+    // and overwrite it without --force.
+    let _lock = RepoLock::acquire_foreground("import project skill").map_err(AppError::io)?;
     let (mut outcome, skill) =
         resolve_project_import(store, &project_id, &skill_relative_path, &agent)?;
     if let Some(refusal) = project_import_refusal(&outcome, force) {
@@ -1074,14 +1079,16 @@ pub fn import_project_skill_to_center_internal(
         return Ok(outcome);
     }
 
-    // The CLI and the app can write the library at the same time.
-    let _lock = RepoLock::acquire_foreground("import project skill").map_err(AppError::io)?;
     let source_path = PathBuf::from(&skill.path);
-    let all_managed = store.get_all_skills().unwrap_or_default();
-    // Use the same matching logic as the UI (find_best_center_match) to
-    // stay consistent with sync-status display. After updating, bind
-    // source_ref so future imports match by exact path.
-    if let Some(existing) = find_best_center_match(&skill, &all_managed) {
+    let all_managed = store.get_all_skills().map_err(AppError::db)?;
+    // Write to the library skill the authorized plan matched (by the same
+    // find_best_center_match the UI uses), nothing re-derived after it.
+    // After updating, bind source_ref so future imports match by exact path.
+    let matched = outcome
+        .skill_id
+        .as_ref()
+        .and_then(|id| all_managed.iter().find(|managed| &managed.id == id));
+    if let Some(existing) = matched {
         let result = installer::install_from_local_to_destination(
             &source_path,
             Some(&existing.name),
@@ -3157,6 +3164,33 @@ mod project_plan_tests {
         let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["claude_code".into()]).unwrap();
         apply_project_deploy(&fx.store, &plan).unwrap();
         assert!(plan_project_undeploy(&fx.store, &fx.project_id, &ids(&[&demo]), &[]).unwrap()[0].safe);
+    }
+
+    /// Review finding 4: whether an import may overwrite is decided under the
+    /// repo lock. Here another writer installs a differing "mine" while the
+    /// import waits for the lock; without --force it must be refused, not
+    /// overwritten on the strength of a plan made before the lock.
+    #[test]
+    fn import_decides_whether_it_overwrites_under_the_lock() {
+        let fx = fixture(&["claude_code"]);
+        write_skill(&fx.repo.join(".claude/skills/mine"), "mine", "# Project version");
+        let held = RepoLock::acquire_foreground("test holds the lock").unwrap();
+
+        let result = std::thread::scope(|scope| {
+            let import = scope.spawn(|| {
+                import_project_skill_to_center_internal(&fx.store, fx.project_id.clone(), "mine".into(), "claude_code".into(), false)
+            });
+            // Long enough for the import to plan and block on the lock.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            library_skill(&fx, "s-mine", "mine", "# Someone else's version");
+            drop(held);
+            import.join().unwrap()
+        });
+
+        let err = result.expect_err("an overwrite without --force must be refused");
+        assert_eq!(conflict_paths(&err).len(), 1);
+        let library = central_repo::skills_dir().join("mine/SKILL.md");
+        assert!(fs::read_to_string(library).unwrap().contains("Someone else's version"));
     }
 
     #[test]
