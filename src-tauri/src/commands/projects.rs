@@ -1454,8 +1454,9 @@ fn ensure_removable(store: &SkillStore, record: &ProjectRecord, target: &Path) -
     let reason = match variants.iter().find(|v| Path::new(&v.path) == target) {
         None => Some("is not a recognizable skill directory".to_string()),
         Some(variant) => {
-            let status = classify_sync_status(variant, find_best_center_match(variant, &all_managed));
-            (!removal_is_safe(variant, &status))
+            let matched = find_best_center_match(variant, &all_managed);
+            let status = classify_sync_status(variant, matched);
+            (!removal_is_safe(variant, matched, &status))
                 .then(|| format!("has content not in the library (sync status: {status})"))
         }
     };
@@ -1786,10 +1787,29 @@ pub struct ProjectRemovalTarget {
 /// Only a hash match proves a copy holds nothing of its own; `center_newer`
 /// is reached after the hashes already differed (see pushSkillToCenterAndAlign
 /// in ProjectDetail.tsx). A symlink holds no content of its own either.
-fn removal_is_safe(variant: &project_scanner::ProjectSkillInfo, sync_status: &str) -> bool {
+///
+/// A link is safe only when it resolves to the matched library skill's own
+/// directory, i.e. it is our deployment. A link the user made to somewhere
+/// else is their configuration, whatever its target holds.
+fn removal_is_safe(
+    variant: &project_scanner::ProjectSkillInfo,
+    matched: Option<&SkillRecord>,
+    sync_status: &str,
+) -> bool {
+    let is_link = std::fs::symlink_metadata(&variant.path)
+        .is_ok_and(|meta| meta.file_type().is_symlink());
+    if is_link {
+        return matched.is_some_and(|managed| {
+            match (
+                dunce::canonicalize(&variant.path),
+                dunce::canonicalize(&managed.central_path),
+            ) {
+                (Ok(link_target), Ok(library_copy)) => link_target == library_copy,
+                _ => false,
+            }
+        });
+    }
     sync_status == "in_sync"
-        || std::fs::symlink_metadata(&variant.path)
-            .is_ok_and(|meta| meta.file_type().is_symlink())
 }
 
 /// The project copies of library skills `skill_ids` that an undeploy would
@@ -1847,7 +1867,7 @@ pub fn plan_project_undeploy(
             shared_by: group.shared_by.clone(),
             relative_path: variant.relative_path.clone(),
             path: variant.path.clone(),
-            safe: removal_is_safe(variant, &sync_status),
+            safe: removal_is_safe(variant, Some(matched), &sync_status),
             sync_status,
         });
     }
@@ -3043,6 +3063,43 @@ mod project_plan_tests {
         remove_planned_project_copy(&fx.store, &fx.project_id, &plan[0], false).unwrap();
         assert!(!disabled.exists());
         assert!(junk.join("notes.txt").is_file());
+    }
+
+    /// A link the user made to somewhere else is their configuration, even
+    /// when its target's content happens to equal the library's. Only a link
+    /// that resolves to the matched library skill's own directory is ours.
+    #[cfg(unix)]
+    #[test]
+    fn undeploy_refuses_a_symlink_that_does_not_point_at_the_library_copy() {
+        let fx = fixture(&["claude_code"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let skills = fx.repo.join(".claude/skills");
+        let link = skills.join("demo");
+
+        for (label, body) in [("different", "# Someone else's demo"), ("identical", "# Demo")] {
+            let elsewhere = fx._tmp.path().join(format!("elsewhere-{label}/demo"));
+            write_skill(&elsewhere, "demo", body);
+            if label == "identical" {
+                fs::copy(Path::new(&demo.central_path).join("SKILL.md"), elsewhere.join("SKILL.md")).unwrap();
+            }
+            let _ = fs::remove_file(&link);
+            std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+
+            let plan = plan_project_undeploy(&fx.store, &fx.project_id, &ids(&[&demo]), &[]).unwrap();
+            assert_eq!(plan.len(), 1, "{label}");
+            assert!(!plan[0].safe, "{label}: status {}", plan[0].sync_status);
+            assert!(delete_project_skill_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).is_err(), "{label}");
+            assert!(fs::symlink_metadata(&link).is_ok(), "{label}: the link stays");
+        }
+
+        // Our own deployment (a link to the library copy) is still removable.
+        fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&demo.central_path, &link).unwrap();
+        let plan = plan_project_undeploy(&fx.store, &fx.project_id, &ids(&[&demo]), &[]).unwrap();
+        assert!(plan[0].safe);
+        delete_project_skill_internal(&fx.store, fx.project_id.clone(), "demo".into(), "claude_code".into(), false).unwrap();
+        assert!(fs::symlink_metadata(&link).is_err());
+        assert!(Path::new(&demo.central_path).join("SKILL.md").is_file(), "the library copy survives");
     }
 
     #[test]
