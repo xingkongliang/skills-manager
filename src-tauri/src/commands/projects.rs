@@ -1743,9 +1743,14 @@ pub fn plan_project_deploy(
         }) {
             collisions.push(TargetConflictDetail {
                 path: target.path.clone(),
+                // Names alone can match (both frontmatter names may be
+                // "demo"), so say which library directories collide.
                 reason: format!(
-                    "skills \"{}\" and \"{}\" would both be written here",
-                    earlier.skill, target.skill
+                    "skills \"{}\" ({}) and \"{}\" ({}) would both be written here",
+                    earlier.skill,
+                    earlier.source.display(),
+                    target.skill,
+                    target.source.display()
                 ),
             });
         }
@@ -3005,6 +3010,10 @@ mod project_plan_tests {
         assert_eq!(conflict_paths(&err), vec![target.to_string_lossy().to_string()]);
         let reason = &err.details.as_ref().unwrap().conflicts[0].reason;
         assert!(reason.contains("a-demo") && reason.contains("b-demo"), "{reason}");
+        assert!(
+            reason.contains(&skills[0].central_path) && reason.contains(&skills[1].central_path),
+            "names can coincide, so the library directories are named: {reason}"
+        );
         assert!(fs::symlink_metadata(&target).is_err());
     }
 

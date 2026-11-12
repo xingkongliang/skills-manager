@@ -72,7 +72,7 @@ The project commands refuse the same way, with these `reason`s:
 | reason | from | what to tell the user |
 |---|---|---|
 | `exists and is not this library skill` | `projects deploy` | that directory holds something else; it was left alone and nothing in the batch was written |
-| `skills "…" and "…" would both be written here` | `projects deploy` | two library skills have the same directory name and only one can live there; ask the user which one, then deploy just that one |
+| `skills "…" (…) and "…" (…) would both be written here` | `projects deploy` | two library skills have the same directory name and only one can live there; ask the user which one, then deploy just that one |
 | `has content not in the library (…)` | `projects undeploy` | the project copy may have edits, extra files (`.gitignore`, `.git`, links) or be a link the user made to somewhere else; `projects import` it first, or remove it with `--force` only if they say it can go |
 | `library copy differs from the project copy` | `projects import` | importing would overwrite the library version; `--force` only if they want the project version to win |
 | `another copy of this skill also differs from the library` | `projects import` | several agents' copies were edited differently; they must pick one by hand |
