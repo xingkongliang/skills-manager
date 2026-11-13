@@ -179,15 +179,21 @@ function SkillDetailPanelContent({
 
   // The source document and the whole-directory diff load only when their tab
   // is opened. For git/skills.sh skills each one resolves the remote and
-  // clones, so opening the sheet must not pay for either.
+  // clones, so opening the sheet must not pay for either. A response is kept
+  // only while its version is still the latest one requested: a slow clone
+  // for an older revision must not land after the newer one and replace it.
   useEffect(() => {
     if (contentTab !== "source" || !supportsSourceDiff) return;
     if (sourceRequestedRef.current === sourceVersion) return;
     sourceRequestedRef.current = sourceVersion;
 
     getSourceSkillDocument(skillId)
-      .then((nextDoc) => setSourceResult({ version: sourceVersion, doc: nextDoc }))
-      .catch(() => setSourceResult({ version: sourceVersion, doc: null }));
+      .then((nextDoc) => {
+        if (sourceRequestedRef.current === sourceVersion) setSourceResult({ version: sourceVersion, doc: nextDoc });
+      })
+      .catch(() => {
+        if (sourceRequestedRef.current === sourceVersion) setSourceResult({ version: sourceVersion, doc: null });
+      });
   }, [contentTab, supportsSourceDiff, skillId, sourceVersion]);
 
   useEffect(() => {
@@ -196,8 +202,12 @@ function SkillDetailPanelContent({
     diffRequestedRef.current = sourceVersion;
 
     getSkillSourceDiff(skillId)
-      .then((diff) => setDiffResult({ version: sourceVersion, diff }))
-      .catch(() => setDiffResult({ version: sourceVersion, diff: null }));
+      .then((diff) => {
+        if (diffRequestedRef.current === sourceVersion) setDiffResult({ version: sourceVersion, diff });
+      })
+      .catch(() => {
+        if (diffRequestedRef.current === sourceVersion) setDiffResult({ version: sourceVersion, diff: null });
+      });
   }, [contentTab, supportsSourceDiff, skillId, sourceVersion]);
 
   useEffect(() => {
@@ -206,8 +216,12 @@ function SkillDetailPanelContent({
     filesRequestedRef.current = localDocVersion;
 
     listSkillFiles(skillId)
-      .then((list) => setFilesResult({ version: localDocVersion, files: list }))
-      .catch(() => setFilesResult({ version: localDocVersion, files: null }));
+      .then((list) => {
+        if (filesRequestedRef.current === localDocVersion) setFilesResult({ version: localDocVersion, files: list });
+      })
+      .catch(() => {
+        if (filesRequestedRef.current === localDocVersion) setFilesResult({ version: localDocVersion, files: null });
+      });
   }, [contentTab, skillId, localDocVersion]);
 
   // A stale list keeps showing until the fresh one arrives, so the column

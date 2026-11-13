@@ -24,7 +24,14 @@ vi.mock("../lib/tauri", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
-vi.mock("./SkillMarkdown", () => ({ SkillMarkdown: () => null }));
+vi.mock("./SkillSourceDiffViewer", () => ({
+  SkillSourceDiffViewer: ({ entries }: { entries: { relative_path: string }[] }) => (
+    <div data-testid="diff">{entries.map((e) => e.relative_path).join(",")}</div>
+  ),
+}));
+vi.mock("./SkillMarkdown", () => ({
+  SkillMarkdown: ({ content }: { content: string }) => <div data-testid="markdown">{content}</div>,
+}));
 
 const skill: ManagedSkill = {
   id: "demo", name: "demo", description: null, source_type: "local", source_ref: null,
@@ -169,6 +176,57 @@ describe("SkillDetailPanel source loading", () => {
     await act(async () => tab("mySkills.docTabs.local").click());
     await act(async () => tab("mySkills.docTabs.source").click());
     expect(api.getSourceSkillDocument).toHaveBeenCalledTimes(1);
+  });
+
+  // A check that finds a new revision (or an update) changes the version while
+  // the first request may still be out; the older response must not win.
+  it.each([
+    {
+      name: "source",
+      tab: "mySkills.docTabs.source",
+      fetch: () => vi.mocked(api.getSourceSkillDocument),
+      bump: { remote_revision: "1b2c3d4e5f60718293a4b5c6d7e8f9012a3b4c5d" },
+      payload: (label: string) => ({
+        skill_id: "demo", filename: "SKILL.md", content: label, source_label: "example/skills", revision: label,
+      }),
+      shown: () => document.body.querySelector("[data-testid=markdown]")?.textContent,
+    },
+    {
+      name: "diff",
+      tab: "mySkills.docTabs.diff",
+      fetch: () => vi.mocked(api.getSkillSourceDiff),
+      bump: { remote_revision: "1b2c3d4e5f60718293a4b5c6d7e8f9012a3b4c5d" },
+      payload: (label: string) => ({
+        skill_id: "demo", source_label: "example/skills", revision: label,
+        entries: [{ relative_path: label }],
+      }),
+      shown: () => document.body.querySelector("[data-testid=diff]")?.textContent,
+    },
+    {
+      name: "files",
+      tab: "mySkills.docTabs.files",
+      fetch: () => vi.mocked(api.listSkillFiles),
+      bump: { updated_at: 1 },
+      payload: (label: string) => [{ relative_path: label, size: 1, executable: false }],
+      shown: () => document.body.querySelector(".app-panel")?.textContent?.replace(/1 B$/, ""),
+    },
+  ])("keeps the current $name result when an older response arrives last", async (c) => {
+    const pending: Array<(value: unknown) => void> = [];
+    const deferred = () => new Promise<never>((resolve) => { pending.push(resolve as (value: unknown) => void); });
+    c.fetch().mockImplementationOnce(deferred).mockImplementationOnce(deferred);
+    const renderSkill = (target: ManagedSkill) =>
+      act(async () =>
+        root.render(<SkillDetailPanel skill={target} onClose={() => {}} isActivePreset={false} />)
+      );
+
+    await renderSkill(gitSkill);
+    await act(async () => tab(c.tab).click());
+    await renderSkill({ ...gitSkill, ...c.bump });
+    expect(c.fetch()).toHaveBeenCalledTimes(2);
+
+    await act(async () => pending[1](c.payload("new")));
+    await act(async () => pending[0](c.payload("old")));
+    expect(c.shown()).toBe("new");
   });
 
   it("lists files only when the Files tab is opened", async () => {
