@@ -30,7 +30,14 @@ vi.mock("./SkillSourceDiffViewer", () => ({
   ),
 }));
 vi.mock("./SkillMarkdown", () => ({
-  SkillMarkdown: ({ content }: { content: string }) => <div data-testid="markdown">{content}</div>,
+  SkillMarkdown: ({ content, onRelativeLink }: { content: string; onRelativeLink?: (path: string) => void }) => (
+    <div data-testid="markdown">
+      {content}
+      {onRelativeLink && (
+        <button type="button" data-testid="relative-link" onClick={() => onRelativeLink("../SKILL.md")} />
+      )}
+    </div>
+  ),
 }));
 
 const skill: ManagedSkill = {
@@ -234,5 +241,26 @@ describe("SkillDetailPanel source loading", () => {
     expect(api.listSkillFiles).not.toHaveBeenCalled();
     await act(async () => tab("mySkills.docTabs.files").click());
     expect(api.listSkillFiles).toHaveBeenCalledWith("demo");
+  });
+
+  it("resolves a link in an opened file against that file's folder", async () => {
+    vi.mocked(api.listSkillFiles).mockResolvedValueOnce([
+      { relative_path: "SKILL.md", size: 10, executable: false },
+      { relative_path: "references/a.md", size: 10, executable: false },
+    ]);
+    vi.mocked(api.readSkillFile)
+      .mockResolvedValueOnce({ relative_path: "references/a.md", content_kind: "text", text: "a" })
+      .mockResolvedValueOnce({ relative_path: "SKILL.md", content_kind: "text", text: "root" });
+    await render(true, gitSkill);
+    await act(async () => tab("mySkills.docTabs.files").click());
+    const fileRow = [...document.body.querySelectorAll<HTMLButtonElement>(".app-panel button")]
+      .find((b) => b.textContent?.includes("references/a.md"));
+    await act(async () => fileRow!.click());
+    expect(api.readSkillFile).toHaveBeenLastCalledWith("demo", "references/a.md");
+
+    // `../SKILL.md` written inside references/a.md is the root SKILL.md.
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-testid=relative-link]")!.click());
+    expect(api.readSkillFile).toHaveBeenLastCalledWith("demo", "SKILL.md");
+    expect(document.body.textContent).not.toContain("mySkills.detail.fileNotFound");
   });
 });

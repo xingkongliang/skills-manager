@@ -13,3 +13,22 @@ export function relativeLinkPath(href: string | undefined): string | null {
   }
   return path || null;
 }
+
+/**
+ * Resolves a link path against the directory of the skill file it appears in
+ * (both skill-relative and `/`-separated), handling `.` and `..`. Null when
+ * the result climbs out of the skill or names its root.
+ */
+export function resolveRelativePath(fromFile: string, path: string): string | null {
+  const parts = fromFile.split("/").slice(0, -1);
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (parts.length === 0) return null;
+      parts.pop();
+    } else {
+      parts.push(segment);
+    }
+  }
+  return parts.length > 0 ? parts.join("/") : null;
+}

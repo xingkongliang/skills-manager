@@ -43,6 +43,7 @@ import { SyncDots } from "./SyncDots";
 import { SegmentedTabs, type SegmentedTab } from "./SegmentedTabs";
 import { CardActionMenu, type CardAction } from "./CardActionMenu";
 import { SkillTagEditor } from "./SkillTagEditor";
+import { resolveRelativePath } from "../lib/relativeLink";
 import { ToggleSwitch } from "./ToggleSwitch";
 
 type ContentTab = "local" | "diff" | "source" | "files";
@@ -245,8 +246,11 @@ function SkillDetailPanelContent({
       });
   }, [contentTab, openFilePath, openFileListed, skillId, localDocVersion]);
 
-  const openRelativeLink = (path: string) => {
-    setOpenFilePath(path);
+  // Links resolve against the folder of the document they appear in. One
+  // that climbs out of the skill keeps its written form, which no listed
+  // file can match, so the Files tab reports it as not found.
+  const openRelativeLink = (fromFile: string) => (path: string) => {
+    setOpenFilePath(resolveRelativePath(fromFile, path) ?? path);
     setContentTab("files");
   };
 
@@ -443,7 +447,7 @@ function SkillDetailPanelContent({
     body = placeholder(t("common.loading"));
   } else {
     body = activeDoc
-      ? <SkillMarkdown content={activeDoc.content} onRelativeLink={openRelativeLink} />
+      ? <SkillMarkdown content={activeDoc.content} onRelativeLink={openRelativeLink(activeDoc.filename)} />
       : placeholder(t("common.documentMissing"));
   }
 
@@ -692,7 +696,8 @@ function SkillFilesView({
   fileContent: SkillFileContent | null;
   fileFailed: boolean;
   onOpen: (path: string | null) => void;
-  onRelativeLink: (path: string) => void;
+  /** Builds the link handler for a document at the given skill-relative path. */
+  onRelativeLink: (fromFile: string) => (path: string) => void;
 }) {
   const { t } = useTranslation();
   const note = (text: string) => <div className="mt-12 text-center text-[13px] text-muted">{text}</div>;
@@ -713,7 +718,7 @@ function SkillFilesView({
     } else if (fileContent.content_kind === "too_large") {
       content = note(t("mySkills.detail.fileTooLarge"));
     } else if (/\.(md|markdown)$/i.test(openFilePath)) {
-      content = <SkillMarkdown content={fileContent.text ?? ""} onRelativeLink={onRelativeLink} />;
+      content = <SkillMarkdown content={fileContent.text ?? ""} onRelativeLink={onRelativeLink(openFilePath)} />;
     } else {
       content = (
         <pre className="overflow-x-auto rounded-xl border border-border-subtle bg-background px-4 py-3 font-mono text-[12px] leading-5 text-secondary">
