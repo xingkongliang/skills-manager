@@ -326,15 +326,14 @@
     "confirmSyncMessage": "将把“{{name}}”同步到以下 {{count}} 个 Agent。",
     "confirmUnsyncMessage": "将从以下 {{count}} 个 Agent 移除“{{name}}”的同步结果。",
     "sourceType": "来源类型",
-    "sourceRef": "来源位置",
-    "sourceResolved": "解析后来源",
     "sourceBranch": "分支 / 标签",
     "sourceSubpath": "子路径",
     "sourceRevision": "版本",
     "docTabs": {
       "local": "本地",
       "diff": "差异",
-      "source": "来源"
+      "source": "来源",
+      "files": "文件"
     },
     "sourceDiffUnavailable": "暂时无法读取来源版本内容",
     "sourceDiff": {
@@ -355,9 +354,6 @@
     "agentCount": "{{count}} 个 Agent",
     "ready": "已就绪",
     "standby": "待启用",
-    "agentTogglesTitle": "全局工作区",
-    "expandAgentToggles": "展开",
-    "collapseAgentToggles": "收起",
     "agentToggleEnabled": "{{agent}} 已开启",
     "agentToggleDisabled": "{{agent}} 已关闭",
     "agentToggleNotInstalled": "未安装",
@@ -476,6 +472,25 @@
       "apply": "同步 {{count}} 项",
       "noAgents": "没有已安装并启用的 Agent。",
       "allSynced": "选中的 Skill 都已同步到这个 Agent"
+    },
+    "detail": {
+      "preset": "Preset",
+      "agents": "Agents",
+      "deployedTo": "已部署到",
+      "source": "来源",
+      "lastChecked": "{{time}}检查",
+      "neverChecked": "尚未检查",
+      "copyPath": "复制路径",
+      "pathCopied": "已复制路径",
+      "revealFolder": "在文件管理器中显示",
+      "filesUnavailable": "读取 Skill 文件失败",
+      "fileNotFound": "Skill 里没有这个文件",
+      "fileBinary": "二进制文件，不显示内容",
+      "fileTooLarge": "文件过大，无法预览（超过 256 KB）",
+      "backToFiles": "返回列表",
+      "noFiles": "这个 Skill 没有文件",
+      "executable": "可执行",
+      "executableHint": "可执行文件"
     }
   },
   "install": {
@@ -837,7 +852,8 @@
     "search": "搜索",
     "goToSettings": "设置",
     "expandAll": "展开全部",
-    "collapse": "收起"
+    "collapse": "收起",
+    "expand": "展开"
   },
   "addFromLibrary": {
     "title": "从技能库添加",
@@ -882,7 +898,9 @@
       "remove": "点击从此 Agent 移除",
       "conflict": "请先重命名库中的 Skill",
       "unavailable": "请先选择目标 Agent"
-    }
+    },
+    "addToProject": "添加到项目…",
+    "notInAnyProject": "还没有添加到任何项目"
   },
   "preset": {
     "create": "新建 Preset",

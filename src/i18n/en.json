@@ -326,15 +326,14 @@
     "confirmSyncMessage": "Sync \"{{name}}\" to these {{count}} agents.",
     "confirmUnsyncMessage": "Remove \"{{name}}\" from these {{count}} synced agents.",
     "sourceType": "Source type",
-    "sourceRef": "Source",
-    "sourceResolved": "Resolved source",
     "sourceBranch": "Branch / Tag",
     "sourceSubpath": "Subpath",
     "sourceRevision": "Revision",
     "docTabs": {
       "local": "Local",
       "diff": "Diff",
-      "source": "Source"
+      "source": "Source",
+      "files": "Files"
     },
     "sourceDiffUnavailable": "Source content is unavailable right now",
     "sourceDiff": {
@@ -355,9 +354,6 @@
     "agentCount": "{{count}} agents",
     "ready": "Ready",
     "standby": "Standby",
-    "agentTogglesTitle": "Global Workspace",
-    "expandAgentToggles": "Expand",
-    "collapseAgentToggles": "Collapse",
     "agentToggleEnabled": "{{agent}} enabled",
     "agentToggleDisabled": "{{agent}} disabled",
     "agentToggleNotInstalled": "Not installed",
@@ -476,6 +472,25 @@
       "apply": "Sync {{count}}",
       "noAgents": "No installed and enabled agents.",
       "allSynced": "Every selected skill is already on this agent"
+    },
+    "detail": {
+      "preset": "Preset",
+      "agents": "Agents",
+      "deployedTo": "Deployed to",
+      "source": "Source",
+      "lastChecked": "Checked {{time}}",
+      "neverChecked": "Not checked yet",
+      "copyPath": "Copy path",
+      "pathCopied": "Path copied",
+      "revealFolder": "Show in file manager",
+      "filesUnavailable": "The skill's files could not be read",
+      "fileNotFound": "This file is not in the skill",
+      "fileBinary": "Binary file, not shown",
+      "fileTooLarge": "Too large to preview (over 256 KB)",
+      "backToFiles": "Back to files",
+      "noFiles": "This skill has no files",
+      "executable": "exec",
+      "executableHint": "Executable file"
     }
   },
   "install": {
@@ -837,7 +852,8 @@
     "search": "Search",
     "goToSettings": "Settings",
     "expandAll": "Show all",
-    "collapse": "Collapse"
+    "collapse": "Collapse",
+    "expand": "Expand"
   },
   "addFromLibrary": {
     "title": "Add from Library",
@@ -882,7 +898,9 @@
       "remove": "Click to remove from this agent",
       "conflict": "Rename the skill in your library first",
       "unavailable": "Select a target agent first"
-    }
+    },
+    "addToProject": "Add to project…",
+    "notInAnyProject": "Not added to any project yet"
   },
   "preset": {
     "create": "New Preset",

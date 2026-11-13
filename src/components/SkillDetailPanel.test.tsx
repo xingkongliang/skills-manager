@@ -3,12 +3,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ManagedSkill, SkillToolToggle } from "../lib/tauri";
+import * as api from "../lib/tauri";
 import { SkillDetailPanel } from "./SkillDetailPanel";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, opts?: Record<string, unknown>) =>
       opts ? `${key}${JSON.stringify(opts)}` : key,
+    i18n: { language: "en" },
   }),
 }));
 // The sheet loads SKILL.md on mount; none of that matters here.
@@ -16,7 +18,12 @@ vi.mock("../lib/tauri", () => ({
   getSkillDocument: vi.fn(() => new Promise(() => {})),
   getSourceSkillDocument: vi.fn(() => new Promise(() => {})),
   getSkillSourceDiff: vi.fn(() => new Promise(() => {})),
+  listSkillFiles: vi.fn(() => new Promise(() => {})),
+  readSkillFile: vi.fn(() => new Promise(() => {})),
+  revealSkillFolder: vi.fn(() => Promise.resolve()),
 }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 vi.mock("./SkillMarkdown", () => ({ SkillMarkdown: () => null }));
 
 const skill: ManagedSkill = {
@@ -26,6 +33,17 @@ const skill: ManagedSkill = {
   last_checked_at: null, last_check_error: null, central_path: "/fixture/demo",
   enabled: true, created_at: 0, updated_at: 0, status: "ok", targets: [],
   preset_ids: ["p1"], tags: [],
+};
+
+const gitSkill: ManagedSkill = {
+  ...skill,
+  source_type: "git",
+  source_ref: "https://github.com/example/skills",
+  source_branch: "main",
+  source_subpath: "skills/demo",
+  source_revision: "9f2c1e7a44b0c3d5e6f708192a3b4c5d6e7f8091",
+  remote_revision: "9f2c1e7a44b0c3d5e6f708192a3b4c5d6e7f8091",
+  update_status: "up_to_date",
 };
 
 function toggle(tool: string, enabled: boolean, deployed: boolean): SkillToolToggle {
@@ -46,6 +64,7 @@ let onToggleTool: Mock<(tool: string, enabled: boolean) => void>;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.clearAllMocks();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -58,11 +77,11 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function render(isActivePreset: boolean) {
+async function render(isActivePreset: boolean, target: ManagedSkill = skill) {
   await act(async () =>
     root.render(
       <SkillDetailPanel
-        skill={skill}
+        skill={target}
         onClose={() => {}}
         toolToggles={toggles}
         onToggleTool={onToggleTool}
@@ -72,10 +91,21 @@ async function render(isActivePreset: boolean) {
   );
 }
 
-function row(name: string): HTMLButtonElement {
-  const button = [...document.body.querySelectorAll<HTMLButtonElement>("button[data-state]")]
-    .find((b) => b.textContent?.includes(name));
-  expect(button, name).toBeDefined();
+function row(name: string): HTMLElement {
+  const element = [...document.body.querySelectorAll<HTMLElement>("[data-state]")]
+    .find((el) => el.textContent?.includes(name));
+  expect(element, name).toBeDefined();
+  return element!;
+}
+
+function rowSwitch(name: string): HTMLButtonElement {
+  return row(name).querySelector<HTMLButtonElement>("button[role=switch]")!;
+}
+
+function tab(label: string): HTMLButtonElement {
+  const button = [...document.body.querySelectorAll<HTMLButtonElement>("button[role=tab]")]
+    .find((b) => b.textContent === label);
+  expect(button, label).toBeDefined();
   return button!;
 }
 
@@ -91,15 +121,60 @@ describe("SkillDetailPanel agent toggles (#384)", () => {
     expect(document.body.textContent).toContain('mySkills.syncSummary{"synced":1,"total":4}');
   });
 
-  it("deploys a pending row when clicked", async () => {
+  it("deploys a pending row from its pending pill", async () => {
     await render(true);
-    await act(async () => row("claude_code").click());
+    const pill = [...row("claude_code").querySelectorAll("button")]
+      .find((b) => b.textContent === "mySkills.agentTogglePendingSync");
+    expect(pill).toBeDefined();
+    await act(async () => pill!.click());
     expect(onToggleTool).toHaveBeenCalledWith("claude_code", true);
+  });
+
+  it("turns a pending row off from its switch", async () => {
+    await render(true);
+    expect(rowSwitch("claude_code").getAttribute("aria-checked")).toBe("true");
+    await act(async () => rowSwitch("claude_code").click());
+    expect(onToggleTool).toHaveBeenCalledWith("claude_code", false);
+  });
+
+  it("flips intent from the switch on off and deployed rows", async () => {
+    await render(true);
+    await act(async () => rowSwitch("gemini_cli").click());
+    await act(async () => rowSwitch("codex").click());
+    expect(onToggleTool.mock.calls).toEqual([["gemini_cli", true], ["codex", false]]);
   });
 
   it("does not show pending on a preset that is not active", async () => {
     await render(false);
     expect(row("claude_code").dataset.state).toBe("enabled");
     expect(document.body.textContent).not.toContain("mySkills.agentTogglePendingSync");
+  });
+});
+
+describe("SkillDetailPanel source loading", () => {
+  it("does not reach for the source on mount, only when its tab is opened", async () => {
+    await render(true, gitSkill);
+    expect(api.getSkillDocument).toHaveBeenCalledTimes(1);
+    expect(api.getSourceSkillDocument).not.toHaveBeenCalled();
+    expect(api.getSkillSourceDiff).not.toHaveBeenCalled();
+
+    await act(async () => tab("mySkills.docTabs.source").click());
+    expect(api.getSourceSkillDocument).toHaveBeenCalledTimes(1);
+    expect(api.getSkillSourceDiff).not.toHaveBeenCalled();
+
+    await act(async () => tab("mySkills.docTabs.diff").click());
+    expect(api.getSkillSourceDiff).toHaveBeenCalledTimes(1);
+
+    // Coming back to a tab does not fetch again.
+    await act(async () => tab("mySkills.docTabs.local").click());
+    await act(async () => tab("mySkills.docTabs.source").click());
+    expect(api.getSourceSkillDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists files only when the Files tab is opened", async () => {
+    await render(true, gitSkill);
+    expect(api.listSkillFiles).not.toHaveBeenCalled();
+    await act(async () => tab("mySkills.docTabs.files").click());
+    expect(api.listSkillFiles).toHaveBeenCalledWith("demo");
   });
 });
