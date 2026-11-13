@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
+  ArrowUpRight,
+  Binary,
+  CloudOff,
   Copy,
+  FileQuestion,
   FileText,
+  FileWarning,
+  FileX,
   FolderOpen,
   Github,
   Globe,
@@ -44,6 +50,7 @@ import { SegmentedTabs, type SegmentedTab } from "./SegmentedTabs";
 import { CardActionMenu, type CardAction } from "./CardActionMenu";
 import { SkillTagEditor } from "./SkillTagEditor";
 import { resolveRelativePath } from "../lib/relativeLink";
+import { DetailEmptyPaper, DetailEmptyState, DetailPaper } from "./DetailPaper";
 import { ToggleSwitch } from "./ToggleSwitch";
 
 type ContentTab = "local" | "diff" | "source" | "files";
@@ -295,15 +302,15 @@ function SkillDetailPanelContent({
           type="button"
           onClick={onRefresh}
           disabled={updating}
-          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/12 px-2 py-0.5 text-[11px] font-medium text-amber-600 outline-none transition-colors hover:bg-amber-500/20 disabled:opacity-50 dark:text-amber-400"
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-amber-500/12 px-2.5 text-[12px] font-medium text-amber-600 outline-none transition-colors hover:bg-amber-500/20 disabled:opacity-50 dark:text-amber-400"
           title={refreshLabel}
         >
-          <RotateCcw className={cn("h-2.5 w-2.5", updating && "animate-spin")} />
+          <RotateCcw className={cn("h-3 w-3", updating && "animate-spin")} />
           {t("mySkills.updateActions.update")}
         </button>
       )}
       {menuActions && menuActions.length > 0 && (
-        <CardActionMenu label={t("mySkills.moreActions")} actions={menuActions} />
+        <CardActionMenu label={t("mySkills.moreActions")} actions={menuActions} size="md" />
       )}
     </>
   );
@@ -332,6 +339,7 @@ function SkillDetailPanelContent({
       onStopEditing={() => { setTagEditing(false); setTagValue(""); }}
       onAdd={(tag) => { void handleAddTag(tag); }}
       onRemove={onRemoveTag}
+      emptyAddLabel={t("mySkills.tags.addTagShort")}
     />
   ) : skill.tags.length > 0 ? (
     <div className="flex flex-wrap items-center gap-1">
@@ -417,19 +425,20 @@ function SkillDetailPanelContent({
     { key: "files", label: t("mySkills.docTabs.files") },
   ];
 
-  const placeholder = (text: string) => (
-    <div className="mt-12 text-center text-[13px] text-muted">{text}</div>
-  );
+  const loadingPaper = <DetailEmptyPaper loading text={t("common.loading")} />;
+  const unavailablePaper = <DetailEmptyPaper icon={CloudOff} text={t("mySkills.sourceDiffUnavailable")} />;
 
+  // Documents sit on a white paper; the diff and the file list are panels of
+  // their own and stay on the grey background.
   let body: ReactNode;
   if (contentTab === "diff") {
     body = activeSourceDiff
       ? <SkillSourceDiffViewer entries={activeSourceDiff.entries} />
-      : placeholder(sourceDiffFailed ? t("mySkills.sourceDiffUnavailable") : t("common.loading"));
+      : sourceDiffFailed ? unavailablePaper : loadingPaper;
   } else if (contentTab === "source") {
     body = activeSourceDoc
-      ? <SkillMarkdown content={activeSourceDoc.content} />
-      : placeholder(sourceFailed ? t("mySkills.sourceDiffUnavailable") : t("common.loading"));
+      ? <DetailPaper><SkillMarkdown content={activeSourceDoc.content} /></DetailPaper>
+      : sourceFailed ? unavailablePaper : loadingPaper;
   } else if (contentTab === "files") {
     body = (
       <SkillFilesView
@@ -444,40 +453,68 @@ function SkillDetailPanelContent({
       />
     );
   } else if (loading) {
-    body = placeholder(t("common.loading"));
+    body = loadingPaper;
   } else {
-    body = activeDoc
-      ? <SkillMarkdown content={activeDoc.content} onRelativeLink={openRelativeLink(activeDoc.filename)} />
-      : placeholder(t("common.documentMissing"));
+    body = activeDoc ? (
+      <DetailPaper>
+        <SkillMarkdown content={activeDoc.content} onRelativeLink={openRelativeLink(activeDoc.filename)} />
+      </DetailPaper>
+    ) : (
+      <DetailEmptyPaper icon={FileQuestion} text={t("common.documentMissing")} />
+    );
   }
+
+  const sourceType = sourceTypeLabel(skill.source_type);
+  const sourceShort = shortSourceRef(skill.source_ref);
 
   return (
     <DetailSheet
       open={true}
       title={skill.name}
+      leading={
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border-subtle bg-bg-secondary text-muted">
+          {sourceIcon(skill.source_type, "h-[18px] w-[18px]")}
+        </span>
+      }
+      subtitle={sourceShort ? `${sourceType} · ${sourceShort}` : sourceType}
       description={skill.description}
       meta={meta}
       actions={actions}
       aside={aside}
       onClose={onClose}
     >
-      <SegmentedTabs className="mb-5" tabs={tabs} value={contentTab} onChange={setContentTab} />
+      <SegmentedTabs className="mb-4" tabs={tabs} value={contentTab} onChange={setContentTab} />
       {body}
     </DetailSheet>
   );
 }
 
-function sourceIcon(type: string) {
-  switch (type) {
-    case "git":
-    case "skillssh":
-      return <Github className="h-3.5 w-3.5 shrink-0" />;
-    case "local":
-    case "import":
-      return <HardDrive className="h-3.5 w-3.5 shrink-0" />;
-    default:
-      return <Globe className="h-3.5 w-3.5 shrink-0" />;
+function sourceIcon(type: string, className = "h-3.5 w-3.5") {
+  const Icon = type === "git" || type === "skillssh"
+    ? Github
+    : type === "local" || type === "import"
+      ? HardDrive
+      : Globe;
+  return <Icon className={cn("shrink-0", className)} />;
+}
+
+function sourceTypeLabel(type: string) {
+  return type === "skillssh" ? "skills.sh" : type;
+}
+
+/** `owner/repo` for a web address, a `~`-shortened path otherwise. */
+function shortSourceRef(ref: string | null): string | null {
+  if (!ref) return null;
+  if (/^https?:\/\//i.test(ref)) {
+    try {
+      const parts = new URL(ref).pathname.split("/").filter(Boolean);
+      if (parts.length >= 2) return `${parts[0]}/${parts[1].replace(/\.git$/, "")}`;
+      return new URL(ref).host;
+    } catch {
+      return ref;
+    }
   }
+  return compactHomePath(ref);
 }
 
 function formatRelativeTime(ms: number, locale: string): string {
@@ -523,13 +560,55 @@ function SourceDetails({
     skill.update_status === "source_missing"
     && (skill.source_type === "local" || skill.source_type === "import");
 
-  const rows: { label: string; value: ReactNode; title?: string }[] = [];
-  if (skill.source_branch) rows.push({ label: t("mySkills.sourceBranch"), value: skill.source_branch });
-  if (skill.source_subpath) rows.push({ label: t("mySkills.sourceSubpath"), value: skill.source_subpath });
+  const openSource = (url: string) => {
+    openUrl(url).catch((error: unknown) => {
+      toast.error(getErrorMessage(error, t("common.error")));
+    });
+  };
+
+  // Label left, value right-aligned and truncated with the full value in its
+  // title. Only branch, subpath and revision are code, so only they are mono.
+  const rows: { label: string; value: ReactNode; title?: string; mono?: boolean }[] = [
+    {
+      label: t("mySkills.sourceType"),
+      value: (
+        <span className="inline-flex items-center gap-1.5">
+          {sourceIcon(skill.source_type, "h-3 w-3 text-muted")}
+          {sourceTypeLabel(skill.source_type)}
+        </span>
+      ),
+      title: sourceTypeLabel(skill.source_type),
+    },
+  ];
+  if (ref) {
+    rows.push({
+      label: t("mySkills.detail.location"),
+      title: ref,
+      value: isUrl ? (
+        <button
+          type="button"
+          onClick={() => openSource(ref)}
+          className="inline-flex max-w-full items-center gap-0.5 text-accent-light hover:underline"
+        >
+          <span className="truncate">{shortSourceRef(ref)}</span>
+          <ArrowUpRight className="h-3 w-3 shrink-0" />
+        </button>
+      ) : (
+        compactHomePath(ref)
+      ),
+    });
+  }
+  if (skill.source_branch) {
+    rows.push({ label: t("mySkills.sourceBranch"), value: skill.source_branch, title: skill.source_branch, mono: true });
+  }
+  if (skill.source_subpath) {
+    rows.push({ label: t("mySkills.sourceSubpath"), value: skill.source_subpath, title: skill.source_subpath, mono: true });
+  }
   if (revision) {
     rows.push({
       label: t("mySkills.sourceRevision"),
       title: newRevision ? `${revision} → ${newRevision}` : revision,
+      mono: true,
       value: newRevision ? (
         <>
           {revision.slice(0, 7)} →{" "}
@@ -540,6 +619,10 @@ function SourceDetails({
       ),
     });
   }
+  const checkedText = skill.last_checked_at
+    ? formatRelativeTime(skill.last_checked_at, locale)
+    : t("mySkills.detail.neverChecked");
+  rows.push({ label: t("mySkills.detail.lastCheckedLabel"), value: checkedText, title: checkedText });
 
   const copyPath = async () => {
     try {
@@ -557,82 +640,50 @@ function SourceDetails({
   };
 
   const iconButton =
-    "shrink-0 rounded-md p-1 text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary";
+    "flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors outline-none hover:bg-surface-active hover:text-secondary";
 
   return (
-    <div className="mt-2 space-y-3 text-[12px]">
-      <div className="min-w-0">
-        <div className="flex items-center gap-1.5 text-[13px] text-secondary">
-          {sourceIcon(skill.source_type)}
-          <span>{skill.source_type === "skillssh" ? "skills.sh" : skill.source_type}</span>
-        </div>
-        {ref && (
-          isUrl ? (
-            <button
-              type="button"
-              onClick={() => {
-                openUrl(ref).catch((error: unknown) => {
-                  toast.error(getErrorMessage(error, t("common.error")));
-                });
-              }}
-              className="mt-1 block max-w-full truncate text-left font-mono text-accent-light hover:underline"
-              title={ref}
+    <div className="mt-2.5 space-y-3 text-[12px]">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-1.5">
+        {rows.map((row) => (
+          <div key={row.label} className="contents">
+            <dt className="whitespace-nowrap text-muted">{row.label}</dt>
+            <dd
+              className={cn("min-w-0 truncate text-right text-secondary", row.mono && "font-mono tabular-nums")}
+              title={row.title}
             >
-              {ref.replace(/^https?:\/\//i, "")}
-            </button>
-          ) : (
-            <div className="mt-1 truncate font-mono text-secondary" title={ref}>
-              {compactHomePath(ref)}
-            </div>
-          )
-        )}
-      </div>
+              {row.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
 
-      {rows.length > 0 && (
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
-          {rows.map((row) => (
-            <div key={row.label} className="contents">
-              <dt className="text-muted">{row.label}</dt>
-              <dd className="truncate font-mono text-secondary tabular-nums" title={row.title ?? String(row.value)}>
-                {row.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      )}
-
-      <div className="flex items-center justify-between gap-2">
-        <span className="min-w-0 truncate text-muted">
-          {skill.last_checked_at
-            ? t("mySkills.detail.lastChecked", { time: formatRelativeTime(skill.last_checked_at, locale) })
-            : t("mySkills.detail.neverChecked")}
-        </span>
-        {onCheckUpdate && (
-          <button
-            type="button"
-            onClick={onCheckUpdate}
-            disabled={checking}
-            className="app-button-secondary h-7 shrink-0 gap-1.5 px-2.5 py-0 text-[12px]"
-          >
-            <RefreshCw className={cn("h-3 w-3", checking && "animate-spin")} />
-            {t("mySkills.updateActions.check")}
-          </button>
-        )}
-      </div>
       {skill.last_check_error && (
         <p className="line-clamp-3 break-words text-danger" title={skill.last_check_error}>
           {skill.last_check_error}
         </p>
       )}
 
+      {onCheckUpdate && (
+        <button
+          type="button"
+          onClick={onCheckUpdate}
+          disabled={checking}
+          className="app-button-secondary h-7 w-full gap-1.5 px-2.5 py-0 text-[12px]"
+        >
+          <RefreshCw className={cn("h-3 w-3", checking && "animate-spin")} />
+          {t("mySkills.updateActions.check")}
+        </button>
+      )}
+
       {missingLocalSource && (onRelinkSource || onDetachSource) && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex gap-2">
           {onRelinkSource && (
             <button
               type="button"
               onClick={onRelinkSource}
               disabled={updating}
-              className="app-button-secondary h-7 px-2.5 py-0 text-[12px]"
+              className="app-button-secondary h-7 flex-1 px-2.5 py-0 text-[12px]"
             >
               {t("mySkills.updateActions.relink")}
             </button>
@@ -642,7 +693,7 @@ function SourceDetails({
               type="button"
               onClick={onDetachSource}
               disabled={updating}
-              className="app-button-secondary h-7 px-2.5 py-0 text-[12px]"
+              className="app-button-secondary h-7 flex-1 px-2.5 py-0 text-[12px]"
             >
               {t("mySkills.updateActions.detachSource")}
             </button>
@@ -650,7 +701,7 @@ function SourceDetails({
         </div>
       )}
 
-      <div className="flex min-w-0 items-center gap-1 border-t border-border-faint pt-3">
+      <div className="flex min-w-0 items-center gap-1 rounded-lg bg-bg-secondary py-1.5 pr-1.5 pl-2.5">
         <span className="min-w-0 flex-1 truncate font-mono text-muted" title={skill.central_path}>
           {compactHomePath(skill.central_path)}
         </span>
@@ -704,56 +755,52 @@ function SkillFilesView({
   onRelativeLink: (fromFile: string) => (path: string) => void;
 }) {
   const { t } = useTranslation();
-  const note = (text: string) => <div className="mt-12 text-center text-[13px] text-muted">{text}</div>;
 
-  if (filesFailed) return note(t("mySkills.detail.filesUnavailable"));
-  if (!files) return note(t("common.loading"));
+  if (filesFailed) return <DetailEmptyPaper icon={CloudOff} text={t("mySkills.detail.filesUnavailable")} />;
+  if (!files) return <DetailEmptyPaper loading text={t("common.loading")} />;
 
   if (openFilePath !== null) {
     let content: ReactNode;
     if (!openFileListed) {
-      content = note(t("mySkills.detail.fileNotFound"));
+      content = <DetailEmptyState icon={FileX} text={t("mySkills.detail.fileNotFound")} />;
     } else if (fileFailed) {
-      content = note(t("mySkills.detail.filesUnavailable"));
+      content = <DetailEmptyState icon={CloudOff} text={t("mySkills.detail.filesUnavailable")} />;
     } else if (!fileContent) {
-      content = note(t("common.loading"));
+      content = <DetailEmptyState loading text={t("common.loading")} />;
     } else if (fileContent.content_kind === "binary") {
-      content = note(t("mySkills.detail.fileBinary"));
+      content = <DetailEmptyState icon={Binary} text={t("mySkills.detail.fileBinary")} />;
     } else if (fileContent.content_kind === "too_large") {
-      content = note(t("mySkills.detail.fileTooLarge"));
+      content = <DetailEmptyState icon={FileWarning} text={t("mySkills.detail.fileTooLarge")} />;
     } else if (/\.(md|markdown)$/i.test(openFilePath)) {
       content = <SkillMarkdown content={fileContent.text ?? ""} onRelativeLink={onRelativeLink(openFilePath)} />;
     } else {
       content = (
-        <pre className="overflow-x-auto rounded-xl border border-border-subtle bg-background px-4 py-3 font-mono text-[12px] leading-5 text-secondary">
-          {fileContent.text}
-        </pre>
+        <pre className="overflow-x-auto font-mono text-[12px] leading-5 text-secondary">{fileContent.text}</pre>
       );
     }
     return (
-      <div>
-        <div className="mb-4 flex min-w-0 items-center gap-2">
+      <DetailPaper className="p-0">
+        <div className="flex min-w-0 items-center gap-2 border-b border-border-faint px-3 py-2">
           <button
             type="button"
             onClick={() => onOpen(null)}
-            className="app-button-secondary h-[34px] shrink-0 gap-1.5 px-3 py-0"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary"
+            title={t("mySkills.detail.backToFiles")}
+            aria-label={t("mySkills.detail.backToFiles")}
           >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            {t("mySkills.detail.backToFiles")}
+            <ArrowLeft className="h-4 w-4" />
           </button>
-          <span className="min-w-0 truncate font-mono text-[12px] text-muted" title={openFilePath}>
-            {openFilePath}
-          </span>
+          <FilePath path={openFilePath} />
         </div>
-        {content}
-      </div>
+        <div className="px-8 py-7">{content}</div>
+      </DetailPaper>
     );
   }
 
-  if (files.length === 0) return note(t("mySkills.detail.noFiles"));
+  if (files.length === 0) return <DetailEmptyPaper icon={FileQuestion} text={t("mySkills.detail.noFiles")} />;
 
   return (
-    <div className="app-panel divide-y divide-border-faint">
+    <div className="app-panel divide-y divide-border-faint shadow-card">
       {files.map((file) => (
         <button
           key={file.relative_path}
@@ -766,9 +813,7 @@ function SkillFilesView({
           ) : (
             <FileText className="h-3.5 w-3.5 shrink-0 text-muted" />
           )}
-          <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-secondary" title={file.relative_path}>
-            {file.relative_path}
-          </span>
+          <FilePath path={file.relative_path} />
           {file.executable && (
             <span
               className="shrink-0 rounded-full bg-surface-hover px-1.5 py-0.5 text-[11px] font-medium text-muted"
@@ -781,5 +826,16 @@ function SkillFilesView({
         </button>
       ))}
     </div>
+  );
+}
+
+/** A skill-relative path as one truncating mono string: folder muted, file name brighter. */
+function FilePath({ path }: { path: string }) {
+  const slash = path.lastIndexOf("/");
+  return (
+    <span className="min-w-0 flex-1 truncate font-mono text-[12px]" title={path}>
+      {slash >= 0 && <span className="text-muted">{path.slice(0, slash + 1)}</span>}
+      <span className="text-secondary">{path.slice(slash + 1)}</span>
+    </span>
   );
 }

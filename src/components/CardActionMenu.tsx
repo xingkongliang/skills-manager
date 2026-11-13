@@ -17,10 +17,12 @@ interface Props {
   className?: string;
   /** Lets the host lift the whole card above its siblings while the menu is open. */
   onOpenChange?: (open: boolean) => void;
+  /** "md" is the 28px icon button of a sheet header; cards keep the 20px default. */
+  size?: "sm" | "md";
 }
 
 /** Overflow "…" menu for low-frequency card actions (see UI spec in CLAUDE.md). */
-export function CardActionMenu({ actions, label, className, onOpenChange }: Props) {
+export function CardActionMenu({ actions, label, className, onOpenChange, size = "sm" }: Props) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const openChangeRef = useRef(onOpenChange);
@@ -72,11 +74,12 @@ export function CardActionMenu({ actions, label, className, onOpenChange }: Prop
           setOpenState(!open);
         }}
         className={cn(
-          "flex h-5 w-5 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-surface-hover hover:text-secondary",
+          "flex items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-surface-hover hover:text-secondary",
+          size === "md" ? "h-7 w-7" : "h-5 w-5",
           open && "bg-surface-hover text-secondary"
         )}
       >
-        <MoreHorizontal className="h-3.5 w-3.5" />
+        <MoreHorizontal className={size === "md" ? "h-4 w-4" : "h-3.5 w-3.5"} />
       </button>
       {open && (
         <div

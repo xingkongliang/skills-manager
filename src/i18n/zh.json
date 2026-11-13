@@ -426,7 +426,8 @@
       "manageHint": "右键重命名或删除",
       "tagRenamed": "标签已重命名",
       "tagDeleted": "标签已删除",
-      "deleteConfirm": "确定从所有技能中移除标签「{{tag}}」吗？"
+      "deleteConfirm": "确定从所有技能中移除标签「{{tag}}」吗？",
+      "addTagShort": "添加标签"
     },
     "selectMode": "多选",
     "selectedCount": "已选 {{count}} 个",
@@ -478,7 +479,6 @@
       "agents": "Agents",
       "deployedTo": "已部署到",
       "source": "来源",
-      "lastChecked": "{{time}}检查",
       "neverChecked": "尚未检查",
       "copyPath": "复制路径",
       "pathCopied": "已复制路径",
@@ -490,7 +490,9 @@
       "backToFiles": "返回列表",
       "noFiles": "这个 Skill 没有文件",
       "executable": "可执行",
-      "executableHint": "可执行文件"
+      "executableHint": "可执行文件",
+      "location": "位置",
+      "lastCheckedLabel": "上次检查"
     }
   },
   "install": {
@@ -899,8 +901,7 @@
       "conflict": "请先重命名库中的 Skill",
       "unavailable": "请先选择目标 Agent"
     },
-    "addToProject": "添加到项目…",
-    "notInAnyProject": "还没有添加到任何项目"
+    "addToProject": "添加到项目…"
   },
   "preset": {
     "create": "新建 Preset",

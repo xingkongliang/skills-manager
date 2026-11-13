@@ -18,6 +18,8 @@ interface Props {
   onRemove: (tag: string) => void;
   className?: string;
   addButtonClassName?: string;
+  /** Shown beside the "+" while there are no tags, so it is not a lone glyph. */
+  emptyAddLabel?: string;
 }
 
 /** A skill's tags: hover a tag for its remove button, "+" to add one. */
@@ -33,6 +35,7 @@ export function SkillTagEditor({
   onRemove,
   className,
   addButtonClassName,
+  emptyAddLabel,
 }: Props) {
   const { t } = useTranslation();
   const needle = value.trim().toLowerCase();
@@ -107,11 +110,13 @@ export function SkillTagEditor({
           onClick={(e) => { e.stopPropagation(); onStartEditing(); }}
           className={cn(
             "inline-flex items-center rounded-full p-0.5 text-faint transition-colors hover:text-muted",
+            emptyAddLabel && tags.length === 0 && "gap-1 pr-1.5 text-[11px] font-medium",
             addButtonClassName
           )}
           title={t("mySkills.tags.addTag")}
         >
           <Plus className="h-3 w-3" />
+          {emptyAddLabel && tags.length === 0 && <span>{emptyAddLabel}</span>}
         </button>
       )}
     </div>

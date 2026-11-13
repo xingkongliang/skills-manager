@@ -426,7 +426,8 @@
       "manageHint": "Right-click to rename or delete",
       "tagRenamed": "Tag renamed",
       "tagDeleted": "Tag deleted",
-      "deleteConfirm": "Remove the tag \"{{tag}}\" from all skills?"
+      "deleteConfirm": "Remove the tag \"{{tag}}\" from all skills?",
+      "addTagShort": "Add tag"
     },
     "selectMode": "Select",
     "selectedCount": "{{count}} selected",
@@ -478,7 +479,6 @@
       "agents": "Agents",
       "deployedTo": "Deployed to",
       "source": "Source",
-      "lastChecked": "Checked {{time}}",
       "neverChecked": "Not checked yet",
       "copyPath": "Copy path",
       "pathCopied": "Path copied",
@@ -490,7 +490,9 @@
       "backToFiles": "Back to files",
       "noFiles": "This skill has no files",
       "executable": "exec",
-      "executableHint": "Executable file"
+      "executableHint": "Executable file",
+      "location": "Location",
+      "lastCheckedLabel": "Last checked"
     }
   },
   "install": {
@@ -899,8 +901,7 @@
       "conflict": "Rename the skill in your library first",
       "unavailable": "Select a target agent first"
     },
-    "addToProject": "Add to project…",
-    "notInAnyProject": "Not added to any project yet"
+    "addToProject": "Add to project…"
   },
   "preset": {
     "create": "New Preset",

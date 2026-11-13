@@ -22,6 +22,8 @@ import {
   CheckCircle2,
   Circle,
   Tag,
+  CloudOff,
+  FileQuestion,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -34,6 +36,7 @@ import { BatchTagDialog } from "../components/BatchTagDialog";
 import { DetailSheet } from "../components/DetailSheet";
 import { AgentToggleSection, type AgentToggleItem } from "../components/AgentToggleSection";
 import { SegmentedTabs } from "../components/SegmentedTabs";
+import { DetailEmptyPaper, DetailPaper } from "../components/DetailPaper";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { ProjectAgentDots } from "../components/ProjectAgentDots";
 import { PresetBar } from "../components/PresetBar";
@@ -1772,7 +1775,7 @@ function ProjectSkillDetailPanel({
     >
       {supportsCenterDiff && (
         <SegmentedTabs
-          className="mb-5"
+          className="mb-4"
           value={contentTab}
           onChange={setContentTab}
           tabs={[
@@ -1784,27 +1787,27 @@ function ProjectSkillDetailPanel({
       )}
 
       {docLoading ? (
-        <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+        <DetailEmptyPaper loading text={t("common.loading")} />
       ) : contentTab === "diff" ? (
         docContent && centerDocContent ? (
           <DocumentDiffViewer original={docContent} updated={centerDocContent} />
         ) : centerDocLoading ? (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+          <DetailEmptyPaper loading text={t("common.loading")} />
         ) : (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+          <DetailEmptyPaper icon={CloudOff} text={t("mySkills.sourceDiffUnavailable")} />
         )
       ) : contentTab === "center" ? (
         centerDocLoading ? (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+          <DetailEmptyPaper loading text={t("common.loading")} />
         ) : centerDocContent ? (
-          <SkillMarkdown content={centerDocContent} />
+          <DetailPaper><SkillMarkdown content={centerDocContent} /></DetailPaper>
         ) : (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+          <DetailEmptyPaper icon={CloudOff} text={t("mySkills.sourceDiffUnavailable")} />
         )
       ) : docContent ? (
-        <SkillMarkdown content={docContent} />
+        <DetailPaper><SkillMarkdown content={docContent} /></DetailPaper>
       ) : (
-        <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
+        <DetailEmptyPaper icon={FileQuestion} text={t("common.documentMissing")} />
       )}
     </DetailSheet>
   );

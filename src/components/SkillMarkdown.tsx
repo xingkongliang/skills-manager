@@ -51,19 +51,19 @@ export function SkillMarkdown({ content, className, onRelativeLink }: SkillMarkd
         components={{
           h1: ({ className, ...props }) => (
             <h1
-              className={cn("mb-4 text-[28px] font-semibold leading-tight text-primary", className)}
+              className={cn("mb-4 text-[20px] font-semibold leading-tight text-primary", className)}
               {...props}
             />
           ),
           h2: ({ className, ...props }) => (
             <h2
-              className={cn("mb-3 mt-8 text-[20px] font-semibold leading-tight text-primary", className)}
+              className={cn("mb-3 mt-8 border-b border-border-faint pb-2 first:mt-0 text-[16px] font-semibold leading-tight text-primary", className)}
               {...props}
             />
           ),
           h3: ({ className, ...props }) => (
             <h3
-              className={cn("mb-2 mt-6 text-[16px] font-semibold leading-tight text-primary", className)}
+              className={cn("mb-2 mt-6 first:mt-0 text-[14px] font-semibold leading-tight text-primary", className)}
               {...props}
             />
           ),

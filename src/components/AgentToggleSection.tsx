@@ -52,7 +52,7 @@ export function AgentToggleSection({
 
   return (
     <div className={className}>
-      <div className="text-[12px] text-muted tabular-nums">
+      <div className="mt-1 text-[12px] text-muted tabular-nums">
         {t("mySkills.syncSummary", {
           synced: syncedAvailableCount,
           total: availableItems.length,
@@ -60,7 +60,7 @@ export function AgentToggleSection({
       </div>
 
       {availableItems.length > 0 && (
-        <div className="mt-1.5">
+        <div className="mt-2">
           {availableItems.map((item) => (
             <AgentToggleRow
               key={item.key}
@@ -118,7 +118,13 @@ function AgentToggleRow({
   const state = agentToggleState(item, showPendingSync);
   const pending = state === "pending";
   return (
-    <div className="flex h-8 min-w-0 items-center gap-2" data-state={state}>
+    <div
+      className={cn(
+        "-mx-2 flex h-8 min-w-0 items-center gap-2 rounded-md px-2 transition-colors",
+        !item.disabled && "hover:bg-surface-hover"
+      )}
+      data-state={state}
+    >
       <span
         className={cn(
           "h-2 w-2 shrink-0 rounded-full",

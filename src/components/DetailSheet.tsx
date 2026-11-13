@@ -15,6 +15,10 @@ interface DetailSheetProps {
   meta?: ReactNode;
   /** Header controls, left of the close button. */
   actions?: ReactNode;
+  /** Identity block left of the title. */
+  leading?: ReactNode;
+  /** One short line under the title. */
+  subtitle?: ReactNode;
   /** Right column; omitted means a single column. */
   aside?: ReactNode;
   onClose: () => void;
@@ -28,6 +32,8 @@ export function DetailSheet({
   description,
   meta,
   actions,
+  leading,
+  subtitle,
   aside,
   onClose,
   children,
@@ -70,15 +76,19 @@ export function DetailSheet({
         onClick={onClose}
       />
       <div className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary">
-        <header className="shrink-0 border-b border-border-subtle px-6 pt-4 pb-3.5">
+        <header className="shrink-0 border-b border-border-subtle bg-surface px-6 pt-4 pb-3.5">
           <div className="flex min-w-0 items-center gap-3">
-            <h2 className="app-page-title min-w-0 flex-1 truncate">{title}</h2>
-            <div className="flex shrink-0 items-center gap-2">
+            {leading}
+            <div className="min-w-0 flex-1">
+              <h2 className="app-page-title truncate">{title}</h2>
+              {subtitle ? <div className="truncate text-[12px] text-muted">{subtitle}</div> : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
               {actions}
               <button
                 type="button"
                 onClick={onClose}
-                className="shrink-0 rounded-md p-1.5 text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -92,7 +102,7 @@ export function DetailSheet({
             <div className="mx-auto w-full max-w-[760px]">{children}</div>
           </div>
           {aside ? (
-            <aside className="w-[300px] shrink-0 overflow-y-auto border-l border-border-subtle scrollbar-hide">
+            <aside className="w-[300px] shrink-0 overflow-y-auto border-l border-border-subtle bg-surface scrollbar-hide">
               {aside}
             </aside>
           ) : null}

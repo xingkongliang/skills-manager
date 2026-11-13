@@ -211,17 +211,15 @@ export function SkillProjectsSection({ skill, projects, onChanged }: Props) {
 
   return (
     <div>
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <h3 className="app-section-title truncate">{t("addFromLibrary.projectsTitle")}</h3>
-        <span className="shrink-0 text-[12px] text-muted tabular-nums">
-          {t("addFromLibrary.projectsSummary", {
-            installed: installedCount,
-            total: projects.length,
-          })}
-        </span>
+      <h3 className="app-section-title truncate">{t("addFromLibrary.projectsTitle")}</h3>
+      <div className="mt-1 text-[12px] text-muted tabular-nums">
+        {t("addFromLibrary.projectsSummary", {
+          installed: installedCount,
+          total: projects.length,
+        })}
       </div>
       {visibleProjects.length > 0 ? (
-        <div className="mt-2 space-y-2.5">
+        <div className="mt-2.5 space-y-2.5">
           {visibleProjects.map((project) => {
             const row = rows[project.id];
             const activeTargets = row?.targets.filter((target) => target.installed && target.enabled) ?? [];
@@ -306,11 +304,10 @@ export function SkillProjectsSection({ skill, projects, onChanged }: Props) {
             );
           })}
         </div>
-      ) : (
-        <p className="mt-2 text-[12px] text-muted">
-          {anyLoading ? t("common.loading") : t("addFromLibrary.notInAnyProject")}
-        </p>
-      )}
+      ) : anyLoading ? (
+        // Nothing installed is already said by the count above.
+        <p className="mt-2 text-[12px] text-muted">{t("common.loading")}</p>
+      ) : null}
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}

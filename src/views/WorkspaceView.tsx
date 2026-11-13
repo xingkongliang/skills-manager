@@ -17,6 +17,8 @@ import {
   Trash2,
   Unlink,
   Upload,
+  CloudOff,
+  FileQuestion,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -28,6 +30,7 @@ import { PresetBar } from "../components/PresetBar";
 import { AgentIcon } from "../components/AgentIcon";
 import { DetailSheet } from "../components/DetailSheet";
 import { SegmentedTabs } from "../components/SegmentedTabs";
+import { DetailEmptyPaper, DetailPaper } from "../components/DetailPaper";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import * as api from "../lib/tauri";
@@ -1185,7 +1188,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       >
         {localDetailSkill?.center_skill_id && (
           <SegmentedTabs
-            className="mb-5"
+            className="mb-4"
             value={localContentTab}
             onChange={setLocalContentTab}
             tabs={[
@@ -1197,27 +1200,27 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         )}
 
         {localDocLoading ? (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+          <DetailEmptyPaper loading text={t("common.loading")} />
         ) : localContentTab === "diff" ? (
           localDocContent && localCenterDocContent ? (
             <DocumentDiffViewer original={localDocContent} updated={localCenterDocContent} />
           ) : localCenterDocLoading ? (
-            <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+            <DetailEmptyPaper loading text={t("common.loading")} />
           ) : (
-            <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+            <DetailEmptyPaper icon={CloudOff} text={t("mySkills.sourceDiffUnavailable")} />
           )
         ) : localContentTab === "center" ? (
           localCenterDocLoading ? (
-            <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+            <DetailEmptyPaper loading text={t("common.loading")} />
           ) : localCenterDocContent ? (
-            <SkillMarkdown content={localCenterDocContent} />
+            <DetailPaper><SkillMarkdown content={localCenterDocContent} /></DetailPaper>
           ) : (
-            <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+            <DetailEmptyPaper icon={CloudOff} text={t("mySkills.sourceDiffUnavailable")} />
           )
         ) : localDocContent ? (
-          <SkillMarkdown content={localDocContent} />
+          <DetailPaper><SkillMarkdown content={localDocContent} /></DetailPaper>
         ) : (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
+          <DetailEmptyPaper icon={FileQuestion} text={t("common.documentMissing")} />
         )}
       </DetailSheet>
 
