@@ -1,10 +1,17 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../utils";
+import { relativeLinkPath } from "../lib/relativeLink";
 
 interface SkillMarkdownProps {
   content: string;
   className?: string;
+  /**
+   * Called instead of following a relative link (no scheme, not starting
+   * with `#` or `/`), with `./`, `?query` and `#fragment` removed. Without
+   * it every link behaves as a plain anchor.
+   */
+  onRelativeLink?: (path: string) => void;
 }
 
 // remark-gfm's autolink step compiles a regex with lookbehind on every render.
@@ -34,7 +41,7 @@ function stripMarkdownFrontmatter(content: string) {
   return rest.slice(closing.index + closing[0].length).trimStart();
 }
 
-export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
+export function SkillMarkdown({ content, className, onRelativeLink }: SkillMarkdownProps) {
   const markdown = stripMarkdownFrontmatter(content);
 
   return (
@@ -66,6 +73,7 @@ export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
           a: ({ className, href, ...props }) => {
             const dangerous = /^(javascript|vbscript|data):/i;
             const safeHref = href && !dangerous.test(href.trim()) ? href : undefined;
+            const relativePath = onRelativeLink ? relativeLinkPath(safeHref) : null;
             return (
               <a
                 className={cn("text-accent-light underline decoration-accent-border underline-offset-4", className)}
@@ -73,6 +81,14 @@ export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
                 target="_blank"
                 rel="noreferrer"
                 {...props}
+                {...(relativePath !== null && onRelativeLink
+                  ? {
+                      onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
+                        e.preventDefault();
+                        onRelativeLink(relativePath);
+                      },
+                    }
+                  : {})}
               />
             );
           },

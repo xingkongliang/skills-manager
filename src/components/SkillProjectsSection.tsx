@@ -202,55 +202,41 @@ export function SkillProjectsSection({ skill, projects, onChanged }: Props) {
 
   if (projects.length === 0) return null;
 
-  const visibleProjects = expanded ? projects : projects.slice(0, 4);
+  // Collapsed, the list holds only the projects that already have the skill;
+  // "Add to project…" opens every project for adding.
+  const anyLoading = projects.some((p) => !rows[p.id] || rows[p.id].state === "loading");
+  const visibleProjects = expanded
+    ? projects
+    : projects.filter((p) => rows[p.id]?.state === "installed");
 
   return (
-    <div className="mb-4 rounded-xl border border-border-subtle">
-      <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-6 py-2.5 text-[13px]">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="font-medium text-secondary">
-            {t("addFromLibrary.projectsTitle")}
-          </span>
-          <span className="rounded-full border border-border-subtle bg-surface px-2 py-0.5 text-[12px] text-muted">
-            {t("addFromLibrary.projectsSummary", {
-              installed: installedCount,
-              total: projects.length,
-            })}
-          </span>
-        </div>
-        {projects.length > 4 && (
-          <button
-            type="button"
-            onClick={() => setExpanded((prev) => !prev)}
-            className="text-[12px] text-muted hover:text-secondary"
-          >
-            {expanded ? t("common.collapse") : t("common.expandAll")}
-          </button>
-        )}
+    <div>
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <h3 className="app-section-title truncate">{t("addFromLibrary.projectsTitle")}</h3>
+        <span className="shrink-0 text-[12px] text-muted tabular-nums">
+          {t("addFromLibrary.projectsSummary", {
+            installed: installedCount,
+            total: projects.length,
+          })}
+        </span>
       </div>
-      <div className="grid grid-cols-1 gap-1.5 px-3 py-3 md:grid-cols-2">
-        {visibleProjects.map((project) => {
-          const row = rows[project.id];
-          const activeTargets = row?.targets.filter((target) => target.installed && target.enabled) ?? [];
-          return (
-            <div
-              key={project.id}
-              className={cn(
-                "rounded-md border border-border-subtle bg-background px-3 py-2 text-[13px]",
-                row?.state === "installed" && "border-emerald-500/30 bg-emerald-500/5",
-              )}
-            >
-              <div className="flex min-w-0 flex-col gap-1.5">
+      {visibleProjects.length > 0 ? (
+        <div className="mt-2 space-y-2.5">
+          {visibleProjects.map((project) => {
+            const row = rows[project.id];
+            const activeTargets = row?.targets.filter((target) => target.installed && target.enabled) ?? [];
+            return (
+              <div key={project.id} className="min-w-0 text-[13px]">
                 <div className="flex min-w-0 items-center gap-2">
                   <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted" />
-                  <span className="min-w-0 flex-1 truncate font-medium text-secondary" title={project.name}>
+                  <span className="min-w-0 flex-1 truncate text-secondary" title={project.name}>
                     {project.name}
                   </span>
                   {!row || row.state === "loading" ? (
                     <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-faint" />
                   ) : row.state === "error" ? (
                     <span
-                      className="shrink-0 text-rose-500"
+                      className="shrink-0 text-[12px] text-danger"
                       title={row.error || t("common.error")}
                     >
                       {t("common.error")}
@@ -258,7 +244,7 @@ export function SkillProjectsSection({ skill, projects, onChanged }: Props) {
                   ) : null}
                 </div>
                 {row && row.state !== "loading" && row.state !== "error" && (
-                  <div className="flex min-w-0 flex-wrap gap-1.5">
+                  <div className="mt-1 flex min-w-0 flex-wrap gap-1 pl-5">
                     {activeTargets.length === 0 ? (
                       <span className="text-[12px] text-muted">{t("addFromLibrary.status.unavailable")}</span>
                     ) : activeTargets.map((target) => {
@@ -317,10 +303,22 @@ export function SkillProjectsSection({ skill, projects, onChanged }: Props) {
                   </div>
                 )}
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="mt-2 text-[12px] text-muted">
+          {anyLoading ? t("common.loading") : t("addFromLibrary.notInAnyProject")}
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        aria-expanded={expanded}
+        className="app-button-secondary mt-3 h-7 w-full px-2.5 py-0 text-[12px]"
+      >
+        {expanded ? t("common.collapse") : t("addFromLibrary.addToProject")}
+      </button>
       {/* Portaled out of the DetailSheet so the sheet's Escape handler sees
           a covering dialog and leaves the key to it. */}
       {createPortal(

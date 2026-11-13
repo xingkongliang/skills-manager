@@ -15,7 +15,6 @@ import {
   Wrench,
   Loader2,
   X,
-  Plus,
   SquareCheck,
   Square,
   GripVertical,
@@ -44,7 +43,8 @@ import { BatchTagDialog } from "../components/BatchTagDialog";
 import { BatchSyncAgentDialog } from "../components/BatchSyncAgentDialog";
 import { SyncDots } from "../components/SyncDots";
 import { ToggleSwitch } from "../components/ToggleSwitch";
-import { CardActionMenu } from "../components/CardActionMenu";
+import { CardActionMenu, type CardAction } from "../components/CardActionMenu";
+import { SkillTagEditor } from "../components/SkillTagEditor";
 import * as api from "../lib/tauri";
 import { getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
@@ -205,7 +205,6 @@ export function MySkills() {
   const [menuSkillId, setMenuSkillId] = useState<string | null>(null);
   const [skillToDelete, setSkillToDelete] = useState<ManagedSkill | null>(null);
   const [tagInput, setTagInput] = useState("");
-  const tagInputRef = useRef<HTMLInputElement>(null);
 
   const [presetSkillOrder, setPresetSkillOrder] = useState<string[]>([]);
 
@@ -989,11 +988,12 @@ export function MySkills() {
     }
   };
 
-  const handleAddTag = async (skill: ManagedSkill, inputValue?: string) => {
+  /** Resolves true when the tag was added. */
+  const handleAddTag = async (skill: ManagedSkill, inputValue?: string): Promise<boolean> => {
     const trimmed = (inputValue ?? tagInput).trim();
     if (!trimmed || skill.tags.includes(trimmed)) {
       setTagInput("");
-      return;
+      return false;
     }
     try {
       await api.setSkillTags(skill.id, [...skill.tags, trimmed]);
@@ -1001,8 +1001,10 @@ export function MySkills() {
       setTagEditSkillId(null);
       setTagInput("");
       await refreshManagedSkills();
+      return true;
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
+      return false;
     }
   };
 
@@ -1056,15 +1058,6 @@ export function MySkills() {
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     }
-  };
-
-  const getTagOptions = (skill: ManagedSkill, keyword: string) => {
-    const needle = keyword.trim().toLowerCase();
-    return allTags.filter((tag) => {
-      if (skill.tags.includes(tag)) return false;
-      if (!needle) return true;
-      return tag.toLowerCase().includes(needle);
-    });
   };
 
   type GitToolbarMode =
@@ -1187,6 +1180,34 @@ export function MySkills() {
     skill.source_type === "local" || skill.source_type === "import"
       ? t("mySkills.updateActions.reimport")
       : t("mySkills.updateActions.update");
+
+  // The "…" menu of a grid card, a list row and the detail sheet: one list so
+  // the three cannot drift apart.
+  const skillMenuActions = (skill: ManagedSkill): CardAction[] => [
+    {
+      key: "check",
+      label: t("mySkills.updateActions.check"),
+      icon: <RefreshCw className={cn("h-3.5 w-3.5", checkingSkillId === skill.id && "animate-spin")} />,
+      disabled: checkingSkillId === skill.id,
+      onSelect: () => handleCheckUpdate(skill),
+    },
+    ...(canRefresh(skill)
+      ? [{
+          key: "refresh",
+          label: refreshLabel(skill),
+          icon: <RotateCcw className={cn("h-3.5 w-3.5", updatingSkillId === skill.id && "animate-spin")} />,
+          disabled: updatingSkillId === skill.id,
+          onSelect: () => handleRefreshSkill(skill),
+        }]
+      : []),
+    {
+      key: "delete",
+      label: t("common.delete"),
+      icon: <Trash2 className="h-3.5 w-3.5" />,
+      danger: true,
+      onSelect: () => setSkillToDelete(skill),
+    },
+  ];
 
   const statusBadge = (skill: ManagedSkill) => {
     if (skill.update_status === "update_available") {
@@ -1610,31 +1631,7 @@ export function MySkills() {
                               ? "opacity-100"
                               : "opacity-0 group-hover:opacity-100"
                           )}
-                          actions={[
-                            {
-                              key: "check",
-                              label: t("mySkills.updateActions.check"),
-                              icon: <RefreshCw className={cn("h-3.5 w-3.5", checkingSkillId === skill.id && "animate-spin")} />,
-                              disabled: checkingSkillId === skill.id,
-                              onSelect: () => handleCheckUpdate(skill),
-                            },
-                            ...(canRefresh(skill)
-                              ? [{
-                                  key: "refresh",
-                                  label: refreshLabel(skill),
-                                  icon: <RotateCcw className={cn("h-3.5 w-3.5", updatingSkillId === skill.id && "animate-spin")} />,
-                                  disabled: updatingSkillId === skill.id,
-                                  onSelect: () => handleRefreshSkill(skill),
-                                }]
-                              : []),
-                            {
-                              key: "delete",
-                              label: t("common.delete"),
-                              icon: <Trash2 className="h-3.5 w-3.5" />,
-                              danger: true,
-                              onSelect: () => setSkillToDelete(skill),
-                            },
-                          ]}
+                          actions={skillMenuActions(skill)}
                         />
                         <ToggleSwitch
                           checked={enabledInPreset}
@@ -1691,74 +1688,19 @@ export function MySkills() {
                         )}
                       </div>
                     )}
-                    <div className="mt-2 flex flex-wrap items-center gap-1">
-                      {skill.tags.map((tag) => (
-                        <span
-                          key={tag}
-                          className={cn(
-                            "group/tag inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] font-medium",
-                            getTagColor(tag, allTags)
-                          )}
-                        >
-                          {tag}
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleRemoveTag(skill, tag); }}
-                            className="hidden group-hover/tag:inline-flex rounded-full p-0 opacity-60 hover:opacity-100"
-                          >
-                            <X className="h-2.5 w-2.5" />
-                          </button>
-                        </span>
-                      ))}
-                      {tagEditSkillId === skill.id ? (
-                        <div className="relative" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            ref={tagInputRef}
-                            type="text"
-                            value={tagInput}
-                            onChange={(e) => setTagInput(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") { handleAddTag(skill); }
-                              if (e.key === "Escape") { setTagEditSkillId(null); setTagInput(""); }
-                            }}
-                            onBlur={() => {
-                              if (tagInput.trim()) handleAddTag(skill);
-                              else { setTagEditSkillId(null); setTagInput(""); }
-                            }}
-                            placeholder={t("mySkills.tags.addTag")}
-                            className="h-5 w-28 rounded-full border border-border-subtle bg-transparent px-1.5 text-[11px] text-secondary outline-none focus:border-accent"
-                            autoCapitalize="none"
-                            autoCorrect="off"
-                            autoComplete="off"
-                            spellCheck={false}
-                            autoFocus
-                          />
-                          {getTagOptions(skill, tagInput).length > 0 && (
-                            <div className="absolute left-0 top-6 z-50 max-h-56 min-w-[112px] max-w-[180px] overflow-y-auto rounded-md border border-border-subtle bg-surface p-1 shadow-lg">
-                              {getTagOptions(skill, tagInput).map((tagOption) => (
-                                <button
-                                  key={tagOption}
-                                  type="button"
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onClick={(e) => { e.stopPropagation(); handleAddTag(skill, tagOption); }}
-                                  className="w-full truncate rounded-md px-1.5 py-1 text-left text-[11px] text-secondary hover:bg-surface-hover"
-                                  title={tagOption}
-                                >
-                                  {tagOption}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setTagEditSkillId(skill.id); setTagInput(""); }}
-                          className="inline-flex items-center rounded-full p-0.5 text-faint transition-colors hover:text-muted opacity-0 group-hover:opacity-100"
-                          title={t("mySkills.tags.addTag")}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </button>
-                      )}
-                    </div>
+                    <SkillTagEditor
+                      className="mt-2"
+                      tags={skill.tags}
+                      allTags={allTags}
+                      editing={tagEditSkillId === skill.id}
+                      value={tagInput}
+                      onValueChange={setTagInput}
+                      onStartEditing={() => { setTagEditSkillId(skill.id); setTagInput(""); }}
+                      onStopEditing={() => { setTagEditSkillId(null); setTagInput(""); }}
+                      onAdd={(tag) => { void handleAddTag(skill, tag); }}
+                      onRemove={(tag) => { void handleRemoveTag(skill, tag); }}
+                      addButtonClassName="opacity-0 group-hover:opacity-100"
+                    />
                   </div>
 
                   <div className="mt-auto flex items-center justify-between gap-2 border-t border-border-faint px-3.5 py-2.5">
@@ -1950,31 +1892,7 @@ export function MySkills() {
                           ? "opacity-100"
                           : "opacity-0 group-hover:opacity-100"
                       )}
-                      actions={[
-                        {
-                          key: "check",
-                          label: t("mySkills.updateActions.check"),
-                          icon: <RefreshCw className={cn("h-3.5 w-3.5", checkingSkillId === skill.id && "animate-spin")} />,
-                          disabled: checkingSkillId === skill.id,
-                          onSelect: () => handleCheckUpdate(skill),
-                        },
-                        ...(canRefresh(skill)
-                          ? [{
-                              key: "refresh",
-                              label: refreshLabel(skill),
-                              icon: <RotateCcw className={cn("h-3.5 w-3.5", updatingSkillId === skill.id && "animate-spin")} />,
-                              disabled: updatingSkillId === skill.id,
-                              onSelect: () => handleRefreshSkill(skill),
-                            }]
-                          : []),
-                        {
-                          key: "delete",
-                          label: t("common.delete"),
-                          icon: <Trash2 className="h-3.5 w-3.5" />,
-                          danger: true,
-                          onSelect: () => setSkillToDelete(skill),
-                        },
-                      ]}
+                      actions={skillMenuActions(skill)}
                     />
                     <ToggleSwitch
                       checked={enabledInPreset}
@@ -2005,6 +1923,21 @@ export function MySkills() {
         isActivePreset={Boolean(viewedPreset && viewedPreset.id === activePreset?.id)}
         projects={projects}
         onProjectsChanged={refreshProjects}
+        viewedPresetName={viewedPreset ? viewedPresetName : null}
+        inViewedPreset={Boolean(viewedPreset && selectedSkill?.preset_ids.includes(viewedPreset.id))}
+        onTogglePreset={selectedSkill && viewedPreset ? () => { void handleTogglePreset(selectedSkill); } : undefined}
+        menuActions={selectedSkill ? skillMenuActions(selectedSkill) : undefined}
+        canRefresh={selectedSkill ? canRefresh(selectedSkill) : false}
+        refreshLabel={selectedSkill ? refreshLabel(selectedSkill) : undefined}
+        updating={!!selectedSkill && updatingSkillId === selectedSkill.id}
+        checking={!!selectedSkill && checkingSkillId === selectedSkill.id}
+        onRefresh={selectedSkill ? () => { void handleRefreshSkill(selectedSkill); } : undefined}
+        onCheckUpdate={selectedSkill ? () => { void handleCheckUpdate(selectedSkill); } : undefined}
+        onRelinkSource={selectedSkill ? () => { void handleRelinkSource(selectedSkill); } : undefined}
+        onDetachSource={selectedSkill ? () => { void handleDetachSource(selectedSkill); } : undefined}
+        allTags={allTags}
+        onAddTag={selectedSkill ? (tag) => handleAddTag(selectedSkill, tag) : undefined}
+        onRemoveTag={selectedSkill ? (tag) => { void handleRemoveTag(selectedSkill, tag); } : undefined}
       />
 
       <ConfirmDialog
