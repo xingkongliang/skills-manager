@@ -33,12 +33,14 @@ const RADIUS_EXCEPTIONS = {
   'src/components/HelpDialog.tsx': ['rounded-[28px]', 'rounded-2xl'],
   // Inline code inside a rendered SKILL.md is document typography.
   'src/components/SkillMarkdown.tsx': ['rounded'],
+  'src/components/SkillReaderMarkdown.tsx': ['rounded'],
 };
 
 const TYPE_SCALE = ['11px', '12px', '13px', '14px', '17px'];
 const FONT_SIZE_EXCEPTIONS = {
   // Headings of a rendered SKILL.md are document typography, not UI chrome.
   'src/components/SkillMarkdown.tsx': ['28px', '20px', '16px'],
+  'src/components/SkillReaderMarkdown.tsx': ['28px', '20px', '16px'],
   // The sheet's title and lead sit directly above that document and match its h1.
   'src/components/DetailSheet.tsx': ['28px', '15px'],
   // The deliberate welcome dialog.

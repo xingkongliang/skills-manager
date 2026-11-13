@@ -1,19 +1,10 @@
 import ReactMarkdown from "react-markdown";
-import { useEffect, useMemo, useState } from "react";
+import remarkGfm from "remark-gfm";
 import { cn } from "../utils";
-import { markdownPlugins } from "../lib/markdown/config";
-import { buildTranslationPlan, readerRemarkPlugin, type TranslationPlan } from "../lib/markdown/translationPlan";
-import { classifyReaderLink, imageBlobUrl } from "../lib/skillReader";
-import { readSkillFile, resolveSkillLink } from "../lib/tauri";
 
 interface SkillMarkdownProps {
   content: string;
   className?: string;
-  plan?: TranslationPlan;
-  translations?: Readonly<Record<string, string>>;
-  onNavigate?: (href: string) => void;
-  sessionId?: string;
-  relativePath?: string;
 }
 
 // remark-gfm's autolink step compiles a regex with lookbehind on every render.
@@ -21,31 +12,35 @@ interface SkillMarkdownProps {
 // with a SyntaxError, which unmounts the whole app and leaves a blank window —
 // the symptom reported in #613. Such engines get plain Markdown instead: no
 // tables, task lists or strikethrough, but the skill is readable.
-function ReaderImage({ src, alt, sessionId, relativePath }: { src?: string; alt?: string; sessionId?: string; relativePath?: string }) {
-  const remote = src && /^https?:\/\//i.test(src);
-  const [local, setLocal] = useState<{ src: string; url: string } | null>(null);
-  useEffect(() => {
-    if (!src || remote || !sessionId || !relativePath || classifyReaderLink(src) !== "internal") return;
-    let live = true; let blob: string | null = null;
-    void resolveSkillLink(sessionId, relativePath, src).then((link) => readSkillFile(sessionId, link.relative_path)).then((file) => {
-      if (file.kind !== "image" || !file.base64) return;
-      blob = imageBlobUrl(file.base64, file.mime);
-      if (live) setLocal({ src, url: blob }); else URL.revokeObjectURL(blob);
-    }).catch(() => {});
-    return () => { live = false; if (blob) URL.revokeObjectURL(blob); };
-  }, [src, remote, sessionId, relativePath]);
-  const url = remote ? src : local && local.src === src ? local.url : undefined;
-  return url ? <img src={url} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" className="my-3 max-h-[640px] max-w-full rounded-xl object-contain" /> : <span className="text-[12px] text-muted">{alt || src}</span>;
+const SUPPORTS_LOOKBEHIND = (() => {
+  try {
+    new RegExp("(?<=a)b");
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const REMARK_PLUGINS = SUPPORTS_LOOKBEHIND ? [remarkGfm] : [];
+
+function stripMarkdownFrontmatter(content: string) {
+  const opening = /^---\r?\n/.exec(content);
+  if (!opening) return content;
+
+  const rest = content.slice(opening[0].length);
+  // Match a complete line, including an empty block or a delimiter at EOF.
+  const closing = /(?:^|\n)---(?:\r?\n|$)/.exec(rest);
+  if (!closing) return content;
+
+  return rest.slice(closing.index + closing[0].length).trimStart();
 }
 
-export function SkillMarkdown({ content, className, plan: suppliedPlan, translations, onNavigate, sessionId, relativePath }: SkillMarkdownProps) {
-  const plan = useMemo(() => suppliedPlan ?? buildTranslationPlan(content), [content, suppliedPlan]);
-  const plugins = useMemo(() => [...markdownPlugins, readerRemarkPlugin(plan, translations)], [plan, translations]);
+export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
+  const markdown = stripMarkdownFrontmatter(content);
 
   return (
-    <article className={cn("mx-auto w-full max-w-[1240px] break-words text-[13px] leading-6 text-secondary", className)}>
+    <article className={cn("mx-auto w-full max-w-[1240px] text-[13px] leading-6 text-secondary", className)}>
       <ReactMarkdown
-        remarkPlugins={plugins}
+        remarkPlugins={REMARK_PLUGINS}
         components={{
           h1: ({ className, ...props }) => (
             <h1
@@ -77,12 +72,10 @@ export function SkillMarkdown({ content, className, plan: suppliedPlan, translat
                 href={safeHref}
                 target="_blank"
                 rel="noreferrer"
-                onClick={onNavigate ? (event) => { event.preventDefault(); if (href) onNavigate(href); } : undefined}
                 {...props}
               />
             );
           },
-          img: ({ src, alt }) => <ReaderImage key={src} src={src} alt={alt} sessionId={sessionId} relativePath={relativePath} />,
           ul: ({ className, ...props }) => (
             <ul className={cn("mb-4 list-disc space-y-1 pl-5 text-secondary", className)} {...props} />
           ),
@@ -151,7 +144,7 @@ export function SkillMarkdown({ content, className, plan: suppliedPlan, translat
           ),
         }}
       >
-        {plan.markdown}
+        {markdown}
       </ReactMarkdown>
     </article>
   );

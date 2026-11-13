@@ -121,8 +121,20 @@ export const openSkillFileExternal = (sessionId: string, relativePath: string) =
 export interface TranslationCacheEntry { cache_key: string; text: string; target_language: string }
 export interface TranslationCacheResult { epoch: number; entries: TranslationCacheEntry[]; persistent: boolean }
 export interface TranslationResponse { results: { text: string | null }[]; error: string | null; retry_after_ms: number | null }
-export const translateSkillBlocks = (sessionId: string, requestId: string, texts: string[], targetLanguage: string) =>
-  invoke<TranslationResponse>("translate_skill_blocks", { sessionId, requestId, texts, targetLanguage });
+export interface TranslationSettings {
+  provider: "google" | "codex" | "claude" | "api";
+  api_base_url: string;
+  model: string;
+  cli_path: string;
+  timeout_seconds: number;
+}
+export interface TranslationSettingsView extends TranslationSettings { has_api_key: boolean; cache_namespace: string }
+export const getTranslationSettings = () => invoke<TranslationSettingsView>("get_translation_settings");
+export const saveTranslationSettings = (settings: TranslationSettings, apiKey: string | null) =>
+  invoke<TranslationSettingsView>("save_translation_settings", { settings, apiKey });
+export const testTranslationSettings = (requestId: string) => invoke<TranslationResponse>("test_translation_settings", { requestId });
+export const translateSkillBlocks = (sessionId: string, requestId: string, texts: string[], targetLanguage: string, expectedNamespace = "google") =>
+  invoke<TranslationResponse>("translate_skill_blocks", { sessionId, requestId, texts, targetLanguage, expectedNamespace });
 export const cancelSkillTranslation = (requestId: string) => invoke<void>("cancel_skill_translation", { requestId });
 export const getTranslationCache = (keys: string[]) => invoke<TranslationCacheResult>("get_translation_cache", { keys });
 export const putTranslationCache = (entries: TranslationCacheEntry[], epoch: number) => invoke<boolean>("put_translation_cache", { entries, epoch });

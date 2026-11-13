@@ -133,12 +133,21 @@ mod tests {
         assert!(cache.get(&["key".into()]).entries.is_empty());
     }
     #[test]
-    fn isolated_database_reads_and_replaces_entries() {
-        let db = Connection::open_in_memory().unwrap();
+    fn isolated_database_retains_entries_after_reopening() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("translations.sqlite3");
+        let db = Connection::open(&database).unwrap();
         db.execute_batch("CREATE TABLE translation_cache(cache_key TEXT PRIMARY KEY,translated_text TEXT,target_language TEXT,last_accessed_at INTEGER,byte_size INTEGER)").unwrap();
         let mut state = CacheState { db: Some(db), initialized: true, memory: HashMap::new(), epoch: 0 };
         let entry = CacheEntry { cache_key: "key".into(), text: "hello".into(), target_language: "zh-CN".into() };
         state.write(&[entry], 1).unwrap();
         assert_eq!(state.read(&["key".into()], 2).unwrap()[0].text, "hello");
+        drop(state);
+
+        let mut state = CacheState { db: Some(Connection::open(database).unwrap()), initialized: true, memory: HashMap::new(), epoch: 0 };
+        assert_eq!(state.read(&["key".into()], 3).unwrap()[0].text, "hello");
+        let replacement = CacheEntry { cache_key: "key".into(), text: "updated".into(), target_language: "zh-CN".into() };
+        state.write(&[replacement], 4).unwrap();
+        assert_eq!(state.read(&["key".into()], 5).unwrap()[0].text, "updated");
     }
 }

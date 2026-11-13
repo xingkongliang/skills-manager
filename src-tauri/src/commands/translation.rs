@@ -26,6 +26,12 @@ pub async fn save_translation_settings(settings: TranslationSettings, api_key: O
 }
 
 #[tauri::command]
+pub async fn test_translation_settings(request_id: String, store: State<'_, Arc<SkillStore>>, transport: State<'_, Arc<TranslationTransport>>) -> Result<TranslationResponse, AppError> {
+    let config = TranslationConfig::load(&store)?;
+    transport.translate_configured(request_id, vec!["Hello, world.".into()], "zh-CN".into(), store.proxy_url(), config).await
+}
+
+#[tauri::command]
 pub fn cancel_skill_translation(request_id: String, transport: State<'_, Arc<TranslationTransport>>) { transport.cancel(&request_id); }
 
 fn validate_keys(keys: &[String]) -> Result<(), AppError> {

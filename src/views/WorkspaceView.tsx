@@ -27,7 +27,8 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PresetBar } from "../components/PresetBar";
 import { AgentIcon } from "../components/AgentIcon";
 import { DetailSheet } from "../components/DetailSheet";
-import { SkillFileBrowser } from "../components/SkillFileBrowser";
+import { SkillMarkdown } from "../components/SkillMarkdown";
+import { SkillReaderEntry } from "../components/SkillReaderEntry";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectSkill } from "../lib/tauri";
@@ -257,7 +258,6 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const [localDocLoading, setLocalDocLoading] = useState(false);
   const [localCenterDocLoading, setLocalCenterDocLoading] = useState(false);
   const [localContentTab, setLocalContentTab] = useState<"local" | "diff" | "center">("local");
-  const [localCenterVisited, setLocalCenterVisited] = useState(false);
   const [uploadConfirmSkill, setUploadConfirmSkill] = useState<ProjectSkill | null>(null);
   const [pullConfirmSkill, setPullConfirmSkill] = useState<ProjectSkill | null>(null);
   const [deleteLocalConfirmSkill, setDeleteLocalConfirmSkill] = useState<ProjectSkill | null>(null);
@@ -660,7 +660,6 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       localDetailRequestRef.current = requestId;
       setLocalDetailSkill(skill);
       setLocalContentTab("local");
-      setLocalCenterVisited(false);
       setLocalDocContent(null);
       setLocalCenterDocContent(null);
       setLocalDocLoading(true);
@@ -1190,14 +1189,14 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
               <button
                 key={tab}
                 type="button"
-                onClick={() => { setLocalContentTab(tab); if (tab === "center") setLocalCenterVisited(true); }}
+                onClick={() => setLocalContentTab(tab)}
                 className={cn(
                   "rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
                   localContentTab === tab
                     ? "bg-accent text-white"
                     : "bg-surface-hover text-muted hover:text-secondary"
                 )}
-                disabled={tab === "diff" && localCenterDocLoading}
+                disabled={(tab === "diff" || tab === "center") && localCenterDocLoading}
               >
                 {tab === "local"
                   ? t("mySkills.docTabs.local")
@@ -1209,17 +1208,41 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           </div>
         )}
 
-        {localDetailSkill && currentTool && <div className={localContentTab === "local" ? "" : "hidden"}>
-          <SkillFileBrowser key={localSkillKey(localDetailSkill)} target={{ kind: "global", agent: currentTool.key, skill_relative_path: localDetailSkill.relative_path }} active={localContentTab === "local"} description={localDetailSkill.description ?? undefined} />
-        </div>}
-        {localCenterVisited && localDetailSkill?.center_skill_id && <div className={localContentTab === "center" ? "" : "hidden"}><SkillFileBrowser key={localDetailSkill.center_skill_id} target={{ kind: "managed", skill_id: localDetailSkill.center_skill_id, origin: "local" }} active={localContentTab === "center"} description={localDetailSkill.description ?? undefined} /></div>}
-        {localContentTab === "diff" && (localDocLoading || localCenterDocLoading ? (
+        {localDetailSkill && currentTool && localContentTab !== "diff" && (
+          <div className="mb-4">
+            <SkillReaderEntry
+              target={localContentTab === "center" && localDetailSkill.center_skill_id
+                ? { kind: "managed", skill_id: localDetailSkill.center_skill_id, origin: "local" }
+                : { kind: "global", agent: currentTool.key, skill_relative_path: localDetailSkill.relative_path }}
+              title={localDetailSkill.name}
+              description={localDetailSkill.description ?? undefined}
+            />
+          </div>
+        )}
+
+        {localDocLoading ? (
           <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
-        ) : localDocContent && localCenterDocContent ? (
-          <DocumentDiffViewer original={localDocContent} updated={localCenterDocContent} />
+        ) : localContentTab === "diff" ? (
+          localDocContent && localCenterDocContent ? (
+            <DocumentDiffViewer original={localDocContent} updated={localCenterDocContent} />
+          ) : localCenterDocLoading ? (
+            <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+          ) : (
+            <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+          )
+        ) : localContentTab === "center" ? (
+          localCenterDocLoading ? (
+            <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+          ) : localCenterDocContent ? (
+            <SkillMarkdown content={localCenterDocContent} />
+          ) : (
+            <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+          )
+        ) : localDocContent ? (
+          <SkillMarkdown content={localDocContent} />
         ) : (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
-        ))}
+          <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
+        )}
       </DetailSheet>
 
       <ConfirmDialog

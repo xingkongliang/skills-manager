@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { clearTranslationCache } from "../lib/tauri";
 import { useReaderPreferences } from "../hooks/useReaderPreferences";
+import { TranslationProviderSettings } from "./TranslationProviderSettings";
 
 export function ReaderSettings() {
   const { t } = useTranslation();
@@ -17,6 +18,7 @@ export function ReaderSettings() {
   return <section>
     <h2 className="app-section-title mb-3">{t("reader.settingsTitle")}</h2>
     <div className="app-panel divide-y divide-border-faint overflow-hidden">
+      <TranslationProviderSettings />
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div><h3 className="text-[14px] font-semibold text-primary">{t("reader.defaultMode")}</h3><p className="mt-1 text-[12px] text-muted">{t("reader.translationPrivacy")}</p></div>
         <select aria-label={t("reader.defaultMode")} value={preferences.mode} onChange={(e) => preferences.setMode(e.target.value as "original" | "bilingual")} className="rounded-md border border-border-subtle bg-surface px-3 py-2 text-[13px] text-secondary"><option value="original">{t("reader.original")}</option><option value="bilingual">{t("reader.bilingual")}</option></select>

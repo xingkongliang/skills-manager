@@ -22,7 +22,7 @@ async function cacheKey(block: TranslationBlock, target: string, namespace?: str
   return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function errorCode(error: unknown) {
+export function translationErrorCode(error: unknown) {
   const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : "";
   return /^reader\.[a-zA-Z]+$/.test(message) ? message : "reader.translationNetwork";
 }
@@ -44,7 +44,7 @@ async function requestWithRetry(texts: string[], options: Options): Promise<Tran
     options.signal.addEventListener("abort", cancel, { once: true });
     let response: TranslationResponse;
     try { response = await options.backend.translate(options.sessionId, id, texts, options.target); }
-    catch (error) { response = { results: [], error: errorCode(error), retry_after_ms: null }; }
+    catch (error) { response = { results: [], error: translationErrorCode(error), retry_after_ms: null }; }
     finally { options.signal.removeEventListener("abort", cancel); }
     if (options.signal.aborted) throw new Error("reader.cancelled");
     if (!response.error) return response;

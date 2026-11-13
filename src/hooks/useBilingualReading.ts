@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../lib/tauri";
-import { runReaderTranslation, type BlockResult, type TranslationBackend } from "../lib/translation/readerTranslation";
+import { runReaderTranslation, translationErrorCode, type BlockResult, type TranslationBackend } from "../lib/translation/readerTranslation";
 import { buildTranslationPlan, type TranslationPlan } from "../lib/markdown/translationPlan";
 
 const backend: TranslationBackend = { readCache: api.getTranslationCache, writeCache: api.putTranslationCache, translate: api.translateSkillBlocks, cancel: api.cancelSkillTranslation };
@@ -28,15 +28,22 @@ export function useBilingualReading(sessionId: string, identity: string, plan: T
     if (!enabled) return;
     const controller = new AbortController();
     const clear = () => { controller.abort(); setState({ identity: stateKey, results: {}, memory: false, paused: true }); };
+    const changed = () => { controller.abort(); setAttempt((n) => n + 1); };
     window.addEventListener("skill-reader-cache-cleared", clear);
-    void runReaderTranslation({ blocks, sessionId, target, signal: controller.signal, backend,
-      priority: (id) => visible.current.has(id),
-      onMemoryCache: () => { if (!controller.signal.aborted) setState((s) => ({ identity: stateKey, results: s.identity === stateKey ? s.results : {}, memory: true })); },
-      onResult: (id, result) => { if (!controller.signal.aborted) setState((s) => ({ identity: stateKey, memory: s.identity === stateKey && s.memory, results: { ...(s.identity === stateKey ? s.results : {}), [id]: result } })); },
-    }).catch(() => {
-      if (!controller.signal.aborted) setState({ identity: stateKey, results: Object.fromEntries(blocks.map((b) => [b.id, { status: "error" as const, error: "reader.translationNetwork" }])), memory: false });
+    window.addEventListener("skill-reader-translation-settings-changed", changed);
+    void api.getTranslationSettings().then((settings) => {
+      if (controller.signal.aborted) return;
+      return runReaderTranslation({ blocks, sessionId, target, signal: controller.signal,
+        cacheNamespace: settings.cache_namespace,
+        backend: { ...backend, translate: (session, request, texts, language) => api.translateSkillBlocks(session, request, texts, language, settings.cache_namespace) },
+        priority: (id) => visible.current.has(id),
+        onMemoryCache: () => { if (!controller.signal.aborted) setState((s) => ({ identity: stateKey, results: s.identity === stateKey ? s.results : {}, memory: true })); },
+        onResult: (id, result) => { if (!controller.signal.aborted) setState((s) => ({ identity: stateKey, memory: s.identity === stateKey && s.memory, results: { ...(s.identity === stateKey ? s.results : {}), [id]: result } })); },
+      });
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setState({ identity: stateKey, results: Object.fromEntries(blocks.map((b) => [b.id, { status: "error" as const, error: translationErrorCode(error) }])), memory: false });
     });
-    return () => { controller.abort(); window.removeEventListener("skill-reader-cache-cleared", clear); };
+    return () => { controller.abort(); window.removeEventListener("skill-reader-cache-cleared", clear); window.removeEventListener("skill-reader-translation-settings-changed", changed); };
   }, [blocks, enabled, sessionId, stateKey, target]);
   const results = enabled && state.identity === stateKey ? state.results : {};
   const translations = Object.fromEntries(Object.entries(results).filter(([, result]) => result.text).map(([id, result]) => [id, result.text!]));

@@ -1143,6 +1143,9 @@
     "reload": "Reload"
   },
   "reader": {
+    "read": "Deep reading",
+    "backToDetails": "Back to details",
+    "content": "Document content",
     "fileFallback": "This file is absent from the new version. The entry document was opened instead.",
     "files": "Files",
     "closeFiles": "Close file browser",
@@ -1164,7 +1167,7 @@
     "retry": "Retry",
     "retryFailed": "Retry failed blocks ({{count}})",
     "translateMore": "Translate remaining content",
-    "translationPrivacy": "Text from this document is sent to Google when bilingual reading is enabled.",
+    "translationPrivacy": "Bilingual reading sends text from the current document to your selected translation service. CLI providers use their signed-in model service.",
     "memoryCache": "Persistent cache is unavailable; translations are cached for this session.",
     "settingsTitle": "Skill reading",
     "defaultMode": "Default reading mode",
@@ -1195,6 +1198,40 @@
       "too_large": "This file is too large to preview.",
       "encoding": "This text encoding is not supported.",
       "format": "This file format cannot be previewed."
-    }
+    },
+    "providerTitle": "Translation service",
+    "providerDescription": "Use Google, an installed AI CLI, or an OpenAI-compatible API. Only uncached text is sent for translation.",
+    "providers": {
+      "google": "Google Translate",
+      "codex": "Local CLI · Codex",
+      "claude": "Local CLI · Claude Code",
+      "api": "OpenAI-compatible API"
+    },
+    "providerModel": "Model",
+    "cliDefaultModel": "Leave blank to use the CLI default",
+    "apiModelPlaceholder": "Enter a model ID supported by your service",
+    "cliPath": "CLI executable path",
+    "cliHelp": "Leave blank to search PATH and common install directories, or enter a full executable path. Sign in first with codex login or claude auth login. Codex uses an isolated configuration with your existing login; choose its model here.",
+    "apiBaseUrl": "API base URL",
+    "apiHelp": "Include the version path, such as /v1. Calls /chat/completions and uses the app proxy. Supports OpenRouter, Ollama, LM Studio and custom services.",
+    "apiKey": "API Key",
+    "apiKeySaved": "Key saved; leave blank to keep it",
+    "apiKeyOptional": "Optional for services that do not require a key",
+    "apiKeyHelp": "Stored encrypted on this device. Changing the API origin clears the saved key unless you enter a replacement.",
+    "clearApiKey": "Remove saved API Key",
+    "providerTimeout": "Request timeout (seconds, 15–600)",
+    "providerSaved": "Translation settings saved",
+    "providerLoadFailed": "Could not load translation settings",
+    "testProvider": "Test saved settings",
+    "testingProvider": "Translating test sentence…",
+    "saveBeforeTest": "Save your changes before testing",
+    "providerTestSuccess": "Translation succeeded: {{text}}",
+    "translationConfigInvalid": "Check the translation URL, executable path and timeout (15–600 seconds).",
+    "translationModelRequired": "Enter a model ID for the API provider.",
+    "translationConfigChanged": "Translation settings changed. Retry with the new settings.",
+    "translationCliMissing": "CLI executable not found. Install it or set its full path in Skill reading settings.",
+    "translationCliFailed": "CLI translation failed. Check the CLI login, model and version in your terminal.",
+    "translationTimeout": "Translation timed out. Retry or increase the request timeout in settings.",
+    "translationApiRejected": "The API rejected the request. Check its URL, model ID and Chat Completions support."
   }
 }

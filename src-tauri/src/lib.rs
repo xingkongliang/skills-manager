@@ -1006,6 +1006,7 @@ pub fn run() {
             commands::translation::translate_skill_blocks,
             commands::translation::get_translation_settings,
             commands::translation::save_translation_settings,
+            commands::translation::test_translation_settings,
             commands::translation::cancel_skill_translation,
             commands::translation::get_translation_cache,
             commands::translation::put_translation_cache,

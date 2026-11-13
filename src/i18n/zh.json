@@ -1143,6 +1143,9 @@
     "reload": "重新加载"
   },
   "reader": {
+    "read": "深度阅读",
+    "backToDetails": "返回详情",
+    "content": "文档内容",
     "fileFallback": "新版本中已没有此文件，已为你打开入口文档。",
     "files": "文件",
     "closeFiles": "关闭文件目录",
@@ -1164,7 +1167,7 @@
     "retry": "重试",
     "retryFailed": "重试失败段落（{{count}}）",
     "translateMore": "继续翻译剩余内容",
-    "translationPrivacy": "启用双语阅读后，当前文档中待翻译的文本会发送给 Google。",
+    "translationPrivacy": "双语阅读会将当前文档文本交由所选翻译服务处理；CLI 使用其已登录的模型服务。",
     "memoryCache": "持久缓存暂不可用，译文仅在本次会话缓存。",
     "settingsTitle": "Skill 阅读",
     "defaultMode": "默认阅读模式",
@@ -1195,6 +1198,40 @@
       "too_large": "此文件过大，无法在应用内预览。",
       "encoding": "暂不支持此文本编码。",
       "format": "此文件格式暂不支持预览。"
-    }
+    },
+    "providerTitle": "翻译服务",
+    "providerDescription": "支持 Google、本地 AI CLI 或 OpenAI 兼容 API。仅发送尚未缓存的待翻译文本。",
+    "providers": {
+      "google": "Google 翻译",
+      "codex": "本地 CLI · Codex",
+      "claude": "本地 CLI · Claude Code",
+      "api": "OpenAI 兼容 API"
+    },
+    "providerModel": "模型",
+    "cliDefaultModel": "留空使用 CLI 默认模型",
+    "apiModelPlaceholder": "填写服务支持的模型 ID",
+    "cliPath": "CLI 可执行文件路径",
+    "cliHelp": "留空从 PATH 和常见安装目录查找，也可填写完整路径。请先通过 codex login 或 claude auth login 登录。Codex 使用独立配置并复用已有登录，模型在此指定。",
+    "apiBaseUrl": "API 地址",
+    "apiHelp": "请包含 /v1 等版本路径。通过 /chat/completions 调用，复用应用代理。支持 OpenRouter、Ollama、LM Studio 及自定义服务。",
+    "apiKey": "API Key",
+    "apiKeySaved": "已保存 Key，留空保留原值",
+    "apiKeyOptional": "服务无需 Key 时可留空",
+    "apiKeyHelp": "在本机加密保存。更换 API 地址的域名、端口或协议时，请重新填写 Key。",
+    "clearApiKey": "移除已保存的 API Key",
+    "providerTimeout": "请求超时（秒，15–600）",
+    "providerSaved": "翻译设置已保存",
+    "providerLoadFailed": "无法加载翻译设置",
+    "testProvider": "测试已保存的设置",
+    "testingProvider": "正在翻译测试句子…",
+    "saveBeforeTest": "请先保存修改再测试",
+    "providerTestSuccess": "翻译成功：{{text}}",
+    "translationConfigInvalid": "请检查翻译地址、可执行文件路径和超时（15–600 秒）。",
+    "translationModelRequired": "请填写 API 服务的模型 ID。",
+    "translationConfigChanged": "翻译设置已更改，请使用新设置重试。",
+    "translationCliMissing": "未找到 CLI，请安装或在「Skill 阅读」设置中填写完整路径。",
+    "translationCliFailed": "CLI 翻译失败，请在终端检查登录状态、模型和 CLI 版本。",
+    "translationTimeout": "翻译超时，请重试或在设置中延长请求超时。",
+    "translationApiRejected": "API 拒绝了请求，请检查地址、模型 ID 以及是否支持 Chat Completions。"
   }
 }
