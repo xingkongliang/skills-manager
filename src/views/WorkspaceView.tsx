@@ -27,6 +27,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PresetBar } from "../components/PresetBar";
 import { AgentIcon } from "../components/AgentIcon";
 import { DetailSheet } from "../components/DetailSheet";
+import { SegmentedTabs } from "../components/SegmentedTabs";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import * as api from "../lib/tauri";
@@ -1183,28 +1184,16 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         onClose={() => setLocalDetailSkill(null)}
       >
         {localDetailSkill?.center_skill_id && (
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            {(["local", "diff", "center"] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setLocalContentTab(tab)}
-                className={cn(
-                  "rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
-                  localContentTab === tab
-                    ? "bg-accent text-white"
-                    : "bg-surface-hover text-muted hover:text-secondary"
-                )}
-                disabled={(tab === "diff" || tab === "center") && localCenterDocLoading}
-              >
-                {tab === "local"
-                  ? t("mySkills.docTabs.local")
-                  : tab === "diff"
-                    ? t("mySkills.docTabs.diff")
-                    : t("project.docTabs.center")}
-              </button>
-            ))}
-          </div>
+          <SegmentedTabs
+            className="mb-5"
+            value={localContentTab}
+            onChange={setLocalContentTab}
+            tabs={[
+              { key: "local", label: t("mySkills.docTabs.local") },
+              { key: "diff", label: t("mySkills.docTabs.diff"), disabled: localCenterDocLoading },
+              { key: "center", label: t("project.docTabs.center"), disabled: localCenterDocLoading },
+            ]}
+          />
         )}
 
         {localDocLoading ? (

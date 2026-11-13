@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { IS_MACOS } from "../lib/platform";
 import { cn } from "../utils";
@@ -8,9 +9,16 @@ import { cn } from "../utils";
 interface DetailSheetProps {
   open: boolean;
   title: ReactNode;
-  description?: ReactNode;
+  /** Clamped to two lines, with a toggle when it overflows. */
+  description?: string | null;
+  /** One row under the description (tags, status pills). */
   meta?: ReactNode;
+  /** Header controls, left of the close button. */
+  actions?: ReactNode;
+  /** Right column; omitted means a single column. */
+  aside?: ReactNode;
   onClose: () => void;
+  /** Main column. */
   children: ReactNode;
 }
 
@@ -19,6 +27,8 @@ export function DetailSheet({
   title,
   description,
   meta,
+  actions,
+  aside,
   onClose,
   children,
 }: DetailSheetProps) {
@@ -43,7 +53,9 @@ export function DetailSheet({
 
   if (!open) return null;
 
-  // Reserve space for the macOS drag bar.
+  // Reserve space for the macOS drag bar. The header stays put because the
+  // sheet is a flex column with the columns scrolling inside it: no sticky,
+  // transform or backdrop-filter here (Monterey WKWebView blanks on those).
   return createPortal(
     <div
       ref={sheetRef}
@@ -58,24 +70,77 @@ export function DetailSheet({
         onClick={onClose}
       />
       <div className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary">
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-5 z-10 shrink-0 rounded-md p-1.5 text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary"
-        >
-          <X className="h-4 w-4" />
-        </button>
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-6 scrollbar-hide">
-          <h2 className="mb-3 min-w-0 pr-10 text-[28px] font-semibold leading-tight tracking-tight text-primary">
-            <span className="block">{title}</span>
-          </h2>
-          {description ? (
-            <div className="text-[15px] leading-7 text-secondary">{description}</div>
+        <header className="shrink-0 border-b border-border-subtle px-6 pt-4 pb-3.5">
+          <div className="flex min-w-0 items-center gap-3">
+            <h2 className="app-page-title min-w-0 flex-1 truncate">{title}</h2>
+            <div className="flex shrink-0 items-center gap-2">
+              {actions}
+              <button
+                type="button"
+                onClick={onClose}
+                className="shrink-0 rounded-md p-1.5 text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          {description ? <SheetDescription text={description} /> : null}
+          {meta ? <div className="mt-2.5">{meta}</div> : null}
+        </header>
+        <div className="flex min-h-0 flex-1">
+          <div className="min-w-0 flex-1 overflow-y-auto px-6 pt-4 pb-6 scrollbar-hide">
+            <div className="mx-auto w-full max-w-[760px]">{children}</div>
+          </div>
+          {aside ? (
+            <aside className="w-[300px] shrink-0 overflow-y-auto border-l border-border-subtle scrollbar-hide">
+              {aside}
+            </aside>
           ) : null}
-          {meta ? <div className="mt-4">{meta}</div> : null}
-          <div className="mt-5">{children}</div>
         </div>
       </div>
     </div>,
     document.body
+  );
+}
+
+/**
+ * The header is the only place the full description shows (the document
+ * body strips its frontmatter), so a clamped one must be expandable.
+ */
+function SheetDescription({ text }: { text: string }) {
+  const { t } = useTranslation();
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  useLayoutEffect(() => {
+    if (expanded) return;
+    const measure = () => {
+      const el = ref.current;
+      if (el) setOverflows(el.scrollHeight > el.clientHeight + 1);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [text, expanded]);
+
+  return (
+    <div className="mt-1 flex min-w-0 items-end gap-2">
+      <p
+        ref={ref}
+        className={cn("min-w-0 flex-1 text-[13px] leading-5 text-secondary", !expanded && "line-clamp-2")}
+      >
+        {text}
+      </p>
+      {(overflows || expanded) && (
+        <button
+          type="button"
+          onClick={() => setExpanded((prev) => !prev)}
+          className="shrink-0 text-[12px] text-muted transition-colors hover:text-secondary"
+        >
+          {expanded ? t("common.collapse") : t("common.expand")}
+        </button>
+      )}
+    </div>
   );
 }

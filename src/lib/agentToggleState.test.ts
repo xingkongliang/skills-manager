@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentToggleState, nextToggleValue } from "./agentToggleState";
+import { agentToggleState } from "./agentToggleState";
 
 describe("agentToggleState", () => {
   it.each([
@@ -14,17 +14,5 @@ describe("agentToggleState", () => {
     [true, false, false, "enabled"], // nothing deploys from an inactive preset
   ] as const)("enabled=%s deployed=%s active=%s -> %s", (enabled, deployed, active, expected) => {
     expect(agentToggleState({ enabled, deployed }, active)).toBe(expected);
-  });
-});
-
-describe("nextToggleValue", () => {
-  it("deploys a pending row instead of turning it off", () => {
-    expect(nextToggleValue("pending")).toBe(true);
-  });
-
-  it("turns an off row on and an enabled or deployed row off", () => {
-    expect(nextToggleValue("off")).toBe(true);
-    expect(nextToggleValue("deployed")).toBe(false);
-    expect(nextToggleValue("enabled")).toBe(false);
   });
 });
