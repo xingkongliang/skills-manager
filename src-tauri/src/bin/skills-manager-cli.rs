@@ -1754,8 +1754,14 @@ fn install_skillssh_action(
     let proxy_url = store.proxy_url();
     let repo_url = format!("https://github.com/{}.git", source);
     let cancel = Arc::new(AtomicBool::new(false));
-    let temp_dir =
-        git_fetcher::clone_repo_ref(&repo_url, None, Some(&cancel), proxy_url.as_deref())?;
+    let temp_dir = git_fetcher::clone_repo_ref_for_skill_id(
+        &repo_url,
+        None,
+        &skill_id_field,
+        Some(&cancel),
+        proxy_url.as_deref(),
+        None,
+    )?;
     let result = (|| -> anyhow::Result<(String, String, String)> {
         let _lock = RepoLock::acquire_foreground("cli install skillssh")?;
         let skill_dir =

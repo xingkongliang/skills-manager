@@ -565,6 +565,40 @@ pub fn clone_repo_ref_with_progress(
     clone_repo_ref_scoped(url, branch, None, cancel, proxy_url, on_progress)
 }
 
+/// Clone one skills.sh skill after resolving its directory from the repository
+/// tree. The tree is available from the sparse cache without fetching file
+/// blobs, so repositories that place skills below `skills/` avoid a full clone.
+/// If the locator is ambiguous or cannot be resolved from the tree, retain the
+/// existing full-checkout fallback so installs with nonstandard layouts keep
+/// working.
+pub fn clone_repo_ref_for_skill_id(
+    url: &str,
+    branch: Option<&str>,
+    skill_id: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+    proxy_url: Option<&str>,
+    on_progress: Option<ProgressCallback>,
+) -> Result<PathBuf> {
+    match clone_repo_sparse(
+        url,
+        branch,
+        None,
+        Some(skill_id),
+        cancel,
+        proxy_url,
+        &on_progress,
+    ) {
+        Ok(dir) => Ok(dir),
+        Err(e) if is_cancellation(&e) => Err(e),
+        Err(e) => {
+            log::info!(
+                "narrow clone for skill '{skill_id}' from {url} unavailable, using a full checkout: {e}"
+            );
+            clone_repo_full(url, branch, cancel, proxy_url, on_progress)
+        }
+    }
+}
+
 /// Clone `url`, narrowed to `subpath` when one is known.
 ///
 /// With a subpath this fetches only that directory (`--filter=blob:none` plus a
@@ -587,7 +621,15 @@ pub fn clone_repo_ref_scoped(
     on_progress: Option<ProgressCallback>,
 ) -> Result<PathBuf> {
     if let Some(subpath) = sparse_pattern(subpath) {
-        match clone_repo_sparse(url, branch, &subpath, cancel, proxy_url, &on_progress) {
+        match clone_repo_sparse(
+            url,
+            branch,
+            Some(&subpath),
+            None,
+            cancel,
+            proxy_url,
+            &on_progress,
+        ) {
             Ok(dir) => return Ok(dir),
             Err(e) if is_cancellation(&e) => return Err(e),
             Err(e) => {
@@ -648,7 +690,8 @@ fn sparse_pattern(subpath: Option<&str>) -> Option<String> {
 fn clone_repo_sparse(
     url: &str,
     branch: Option<&str>,
-    subpath: &str,
+    subpath: Option<&str>,
+    skill_id: Option<&str>,
     cancel: Option<&Arc<AtomicBool>>,
     proxy_url: Option<&str>,
     on_progress: &Option<ProgressCallback>,
@@ -672,16 +715,89 @@ fn clone_repo_sparse(
         )?;
     }
 
-    set_sparse_scope(&cached_dir, subpath, cancel, proxy_url, on_progress)?;
+    let subpath = match subpath {
+        Some(subpath) => subpath.to_string(),
+        None => {
+            let skill_id = skill_id
+                .context("a skill id is required to resolve a repository path")?;
+            if let Some(cb) = on_progress {
+                cb("Resolving the skill directory from the repository tree…");
+            }
+            skill_subpath_from_repo_tree(&cached_dir, skill_id, cancel)?
+        }
+    };
+    set_sparse_scope(&cached_dir, &subpath, cancel, proxy_url, on_progress)?;
 
     // `sparse-checkout set` succeeds on a path the repository does not have — it
     // just leaves that path absent, keeping the root files cone mode always
     // includes. So the result has to be inspected rather than trusted.
-    if !sparse_checkout_holds_a_skill(&cached_dir, subpath) {
+    if !sparse_checkout_holds_a_skill(&cached_dir, &subpath) {
         bail!("'{subpath}' is not a skill directory in the narrow checkout of {url}");
     }
 
     copy_cached_repo(&cached_dir, cancel)
+}
+
+fn skill_subpath_from_repo_tree(
+    repo: &Path,
+    skill_id: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<String> {
+    if cancel.is_some_and(|cancel| cancel.load(Ordering::SeqCst)) {
+        bail!("Installation cancelled");
+    }
+    let output = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["ls-tree", "-r", "-z", "--name-only", "HEAD"])
+        .output()
+        .context("Failed to index the repository tree")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git ls-tree exited with {}: {}", output.status, stderr.trim());
+    }
+    if cancel.is_some_and(|cancel| cancel.load(Ordering::SeqCst)) {
+        bail!("Installation cancelled");
+    }
+
+    resolve_skill_subpath_from_tree(&output.stdout, skill_id)
+        .ok_or_else(|| anyhow::anyhow!("No unique skill directory found for '{skill_id}'"))
+}
+
+fn resolve_skill_subpath_from_tree(tree_paths: &[u8], skill_id: &str) -> Option<String> {
+    let skill_id = sparse_pattern(Some(skill_id))?;
+    let directories: HashSet<String> = tree_paths
+        .split(|byte| *byte == 0)
+        .filter_map(|path| {
+            let path = std::str::from_utf8(path).ok()?;
+            let (directory, file_name) = path.rsplit_once('/')?;
+            file_name
+                .eq_ignore_ascii_case("SKILL.md")
+                .then(|| directory.to_string())
+        })
+        .collect();
+
+    if directories.contains(&skill_id) {
+        return Some(skill_id);
+    }
+    if skill_id.contains('/') {
+        return None;
+    }
+
+    for candidate in [
+        format!("skills/{skill_id}"),
+        format!(".agents/skills/{skill_id}"),
+    ] {
+        if directories.contains(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    let mut matches = directories
+        .into_iter()
+        .filter(|directory| directory.rsplit('/').next() == Some(skill_id.as_str()));
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
 }
 
 fn sparse_clone_into(
@@ -2338,6 +2454,70 @@ mod tests {
         assert_eq!(sparse_pattern(Some("skills//foo")), None);
         assert_eq!(sparse_pattern(Some("/skills/foo")), None);
         assert_eq!(sparse_pattern(Some("skills/foo/")), None);
+    }
+
+    #[test]
+    fn resolves_a_skills_sh_skill_from_blobless_tree_paths() {
+        let tree = b"README.md\0skills/music-to-video/SKILL.md\0skills/pr-to-video/SKILL.md\0";
+        assert_eq!(
+            resolve_skill_subpath_from_tree(tree, "music-to-video").as_deref(),
+            Some("skills/music-to-video")
+        );
+    }
+
+    #[test]
+    fn tree_locator_prefers_existing_resolver_locations_and_rejects_ambiguity() {
+        let tree = b"music-to-video/SKILL.md\0skills/music-to-video/SKILL.md\0";
+        assert_eq!(
+            resolve_skill_subpath_from_tree(tree, "music-to-video").as_deref(),
+            Some("music-to-video")
+        );
+
+        let tree = b"skills/music-to-video/SKILL.md\0other/music-to-video/SKILL.md\0";
+        assert_eq!(
+            resolve_skill_subpath_from_tree(tree, "music-to-video").as_deref(),
+            Some("skills/music-to-video")
+        );
+
+        let tree = b"tools/music-to-video/SKILL.md\0examples/music-to-video/SKILL.md\0";
+        assert_eq!(resolve_skill_subpath_from_tree(tree, "music-to-video"), None);
+    }
+
+    #[test]
+    fn tree_locator_rejects_unsafe_or_unresolved_ids() {
+        let tree = b"skills/music-to-video/SKILL.md\0";
+        assert_eq!(resolve_skill_subpath_from_tree(tree, "../music-to-video"), None);
+        assert_eq!(resolve_skill_subpath_from_tree(tree, "missing"), None);
+    }
+
+    #[test]
+    fn indexes_a_skill_path_from_a_blobless_git_tree() {
+        let tmp = tempdir().unwrap();
+        let repo_dir = tmp.path().join("repo");
+        fs::create_dir_all(repo_dir.join("skills/music-to-video")).unwrap();
+        fs::write(
+            repo_dir.join("skills/music-to-video/SKILL.md"),
+            "---\nname: music-to-video\n---\n",
+        )
+        .unwrap();
+
+        let repo = Repository::init(&repo_dir).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(Path::new("skills/music-to-video/SKILL.md"))
+            .unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "test", &tree, &[])
+            .unwrap();
+        drop(tree);
+        drop(repo);
+
+        assert_eq!(
+            skill_subpath_from_repo_tree(&repo_dir, "music-to-video", None).unwrap(),
+            "skills/music-to-video"
+        );
     }
 
     /// The pattern handed to git has to name the same directory the caller will
