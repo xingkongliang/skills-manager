@@ -134,8 +134,48 @@ fn snapshot_checkout_restores_links_omitted_by_the_install_cache_copy() {
     let signature = git2::Signature::now("Reader test", "reader@example.invalid").unwrap();
     let commit = repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[]).unwrap();
     std::fs::remove_file(root.path().join("alias.md")).unwrap();
-    checkout_snapshot(root.path(), &commit.to_string()).unwrap();
+    checkout_snapshot(root.path(), &commit.to_string(), None, None).unwrap();
     assert!(std::fs::symlink_metadata(root.path().join("alias.md")).unwrap().file_type().is_symlink());
     let session = BrowserSession::local(root.path().to_owned(), "Git".into()).unwrap();
     assert!(session.read("alias.md").unwrap().content.unwrap().contains("# Start"));
+}
+
+#[test]
+fn cancelled_snapshot_checkout_does_not_restore_files() {
+    let root = fixture();
+    let repo = git2::Repository::init(root.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_all(["*"], git2::IndexAddOption::DEFAULT, None).unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let signature = git2::Signature::now("Reader test", "reader@example.invalid").unwrap();
+    let commit = repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[]).unwrap();
+    std::fs::remove_file(root.path().join("SKILL.md")).unwrap();
+    let cancel = Arc::new(AtomicBool::new(true));
+    let result = checkout_snapshot(root.path(), &commit.to_string(), Some(&cancel), None);
+    assert!(matches!(result, Err(error) if error.kind == crate::core::error::ErrorKind::Cancelled));
+    assert!(!root.path().join("SKILL.md").exists());
+}
+
+#[test]
+fn snapshot_checkout_works_without_system_git() {
+    if std::env::var_os("SKILL_READER_GITLESS_PROBE").is_none() {
+        let empty_path = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "core::skill_browser::tests::snapshot_checkout_works_without_system_git", "--nocapture"])
+            .env("SKILL_READER_GITLESS_PROBE", "1").env("PATH", empty_path.path()).output().unwrap();
+        assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        return;
+    }
+    let root = fixture();
+    let repo = git2::Repository::init(root.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_all(["*"], git2::IndexAddOption::DEFAULT, None).unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let signature = git2::Signature::now("Reader test", "reader@example.invalid").unwrap();
+    let commit = repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[]).unwrap();
+    std::fs::remove_file(root.path().join("SKILL.md")).unwrap();
+    checkout_snapshot(root.path(), &commit.to_string(), None, None).unwrap();
+    assert!(std::fs::read_to_string(root.path().join("SKILL.md")).unwrap().contains("# Start"));
 }

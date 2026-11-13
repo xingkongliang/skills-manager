@@ -28,15 +28,27 @@ fn reader_io(error: std::io::Error) -> AppError {
 
 /// A fresh reader checkout must restore tracked links skipped by the install
 /// cache copier. Only call this on a temporary clone owned by the reader.
-pub fn checkout_snapshot(repo_dir: &Path, revision: &str) -> Result<(), AppError> {
-    let oid = git2::Oid::from_str(revision).map_err(AppError::git)?;
-    let status = super::git_command::git_command().arg("-C").arg(repo_dir)
-        .args(["checkout", "--force", "--detach", revision])
-        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
-    if status.map(|s| s.success()).unwrap_or(false) { return Ok(()); }
-    let repo = git2::Repository::open(repo_dir).map_err(AppError::git)?;
-    repo.set_head_detached(oid).map_err(AppError::git)?;
-    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force())).map_err(AppError::git)
+pub fn checkout_snapshot(repo_dir: &Path, revision: &str, cancel: Option<&Arc<AtomicBool>>, proxy: Option<&str>) -> Result<(), AppError> {
+    if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+        return Err(AppError::cancelled("reader.cancelled"));
+    }
+    match git_fetcher::run_git_watched_at(repo_dir, &["checkout", "--force", "--detach", revision], proxy, cancel, &None) {
+        Ok(()) => Ok(()),
+        Err(error) if error.chain().any(|cause| cause.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)) => {
+            // Gitless installations use a full git2 clone. Only a missing
+            // executable permits this local fallback; cancellation/timeouts do not.
+            let repo = git2::Repository::open(repo_dir).map_err(AppError::git)?;
+            let oid = git2::Oid::from_str(revision).map_err(AppError::git)?;
+            repo.set_head_detached(oid).map_err(AppError::git)?;
+            let mut checkout = git2::build::CheckoutBuilder::new();
+            checkout.force().notify_on(git2::CheckoutNotificationType::all())
+                .notify(|_, _, _, _, _| !cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)));
+            let result = repo.checkout_head(Some(&mut checkout));
+            if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) { return Err(AppError::cancelled("reader.cancelled")); }
+            result.map_err(AppError::git)
+        }
+        Err(error) => Err(AppError::classify_git_error(error)),
+    }
 }
 
 #[derive(Serialize)]

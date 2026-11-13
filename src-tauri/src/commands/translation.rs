@@ -58,5 +58,5 @@ pub async fn put_translation_cache(entries: Vec<CacheEntry>, epoch: u64, cache: 
 pub async fn clear_translation_cache(cache: State<'_, Arc<TranslationCache>>, transport: State<'_, Arc<TranslationTransport>>) -> Result<u64, AppError> {
     transport.cancel_all();
     let cache = cache.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || Ok(cache.clear())).await?
+    tauri::async_runtime::spawn_blocking(move || cache.clear()).await?
 }

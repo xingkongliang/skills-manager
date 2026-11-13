@@ -100,19 +100,29 @@ impl TranslationCache {
         }
         true
     }
-    pub fn clear(&self) -> u64 {
+    pub fn clear(&self) -> Result<u64, super::error::AppError> {
+        self.clear_at(&super::central_repo::cache_dir().join("translations.sqlite3"))
+    }
+    fn clear_at(&self, path: &std::path::Path) -> Result<u64, super::error::AppError> {
         let mut state = self.inner.lock().unwrap();
         state.epoch += 1;
         state.memory.clear();
         state.initialize();
         if let Some(db) = &state.db {
-            if db.execute("DELETE FROM translation_cache", []).is_err() {
-                state.db = None;
-                // Retire a corrupt cache instead of returning old rows next launch.
-                let _ = std::fs::remove_file(super::central_repo::cache_dir().join("translations.sqlite3"));
-            } else { let _ = db.execute_batch("PRAGMA incremental_vacuum;"); }
+            if db.execute("DELETE FROM translation_cache", []).is_ok() {
+                let _ = db.execute_batch("PRAGMA incremental_vacuum;");
+                return Ok(state.epoch);
+            }
         }
-        state.epoch
+        // A failed read/write may already have discarded the connection. The
+        // disk file still exists, and must be retired before reporting success.
+        state.db = None;
+        match std::fs::remove_file(path) {
+            Ok(()) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(_) => return Err(super::error::AppError::io("reader.cacheClearFailed")),
+        }
+        Ok(state.epoch)
     }
 }
 
@@ -128,9 +138,31 @@ mod tests {
         let entry = CacheEntry { cache_key: "key".into(), text: "译文".into(), target_language: "zh-CN".into() };
         assert!(cache.put(vec![entry.clone()], 0));
         assert_eq!(cache.get(&["key".into()]).entries.len(), 1);
-        cache.clear();
+        let directory = tempfile::tempdir().unwrap();
+        cache.clear_at(&directory.path().join("translations.sqlite3")).unwrap();
         assert!(!cache.put(vec![entry], 0));
         assert!(cache.get(&["key".into()]).entries.is_empty());
+    }
+    #[test]
+    fn clear_removes_persistent_rows_after_falling_back_to_memory() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("translations.sqlite3");
+        let db = Connection::open(&database).unwrap();
+        db.execute_batch("CREATE TABLE translation_cache(cache_key TEXT PRIMARY KEY,translated_text TEXT,target_language TEXT,last_accessed_at INTEGER,byte_size INTEGER)").unwrap();
+        let mut state = CacheState { db: Some(db), initialized: true, memory: HashMap::new(), epoch: 0 };
+        state.write(&[CacheEntry { cache_key: "key".into(), text: "old translation".into(), target_language: "en".into() }], 1).unwrap();
+        let lock = Connection::open(&database).unwrap();
+        lock.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        state.db.as_ref().unwrap().busy_timeout(std::time::Duration::ZERO).unwrap();
+        assert!(state.read(&["key".into()], 2).is_err());
+        state.db = None;
+        lock.execute_batch("ROLLBACK").unwrap();
+        drop(lock);
+        let cache = TranslationCache { inner: Mutex::new(state) };
+        cache.clear_at(&database).unwrap();
+        let reopened = Connection::open(&database).unwrap();
+        let rows = reopened.query_row("SELECT COUNT(*) FROM translation_cache", [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+        assert_eq!(rows, 0, "cleared translations must not reappear after reopening");
     }
     #[test]
     fn isolated_database_retains_entries_after_reopening() {

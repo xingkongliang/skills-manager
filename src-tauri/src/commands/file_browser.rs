@@ -55,10 +55,13 @@ pub async fn open_skill_browser(target: BrowserTarget, request_id: String, store
                         let source = super::skills::git_source_from_skill(&skill)?;
                         git_fetcher::validate_git_url(&source.clone_url).map_err(AppError::git)?;
                         let proxy = store.proxy_url();
-                        let revision = git_fetcher::resolve_remote_revision(&source.clone_url, source.branch.as_deref(), proxy.as_deref()).map_err(AppError::classify_git_error)?;
                         let temp = git_fetcher::clone_repo_ref_scoped(&source.clone_url, source.branch.as_deref(), source.subpath.as_deref(), Some(&cancel), proxy.as_deref(), None).map_err(AppError::classify_git_error)?;
                         let result = (|| {
-                            skill_browser::checkout_snapshot(&temp, &revision)?;
+                            // The clone already resolved the requested ref under
+                            // its timeout/cancel policy. Use the revision actually
+                            // fetched instead of starting a second remote query.
+                            let revision = git2::Repository::open(&temp).and_then(|repo| repo.head()?.peel_to_commit().map(|commit| commit.id().to_string())).map_err(AppError::git)?;
+                            skill_browser::checkout_snapshot(&temp, &revision, Some(&cancel), proxy.as_deref())?;
                             let root = super::skills::resolve_skill_dir(&temp, source.subpath.as_deref(), source.locator_skill_id.as_deref())?;
                             let root = root.canonicalize().map_err(AppError::io)?;
                             if !root.starts_with(temp.canonicalize().map_err(AppError::io)?) { return Err(AppError::invalid_input("reader.invalidPath")); }

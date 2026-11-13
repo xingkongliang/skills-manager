@@ -26,13 +26,18 @@ export function targetLanguage(locale: string): ReaderLanguage {
 // Inspect prose only; callers remove code, frontmatter and protected tokens.
 export function proseLanguage(text: string): string | null {
   const prose = text.replace(/⟦S\d+⟧/g, "");
+  if (!/\p{L}/u.test(prose)) return null;
+  if (/[\u3040-\u30ff]/.test(prose)) return "ja";
   const han = (prose.match(/[\u3400-\u9fff]/g) ?? []).length;
   const hangul = (prose.match(/[\uac00-\ud7af]/g) ?? []).length;
   const latin = (prose.match(/[a-zA-Záéíóúñü]/g) ?? []).length;
   if (hangul > 0 && hangul * 3 >= latin) return "ko";
   if (han > 0 && han * 3 >= latin) return "zh";
-  if (!latin) return null;
-  return /[¿¡ñ]|\b(el|los|las|para|una|del|que|archivo|utilizar)\b/i.test(prose) ? "es" : "en";
+  if (/[¿¡ñ]|\b(el|los|las|para|una|del|que|archivo|utilizar)\b/i.test(prose)) return "es";
+  // Unknown prose still needs translation. A Latin alphabet alone does not
+  // identify English (and other scripts must not be mistaken for empty text).
+  if (latin && /\b(the|this|these|that|with|your|you|read|reading|hello|please|before|after|and|is|are|of)\b/i.test(prose)) return "en";
+  return "und";
 }
 export function needsTranslation(text: string, target: string): boolean {
   const source = proseLanguage(text);

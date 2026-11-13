@@ -72,7 +72,7 @@ afterEach(async () => {
 });
 
 async function render(currentSkill = skill) {
-  await act(async () => root.render(<SkillDetailPanel skill={currentSkill} onClose={onClose} />));
+  await act(async () => root.render(<SkillDetailPanel {...{ skill: currentSkill, isActivePreset: false, onClose }} />));
 }
 async function click(label: string) {
   const button = [...document.querySelectorAll("button")].find((node) => node.textContent?.startsWith(label) || node.getAttribute("aria-label") === label);
@@ -226,6 +226,14 @@ describe("Independent skill reading", () => {
     expect(api.translateSkillBlocks).not.toHaveBeenCalled();
   });
 
+  it("translates foreign paragraphs inside a mostly matching-language document", async () => {
+    api.readSkillFile.mockResolvedValue({ relative_path: "SKILL.md", content_hash: "mixed", size_bytes: 60, mime: "text/markdown", kind: "markdown", content: "# 中文说明\n\n请阅读这篇很长的中文说明，了解如何使用这个功能。\n\nRead this.", base64: null, reason: null });
+    await render();
+    await openReader();
+    await translated();
+    expect(document.querySelector('[role="dialog"] [aria-pressed="true"]')?.textContent).toBe("reader.bilingual");
+  });
+
   it("reuses translated paragraphs when the bilingual reader is reopened", async () => {
     localStorage.setItem("reader_mode", "original");
     await render();
@@ -237,6 +245,31 @@ describe("Independent skill reading", () => {
     await openReader(true);
     await translated();
     expect(api.translateSkillBlocks).toHaveBeenCalledTimes(calls);
+  });
+
+  it("restores a bilingual reading position after cached translations add height", async () => {
+    api.listSkillDirectory.mockResolvedValue({ entries: [{ relative_path: "notes.txt", name: "notes.txt", kind: "file", size_bytes: 10, preview_kind: "text", accessible: true }], next_cursor: null, truncated: false });
+    const markdown = { relative_path: "SKILL.md", content_hash: "long", size_bytes: 80, mime: "text/markdown", kind: "markdown", content: "# Reading example\n\nRead this long document.", base64: null, reason: null };
+    api.readSkillFile.mockImplementation(async (_session: string, path: string) => path === "notes.txt" ? { ...markdown, relative_path: path, kind: "text", content: "Notes" } : markdown);
+    await render();
+    await openReader();
+    await translated();
+    const region = document.querySelector<HTMLElement>('[aria-label="reader.content"]')!;
+    let top = 0;
+    Object.defineProperty(region, "scrollTop", {
+      configurable: true, get: () => top,
+      set: (value: number) => { top = Math.min(value, region.querySelector(".reader-translation") ? 10000 : 5000); },
+    });
+    region.scrollTop = 9000;
+    await click("notes.txt");
+    let finishCache!: (value: unknown) => void;
+    api.getTranslationCache.mockImplementation(() => new Promise((resolve) => { finishCache = resolve; }));
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="reader.back"]')!.click());
+    await vi.waitFor(() => expect(finishCache).toBeDefined());
+    expect(region.scrollTop).toBe(5000);
+    await act(async () => finishCache({ epoch: 0, persistent: true, entries: [...cache.values()] }));
+    await translated();
+    await vi.waitFor(() => expect(region.scrollTop).toBe(9000));
   });
 
   it("translates only changed paragraphs after a document changes", async () => {

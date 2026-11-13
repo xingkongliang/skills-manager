@@ -15,7 +15,7 @@ import { useBilingualReading } from "../hooks/useBilingualReading";
 import { useReaderPreferences } from "../hooks/useReaderPreferences";
 import { SkillFileTree } from "./SkillFileTree";
 import { SkillReaderMarkdown } from "./SkillReaderMarkdown";
-import { needsTranslation, readerLanguages, type ReaderLanguage } from "../lib/readerLanguage";
+import { readerLanguages, type ReaderLanguage } from "../lib/readerLanguage";
 import { cn } from "../utils";
 
 export type ReaderMode = "original" | "bilingual";
@@ -58,7 +58,7 @@ function MarkdownReader({ file, sessionId, active, description, mode: selectedMo
   const { t } = useTranslation();
   const preferences = useReaderPreferences();
   const plan = useMemo(() => buildTranslationPlan(file.content ?? "", preferences.target), [file.content, preferences.target]);
-  const mode = selectedMode ?? (needsTranslation(plan.blocks.map((block) => block.request).join("\n"), preferences.target) ? "bilingual" : "original");
+  const mode = selectedMode ?? (plan.blocks.some((block) => !block.skipped && block.request) ? "bilingual" : "original");
   const bilingual = active && preferences.loaded && mode === "bilingual";
   const reading = useBilingualReading(sessionId, `${sessionId}:${file.relative_path}:${file.content_hash}`, plan, description, bilingual, preferences.target);
   useEffect(() => {
@@ -139,6 +139,25 @@ function BrowserContent({ toolbarStart, session, history, active, description, m
       if (heading) root.scrollTop += heading.getBoundingClientRect().top - root.getBoundingClientRect().top - 76;
     }
     lastLocation.current = location;
+    const savedTop = history.current?.scrollTop ?? 0;
+    if (location?.fragment || root.scrollTop >= savedTop) return;
+    // Cached translations and images arrive after the original document. Keep
+    // the saved offset until its height is available, unless the user moves.
+    const mutations = new MutationObserver(restore);
+    const resize = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(restore);
+    const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    function stop() {
+      mutations.disconnect(); resize?.disconnect();
+      events.forEach((event) => root.removeEventListener(event, stop));
+    }
+    function restore() {
+      root.scrollTop = savedTop;
+      if (root.scrollTop >= savedTop) stop();
+    }
+    mutations.observe(root, { childList: true, subtree: true });
+    Array.from(root.children).forEach((child) => resize?.observe(child));
+    events.forEach((event) => root.addEventListener(event, stop, { passive: true }));
+    return stop;
   }, [file, location, history]);
   useEffect(() => () => { navigation.current++; }, []);
 

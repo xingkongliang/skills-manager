@@ -17,4 +17,16 @@ describe("reader language selection", () => {
     expect(buildTranslationPlan("请阅读说明。", "en").blocks[0].skipped).toBe(false);
     expect(buildTranslationPlan("```sh\necho hello\n```", "zh-CN").blocks).toEqual([]);
   });
+  it.each([
+    ["Bonjour, veuillez lire ce document avant de commencer.", "en"],
+    ["Прочитайте этот документ перед началом работы.", "zh-CN"],
+    ["يرجى قراءة هذا المستند قبل البدء", "en"],
+    ["まずこちらをおよみください", "zh-CN"],
+    ["कृपया शुरू करने से पहले यह दस्तावेज़ पढ़ें", "en"],
+  ])("does not discard foreign prose: %s", (text, target) => {
+    expect(buildTranslationPlan(text, target).blocks[0].skipped).toBe(false);
+  });
+  it("leaves punctuation and numeric content alone", () => {
+    expect(needsTranslation("12345 — + = 😀", "en")).toBe(false);
+  });
 });
