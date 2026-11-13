@@ -2,7 +2,7 @@ import { createPortal } from "react-dom";
 import { useDragWindow } from "../hooks/useDragWindow";
 import { ReaderTranslationService } from "./ReaderTranslationService";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, ExternalLink, FolderOpen, Languages, Loader2, PanelLeft, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ExternalLink, FolderOpen, Languages, Loader2, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
@@ -94,17 +94,13 @@ function MarkdownReader({ file, sessionId, active, description, mode: selectedMo
 
 function BrowserContent({ toolbarStart, session, history, active, description, mode, onModeChange, reopening, reopen }: { toolbarStart?: ReactNode; session: api.SkillBrowserSession; history: ReaderHistory; active: boolean; description?: string; mode: ReaderMode | undefined; onModeChange(mode: ReaderMode): void; reopening: boolean; reopen(): void }) {
   const { t } = useTranslation();
-  const preferences = useReaderPreferences();
   const drag = useDragWindow();
   const [controlsHost, setControlsHost] = useState<HTMLDivElement | null>(null);
   const [statusHost, setStatusHost] = useState<HTMLDivElement | null>(null);
   const [location, setLocation] = useState(() => history.initial(session.default_path));
   const [preview, setPreview] = useState<{ path: string; file?: api.SkillFilePreview; error?: unknown }>({ path: "" });
   const [refresh, setRefresh] = useState(0);
-  const [treeOpen, setTreeOpen] = useState(false);
   const [revealDirectory, setRevealDirectory] = useState("");
-  const [narrow, setNarrow] = useState(() => window.innerWidth < 760);
-  const container = useRef<HTMLDivElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const path = location?.path ?? "";
   const file = preview.path === path ? preview.file : undefined;
@@ -112,12 +108,6 @@ function BrowserContent({ toolbarStart, session, history, active, description, m
   const navigation = useRef(0);
   const lastLocation = useRef<typeof location>(null);
   const firstRead = useRef(true);
-  useEffect(() => {
-    if (!container.current || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(([entry]) => setNarrow(entry.contentRect.width < 760));
-    observer.observe(container.current);
-    return () => observer.disconnect();
-  }, []);
   useEffect(() => {
     if (!path) return;
     let live = true;
@@ -156,7 +146,6 @@ function BrowserContent({ toolbarStart, session, history, active, description, m
     navigation.current++;
     history.saveScroll(scroll.current?.scrollTop ?? 0);
     setLocation(history.push(next, fragment));
-    setTreeOpen(false);
   };
   const move = (delta: number) => {
     navigation.current++;
@@ -172,7 +161,7 @@ function BrowserContent({ toolbarStart, session, history, active, description, m
     try {
       const link = await api.resolveSkillLink(session.session_id, path, href);
       if (navigation.current !== generation) return;
-      if (link.directory) { setRevealDirectory(link.relative_path); if (narrow) setTreeOpen(true); else preferences.setCollapsed(false); }
+      if (link.directory) { setRevealDirectory(link.relative_path); }
       else select(link.relative_path, link.fragment);
     } catch (e) { if (navigation.current === generation) report(e); }
   };
@@ -181,17 +170,13 @@ function BrowserContent({ toolbarStart, session, history, active, description, m
     // Reopening also renews an expired local session; history lives above it.
     reopen();
   };
-  const showTree = narrow ? treeOpen : !preferences.collapsed;
-  return <div ref={container} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-bg-secondary">
+  return <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-bg-secondary">
     <div onMouseDown={(event) => { if (!(event.target as HTMLElement).closest("button, select, input, a")) drag(event); }} className="flex h-8 min-w-0 shrink-0 items-center gap-1 border-b border-border-subtle px-2">
       {toolbarStart}
-      <button type="button" onClick={() => narrow ? setTreeOpen(!treeOpen) : preferences.setCollapsed(!preferences.collapsed)} className={buttonClass} aria-label={t("reader.files")} aria-expanded={showTree}><PanelLeft className="h-4 w-4" />{t("reader.files")}</button>
       <span title={path} className="min-w-0 flex-1 truncate px-2 font-mono text-[12px] text-secondary">{path || t("reader.selectFile")}</span>
     </div>
     <div className="relative flex min-h-0 min-w-0 flex-1">
-      {narrow && treeOpen && <button type="button" className="absolute inset-0 z-20 bg-black/30" onClick={() => setTreeOpen(false)} aria-label={t("reader.closeFiles")} />}
-      <aside className={cn("flex w-[280px] max-w-[85%] min-h-0 shrink-0 flex-col border-r border-border-subtle bg-bg-secondary", !showTree && "hidden", narrow && "absolute inset-y-0 left-0 z-30 shadow-card-hover")}>
-        {narrow && <button type="button" onClick={() => setTreeOpen(false)} className={buttonClass} aria-label={t("reader.closeFiles")}><X className="h-3.5 w-3.5" />{t("reader.files")}</button>}
+      <aside className="flex w-[280px] max-w-[45%] min-h-0 shrink-0 flex-col border-r border-border-subtle bg-bg-secondary">
         <section aria-label={t("reader.translationSection")} className="max-h-[65%] shrink-0 overflow-y-auto overscroll-contain border-b border-border-subtle">
           <h3 className="px-3 pt-3 text-[13px] font-semibold text-primary">{t("reader.translationSection")}</h3>
           <div ref={setControlsHost} />

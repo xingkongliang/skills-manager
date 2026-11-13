@@ -213,7 +213,7 @@ describe("Independent skill reading", () => {
     const filePath = document.querySelector('[role="dialog"] span[title="SKILL.md"]')!;
     await act(async () => filePath.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, buttons: 1, detail: 1 })));
     expect(startDragging).toHaveBeenCalledTimes(1);
-    const button = document.querySelector('[aria-label="reader.files"]')!;
+    const button = document.querySelector('[aria-label="reader.backToDetails"]')!;
     await act(async () => button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, buttons: 1, detail: 1 })));
     expect(startDragging).toHaveBeenCalledTimes(1);
   });

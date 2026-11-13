@@ -27,8 +27,12 @@ pub struct TranslationResponse {
     pub retry_after_ms: Option<u64>,
 }
 
+pub fn is_supported_target(target: &str) -> bool {
+    matches!(target, "zh-CN" | "zh-TW" | "en" | "ja" | "ko" | "fr" | "de" | "es" | "pt" | "it" | "ru" | "uk" | "vi" | "th" | "id" | "ms" | "ar" | "hi")
+}
+
 pub fn validate_batch(texts: &[String], target: &str) -> Result<(), AppError> {
-    if !matches!(target, "zh-CN" | "zh-TW" | "en" | "es" | "ko") || texts.is_empty() || texts.len() > 20
+    if !is_supported_target(target) || texts.is_empty() || texts.len() > 20
         || texts.iter().map(|s| s.encode_utf16().count()).sum::<usize>() > 3500 {
         return Err(AppError::invalid_input("reader.translationInvalidRequest"));
     }

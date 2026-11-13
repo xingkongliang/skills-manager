@@ -1,4 +1,23 @@
-export const readerLanguages = { "zh-CN": "简体中文", "zh-TW": "繁體中文", en: "English", es: "Español", ko: "한국어" } as const;
+export const readerLanguages = {
+  "zh-CN": "简体中文",
+  "zh-TW": "繁體中文",
+  en: "English",
+  ja: "日本語",
+  ko: "한국어",
+  fr: "Français",
+  de: "Deutsch",
+  es: "Español",
+  pt: "Português",
+  it: "Italiano",
+  ru: "Русский",
+  uk: "Українська",
+  vi: "Tiếng Việt",
+  th: "ไทย",
+  id: "Bahasa Indonesia",
+  ms: "Bahasa Melayu",
+  ar: "العربية",
+  hi: "हिन्दी",
+} as const;
 export type ReaderLanguage = keyof typeof readerLanguages;
 export function targetLanguage(locale: string): ReaderLanguage {
   if (/^zh/i.test(locale)) return /hant|tw|hk|mo/i.test(locale) ? "zh-TW" : "zh-CN";
