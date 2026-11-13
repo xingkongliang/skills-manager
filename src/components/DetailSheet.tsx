@@ -15,8 +15,8 @@ interface DetailSheetProps {
   meta?: ReactNode;
   /** Header controls, left of the close button. */
   actions?: ReactNode;
-  /** Identity block left of the title. */
-  leading?: ReactNode;
+  /** Drawn in a 36px identity block left of the title; the lines below align with the title. */
+  icon?: ReactNode;
   /** One short line under the title. */
   subtitle?: ReactNode;
   /** Right column; omitted means a single column. */
@@ -32,7 +32,7 @@ export function DetailSheet({
   description,
   meta,
   actions,
-  leading,
+  icon,
   subtitle,
   aside,
   onClose,
@@ -75,10 +75,16 @@ export function DetailSheet({
         }
         onClick={onClose}
       />
-      <div className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary">
+      {/* Dark mode drops to the page background, as the library grid does:
+          bg-secondary sits too close to surface there for the panels to read. */}
+      <div className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary dark:bg-background">
         <header className="shrink-0 border-b border-border-subtle bg-surface px-6 pt-4 pb-3.5">
           <div className="flex min-w-0 items-center gap-3">
-            {leading}
+            {icon ? (
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border-subtle bg-bg-secondary text-muted">
+                {icon}
+              </span>
+            ) : null}
             <div className="min-w-0 flex-1">
               <h2 className="app-page-title truncate">{title}</h2>
               {subtitle ? <div className="truncate text-[12px] text-muted">{subtitle}</div> : null}
@@ -94,8 +100,12 @@ export function DetailSheet({
               </button>
             </div>
           </div>
-          {description ? <SheetDescription text={description} /> : null}
-          {meta ? <div className="mt-2.5">{meta}</div> : null}
+          {/* With an identity block, the description and meta start under the
+              title text (36px block + 12px gap), not under the block. */}
+          <div className={icon ? "pl-12" : undefined}>
+            {description ? <SheetDescription text={description} /> : null}
+            {meta ? <div className="mt-2.5">{meta}</div> : null}
+          </div>
         </header>
         <div className="flex min-h-0 flex-1">
           <div className="min-w-0 flex-1 overflow-y-auto px-6 pt-4 pb-6 scrollbar-hide">

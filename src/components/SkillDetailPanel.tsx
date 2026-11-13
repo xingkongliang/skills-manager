@@ -471,11 +471,7 @@ function SkillDetailPanelContent({
     <DetailSheet
       open={true}
       title={skill.name}
-      leading={
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border-subtle bg-bg-secondary text-muted">
-          {sourceIcon(skill.source_type, "h-[18px] w-[18px]")}
-        </span>
-      }
+      icon={sourceIcon(skill.source_type, "h-[18px] w-[18px]")}
       subtitle={sourceShort ? `${sourceType} · ${sourceShort}` : sourceType}
       description={skill.description}
       meta={meta}
@@ -568,18 +564,8 @@ function SourceDetails({
 
   // Label left, value right-aligned and truncated with the full value in its
   // title. Only branch, subpath and revision are code, so only they are mono.
-  const rows: { label: string; value: ReactNode; title?: string; mono?: boolean }[] = [
-    {
-      label: t("mySkills.sourceType"),
-      value: (
-        <span className="inline-flex items-center gap-1.5">
-          {sourceIcon(skill.source_type, "h-3 w-3 text-muted")}
-          {sourceTypeLabel(skill.source_type)}
-        </span>
-      ),
-      title: sourceTypeLabel(skill.source_type),
-    },
-  ];
+  // The source type is in the header's summary line, so it is not repeated here.
+  const rows: { label: string; value: ReactNode; title?: string; mono?: boolean }[] = [];
   if (ref) {
     rows.push({
       label: t("mySkills.detail.location"),

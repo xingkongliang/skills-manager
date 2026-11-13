@@ -883,8 +883,6 @@
     "toastRemovedFromProject": "已从 {{project}} 移除“{{skill}}”",
     "removeConfirmTitle": "从工作区移除",
     "removeConfirm": "从 {{project}}（{{agent}}）永久删除“{{skill}}”文件夹？此操作无法撤销。",
-    "add": "添加",
-    "installedShort": "已添加",
     "projectsTitle": "项目工作区",
     "projectsSummary": "{{installed}} / {{total}} 已添加",
     "errors": {
@@ -901,7 +899,8 @@
       "conflict": "请先重命名库中的 Skill",
       "unavailable": "请先选择目标 Agent"
     },
-    "addToProject": "添加到项目…"
+    "addToProject": "添加到项目…",
+    "addToAgent": "添加到 {{agent}}"
   },
   "preset": {
     "create": "新建 Preset",

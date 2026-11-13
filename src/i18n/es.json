@@ -818,7 +818,6 @@
     "collapse": "Contraer"
   },
   "addFromLibrary": {
-    "add": "Añadir",
     "changeTarget": "Cambiar destino",
     "clearTargets": "Limpiar",
     "ctaEmpty": "Elige skills para añadir a {{agent}}",
@@ -832,7 +831,6 @@
     "errors": {
       "noTarget": "Selecciona al menos un agente de destino"
     },
-    "installedShort": "Añadida",
     "noTargetSelected": "sin destino",
     "projectsSummary": "{{installed}} / {{total}} instaladas",
     "projectsTitle": "Espacios de trabajo de proyecto",

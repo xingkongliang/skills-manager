@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, CheckCircle2, FolderOpen, Loader2, Plus } from "lucide-react";
+import { FolderOpen, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import * as api from "../lib/tauri";
@@ -219,52 +219,44 @@ export function SkillProjectsSection({ skill, projects, onChanged }: Props) {
         })}
       </div>
       {visibleProjects.length > 0 ? (
-        <div className="mt-2.5 space-y-2.5">
+        <div className="mt-2">
           {visibleProjects.map((project) => {
             const row = rows[project.id];
             const activeTargets = row?.targets.filter((target) => target.installed && target.enabled) ?? [];
             return (
-              <div key={project.id} className="min-w-0 text-[13px]">
-                <div className="flex min-w-0 items-center gap-2">
-                  <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted" />
-                  <span className="min-w-0 flex-1 truncate text-secondary" title={project.name}>
-                    {project.name}
+              <div key={project.id} className="flex h-8 min-w-0 items-center gap-2 text-[13px]">
+                <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted" />
+                <span className="min-w-0 flex-1 truncate text-secondary" title={project.name}>
+                  {project.name}
+                </span>
+                {!row || row.state === "loading" ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-faint" />
+                ) : row.state === "error" ? (
+                  <span className="shrink-0 text-[12px] text-danger" title={row.error || t("common.error")}>
+                    {t("common.error")}
                   </span>
-                  {!row || row.state === "loading" ? (
-                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-faint" />
-                  ) : row.state === "error" ? (
-                    <span
-                      className="shrink-0 text-[12px] text-danger"
-                      title={row.error || t("common.error")}
-                    >
-                      {t("common.error")}
-                    </span>
-                  ) : null}
-                </div>
-                {row && row.state !== "loading" && row.state !== "error" && (
-                  <div className="mt-1 flex min-w-0 flex-wrap gap-1 pl-5">
-                    {activeTargets.length === 0 ? (
-                      <span className="text-[12px] text-muted">{t("addFromLibrary.status.unavailable")}</span>
-                    ) : activeTargets.map((target) => {
+                ) : activeTargets.length === 0 ? (
+                  <span className="shrink-0 text-[12px] text-muted">{t("addFromLibrary.status.unavailable")}</span>
+                ) : (
+                  // Same language as the card's agent dots: opaque = added,
+                  // faded = not added, click to change.
+                  <div className="flex shrink-0 items-center">
+                    {activeTargets.map((target) => {
                       const agentState = getAgentState(row, target);
                       const agentPending = pendingKey === `${project.id}:${target.key}`;
-                      const label =
-                        agentState === "installed"
-                          ? t("addFromLibrary.installedShort")
-                          : agentState === "conflict"
-                            ? t("addFromLibrary.status.conflict")
-                            : t("addFromLibrary.add");
                       const title =
                         agentState === "conflict"
-                          ? t("addFromLibrary.tooltip.conflict")
+                          ? `${target.display_name} · ${t("addFromLibrary.tooltip.conflict")}`
                           : agentState === "installed"
-                            ? t("addFromLibrary.tooltip.remove")
-                          : target.display_name;
+                            ? `${target.display_name} · ${t("addFromLibrary.tooltip.remove")}`
+                            : t("addFromLibrary.addToAgent", { agent: target.display_name });
+                      const clickable = agentState === "available" || agentState === "installed";
                       return (
                         <button
                           key={target.key}
                           type="button"
                           title={title}
+                          aria-label={title}
                           onClick={() => {
                             if (agentState === "installed") {
                               setRemoveTarget({ project, target });
@@ -272,29 +264,22 @@ export function SkillProjectsSection({ skill, projects, onChanged }: Props) {
                               void handleAdd(project, target);
                             }
                           }}
-                          disabled={(agentState !== "available" && agentState !== "installed") || agentPending}
-                          className={cn(
-                            "inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[12px] font-semibold transition-colors disabled:cursor-default",
-                            agentState === "available" && "text-accent-light hover:bg-accent-bg",
-                            agentState === "installed" && "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/15 dark:text-emerald-400",
-                            agentState === "conflict" && "bg-rose-500/10 text-rose-600 dark:text-rose-400",
-                          )}
+                          disabled={!clickable || agentPending}
+                          className="flex h-6 w-6 items-center justify-center rounded-md transition-colors disabled:cursor-default enabled:hover:bg-surface-hover"
                         >
-                          <AgentIcon
-                            agentKey={target.key}
-                            displayName={target.display_name}
-                            className="h-3.5 w-3.5 rounded-[4px]"
-                          />
                           {agentPending ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : agentState === "installed" ? (
-                            <CheckCircle2 className="h-3 w-3" />
-                          ) : agentState === "conflict" ? (
-                            <AlertTriangle className="h-3 w-3" />
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
                           ) : (
-                            <Plus className="h-3 w-3" />
+                            <AgentIcon
+                              agentKey={target.key}
+                              displayName={target.display_name}
+                              className={cn(
+                                "h-[18px] w-[18px] rounded-[4px]",
+                                agentState === "available" && "opacity-45",
+                                agentState === "conflict" && "ring-1 ring-danger",
+                              )}
+                            />
                           )}
-                          <span>{label}</span>
                         </button>
                       );
                     })}

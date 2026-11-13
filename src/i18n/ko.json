@@ -840,8 +840,6 @@
     "toastFailed": "스킬 {{count}}개를 추가하지 못했습니다",
     "toastAddedToProject": "\"{{skill}}\" 스킬을 {{project}}에 추가했습니다",
     "toastRemovedFromProject": "\"{{skill}}\" 스킬을 {{project}}에서 뺐습니다",
-    "add": "추가",
-    "installedShort": "추가됨",
     "projectsTitle": "프로젝트 워크스페이스",
     "projectsSummary": "{{total}}개 중 {{installed}}개 설치됨",
     "errors": {

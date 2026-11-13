@@ -44,7 +44,7 @@ import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import { enabledInstalledAgentKeys, getDefaultExportAgents } from "../lib/exportAgents";
-import { cn } from "../utils";
+import { cn, compactHomePath } from "../utils";
 import * as api from "../lib/tauri";
 import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
@@ -1722,33 +1722,23 @@ function ProjectSkillDetailPanel({
             : null,
     };
   });
-  const meta = (
-    <>
-      {skill.tags.length > 0 && (
-        <div className="mb-2 flex flex-wrap items-center gap-1">
-          {skill.tags.map((tag) => (
-            <span
-              key={tag}
-              className="inline-flex items-center rounded-full bg-surface-hover px-2 py-0.5 text-[11px] font-medium text-secondary"
-            >
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="flex items-center gap-4 text-[12px] text-muted">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-          <span className="font-mono truncate" title={skill.primaryVariant.path}>{skill.primaryVariant.path}</span>
-        </div>
-        {skill.files.length > 0 && (
-          <div className="flex shrink-0 items-center gap-1.5">
-            <FileText className="h-3.5 w-3.5" />
-            {skill.files.join(", ")}
-          </div>
-        )}
-      </div>
-    </>
+  const meta = skill.tags.length > 0 ? (
+    <div className="flex flex-wrap items-center gap-1">
+      {skill.tags.map((tag) => (
+        <span
+          key={tag}
+          className="inline-flex items-center rounded-full bg-surface-hover px-2 py-0.5 text-[11px] font-medium text-secondary"
+        >
+          {tag}
+        </span>
+      ))}
+    </div>
+  ) : null;
+  const subtitle = (
+    <span title={skill.primaryVariant.path}>
+      <span className="font-mono">{compactHomePath(skill.primaryVariant.path)}</span>
+      {skill.files.length > 0 && <> · {skill.files.join(", ")}</>}
+    </span>
   );
 
   const aside = (
@@ -1768,6 +1758,8 @@ function ProjectSkillDetailPanel({
     <DetailSheet
       open={true}
       title={skill.name}
+      icon={<FolderOpen className="h-[18px] w-[18px]" />}
+      subtitle={subtitle}
       description={skill.description}
       meta={meta}
       aside={aside}

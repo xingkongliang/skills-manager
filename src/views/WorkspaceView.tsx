@@ -19,6 +19,7 @@ import {
   Upload,
   CloudOff,
   FileQuestion,
+  FolderOpen,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -1171,17 +1172,19 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       <DetailSheet
         open={!!localDetailSkill}
         title={localDetailSkill?.name ?? ""}
+        icon={<FolderOpen className="h-[18px] w-[18px]" />}
+        subtitle={
+          // The folder is usually named after the skill; repeating the title says nothing.
+          localDetailSkill && localDetailSkill.relative_path !== localDetailSkill.name ? (
+            <span className="font-mono">{localDetailSkill.relative_path}</span>
+          ) : null
+        }
         description={localDetailSkill?.description}
         meta={
           localDetailSkill ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={cn("rounded-full px-2.5 py-1 text-[12px] font-medium", getLocalStatusMeta(t, localDetailSkill.sync_status).className)}>
-                {getLocalStatusMeta(t, localDetailSkill.sync_status).label}
-              </span>
-              <span className="rounded-full bg-surface-hover px-2.5 py-1 text-[12px] text-muted">
-                {localDetailSkill.relative_path}
-              </span>
-            </div>
+            <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium", getLocalStatusMeta(t, localDetailSkill.sync_status).className)}>
+              {getLocalStatusMeta(t, localDetailSkill.sync_status).label}
+            </span>
           ) : null
         }
         onClose={() => setLocalDetailSkill(null)}

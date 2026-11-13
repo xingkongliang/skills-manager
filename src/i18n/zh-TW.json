@@ -849,8 +849,6 @@
     "toastRemovedFromProject": "已從 {{project}} 移除「{{skill}}」",
     "removeConfirmTitle": "從工作區移除",
     "removeConfirm": "從 {{project}}（{{agent}}）永久刪除「{{skill}}」資料夾？此操作無法復原。",
-    "add": "新增",
-    "installedShort": "已新增",
     "projectsTitle": "專案工作區",
     "projectsSummary": "{{installed}} / {{total}} 已新增",
     "errors": {
