@@ -122,7 +122,7 @@ fn read_workspace_skills(
 }
 
 /// Resolve the enabled and disabled skills root directories for a given agent in a workspace.
-fn resolve_agent_skills_roots(
+pub(crate) fn resolve_agent_skills_roots(
     store: &SkillStore,
     rec: &ProjectRecord,
     agent: &str,

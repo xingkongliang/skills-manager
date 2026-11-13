@@ -17,6 +17,7 @@ tauri-build = { version = "2.5.4", features = [] }
 
 [dependencies]
 serde_json = "1.0"
+base64 = "0.22"
 # Canonical paths without the Windows verbatim prefix where that is safe.
 dunce = "1.0.5"
 serde = { version = "1.0", features = ["derive"] }
@@ -60,3 +61,6 @@ clap = { version = "4.5", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 junction = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -1,4 +1,6 @@
 pub mod agent_workspace;
+pub mod file_browser;
+pub mod translation;
 pub mod browse;
 pub mod git_backup;
 pub mod projects;

@@ -28,6 +28,7 @@ import { PresetBar } from "../components/PresetBar";
 import { AgentIcon } from "../components/AgentIcon";
 import { DetailSheet } from "../components/DetailSheet";
 import { SkillMarkdown } from "../components/SkillMarkdown";
+import { SkillReaderEntry } from "../components/SkillReaderEntry";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectSkill } from "../lib/tauri";
@@ -1182,8 +1183,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         }
         onClose={() => setLocalDetailSkill(null)}
       >
+      <div className="mb-4 flex items-start justify-between gap-3">
         {localDetailSkill?.center_skill_id && (
-          <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             {(["local", "diff", "center"] as const).map((tab) => (
               <button
                 key={tab}
@@ -1206,6 +1208,20 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             ))}
           </div>
         )}
+
+        {localDetailSkill && currentTool && localContentTab !== "diff" && (
+          <div className="ml-auto shrink-0">
+            <SkillReaderEntry
+              target={localContentTab === "center" && localDetailSkill.center_skill_id
+                ? { kind: "managed", skill_id: localDetailSkill.center_skill_id, origin: "local" }
+                : { kind: "global", agent: currentTool.key, skill_relative_path: localDetailSkill.relative_path }}
+              title={localDetailSkill.name}
+              description={localDetailSkill.description ?? undefined}
+            />
+          </div>
+        )}
+
+      </div>
 
         {localDocLoading ? (
           <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>

@@ -37,6 +37,7 @@ import { ToggleSwitch } from "../components/ToggleSwitch";
 import { ProjectAgentDots } from "../components/ProjectAgentDots";
 import { PresetBar } from "../components/PresetBar";
 import { SkillMarkdown } from "../components/SkillMarkdown";
+import { SkillReaderEntry } from "../components/SkillReaderEntry";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import { enabledInstalledAgentKeys, getDefaultExportAgents } from "../lib/exportAgents";
@@ -1598,6 +1599,7 @@ export function ProjectDetail() {
       {/* Skill Document Detail Panel */}
       {detailSkill && project && (
         <ProjectSkillDetailPanel
+          projectId={project.id}
           skill={detailSkill}
           targets={exportTargets}
           togglingAgent={
@@ -1689,6 +1691,7 @@ export function ProjectDetail() {
 
 function ProjectSkillDetailPanel({
   skill,
+  projectId,
   targets,
   togglingAgent,
   onToggleAgent,
@@ -1699,6 +1702,7 @@ function ProjectSkillDetailPanel({
   onClose,
 }: {
   skill: ProjectSkillGroup;
+  projectId: string;
   targets: ProjectAgentTarget[];
   togglingAgent: string | null;
   onToggleAgent: (agentKey: string, enabled: boolean) => void;
@@ -1788,8 +1792,9 @@ function ProjectSkillDetailPanel({
         className="mb-4"
       />
 
+      <div className="mb-4 flex items-start justify-between gap-3">
       {supportsCenterDiff && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {(["local", "diff", "center"] as const).map((tab) => (
             <button
               key={tab}
@@ -1812,6 +1817,20 @@ function ProjectSkillDetailPanel({
           ))}
         </div>
       )}
+
+      {contentTab !== "diff" && (
+        <div className="ml-auto shrink-0">
+          <SkillReaderEntry
+            target={contentTab === "center" && skill.centerSkillIds[0]
+              ? { kind: "managed", skill_id: skill.centerSkillIds[0], origin: "local" }
+              : { kind: "project", project_id: projectId, agent: skill.primaryVariant.agent, skill_relative_path: skill.primaryVariant.relative_path }}
+            title={skill.name}
+            description={skill.description ?? undefined}
+          />
+        </div>
+      )}
+
+      </div>
 
       {docLoading ? (
         <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
