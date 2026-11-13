@@ -570,7 +570,11 @@ function SourceDetails({
           isUrl ? (
             <button
               type="button"
-              onClick={() => { openUrl(ref).catch(() => {}); }}
+              onClick={() => {
+                openUrl(ref).catch((error: unknown) => {
+                  toast.error(getErrorMessage(error, t("common.error")));
+                });
+              }}
               className="mt-1 block max-w-full truncate text-left font-mono text-accent-light hover:underline"
               title={ref}
             >
