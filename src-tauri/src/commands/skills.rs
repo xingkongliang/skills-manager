@@ -531,7 +531,16 @@ fn read_skill_file_in(dir: &Path, relative_path: &str) -> Result<SkillFileConten
         .into_iter()
         .find(|entry| entry.relative_path == relative_path)
         .ok_or_else(|| AppError::not_found(format!("File not found in skill: {relative_path}")))?;
-    let (kind, text) = classify_diff_bytes(std::fs::read(&entry.path).ok());
+    // Judge the size before reading, so a large model or archive in the skill
+    // is not pulled into memory just to be reported as too large.
+    let too_large = std::fs::metadata(&entry.path)
+        .map(|m| m.len() > MAX_DIFF_FILE_BYTES as u64)
+        .unwrap_or(false);
+    let (kind, text) = if too_large {
+        ("too_large", None)
+    } else {
+        classify_diff_bytes(std::fs::read(&entry.path).ok())
+    };
     Ok(SkillFileContentDto {
         relative_path: entry.relative_path,
         content_kind: kind.into(),
