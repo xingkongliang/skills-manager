@@ -4,8 +4,9 @@ import { ArrowLeft, BookOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { SkillBrowserTarget } from "../lib/tauri";
 import { IS_MACOS } from "../lib/platform";
+import { useDragWindow } from "../hooks/useDragWindow";
 import { cn } from "../utils";
-import type { ReaderMode } from "./SkillFileBrowser";
+
 
 const SkillFileBrowser = lazy(() => import("./SkillFileBrowser").then((module) => ({ default: module.SkillFileBrowser })));
 
@@ -30,17 +31,17 @@ function ReaderEntry(props: Props) {
       className="inline-flex items-center gap-1.5 rounded-lg border border-border-subtle px-3 py-1.5 text-[12px] text-secondary transition-colors hover:bg-surface-hover">
       <BookOpen className="h-3.5 w-3.5" />{t("reader.read")}
     </button>
-    {trigger && <ReaderView {...props} initialMode="original" trigger={trigger} onClose={close} />}
+    {trigger && <ReaderView {...props} trigger={trigger} onClose={close} />}
   </>;
 }
 
-function ReaderView({ target, title, description, initialMode, trigger, onClose }: Props & {
-  initialMode: ReaderMode;
+function ReaderView({ target, title, description, trigger, onClose }: Props & {
   trigger: HTMLButtonElement;
   onClose(): void;
 }) {
   const { t } = useTranslation();
   const titleId = useId();
+  const drag = useDragWindow();
   const panel = useRef<HTMLDivElement>(null);
   const back = useRef<HTMLButtonElement>(null);
 
@@ -53,7 +54,7 @@ function ReaderView({ target, title, description, initialMode, trigger, onClose 
       .filter((node): node is HTMLElement => node instanceof HTMLElement && !node.contains(view))
       .map((node) => ({ node, inert: node.inert }));
     background.forEach(({ node }) => { node.inert = true; });
-    back.current?.focus({ preventScroll: true });
+    view.focus({ preventScroll: true });
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;
@@ -66,10 +67,11 @@ function ReaderView({ target, title, description, initialMode, trigger, onClose 
         onClose();
       } else if (event.key === "Tab") {
         const controls = Array.from(view.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), a[href], select:not(:disabled), [tabindex="0"]',
+          'button:not(:disabled), input:not(:disabled), a[href], select:not(:disabled), [tabindex="0"]',
         ));
-        const first = controls[0];
-        const last = controls.at(-1);
+        const visibleControls = controls.filter((node) => !node.closest(".hidden"));
+        const first = visibleControls[0];
+        const last = visibleControls.at(-1);
         if (event.shiftKey && document.activeElement === first) {
           event.preventDefault(); last?.focus();
         } else if (!event.shiftKey && document.activeElement === last) {
@@ -87,16 +89,11 @@ function ReaderView({ target, title, description, initialMode, trigger, onClose 
 
   return createPortal(
     <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId}
-      className={cn("fixed inset-x-0 bottom-0 z-[45] flex min-h-0 min-w-0 flex-col overflow-hidden overscroll-none bg-bg-secondary", IS_MACOS ? "top-[28px]" : "top-0")}>
-      <header className="flex shrink-0 items-center gap-4 border-b border-border-subtle px-5 py-3">
-        <button ref={back} type="button" onClick={onClose}
-          className="inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-[13px] text-secondary transition-colors hover:bg-surface-hover">
-          <ArrowLeft className="h-4 w-4" />{t("reader.backToDetails")}
-        </button>
-        <h2 id={titleId} title={title} className="min-w-0 truncate text-[17px] font-semibold text-primary">{title}</h2>
-      </header>
+      tabIndex={-1} className={cn("fixed inset-0 z-[45] flex min-h-0 min-w-0 flex-col overflow-hidden overscroll-none bg-bg-secondary outline-none", IS_MACOS && "pt-[28px]")}>
+      {IS_MACOS && <div aria-hidden="true" onMouseDown={drag} className="absolute inset-x-0 top-0 h-[28px]" />}
+      <h2 id={titleId} className="sr-only">{title}</h2>
       <Suspense fallback={<div className="p-6 text-[13px] text-muted">{t("common.loading")}</div>}>
-        <SkillFileBrowser target={target} description={description} initialMode={initialMode} />
+        <SkillFileBrowser target={target} description={description} toolbarStart={<button ref={back} type="button" onClick={onClose} title={t("reader.backToDetails")} aria-label={t("reader.backToDetails")} className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1.5 text-[12px] text-secondary hover:bg-surface-hover"><ArrowLeft className="h-4 w-4" /><span className="sr-only">{t("reader.backToDetails")}</span></button>} />
       </Suspense>
     </div>,
     document.body,

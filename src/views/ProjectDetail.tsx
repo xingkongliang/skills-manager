@@ -1789,8 +1789,9 @@ function ProjectSkillDetailPanel({
         className="mb-4"
       />
 
+      <div className="mb-4 flex items-start justify-between gap-3">
       {supportsCenterDiff && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {(["local", "diff", "center"] as const).map((tab) => (
             <button
               key={tab}
@@ -1815,7 +1816,7 @@ function ProjectSkillDetailPanel({
       )}
 
       {contentTab !== "diff" && (
-        <div className="mb-4">
+        <div className="ml-auto shrink-0">
           <SkillReaderEntry
             target={contentTab === "center" && skill.centerSkillIds[0]
               ? { kind: "managed", skill_id: skill.centerSkillIds[0], origin: "local" }
@@ -1825,6 +1826,8 @@ function ProjectSkillDetailPanel({
           />
         </div>
       )}
+
+      </div>
 
       {docLoading ? (
         <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>

@@ -1232,6 +1232,12 @@
     "translationCliMissing": "未找到 CLI，请安装或在「Skill 阅读」设置中填写完整路径。",
     "translationCliFailed": "CLI 翻译失败，请在终端检查登录状态、模型和 CLI 版本。",
     "translationTimeout": "翻译超时，请重试或在设置中延长请求超时。",
-    "translationApiRejected": "API 拒绝了请求，请检查地址、模型 ID 以及是否支持 Chat Completions。"
+    "translationApiRejected": "API 拒绝了请求，请检查地址、模型 ID 以及是否支持 Chat Completions。",
+    "defaultModel": "CLI 默认模型",
+    "translating": "翻译中 {{done}} / {{total}}",
+    "translationDone": "翻译完成 {{done}} / {{total}}",
+    "translationPaused": "翻译已暂停",
+    "translationFailed": "部分翻译失败 · {{done}} / {{total}}",
+    "translationSection": "阅读与翻译"
   }
 }

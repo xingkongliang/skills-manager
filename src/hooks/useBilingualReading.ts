@@ -11,9 +11,9 @@ export function useBilingualReading(sessionId: string, identity: string, plan: T
   const [state, setState] = useState<{ identity: string; results: Record<string, BlockResult>; memory: boolean; paused?: boolean }>({ identity: "", results: {}, memory: false });
   const visible = useRef(new Set<string>());
   const allBlocks = useMemo(() => [
-    ...buildTranslationPlan(description ?? "").blocks.map((b) => ({ ...b, id: `description:${b.id}` })),
+    ...buildTranslationPlan(description ?? "", target).blocks.map((b) => ({ ...b, id: `description:${b.id}` })),
     ...plan.blocks,
-  ], [plan, description]);
+  ], [plan, description, target]);
   const blocks = useMemo(() => {
     let count = 0; let characters = 0;
     return allBlocks.filter((b) => {
@@ -49,7 +49,8 @@ export function useBilingualReading(sessionId: string, identity: string, plan: T
   const translations = Object.fromEntries(Object.entries(results).filter(([, result]) => result.text).map(([id, result]) => [id, result.text!]));
   const complete = Object.values(results).filter((r) => r.text).length;
   const failed = Object.values(results).filter((r) => r.status === "error");
-  return { translations, complete, total: blocks.length, failed: failed.length, error: failed[0]?.error, memory: state.memory, paused: state.identity === stateKey && state.paused,
+  const busy = enabled && !(state.identity === stateKey && state.paused) && complete + failed.length < blocks.length;
+  return { busy, translations, complete, total: blocks.length, failed: failed.length, error: failed[0]?.error, memory: state.memory, paused: state.identity === stateKey && state.paused,
     descriptionTranslation: Object.entries(translations).filter(([id]) => id.startsWith("description:")).map(([, text]) => text).join("\n"),
     hasMore: allBlocks.filter((b) => !b.skipped).length > blocks.length,
     retry: () => setAttempt((n) => n + 1), more: () => setPages((n) => n + 1), visible };

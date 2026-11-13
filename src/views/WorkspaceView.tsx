@@ -1183,8 +1183,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         }
         onClose={() => setLocalDetailSkill(null)}
       >
+      <div className="mb-4 flex items-start justify-between gap-3">
         {localDetailSkill?.center_skill_id && (
-          <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             {(["local", "diff", "center"] as const).map((tab) => (
               <button
                 key={tab}
@@ -1209,7 +1210,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         )}
 
         {localDetailSkill && currentTool && localContentTab !== "diff" && (
-          <div className="mb-4">
+          <div className="ml-auto shrink-0">
             <SkillReaderEntry
               target={localContentTab === "center" && localDetailSkill.center_skill_id
                 ? { kind: "managed", skill_id: localDetailSkill.center_skill_id, origin: "local" }
@@ -1219,6 +1220,8 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             />
           </div>
         )}
+
+      </div>
 
         {localDocLoading ? (
           <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>

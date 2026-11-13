@@ -28,7 +28,7 @@ pub struct TranslationResponse {
 }
 
 pub fn validate_batch(texts: &[String], target: &str) -> Result<(), AppError> {
-    if !matches!(target, "zh-CN" | "zh-TW") || texts.is_empty() || texts.len() > 20
+    if !matches!(target, "zh-CN" | "zh-TW" | "en" | "es" | "ko") || texts.is_empty() || texts.len() > 20
         || texts.iter().map(|s| s.encode_utf16().count()).sum::<usize>() > 3500 {
         return Err(AppError::invalid_input("reader.translationInvalidRequest"));
     }

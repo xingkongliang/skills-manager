@@ -5,7 +5,7 @@ import * as api from "../lib/tauri";
 import { readerRequestId } from "../lib/skillReader";
 import { translationErrorCode } from "../lib/translation/readerTranslation";
 
-export function TranslationProviderSettings() {
+export function TranslationProviderSettings({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<api.TranslationSettingsView | null>(null);
   const [saved, setSaved] = useState<api.TranslationSettingsView | null>(null);
@@ -65,8 +65,8 @@ export function TranslationProviderSettings() {
   if (!settings) return <div className="px-4 py-3 text-[13px] text-muted">{loadingError ? <button type="button" className={buttonClass} onClick={load}>{t("reader.providerLoadFailed")} · {t("reader.retry")}</button> : t("common.loading")}</div>;
   const cli = settings.provider === "codex" || settings.provider === "claude";
   return <div className="space-y-3 px-4 py-3">
-    <div><h3 className="text-[14px] font-semibold text-primary">{t("reader.providerTitle")}</h3><p className="mt-1 text-[12px] text-muted">{t("reader.providerDescription")}</p></div>
-    <fieldset disabled={saving || testing} className="grid gap-3 sm:grid-cols-2 disabled:opacity-60">
+    {!compact && <div><h3 className="text-[14px] font-semibold text-primary">{t("reader.providerTitle")}</h3><p className="mt-1 text-[12px] text-muted">{t("reader.providerDescription")}</p></div>}
+    <fieldset disabled={saving || testing} className={`grid gap-3 disabled:opacity-60 ${compact ? "grid-cols-1" : "sm:grid-cols-2"}`}>
       <label className="space-y-1 text-[13px] text-secondary"><span>{t("reader.providerTitle")}</span>
         <select className="app-input w-full" value={settings.provider} onChange={(e) => { update("provider", e.target.value as api.TranslationSettings["provider"]); update("cli_path", ""); }}>
           <option value="google">{t("reader.providers.google")}</option><option value="codex">{t("reader.providers.codex")}</option><option value="claude">{t("reader.providers.claude")}</option><option value="api">{t("reader.providers.api")}</option>
@@ -74,11 +74,11 @@ export function TranslationProviderSettings() {
       </label>
       {settings.provider !== "google" && <>
         <label className="space-y-1 text-[13px] text-secondary"><span>{t("reader.providerModel")}</span><input className="app-input w-full" value={settings.model} placeholder={cli ? t("reader.cliDefaultModel") : t("reader.apiModelPlaceholder")} onChange={(e) => update("model", e.target.value)} autoComplete="off" spellCheck={false} /></label>
-        {cli && <label className="space-y-1 text-[13px] text-secondary sm:col-span-2"><span>{t("reader.cliPath")}</span><input className="app-input w-full" value={settings.cli_path} placeholder={settings.provider === "codex" ? "codex" : "claude"} onChange={(e) => update("cli_path", e.target.value)} autoComplete="off" spellCheck={false} /><span className="block text-[12px] text-muted">{t("reader.cliHelp")}</span></label>}
+        {cli && <label className="space-y-1 text-[13px] text-secondary col-span-full"><span>{t("reader.cliPath")}</span><input className="app-input w-full" value={settings.cli_path} placeholder={settings.provider === "codex" ? "codex" : "claude"} onChange={(e) => update("cli_path", e.target.value)} autoComplete="off" spellCheck={false} /><span className="block text-[12px] text-muted">{t("reader.cliHelp")}</span></label>}
         {settings.provider === "api" && <>
-          <label className="space-y-1 text-[13px] text-secondary sm:col-span-2"><span>{t("reader.apiBaseUrl")}</span><input className="app-input w-full" type="url" value={settings.api_base_url} placeholder="https://api.openai.com/v1" onChange={(e) => update("api_base_url", e.target.value)} autoComplete="off" spellCheck={false} /><span className="block text-[12px] text-muted">{t("reader.apiHelp")}</span></label>
-          <label className="space-y-1 text-[13px] text-secondary sm:col-span-2"><span>{t("reader.apiKey")}</span><input className="app-input w-full" type="password" value={apiKey} disabled={clearKey} placeholder={retainsKey ? t("reader.apiKeySaved") : t("reader.apiKeyOptional")} onChange={(e) => setApiKey(e.target.value)} autoComplete="new-password" /><span className="block text-[12px] text-muted">{t("reader.apiKeyHelp")}</span></label>
-          {settings.has_api_key && <label className="flex items-center gap-2 text-[12px] text-secondary sm:col-span-2"><input type="checkbox" checked={clearKey} onChange={(e) => setClearKey(e.target.checked)} />{t("reader.clearApiKey")}</label>}
+          <label className="space-y-1 text-[13px] text-secondary col-span-full"><span>{t("reader.apiBaseUrl")}</span><input className="app-input w-full" type="url" value={settings.api_base_url} placeholder="https://api.openai.com/v1" onChange={(e) => update("api_base_url", e.target.value)} autoComplete="off" spellCheck={false} /><span className="block text-[12px] text-muted">{t("reader.apiHelp")}</span></label>
+          <label className="space-y-1 text-[13px] text-secondary col-span-full"><span>{t("reader.apiKey")}</span><input className="app-input w-full" type="password" value={apiKey} disabled={clearKey} placeholder={retainsKey ? t("reader.apiKeySaved") : t("reader.apiKeyOptional")} onChange={(e) => setApiKey(e.target.value)} autoComplete="new-password" /><span className="block text-[12px] text-muted">{t("reader.apiKeyHelp")}</span></label>
+          {settings.has_api_key && <label className="flex items-center gap-2 text-[12px] text-secondary col-span-full"><input type="checkbox" checked={clearKey} onChange={(e) => setClearKey(e.target.checked)} />{t("reader.clearApiKey")}</label>}
         </>}
         <label className="space-y-1 text-[13px] text-secondary"><span>{t("reader.providerTimeout")}</span><input className="app-input w-full" type="number" min={15} max={600} value={settings.timeout_seconds} onChange={(e) => update("timeout_seconds", Number(e.target.value))} /></label>
       </>}

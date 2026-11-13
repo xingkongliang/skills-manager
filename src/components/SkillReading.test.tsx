@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillDetailPanel } from "./SkillDetailPanel";
 import type { ManagedSkill, TranslationCacheEntry } from "../lib/tauri";
 
+const startDragging = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ startDragging }) }));
+
 const api = vi.hoisted(() => ({
   openSkillBrowser: vi.fn(), closeSkillBrowser: vi.fn(), cancelOpenSkillBrowser: vi.fn(),
   readSkillFile: vi.fn(), listSkillDirectory: vi.fn(), getSettings: vi.fn(), setSettings: vi.fn(),
@@ -39,6 +42,7 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("crypto", webcrypto);
   localStorage.clear();
+  localStorage.setItem("translation_target_language", "zh-CN");
   cache = new Map();
   api.getSkillDocument.mockResolvedValue({ skill_id: skill.id, filename: "SKILL.md", central_path: skill.central_path, content: "# Original detail\n\nThe complete skill document stays here." });
   api.getSourceSkillDocument.mockResolvedValue({ skill_id: skill.id, filename: "SKILL.md", source_label: "example/source", revision: "abcdef123456", content: "# Source document\n\nThe upstream skill document." });
@@ -71,7 +75,7 @@ async function render(currentSkill = skill) {
   await act(async () => root.render(<SkillDetailPanel skill={currentSkill} onClose={onClose} />));
 }
 async function click(label: string) {
-  const button = [...document.querySelectorAll("button")].find((node) => node.textContent === label);
+  const button = [...document.querySelectorAll("button")].find((node) => node.textContent?.startsWith(label) || node.getAttribute("aria-label") === label);
   expect(button, `Button ${label}`).toBeDefined();
   await act(async () => button!.click());
 }
@@ -130,7 +134,8 @@ describe("Independent skill reading", () => {
     expect(api.openSkillBrowser.mock.calls.at(-1)?.[0]).toEqual({ kind: "managed", skill_id: skill.id, origin: "local" });
   });
 
-  it("opens original mode explicitly and returns to the same detail position and focus", async () => {
+  it("uses original mode for matching language and preserves detail position and focus", async () => {
+    localStorage.setItem("translation_target_language", "en");
     localStorage.setItem("reader_mode", "bilingual");
     await render();
     const detail = document.querySelector<HTMLElement>(".overflow-y-auto")!;
@@ -166,13 +171,59 @@ describe("Independent skill reading", () => {
     await render();
     const preview = document.querySelector("article");
     await openReader();
-    await click("reader.files");
     await click("references");
     await click("guide.md");
     expect(document.querySelector('[role="dialog"] article')?.textContent).toContain("An additional reference document.");
     expect(preview?.textContent).toContain("The complete skill document stays here.");
     await click("reader.backToDetails");
     expect(document.querySelector("article")).toBe(preview);
+  });
+
+  it("automatically translates foreign prose and exposes service settings in the reader", async () => {
+    await render();
+    await openReader();
+    await translated();
+    expect(document.querySelector('[role="dialog"] [aria-pressed="true"]')?.textContent).toBe("reader.bilingual");
+    const content = document.querySelector('[role="dialog"] article');
+    await click("reader.providerTitle");
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(document.querySelector('[role="dialog"] article')).toBe(content);
+    await vi.waitFor(async () => {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+      expect(document.querySelector('[role="dialog"] select option[value="codex"]')).not.toBeNull();
+      expect(document.querySelector('[role="dialog"] select option[value="api"]')).not.toBeNull();
+    });
+  });
+
+  it("shows pending translation status before the service responds, then completion", async () => {
+    let finish!: (value: unknown) => void;
+    api.translateSkillBlocks.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    await render();
+    await openReader();
+    await vi.waitFor(() => expect(api.translateSkillBlocks).toHaveBeenCalled());
+    expect(document.querySelector('[role="status"]')?.textContent).toBe("reader.translating");
+    await act(async () => finish({ results: api.translateSkillBlocks.mock.calls[0][2].map(() => ({ text: "缓存译文" })), error: null }));
+    await translated();
+    expect(document.querySelector('[role="status"]')?.textContent).toBe("reader.translationDone");
+  });
+
+  it("drags from the compact toolbar but not from its buttons", async () => {
+    await render();
+    await openReader();
+    const filePath = document.querySelector('[role="dialog"] span[title="SKILL.md"]')!;
+    await act(async () => filePath.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, buttons: 1, detail: 1 })));
+    expect(startDragging).toHaveBeenCalledTimes(1);
+    const button = document.querySelector('[aria-label="reader.files"]')!;
+    await act(async () => button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, buttons: 1, detail: 1 })));
+    expect(startDragging).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Chinese prose original when the target is Chinese", async () => {
+    api.readSkillFile.mockResolvedValue({ relative_path: "SKILL.md", content_hash: "chinese", size_bytes: 60, mime: "text/markdown", kind: "markdown", content: "# 使用说明\n\n请先阅读文档，然后执行操作。", base64: null, reason: null });
+    await render();
+    await openReader();
+    expect(document.querySelector('[role="dialog"] [aria-pressed="true"]')?.textContent).toBe("reader.original");
+    expect(api.translateSkillBlocks).not.toHaveBeenCalled();
   });
 
   it("reuses translated paragraphs when the bilingual reader is reopened", async () => {

@@ -49,7 +49,7 @@ pub async fn get_translation_cache(keys: Vec<String>, cache: State<'_, Arc<Trans
 #[tauri::command]
 pub async fn put_translation_cache(entries: Vec<CacheEntry>, epoch: u64, cache: State<'_, Arc<TranslationCache>>) -> Result<bool, AppError> {
     validate_keys(&entries.iter().map(|e| e.cache_key.clone()).collect::<Vec<_>>())?;
-    if entries.iter().map(|e| e.text.len()).sum::<usize>() > 2 * 1024 * 1024 || entries.iter().any(|e| !matches!(e.target_language.as_str(), "zh-CN" | "zh-TW")) { return Err(AppError::invalid_input("reader.translationInvalidRequest")); }
+    if entries.iter().map(|e| e.text.len()).sum::<usize>() > 2 * 1024 * 1024 || entries.iter().any(|e| !matches!(e.target_language.as_str(), "zh-CN" | "zh-TW" | "en" | "es" | "ko")) { return Err(AppError::invalid_input("reader.translationInvalidRequest")); }
     let cache = cache.inner().clone();
     tauri::async_runtime::spawn_blocking(move || Ok(cache.put(entries, epoch))).await?
 }

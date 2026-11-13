@@ -1232,6 +1232,12 @@
     "translationCliMissing": "CLI executable not found. Install it or set its full path in Skill reading settings.",
     "translationCliFailed": "CLI translation failed. Check the CLI login, model and version in your terminal.",
     "translationTimeout": "Translation timed out. Retry or increase the request timeout in settings.",
-    "translationApiRejected": "The API rejected the request. Check its URL, model ID and Chat Completions support."
+    "translationApiRejected": "The API rejected the request. Check its URL, model ID and Chat Completions support.",
+    "defaultModel": "CLI default model",
+    "translating": "Translating {{done}} / {{total}}",
+    "translationDone": "Translated {{done}} / {{total}}",
+    "translationPaused": "Translation paused",
+    "translationFailed": "Translation incomplete · {{done}} / {{total}}",
+    "translationSection": "Reading & translation"
   }
 }

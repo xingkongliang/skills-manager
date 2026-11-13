@@ -1,3 +1,4 @@
+import { needsTranslation } from "../readerLanguage";
 import { unified, type Plugin } from "unified";
 import remarkParse from "remark-parse";
 import type { Root } from "mdast";
@@ -26,7 +27,7 @@ function requestText(node: AstNode, tokens: string[]): string {
   return node.children?.map((child) => requestText(child, tokens)).join("") ?? "";
 }
 
-export function buildTranslationPlan(content: string): TranslationPlan {
+export function buildTranslationPlan(content: string, target = "zh-CN"): TranslationPlan {
   const markdown = stripMarkdownFrontmatter(content).replace(/\r\n?/g, "\n");
   const processor = unified().use(remarkParse);
   for (const plugin of markdownPlugins) processor.use(plugin);
@@ -39,7 +40,7 @@ export function buildTranslationPlan(content: string): TranslationPlan {
       const tokens: string[] = [];
       const request = requestText(node, tokens).trim();
       const prose = request.replace(/⟦S\d+⟧/g, "");
-      const skipped = !/[a-zA-Z]{2}/.test(prose);
+      const skipped = !needsTranslation(prose, target);
       blocks.push({ id: nodeId(node), request, tokens, skipped });
       if (node.type === "heading") {
         const plain = restoreProtectedText(request, tokens);

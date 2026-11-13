@@ -1123,5 +1123,13 @@
       "deletedLocalBatch": "已刪除 {{count}} 個本機 Skill",
       "deleteLocalBatchFailed": "{{count}} 個本機 Skill 刪除失敗"
     }
+  },
+  "reader": {
+    "defaultModel": "CLI 預設模型",
+    "translating": "翻譯中 {{done}} / {{total}}",
+    "translationDone": "翻譯完成 {{done}} / {{total}}",
+    "translationPaused": "翻譯已暫停",
+    "translationFailed": "部分翻譯失敗 · {{done}} / {{total}}",
+    "translationSection": "閱讀與翻譯"
   }
 }
