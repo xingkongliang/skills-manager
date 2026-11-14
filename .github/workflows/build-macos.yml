@@ -3,7 +3,7 @@ name: Build macOS Test Package
 on:
   push:
     branches:
-      - "feat/添加适配"
+      - "**"
   workflow_dispatch:
     inputs:
       architecture:

@@ -270,10 +270,10 @@ npm run cli:build
 macOS 安装包需要在 macOS 上构建。可以在 Linux 提交代码，由 GitHub Actions 的 macOS runner 生成 `.dmg`：
 
 1. 将 `.github/workflows/build-macos.yml` 和 `src-tauri/tauri.macos-test.conf.json` 连同需要打包的代码推送到自己的 GitHub 仓库。
-2. 每次推送到开发分支 `feat/添加适配` 会自动构建 Apple 芯片和 Intel 两种版本，无需合入默认分支。打开仓库的 **Actions → Build macOS Test Package** 查看运行进度。
+2. 每次推送到任意包含此工作流和测试配置的分支，都会自动构建 Apple 芯片和 Intel 两种版本，无需合入默认分支；支持包含 `/` 的分支名。打开仓库的 **Actions → Build macOS Test Package** 查看运行进度。
 3. 构建成功后，在该次运行页面的 **Artifacts** 中下载对应架构的压缩包，解压得到 `.dmg`，在 Mac 上打开并将应用拖入 Applications。下载产物需要登录 GitHub，产物保留 14 天。
 
-工作流文件存在于仓库默认分支后，也可以通过 **Run workflow** 手动选择代码分支和架构：Apple 芯片选择 `arm64`，Intel 选择 `x64`，同时构建两种版本选择 `both`。如需自动打包其他开发分支，修改工作流中的 `push.branches`。
+工作流文件存在于仓库默认分支后，也可以通过 **Run workflow** 手动选择包含此工作流的代码分支和架构：Apple 芯片选择 `arm64`，Intel 选择 `x64`，同时构建两种版本选择 `both`。
 
 此工作流使用临时签名（ad hoc），无需 Apple 或 Tauri 签名 Secrets，产物仅供自行安装测试。首次打开可能需要在 **系统设置 → 隐私与安全性** 中点击 **仍要打开**。测试配置关闭更新包生成和应用内更新；正式分发仍使用 `Build & Release` 工作流及 Developer ID 签名、公证。
 
