@@ -370,7 +370,8 @@
       "available": "可更新",
       "error": "檢查失敗",
       "localOnly": "本機來源",
-      "sourceMissing": "原路徑遺失"
+      "sourceMissing": "原路徑遺失",
+      "sourceGone": "上游已刪除"
     },
     "updateActions": {
       "check": "檢查",

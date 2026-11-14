@@ -1195,6 +1195,14 @@ export function MySkills() {
         className: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
       };
     }
+    // Still installed, still deploying, and nothing to do about it: the Source
+    // no longer holds this skill (#655). Muted, not red — it is not an error.
+    if (skill.update_status === "source_gone") {
+      return {
+        label: t("mySkills.updateStatus.sourceGone"),
+        className: "bg-surface-active text-secondary",
+      };
+    }
     if (skill.update_status === "source_missing") {
       return {
         label: t("mySkills.updateStatus.sourceMissing"),
