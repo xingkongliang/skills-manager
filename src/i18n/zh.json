@@ -404,7 +404,8 @@
       "local": "本地",
       "import": "导入",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "website": "网站"
     },
     "groupBySource": "按来源分组",
     "sourcePicker": {

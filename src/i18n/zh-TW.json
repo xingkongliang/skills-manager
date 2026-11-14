@@ -402,7 +402,8 @@
       "local": "本機",
       "import": "匯入",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "website": "網站"
     },
     "tags": {
       "filter": "標籤",

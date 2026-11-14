@@ -51,9 +51,14 @@ describe("ChannelPills", () => {
     expect(onToggle).toHaveBeenCalledWith("import");
   });
 
+  it("shows the site channel by name", () => {
+    const shown = render({ channels: [...CHANNEL_ORDER, "well-known"] });
+    expect(shown[4].textContent).toBe("mySkills.sourceFilter.website");
+  });
+
   it("shows an unknown channel as its raw source_type", () => {
     // Dropping it would look like the filter cannot reach those skills at all.
-    const shown = render({ channels: [...CHANNEL_ORDER, "well-known"] });
-    expect(shown[4].textContent).toBe("well-known");
+    const shown = render({ channels: [...CHANNEL_ORDER, "zz-legacy"] });
+    expect(shown[4].textContent).toBe("zz-legacy");
   });
 });

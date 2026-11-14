@@ -404,7 +404,8 @@
       "local": "Local",
       "import": "Imported",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "website": "Website"
     },
     "groupBySource": "Group by source",
     "sourcePicker": {

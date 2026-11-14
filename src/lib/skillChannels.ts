@@ -16,22 +16,32 @@ export function isKnownChannel(channel: string): channel is KnownChannel {
 }
 
 /**
- * What to call a Channel in the UI. A channel this build does not name is shown
- * as its raw `source_type` rather than hidden, so the pill still reaches those
- * skills and the user can see what they are called.
+ * Channels that get a pill only when the library holds one of their skills,
+ * but still have a name: `well-known` is a skill installed from a website.
+ */
+const EXTRA_CHANNEL_LABELS: Record<string, string> = {
+  "well-known": "mySkills.sourceFilter.website",
+};
+
+/**
+ * What to call a Channel in the UI. A channel this build does not name at all
+ * is shown as its raw `source_type` rather than hidden, so the pill still
+ * reaches those skills and the user can see what they are called.
  */
 export function channelLabel(
   t: (key: string) => string,
   channel: string
 ): string {
-  return isKnownChannel(channel) ? t(`mySkills.sourceFilter.${channel}`) : channel;
+  if (isKnownChannel(channel)) return t(`mySkills.sourceFilter.${channel}`);
+  const named = EXTRA_CHANNEL_LABELS[channel];
+  return named ? t(named) : channel;
 }
 
 /**
  * Channels to render for a given library: the known ones always, so the row
- * does not change shape as skills come and go, then any channel the list
- * reports that this build does not know about — `well-known` today — sorted so
- * the extra pills at least hold still.
+ * does not change shape as skills come and go, then any other channel the
+ * library holds — `well-known` today — sorted so the extra pills at least hold
+ * still.
  */
 export function channelsForSkills(skills: { source_type: string }[]): string[] {
   const extra = new Set<string>();
