@@ -205,6 +205,16 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
     // merge collision reshuffles) cannot trip the UNIQUE constraint mid-loop.
     store.park_central_paths_for_reindex()?;
 
+    // Hashing reads every file of every skill, and this runs at each launch and
+    // each CLI command: a library holding one 13k-file skill took 90 s on
+    // Windows (#623). Reuse the hash a skill's unchanged stamp was recorded with.
+    // A stamp only counts while its hash is still the record's, so a hash some
+    // other path wrote since (install, update) is never paired with a stale one.
+    let stamps = store.get_content_stamps().unwrap_or_else(|err| {
+        log::warn!("reindex: content stamps unreadable, hashing every skill: {err:#}");
+        HashMap::new()
+    });
+
     for meta in skills {
         let skill_dir = skills_root.join(&meta.path);
         if !skill_dir.is_dir() {
@@ -229,7 +239,16 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
         };
         let central_path = skill_dir.to_string_lossy().to_string();
 
-        let new_hash = super::content_hash::hash_directory(&skill_dir).ok();
+        let cached = previous
+            .and_then(|prev| prev.content_hash.as_deref())
+            .and_then(|hash| {
+                stamps
+                    .get(&meta.skill_id)
+                    .filter(|(_, stamped)| stamped == hash)
+            })
+            .map(|(stamp, hash)| (stamp.as_str(), hash.as_str()));
+        let hashed = super::content_hash::hash_directory_reusing(&skill_dir, cached);
+        let new_hash = Some(hashed.hash.clone());
         let updated_at = match previous {
             Some(prev) if prev.content_hash == new_hash => prev.updated_at,
             _ => now,
@@ -260,6 +279,16 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
         };
         store.upsert_skill(&record)?;
         store.set_tags_for_skill(&meta.skill_id, &meta.tags)?;
+        // After the row, so a stamp is never stored ahead of the hash it vouches
+        // for. A cache that could not be written costs a re-read next launch.
+        if let Some(stamp) = &hashed.stamp {
+            if let Err(err) = store.set_content_stamp(&meta.skill_id, stamp, &hashed.hash) {
+                log::warn!(
+                    "reindex: cannot record content stamp for {}: {err:#}",
+                    meta.skill_id
+                );
+            }
+        }
     }
 
     if has_complete_scenario_snapshot {
@@ -950,6 +979,163 @@ mod tests {
             repo.store.get_skill_ids_for_scenario("preset-1").unwrap(),
             vec!["skill-1".to_string()]
         );
+    }
+
+    /// A skill reindexed once, with its stamp on record.
+    fn stamped_skill(repo: &TestRepo, id: &str) -> PathBuf {
+        let skill_dir = write_skill_dir(id);
+        fs::write(skill_dir.join("notes.md"), "before").unwrap();
+        repo.store
+            .insert_skill(&sample_skill(id, &skill_dir))
+            .unwrap();
+        write_all_from_db_unlocked(&repo.store).unwrap();
+        let before = files_read();
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+        assert!(files_read() > before, "a first reindex reads the skill");
+        assert!(repo.store.get_content_stamps().unwrap().contains_key(id));
+        skill_dir
+    }
+
+    fn files_read() -> usize {
+        super::super::content_hash::FILES_READ.with(|count| count.get())
+    }
+
+    fn content_hash_of(store: &SkillStore, id: &str) -> Option<String> {
+        store.get_skill_by_id(id).unwrap().unwrap().content_hash
+    }
+
+    /// Point the record and its stamp at a hash no file can produce, so a
+    /// reindex that keeps it took the cached value rather than reading.
+    fn plant_hash(store: &SkillStore, id: &str, hash: &str) {
+        let mut record = store.get_skill_by_id(id).unwrap().unwrap();
+        record.content_hash = Some(hash.to_string());
+        store.upsert_skill(&record).unwrap();
+        let (stamp, _) = store.get_content_stamps().unwrap().remove(id).unwrap();
+        store.set_content_stamp(id, &stamp, hash).unwrap();
+    }
+
+    fn set_mtime(path: &Path, at: std::time::SystemTime) {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+
+    /// #623: an unchanged skill is not read again on the next launch.
+    #[test]
+    fn reindex_reuses_the_hash_of_an_unchanged_stamp() {
+        let repo = test_repo();
+        stamped_skill(&repo, "big");
+        plant_hash(&repo.store, "big", "planted");
+        let before = files_read();
+
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+
+        assert_eq!(files_read(), before, "a reused hash must not cost a read");
+        assert_eq!(
+            content_hash_of(&repo.store, "big").as_deref(),
+            Some("planted")
+        );
+    }
+
+    #[test]
+    fn reindex_rehashes_a_same_length_edit() {
+        let repo = test_repo();
+        let dir = stamped_skill(&repo, "edited");
+        plant_hash(&repo.store, "edited", "planted");
+
+        fs::write(dir.join("notes.md"), "AFTER!").unwrap();
+        set_mtime(
+            &dir.join("notes.md"),
+            std::time::SystemTime::now() + std::time::Duration::from_secs(5),
+        );
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+
+        assert_eq!(
+            content_hash_of(&repo.store, "edited"),
+            Some(super::super::content_hash::hash_directory(&dir).unwrap())
+        );
+    }
+
+    /// A tool that restores the modification time still moves the change time.
+    #[cfg(unix)]
+    #[test]
+    fn reindex_rehashes_a_rewrite_that_restores_the_mtime() {
+        let repo = test_repo();
+        let dir = stamped_skill(&repo, "restored");
+        let file = dir.join("notes.md");
+        let mtime = fs::metadata(&file).unwrap().modified().unwrap();
+        plant_hash(&repo.store, "restored", "planted");
+
+        // ctime has the filesystem's granularity; make sure it can move.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&file, "AFTER!").unwrap();
+        set_mtime(&file, mtime);
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+
+        assert_eq!(
+            content_hash_of(&repo.store, "restored"),
+            Some(super::super::content_hash::hash_directory(&dir).unwrap())
+        );
+    }
+
+    /// Install and update write the record's hash without touching stamps; a
+    /// stamp recorded with another hash must not override theirs.
+    #[test]
+    fn reindex_ignores_a_stamp_recorded_with_another_hash() {
+        let repo = test_repo();
+        let dir = stamped_skill(&repo, "rewritten");
+        plant_hash(&repo.store, "rewritten", "planted");
+        let mut record = repo.store.get_skill_by_id("rewritten").unwrap().unwrap();
+        record.content_hash = Some("written-by-an-update".to_string());
+        repo.store.upsert_skill(&record).unwrap();
+
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+
+        assert_eq!(
+            content_hash_of(&repo.store, "rewritten"),
+            Some(super::super::content_hash::hash_directory(&dir).unwrap())
+        );
+    }
+
+    /// A file that could not be read hashes as empty; caching that would keep
+    /// the wrong hash after the file became readable again.
+    #[cfg(unix)]
+    #[test]
+    fn reindex_does_not_stamp_a_skill_it_could_not_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = test_repo();
+        let dir = write_skill_dir("locked");
+        let file = dir.join("secret.md");
+        fs::write(&file, "x").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&file).is_ok() {
+            return; // running as root: nothing is unreadable
+        }
+        repo.store
+            .insert_skill(&sample_skill("locked", &dir))
+            .unwrap();
+        write_all_from_db_unlocked(&repo.store).unwrap();
+
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(content_hash_of(&repo.store, "locked").is_some());
+        let stamps = repo.store.get_content_stamps().unwrap();
+        assert!(!stamps.contains_key("locked"));
+    }
+
+    #[test]
+    fn a_deleted_skill_takes_its_stamp_with_it() {
+        let repo = test_repo();
+        stamped_skill(&repo, "gone");
+
+        repo.store.delete_skill("gone").unwrap();
+
+        let stamps = repo.store.get_content_stamps().unwrap();
+        assert!(!stamps.contains_key("gone"));
     }
 
     #[test]

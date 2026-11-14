@@ -362,6 +362,8 @@
     "agentToggleDisabled": "{{agent}} 已关闭",
     "agentToggleNotInstalled": "未安装",
     "agentToggleDisabledGlobally": "已在设置中禁用",
+    "agentTogglePendingSync": "待同步",
+    "agentTogglePendingSyncHint": "已在此 Preset 中启用，但还没有部署到这个 Agent。点击即部署。",
     "agentUnavailableCount": "{{count}} 个不可用",
     "updateStatus": {
       "unknown": "未知",
@@ -431,6 +433,7 @@
     },
     "selectMode": "多选",
     "selectedCount": "已选 {{count}} 个",
+    "hiddenInCollapsedSources": "（其中 {{count}} 个在折叠的来源中）",
     "selectHint": "点击 Skill 开始选择",
     "batchUpdate": "更新 {{count}} 个",
     "batchUpdated": "已批量更新 {{count}} 个 Skill",
@@ -438,6 +441,7 @@
     "batchUpdateFailed": "{{count}} 个 Skill 更新失败",
     "deleteSelected": "删除 {{count}} 个",
     "batchDeleteConfirm": "确定彻底删除选中的 {{count}} 个 Skill 吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
+    "batchDeleteHiddenInCollapsed": "其中 {{count}} 个在折叠的来源中。",
     "batchDeleted": "已删除 {{count}} 个 Skill",
     "batchDeleteFailed": "{{count}} 个 Skill 删除失败",
     "batchToggleFailed": "{{count}} 个 Skill 更新失败",
@@ -654,6 +658,7 @@
     "textSizeXLarge": "特大",
     "language": "语言",
     "help": "帮助",
+    "whatsNew": "更新内容",
     "website": "官网",
     "about": "关于",
     "version": "Skills Manager {{version}}",
@@ -1135,5 +1140,21 @@
       "deletedLocalBatch": "已删除 {{count}} 个本地 Skill",
       "deleteLocalBatchFailed": "{{count}} 个本地 Skill 删除失败"
     }
+  },
+  "errorBoundary": {
+    "title": "出错了",
+    "description": "窗口遇到了意外错误，重新加载即可继续。如果反复出现，请把下面的错误信息复制到 GitHub issue 里。",
+    "copy": "复制错误信息",
+    "copied": "已复制",
+    "exportLogs": "导出日志",
+    "exportLogsDone": "日志已保存到 {{path}}",
+    "exportLogsFailed": "导出日志失败。",
+    "reload": "重新加载"
+  },
+  "whatsNew": {
+    "title": "更新内容",
+    "gotIt": "知道了",
+    "fullChangelog": "查看完整更新日志",
+    "close": "关闭"
   }
 }

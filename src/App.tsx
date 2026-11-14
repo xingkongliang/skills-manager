@@ -5,6 +5,7 @@ import { ThemeProvider, useThemeContext } from "./context/ThemeContext";
 import { HelpDialog } from "./components/HelpDialog";
 import { CloseActionGuard } from "./components/CloseActionGuard";
 import { FirstRunRestoreDialog } from "./components/FirstRunRestoreDialog";
+import { WhatsNewOnUpdate } from "./components/WhatsNewDialog";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./views/Dashboard";
 import { MySkills } from "./views/MySkills";
@@ -54,6 +55,7 @@ function App() {
           <HelpDialog />
           <CloseActionGuard />
           <FirstRunRestoreDialog />
+          <WhatsNewOnUpdate />
         </BrowserRouter>
         <ThemedToaster />
       </AppProvider>

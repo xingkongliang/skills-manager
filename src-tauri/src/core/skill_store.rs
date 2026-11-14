@@ -447,6 +447,27 @@ impl SkillStore {
         Ok(())
     }
 
+    /// `skill_id → (stamp, content_hash)` as the reindex last recorded them.
+    pub fn get_content_stamps(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT skill_id, stamp, content_hash FROM skill_content_stamps")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn set_content_stamp(&self, skill_id: &str, stamp: &str, content_hash: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO skill_content_stamps (skill_id, stamp, content_hash)
+             VALUES (?1, ?2, ?3)",
+            params![skill_id, stamp, content_hash],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_skill(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM skills WHERE id = ?1", params![id])?;
@@ -1515,6 +1536,70 @@ mod scenario_membership_tests {
             .get_enabled_tools_for_scenario_skill("ghost-s", "k1")
             .unwrap()
             .is_empty());
+    }
+
+    /// `ensure_scenario_skill_tool_defaults` seeds the per-preset *intent*
+    /// flag only: `skill_targets`, the actual deployment table, must stay
+    /// untouched and independent of the flag. The toggle UI used to read the
+    /// flag as "synced", reporting preset membership edits as green
+    /// checks (#384).
+    #[test]
+    fn tool_defaults_seed_enabled_flags_without_deployments() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+
+        store
+            .insert_scenario(&ScenarioRecord {
+                id: "s1".to_string(),
+                name: "S1".to_string(),
+                description: None,
+                icon: None,
+                sort_order: 0,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        store.upsert_skill(&sample_skill("k1")).unwrap();
+        store.add_skill_to_scenario("s1", "k1").unwrap();
+
+        store
+            .ensure_scenario_skill_tool_defaults(
+                "s1",
+                "k1",
+                &["ToolA".to_string(), "ToolB".to_string()],
+            )
+            .unwrap();
+
+        let toggles = store.get_scenario_skill_tool_toggles("s1", "k1").unwrap();
+        assert_eq!(toggles.len(), 2);
+        assert!(toggles.iter().all(|toggle| toggle.enabled));
+        // Membership is a DB edit only: no `skill_targets` deployment rows.
+        assert!(store.get_targets_for_skill("k1").unwrap().is_empty());
+
+        // The deployment fact lives in `skill_targets` and stays independent
+        // from the flag: one tool deployed, the other merely enabled.
+        store
+            .insert_target(&SkillTargetRecord {
+                id: "t1".to_string(),
+                skill_id: "k1".to_string(),
+                tool: "ToolA".to_string(),
+                target_path: "/tmp/agent/ToolA/k1".to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: None,
+            })
+            .unwrap();
+        assert_eq!(
+            store
+                .get_targets_for_skill("k1")
+                .unwrap()
+                .into_iter()
+                .map(|target| target.tool)
+                .collect::<Vec<_>>(),
+            vec!["ToolA".to_string()]
+        );
     }
 }
 

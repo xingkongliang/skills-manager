@@ -1632,6 +1632,9 @@ pub struct PrefetchedRemote {
     /// The `(source_revision, subpath)` pairs whose directory is the same tree
     /// at the resolved revision — see [`git_fetcher::unchanged_subtrees`].
     unchanged: HashSet<(String, String)>,
+    /// Why those directories could not be compared. A resolved head alone
+    /// does not establish whether an installed subtree changed.
+    comparison_error: Option<String>,
 }
 
 /// The directory a subpath skill was installed from, as `(revision, subpath)`.
@@ -1648,17 +1651,25 @@ fn resolve_remote(
     installed: &HashSet<(String, String)>,
     proxy_url: Option<&str>,
 ) -> PrefetchedRemote {
-    let result =
+    let resolve = || {
         git_fetcher::resolve_remote_revision(&key.clone_url, key.branch.as_deref(), proxy_url)
-            .map_err(|err| err.to_string());
-    let unchanged = match &result {
-        Ok(head) => git_fetcher::unchanged_subtrees(&key.clone_url, head, installed, proxy_url),
-        Err(_) => HashSet::new(),
+            .map_err(|err| err.to_string())
+    };
+    let result = resolve();
+    let (unchanged, comparison_error) = match &result {
+        Ok(head) => {
+            match git_fetcher::unchanged_subtrees(&key.clone_url, head, installed, proxy_url) {
+                Ok(unchanged) => (unchanged, None),
+                Err(err) => (HashSet::new(), Some(err.to_string())),
+            }
+        }
+        Err(_) => (HashSet::new(), None),
     };
     PrefetchedRemote {
         key,
         result,
         unchanged,
+        comparison_error,
     }
 }
 
@@ -2798,6 +2809,7 @@ pub fn check_skill_update_internal_with_remote(
             let Some(PrefetchedRemote {
                 result: remote_result,
                 unchanged,
+                comparison_error,
                 ..
             }) = prefetched.filter(|prefetched| prefetched.key.matches(&git_source))
             else {
@@ -2809,6 +2821,25 @@ pub fn check_skill_update_internal_with_remote(
             };
             match remote_result {
                 Ok(remote_revision) => {
+                    // The repo moved, and the comparison that answers for this
+                    // skill's directory failed (#582). That
+                    // says nothing about the skill, so it is not an update:
+                    // record a failed check, as for a head that could not be
+                    // resolved, and let the next round ask again.
+                    if let Some(message) = comparison_error.filter(|_| {
+                        skill.source_revision.as_deref() != Some(remote_revision.as_str())
+                            && installed_subtree(&skill, &git_source).is_some()
+                    }) {
+                        store
+                            .update_skill_check_state(
+                                &skill.id,
+                                Some(&remote_revision),
+                                "error",
+                                Some(&message),
+                            )
+                            .map_err(AppError::db)?;
+                        return Err(AppError::git(message));
+                    }
                     let update_status = match skill.source_revision.as_deref() {
                         Some(current) if current == remote_revision => "up_to_date",
                         // The repo moved but this skill's directory did not
@@ -4046,6 +4077,7 @@ mod tests {
             key: remote(url, None),
             result: Ok(revision.to_string()),
             unchanged: HashSet::new(),
+            comparison_error: None,
         })
     }
 
@@ -4210,6 +4242,7 @@ mod tests {
                 key: remote("https://example.test/a.git", None),
                 result: Err("could not read from remote".to_string()),
                 unchanged: HashSet::new(),
+                comparison_error: None,
             }),
         )
         .unwrap_err();
@@ -4221,6 +4254,66 @@ mod tests {
             stored.last_check_error.as_deref(),
             Some("could not read from remote")
         );
+    }
+
+    /// A head that resolved, followed by a failed subtree comparison (#582).
+    fn prefetch_comparison_error(url: &str, revision: &str, reason: &str) -> Option<PrefetchedRemote> {
+        Some(PrefetchedRemote {
+            comparison_error: Some(reason.to_string()),
+            ..prefetch(url, revision).unwrap()
+        })
+    }
+
+    /// The repo moved, but whether a subpath skill's directory moved with it
+    /// was never established: the comparison failed. That
+    /// is a failed check, like a head that could not be resolved — not an
+    /// update, which the badge, the notification and auto-update would act on.
+    /// The installed revision stays, so the next round compares again.
+    #[test]
+    fn a_failed_subtree_comparison_records_a_failed_check() {
+        let repo = test_repo();
+        let url = "https://example.test/a.git";
+        insert_monorepo_skill(&repo.store, "a", url, Some("skills/a"), "old-rev");
+        let reason = "fatal: unable to access: SSL_connect: SSL_ERROR_SYSCALL";
+
+        let err = check_skill_update_internal_with_remote(
+            &repo.store,
+            "a",
+            false,
+            prefetch_comparison_error(url, "new-rev", reason),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.message, reason);
+        let stored = repo.store.get_skill_by_id("a").unwrap().unwrap();
+        assert_eq!(stored.update_status, "error");
+        assert_eq!(stored.last_check_error.as_deref(), Some(reason));
+        assert_eq!(stored.source_revision.as_deref(), Some("old-rev"));
+        assert_eq!(stored.remote_revision.as_deref(), Some("new-rev"));
+    }
+
+    /// The comparison only ever answers for a subpath skill whose revision is
+    /// behind the head. A skill installed from the repository root still sees
+    /// the moved head as its update, and a subpath skill already at the head
+    /// is up to date, whatever became of the comparison.
+    #[test]
+    fn a_failed_comparison_leaves_skills_it_does_not_answer_for() {
+        let repo = test_repo();
+        let url = "https://example.test/a.git";
+        insert_monorepo_skill(&repo.store, "root", url, None, "old-rev");
+        insert_monorepo_skill(&repo.store, "current", url, Some("skills/b"), "new-rev");
+        let check = |id: &str| {
+            check_skill_update_internal_with_remote(
+                &repo.store,
+                id,
+                false,
+                prefetch_comparison_error(url, "new-rev", "remote unreachable"),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(check("root").update_status, "update_available");
+        assert_eq!(check("current").update_status, "up_to_date");
     }
 
     /// Callers hold the central-repo lock across this write, so a git skill with
@@ -4340,20 +4433,21 @@ mod tests {
         assert_eq!(b.source_revision.as_deref(), Some(head.as_str()));
     }
 
-    /// An installed revision the server no longer has (a force-push, say) cannot
-    /// be compared, so the check reports an update exactly as it always did.
+    /// An installed revision the server no longer has cannot be compared.
+    /// A successful head lookup does not establish an update for that subtree.
     #[test]
-    fn an_unfetchable_installed_revision_still_reports_an_update() {
+    fn an_unfetchable_installed_revision_records_a_failed_check() {
         let repo = test_repo();
         let (dir, url, _) = monorepo(&repo);
         let gone = "0123456789abcdef0123456789abcdef01234567";
         insert_monorepo_skill(&repo.store, "b", &url, Some("skills/b"), gone);
         commit_file(&dir, "skills/a/SKILL.md", "---\nname: a\n---\nchanged\n");
 
-        let dto = check_skill_update_internal(&repo.store, "b", true, None).unwrap();
+        let err = check_skill_update_internal(&repo.store, "b", true, None).unwrap_err();
 
-        assert_eq!(dto.update_status, "update_available");
         let b = repo.store.get_skill_by_id("b").unwrap().unwrap();
+        assert_eq!(b.update_status, "error");
+        assert_eq!(b.last_check_error.as_deref(), Some(err.message.as_str()));
         assert_eq!(b.source_revision.as_deref(), Some(gone));
     }
 

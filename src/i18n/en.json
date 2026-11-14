@@ -362,6 +362,8 @@
     "agentToggleDisabled": "{{agent}} disabled",
     "agentToggleNotInstalled": "Not installed",
     "agentToggleDisabledGlobally": "Disabled in Settings",
+    "agentTogglePendingSync": "Pending sync",
+    "agentTogglePendingSyncHint": "Enabled in this preset but not deployed to this agent yet. Click to deploy.",
     "agentUnavailableCount": "{{count}} unavailable",
     "updateStatus": {
       "unknown": "Unknown",
@@ -431,6 +433,7 @@
     },
     "selectMode": "Select",
     "selectedCount": "{{count}} selected",
+    "hiddenInCollapsedSources": "({{count}} in collapsed sources)",
     "selectHint": "Click skills to select",
     "batchUpdate": "Update {{count}}",
     "batchUpdated": "{{count}} skills refreshed",
@@ -438,6 +441,7 @@
     "batchUpdateFailed": "{{count}} skills failed to refresh",
     "deleteSelected": "Delete {{count}}",
     "batchDeleteConfirm": "Delete {{count}} selected skills permanently? This removes their central library files, preset links, and synced agent targets.",
+    "batchDeleteHiddenInCollapsed": "{{count}} of them are in collapsed sources.",
     "batchDeleted": "{{count}} skills deleted",
     "batchDeleteFailed": "{{count}} skills failed to delete",
     "batchToggleFailed": "{{count}} skills failed to update",
@@ -654,6 +658,7 @@
     "textSizeXLarge": "Extra Large",
     "language": "Language",
     "help": "Help",
+    "whatsNew": "What's new",
     "website": "Website",
     "about": "About",
     "version": "Skills Manager {{version}}",
@@ -1135,5 +1140,21 @@
       "deletedLocalBatch": "{{count}} local skills deleted",
       "deleteLocalBatchFailed": "{{count}} local skills failed to delete"
     }
+  },
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "description": "The window hit an unexpected error. Reload to continue. If it keeps happening, copy the details below into a GitHub issue.",
+    "copy": "Copy details",
+    "copied": "Copied",
+    "exportLogs": "Export logs",
+    "exportLogsDone": "Logs saved to {{path}}",
+    "exportLogsFailed": "Failed to export logs.",
+    "reload": "Reload"
+  },
+  "whatsNew": {
+    "title": "What's new",
+    "gotIt": "Got it",
+    "fullChangelog": "Full changelog",
+    "close": "Close"
   }
 }

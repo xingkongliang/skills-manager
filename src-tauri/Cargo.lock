@@ -4943,7 +4943,7 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
 name = "skills-manager"
-version = "1.43.0"
+version = "1.45.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -4951,6 +4951,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs 5.0.1",
+ "dunce",
  "fs2",
  "gethostname",
  "git2",

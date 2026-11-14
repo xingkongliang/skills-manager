@@ -5,6 +5,91 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.45.0] - 2026-11-14
+
+### Release Overview
+- After an update, the app now shows what changed.
+
+### User-facing
+- **See what's new after an update** — The first time you open the app after updating, a "What's new" dialog lists what changed for you in that release. If you skipped several releases, it covers each of them, up to five. It appears once per update; **What's new** in Settings, next to the version, opens it again at any time. The notes ship with the app, so the dialog works offline (#669).
+
+### Developer & Governance
+- The dialog reads the `CHANGELOG.md` / `CHANGELOG-zh.md` bundled at build time and shows only the "Release Overview" and "User-facing" sections. Each file is a separate chunk, loaded on demand. The last version seen is stored in the `whats_new_seen_version` setting, which stays on this machine and is not part of the backup (#669).
+- A frontend test now fails when the two CHANGELOG files list different releases, or when one of the latest ten releases uses a section heading other than the three standard ones. A release whose template is left unfilled opens no dialog (#669).
+## [1.44.0] - 2026-11-12
+
+### Release Overview
+- Agents can now manage project-level skills through the CLI, the skill detail sheet shows what is actually deployed instead of what a preset intends, and a rendering error no longer leaves a blank window.
+
+### User-facing
+- **Manage project skills from the CLI** — `skills-manager-cli` gains a `projects` group: `list`, `show`, `add`, `remove`, `deploy`, `undeploy` and `import`. An agent working in a repository can now register it, deploy library skills or a whole preset into it, and bring a skill written there back into the library. Every command that changes something takes `--dry-run`. The bundled `manage-skills` skill explains the commands to agents. Thanks to @vtxyer and @haringuyendev, whose pull requests this builds on (#660, #309, #486).
+- **The skill detail sheet shows what is deployed** — The agent rows and "synced x / y" used to follow the preset's switch for each agent, which starts out on. A skill just added to a preset therefore showed every agent as synced while nothing was on disk. A green tick now means the skill is enabled and deployed. On the active preset, an enabled agent that has not been deployed to yet shows "pending sync", and clicking it deploys. Thanks to @akushonkamen (#662, #548, #384).
+- **Agents that share a skills folder can each be deployed to** — Several agents read the same folder; Codex, GitHub Copilot and Pi all read `~/.agents/skills`, for example. With the sync mode set to Copy, deploying a skill to the second of them from its card, the detail sheet or a preset was refused, and installing into the active preset reported success without deploying to it. The second agent now takes over the copy that is already there when it matches the library. A copy you have edited is left alone and the deploy is refused, as before (#663).
+- **A rendering error no longer blanks the window** — When a page failed while rendering, the whole window turned a plain colour with no way out. It now shows the error, with buttons to copy the details, export logs and reload (#659).
+- **Adding the same project folder twice is refused clearly** — A project is stored under its canonical path, so a second spelling of the same folder (a trailing slash, a symlink) no longer registers a duplicate. The message names the project that already has it (#660).
+- **A missing project folder is reported, not recreated** — When a registered project's folder no longer exists, adding, removing or importing a skill there says so. Adding a skill used to recreate the folder (#660).
+- **The theme follows the system by default** — When you have never picked a theme, the app now follows the system's light or dark appearance; it used to open dark. This also applies after updating: on a light system you will get the light theme. A theme you chose yourself is kept (#652, #369).
+
+### Developer & Governance
+- Removing a project skill copy and importing one into the library are now checked in Rust, not only in the frontend: removal without `force` is refused unless the copy is in sync or is a link to the library copy, and an import is refused when several copies of the skill in the project differ from the library. The app passes `force` after its own confirmation dialog, so its behaviour is unchanged (#660).
+- Importing a project skill into the library now takes `RepoLock`, writes sync metadata and an audit entry, and resolves and authorizes its destination under the lock (#660).
+- A project deploy batch that would overwrite something that is not that skill, or send two skills to one directory, is refused as a whole with `TARGET_CONFLICT`. Any agent that reads a shared project directory can be named with `--agent`, not only the one the directory is filed under (#660).
+- Outside batch deploys, a `skill_targets` row belonging to another agent only lets a deploy adopt a directory whose content matches the library; it never authorizes replacing one. Removal checks for other rows by physical directory, so a path alias through a symlink is recognized. `skills sync --dry-run` accounts for writes made earlier in the same run. Batch deploys no longer take a row for a different skill at the same path as permission (#663).
+- `get_skill_tool_toggles` returns `deployed` for each agent, read from `skill_targets`; the TypeScript type requires it (#662).
+- New direct dependency `dunce`, for canonical Windows paths without the verbatim prefix. It was already in the lockfile (#660).
+- The Linux CI job runs `cargo test`; it used to run `cargo check` only (#661).
+## [1.43.4] - 2026-11-10
+
+### Release Overview
+- Three fixes: TRAE CN project skills land in the folder TRAE CN reads, a stuck backup no longer blocks update checks indefinitely, and a skill in a folder several agents share appears once when scanning local skills.
+
+### User-facing
+- **TRAE CN project skills go where TRAE CN reads them** — In a project workspace, skills for TRAE CN were deployed to `<project>/.trae-cn/skills`, which TRAE CN does not read; only its global folder is `~/.trae-cn/skills`. They now go to `<project>/.trae/skills`, and TRAE CN shares that row with TRAE IDE, which reads the same folder. Skills that earlier versions put in `.trae-cn/skills` are left there: add them to the project again, and the old folder can be deleted. Thanks to @zhirogo (#645, #632, #247).
+- **A stuck backup no longer blocks update checks indefinitely** — When the backup remote stopped answering during a background backup (for example an SSH connection that never replies), the backup kept the library locked, and every update check failed with "skills repository is busy" for as long as it stayed stuck. Git commands that reach the backup remote now give up after 300 seconds and report an error, so update checks wait at most five minutes. Your own SSH configuration is used as before. Thanks to @Carlo1911 (#585).
+- **Each skill appears once when scanning local skills** — Several agents read the same folder; Codex, GitHub Copilot, Pi and others all read `~/.agents/skills`. Scan Local Skills listed a skill in that folder once for each of them, so one skill showed up with six identical locations. Each folder is now listed once, under the first agent that finds it (#646, #641).
+
+### Developer & Governance
+- Network git in the backup repository (fetch, push, pull, ls-remote, clone) now runs through a killable wait with a 300s deadline, matching the clone timeout, with `GIT_TERMINAL_PROMPT=0`, a closed stdin and an HTTP low-speed abort. No `GIT_SSH_COMMAND` is injected. The auto-backup fetch stays inside `RepoLock`, because a fetch outside it races a clone that replaces the directory, so this bounds the hang rather than removing the busy errors (#585).
+- `scanner::push_discovered` skips a path that is already recorded, so the scan's `skills_found` and discovered list count each path once, under the first adapter that finds it. Later adapters no longer hash the same directory again (#646).
+- The `trae_cn` adapter now has `project_relative_skills_dir = ".trae/skills"`; it used to fall back to its global `.trae-cn/skills`. Nothing is migrated (#645).
+## [1.43.3] - 2026-11-03
+
+### Release Overview
+- Skills deployed to Antigravity now land in the folders Antigravity reads. A network hiccup during an update check no longer marks every skill from a repository as having an update. And a project folder that several agents share stays usable when only some of them are installed.
+
+### User-facing
+- **Antigravity finds deployed skills** — Skills Manager deployed Antigravity skills to `~/.gemini/antigravity/skills`, which current versions of Antigravity do not read. Global skills now go to `~/.gemini/config/skills`, which the Antigravity app, IDE and CLI all read, and project skills go to `<project>/.agents/skills`. At the next sync, skills already deployed to Antigravity are deployed again in the new folder. Links in the old folder are removed, and copies there move into `kept-copies/antigravity/` in the library, as with any change to an agent's folder. Thanks to @ZhuYichuan (#605), and to @zhirogo, who proposed the same paths earlier in #458 (#602, #461, #409, #217).
+- **A failed comparison no longer shows as an update** — For skills installed from a folder inside a repository, the update check makes a second request that compares that folder with the installed version. When that request failed, for example over a dropped connection, every such skill from the repository showed "Update", and the badge, the notifications and auto-update all acted on it. These skills now show a failed check, keep their installed version, and are checked again next time. You can still update one from its card. Thanks to @HengYangDS (#583, #582).
+- **Shared project folders stay usable** — In a project workspace, agents that read the same folder share one row; Antigravity, Cline, Warp and GitLab Duo all use `.agents/skills`, for example. The row counted as installed and enabled only when the first agent in it was. So skills could not be added there by a Warp user without Cline, by a custom agent sharing a built-in agent's folder, or by TRAE CN with its project folder set to `.trae/skills` and TRAE IDE not installed. The row is now usable while any agent that reads the folder is installed and enabled. Thanks to @GoodScholar for tracking this down in #489 (#633, #431, #632).
+
+### Developer & Governance
+- `skills-manager-cli skills check --json` reports the skills from the second item above as `error`, with the comparison's message in `last_check_error`, where it used to report `update_available`. Skills installed from a repository root, and subpath skills already at the remote head, are unchanged. No new status is introduced (#583).
+- `project_agent_targets_for_record` takes "installed" and "enabled" from every adapter whose project folder matches the row, not only from the adapter whose key the row carries. `export_skill_to_project` filters on the same state. The row still carries the first adapter's key. The regression test reads that key instead of naming it, because #605 changed which adapter comes first (#633, #634).
+## [1.43.2] - 2026-11-01
+
+### Release Overview
+- Opening a skill no longer blanks the window on older macOS, launches and CLI commands stop re-reading every skill's files, and the skill preview hides metadata headers written with Windows line endings.
+
+### User-facing
+- **Opening a skill no longer turns the window black on older macOS** — On WebKit before Safari 16.4 (for example macOS Monterey without the latest Safari), showing a skill's SKILL.md hit a regular-expression feature that engine does not support, and the whole window went blank until the app was quit. Those systems now show the skill as plain Markdown: tables, checklists and strikethrough appear as text (#627, #613).
+- **Faster launches and CLI commands with large skills** — Every launch, and every `skills-manager-cli` command, re-read every file of every skill to see whether it had changed; one skill with 13,000 files made that about 90 seconds on Windows. A skill is now read again only when its files' names, sizes or modification times change. The first launch after updating still reads everything once (#628, #623).
+- **Skill preview hides Windows-style metadata headers** — The metadata header of a SKILL.md saved with Windows line endings, or one that ends the file, showed up in the preview, and an empty header hid the instructions up to the next `---` line. Thanks to @Jiandong7 (#620).
+
+### Developer & Governance
+- Database schema v9 adds `skill_content_stamps`, a local cache of each skill's file fingerprint and the hash it was recorded with. A fingerprint is stored only when every file was read and none changed during the read, and is ignored once the skill's recorded hash changes. Accepted limit: a rewrite that keeps both the size and the modification time reads as unchanged; the inode change time still catches it on macOS and Linux, not on Windows. As with earlier schema changes, an older version refuses a database this one has upgraded (#628).
+- `SkillMarkdown` probes regex lookbehind once at load. Vite 7 targets safari16, so esbuild turns remark-gfm's lookbehind literal into a runtime `new RegExp` that only fails when a document renders (#627).
+## [1.43.1] - 2026-10-27
+
+### Release Overview
+- Copies you edited in an agent's folder are no longer overwritten by routine syncs while the library is unchanged, and the CLI's `skills check` now checks skills installed from a local folder.
+
+### User-facing
+- **Edited copies stay put while the library is unchanged** — For skills deployed as copies, applying a preset from the PresetBar, adding skills from the Add Skills sheet, batch deploys, the sync after an install, and an update or reimport that changed nothing all copied the skill again, which threw away edits made in the agent's folder. These now leave the copy alone while the library's content is the same as when it was deployed, as the startup sync already did. When the library does change, the copy is still replaced, as before. Such a copy switches to a link at the next content change, or when you undeploy and deploy the skill again (#598).
+- **`skills-manager-cli skills check` checks local skills** — It skipped skills installed from a local folder or imported, and reported them with `skipped: true`. It now compares them with their source folder, as the app does, and reports `up_to_date`, `update_available` or `source_missing`. Local checks always run; the update-check cache is only for Git sources. Skills from websites are still skipped (#597, #590).
+
+### Developer & Governance
+- The startup sync's check for whether a deployed copy is still current is now one function, `recorded_target_is_current`, and all five sync paths call it. Only the calling agent's own record counts, so agents sharing one skills folder (amp and replit, cline and warp) behave as before. When a file or a foreign link sits where the copy should be, the startup sync now reports the refusal instead of skipping it silently (#598).
+- `skills/manage-skills` now explains what `check` compares for a local skill and what `update_available` and `source_missing` mean (#597).
 ## [1.43.0] - 2026-10-21
 
 ### Release Overview
