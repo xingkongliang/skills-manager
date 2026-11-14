@@ -836,6 +836,14 @@ fn log_update_outcome(
                 ))
                 .ok();
         }
+        // Deleted upstream, not "nothing to do": the trail is what #655 was
+        // measured in, so it must not read the same as an unchanged skill.
+        Ok(result) if result.skill.update_status == skill_store::SOURCE_GONE => {
+            draft = draft
+                .skill(result.skill.id.clone(), result.skill.name.clone())
+                .detail(format!("{source_label}; source gone"))
+                .ok();
+        }
         Ok(result) => {
             draft = draft
                 .skill(result.skill.id.clone(), result.skill.name.clone())
@@ -2873,6 +2881,24 @@ pub fn check_skill_update_internal_with_remote(
                         return Err(AppError::git(message));
                     }
                     let update_status = match skill.source_revision.as_deref() {
+                        // An update already established that a skills.sh skill is
+                        // gone. This check cannot re-establish anything — the id
+                        // lookup needs blobs it does not fetch — so it must not
+                        // flip the answer back into an update, which would clone
+                        // the whole Source next round to learn the same thing.
+                        //
+                        // When the author puts the skill back at its recorded
+                        // path, the head moves and the pair drops out of
+                        // `missing`, so the arms below take over again.
+                        Some(current)
+                            if skill.update_status == skill_store::SOURCE_GONE
+                                && git_source.locator_skill_id.is_some()
+                                && (current == remote_revision
+                                    || installed_subtree(&skill, &git_source)
+                                        .is_some_and(|installed| missing.contains(&installed))) =>
+                        {
+                            skill_store::SOURCE_GONE
+                        }
                         Some(current) if current == remote_revision => "up_to_date",
                         // The Source no longer holds this skill anywhere this
                         // check would look (#655). Not an update — no head could
@@ -3027,10 +3053,7 @@ fn should_skip_update_check(
     // A settled answer stays settled for the TTL — including `source_gone`,
     // which no re-check inside the TTL can change unless the author restored
     // the skill (#655). Anything unresolved keeps asking.
-    let stable_status = !matches!(
-        skill.update_status.as_str(),
-        "unknown" | "checking" | "updating" | "error"
-    );
+    let stable_status = skill_store::is_settled_update_status(&skill.update_status);
 
     Ok(stable_status
         && skill
@@ -4663,6 +4686,29 @@ mod tests {
             dto.update_status, "update_available",
             "only the update, which can look by id, may decide"
         );
+    }
+
+    /// Once an update has called a skills.sh skill deleted, a check keeps that
+    /// answer: it has no blobs, so it cannot look by id, and turning the status
+    /// back into "update available" would re-clone the whole Source next round
+    /// only to learn the same thing (#655).
+    #[test]
+    fn a_check_keeps_a_settled_source_gone_for_a_skillssh_skill() {
+        let repo = test_repo();
+        let (dir, url, installed) = monorepo(&repo);
+        insert_skillssh_skill(&repo.store, "b", "owner/repo/b", &url, Some("skills/b"), &installed);
+        repo.store
+            .update_skill_check_state("b", Some(&installed), skill_store::SOURCE_GONE, None)
+            .unwrap();
+
+        // Nothing has moved yet: the check still has no grounds to disagree.
+        let dto = check_skill_update_internal(&repo.store, "b", true, None).unwrap();
+        assert_eq!(dto.update_status, "source_gone");
+
+        git_in(&dir, &["rm", "-r", "-q", "skills/b"]);
+        git_in(&dir, &["commit", "-qm", "drop b"]);
+        let dto = check_skill_update_internal(&repo.store, "b", true, None).unwrap();
+        assert_eq!(dto.update_status, "source_gone");
     }
 
     /// A skills.sh skill its Source deleted is nowhere the update would look —

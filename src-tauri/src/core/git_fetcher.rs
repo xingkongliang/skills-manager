@@ -48,6 +48,12 @@ pub fn parse_git_source(url: &str) -> ParsedGitSource {
 /// Only permits `https://`, `http://`, `ssh://`, and SCP-style `git@` URLs,
 /// plus shorthand like `user/repo` (no scheme). Rejects everything else
 /// including `file://`, `ext::`, bare local paths, and UNC paths.
+///
+/// One exception, and it exists only in unit-test builds: a `file://` URL
+/// pointing into the system temp directory, which is where the tests build the
+/// repositories they clone. It is not in a shipped binary, and it is not
+/// visible to the `skills-manager-cli` binary either — that links this library
+/// without `cfg(test)`, so a CLI test cannot use a `file://` Source.
 pub fn validate_git_url(url: &str) -> Result<()> {
     let trimmed = url.trim();
     let lower = trimmed.to_lowercase();
@@ -61,11 +67,19 @@ pub fn validate_git_url(url: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Tests clone a repository that lives on disk. No shipped build reaches
-    // this: a `file://` Source is rejected in the app, as it always was.
+    // Tests clone the repositories they build, and those live in the temp
+    // directory. Nothing else on disk is exempt.
     #[cfg(test)]
     if lower.starts_with("file://") {
-        return Ok(());
+        let rest = &trimmed["file://".len()..];
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let canonical = std::fs::canonicalize(rest)
+            .or_else(|_| std::fs::canonicalize(rest.trim_start_matches('/')));
+        if canonical.is_ok_and(|path| path.starts_with(&temp)) {
+            return Ok(());
+        }
     }
 
     // Allow GitHub/GitLab shorthand like "user/repo" or "user/repo.git"
@@ -1730,6 +1744,23 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    /// The test-only `file://` exemption is bounded by the temp directory:
+    /// everything else on disk stays refused, which is the part a shipped build
+    /// has always enforced.
+    #[test]
+    fn a_file_url_outside_the_temp_directory_is_still_rejected() {
+        let outside = std::env::current_dir().unwrap().join("some-repo");
+        assert!(
+            validate_git_url(&format!("file://{}", outside.display())).is_err(),
+            "only the temp directory is exempt, and only in tests"
+        );
+        let inside = tempdir().unwrap();
+        assert!(
+            validate_git_url(&format!("file://{}", inside.path().display())).is_ok(),
+            "the repositories the tests clone live here"
+        );
+    }
 
     // ── parse_git_source ──
 
