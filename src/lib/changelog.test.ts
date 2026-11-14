@@ -4,6 +4,7 @@ import changelogZh from "../../CHANGELOG-zh.md?raw";
 import packageJson from "../../package.json?raw";
 import {
   MAX_WHATS_NEW_ENTRIES,
+  SECTION_TITLES,
   compareVersions,
   decideWhatsNew,
   parseChangelog,
@@ -76,6 +77,29 @@ describe("parseChangelog", () => {
 
   it("reads old-format releases as empty", () => {
     expect(entries[3]).toMatchObject({ overview: "", userFacing: "" });
+  });
+
+  // What scripts/prepare-release.mjs writes before anyone fills it in; the
+  // Prepare Release workflow can ship it as is.
+  it("reads an unfilled release template as empty", () => {
+    const template = [
+      "## [2.0.0] - 2026-12-01", "",
+      "### Release Overview", "- ", "",
+      "### User-facing", "- ", "",
+      "### Developer & Governance", "- ", "",
+      "## [1.9.0] - 2026-11-01", "",
+      "### 发布概览", "-", "",
+      "### 用户可见更新", "- ", "", "",
+      "## [1.8.0] - 2026-10-01", "",
+      "### User-facing", "- Real item.", "- ", "",
+    ].join("\n");
+    const parsed = parseChangelog(template);
+    expect(parsed[0]).toMatchObject({ version: "2.0.0", overview: "", userFacing: "" });
+    expect(parsed[1]).toMatchObject({ version: "1.9.0", overview: "", userFacing: "" });
+    // Only a section with nothing else counts as empty.
+    expect(parsed[2].userFacing).toBe("- Real item.\n-");
+    expect(selectWhatsNew(parsed, "2.0.0", null)).toEqual([]);
+    expect(selectWhatsNew(parsed, "2.0.0", "1.8.0")).toEqual([]);
   });
 
   it("keeps the first entry of a duplicated version", () => {
@@ -180,29 +204,44 @@ describe("decideWhatsNew", () => {
 
 // The parser depends on the exact `##` / `###` headings. If the CHANGELOG
 // format drifts, these fail in CI instead of the dialog going quietly empty.
+// They must stay green on an unfilled release template, which is a supported
+// way to cut a release (the dialog then simply does not open).
+const RECENT_RELEASES = 10;
+
+/** Every `###` heading in the newest releases, read from the raw text. */
+function recentHeadings(markdown: string): string[] {
+  return markdown
+    .split(/^## \[/m)
+    .slice(1, RECENT_RELEASES + 1)
+    .flatMap((release) => release.split(/\r?\n/))
+    .filter((line) => line.startsWith("### "))
+    .map((line) => line.slice(4).trim());
+}
+
 describe("the real CHANGELOG files", () => {
   const en = parseChangelog(changelogEn);
   const zh = parseChangelog(changelogZh);
   const current = (JSON.parse(packageJson) as { version: string }).version;
 
   it("list the same releases in both languages", () => {
-    expect(en.length).toBeGreaterThan(10);
+    expect(en.length).toBeGreaterThan(RECENT_RELEASES);
     expect(en.map((e) => `${e.version} ${e.date}`)).toEqual(zh.map((e) => `${e.version} ${e.date}`));
   });
 
-  it("have the current version, with an overview, in both languages", () => {
-    for (const entries of [en, zh]) {
-      const entry = entries.find((e) => e.version === current);
-      expect(entry, current).toBeDefined();
-      expect(entry!.overview).not.toBe("");
-    }
+  it("have the current version in both languages", () => {
+    expect(en.map((e) => e.version)).toContain(current);
+    expect(zh.map((e) => e.version)).toContain(current);
   });
 
-  it("give each of the latest 10 releases an overview", () => {
-    for (const entries of [en, zh]) {
-      for (const entry of entries.slice(0, 10)) {
-        expect(entry.overview, entry.version).not.toBe("");
-      }
+  it("use only the known section headings in recent releases", () => {
+    for (const [markdown, titles] of [
+      [changelogEn, SECTION_TITLES.en],
+      [changelogZh, SECTION_TITLES.zh],
+    ] as const) {
+      const known: string[] = Object.values(titles);
+      const headings = recentHeadings(markdown);
+      expect(headings.length).toBeGreaterThan(0);
+      expect(headings.filter((heading) => !known.includes(heading))).toEqual([]);
     }
   });
 });

@@ -27,13 +27,28 @@ export const MAX_WHATS_NEW_ENTRIES = 5;
 
 const VERSION_HEADING = /^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})\s*$/;
 const SECTION_HEADING = /^### (.+?)\s*$/;
-const OVERVIEW_TITLES = new Set(["Release Overview", "发布概览"]);
-const USER_FACING_TITLES = new Set(["User-facing", "用户可见更新"]);
+
+/**
+ * The three section headings each release is written with, per language (as
+ * scripts/prepare-release.mjs generates them). The developer one is never
+ * shown; it is listed so the CHANGELOG test can reject any other heading.
+ */
+export const SECTION_TITLES = {
+  en: { overview: "Release Overview", userFacing: "User-facing", developer: "Developer & Governance" },
+  zh: { overview: "发布概览", userFacing: "用户可见更新", developer: "开发者与治理更新" },
+} as const;
+const OVERVIEW_TITLES = new Set<string>([SECTION_TITLES.en.overview, SECTION_TITLES.zh.overview]);
+const USER_FACING_TITLES = new Set<string>([SECTION_TITLES.en.userFacing, SECTION_TITLES.zh.userFacing]);
+
+/** A line of the release template's placeholder: a list item with no text. */
+const EMPTY_LIST_ITEM = /^\s*-\s*$/;
 
 /**
  * Splits a CHANGELOG into releases, newest first as written. A version that
  * appears twice keeps its first entry (CHANGELOG.md has a leftover empty
  * template above the real 1.14.3), so versions are unique and safe as keys.
+ * A section holding nothing but empty list items (the `- ` placeholders of an
+ * unfilled release template) reads as empty.
  */
 export function parseChangelog(markdown: string): ChangelogEntry[] {
   const entries: ChangelogEntry[] = [];
@@ -43,7 +58,11 @@ export function parseChangelog(markdown: string): ChangelogEntry[] {
   let buffer: string[] = [];
 
   const flushSection = () => {
-    if (entry && section) entry[section] = buffer.join("\n").trim();
+    if (entry && section) {
+      const text = buffer.join("\n").trim();
+      const placeholder = text.split("\n").every((line) => !line.trim() || EMPTY_LIST_ITEM.test(line));
+      entry[section] = placeholder ? "" : text;
+    }
     buffer = [];
   };
 
