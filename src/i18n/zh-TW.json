@@ -470,7 +470,7 @@
       "noAgents": "沒有已安裝並啟用的 Agent。",
       "allSynced": "選取的 Skill 都已同步到這個 Agent"
     },
-    "batchSourceGone": "{count} 個技能的上游已刪除，無法更新",
+    "batchSourceGone": "{{count}} 個技能的上游已刪除，沒有可更新的內容",
     "cleanup": {
       "entry": "清理 {{count}} 個上游已刪除",
       "title": "刪除這 {{count}} 個上游已刪除的技能？",

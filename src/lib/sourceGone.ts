@@ -1,5 +1,8 @@
 import type { ManagedSkill } from "./tauri";
 
+/** The status the backend writes when a Source no longer holds a skill (#655). */
+export const SOURCE_GONE = "source_gone";
+
 /**
  * One skill the cleanup would delete, with everything the confirmation has to
  * disclose: where it came from, what the library still holds, and what else
@@ -27,7 +30,7 @@ export interface SourceGoneRow {
  */
 export function sourceGoneRows(skills: ManagedSkill[]): SourceGoneRow[] {
   return skills
-    .filter((skill) => skill.update_status === "source_gone")
+    .filter((skill) => skill.update_status === SOURCE_GONE)
     .map((skill) => ({
       id: skill.id,
       name: skill.name,

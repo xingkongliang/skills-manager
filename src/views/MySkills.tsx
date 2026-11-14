@@ -56,7 +56,7 @@ import type {
 import { getErrorMessage } from "../lib/error";
 import { normalizeSkillSearch, skillSearchMatches } from "../lib/skillSearch";
 import { countHiddenSelected, hiddenSelectionTexts } from "../lib/selectionVisibility";
-import { sourceGoneRows } from "../lib/sourceGone";
+import { SOURCE_GONE, sourceGoneRows } from "../lib/sourceGone";
 import { buildSkillRows, renderedSkillIds, type SkillListRow } from "../lib/skillRows";
 import { channelsForSkills } from "../lib/skillChannels";
 import { ChannelPills } from "../components/ChannelPills";
@@ -1236,7 +1236,7 @@ export function MySkills() {
     }
     // Still installed, still deploying, and nothing to do about it: the Source
     // no longer holds this skill (#655). Muted, not red — it is not an error.
-    if (skill.update_status === "source_gone") {
+    if (skill.update_status === SOURCE_GONE) {
       return {
         label: t("mySkills.updateStatus.sourceGone"),
         className: "bg-surface-active text-secondary",

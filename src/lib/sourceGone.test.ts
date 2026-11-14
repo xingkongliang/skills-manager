@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sourceGoneRows } from "./sourceGone";
+import { SOURCE_GONE, sourceGoneRows } from "./sourceGone";
 import type { ManagedSkill } from "./tauri";
 
 function skill(overrides: Partial<ManagedSkill> = {}): ManagedSkill {
@@ -14,7 +14,7 @@ function skill(overrides: Partial<ManagedSkill> = {}): ManagedSkill {
     source_branch: null,
     source_revision: "rev-1",
     remote_revision: "rev-2",
-    update_status: "source_gone",
+    update_status: SOURCE_GONE,
     last_checked_at: 1,
     last_check_error: null,
     central_path: "/library/b",
