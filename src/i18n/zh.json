@@ -404,7 +404,8 @@
       "local": "本地",
       "import": "导入",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "website": "网站"
     },
     "groupBySource": "按来源分组",
     "sourcePicker": {
@@ -433,7 +434,7 @@
     },
     "selectMode": "多选",
     "selectedCount": "已选 {{count}} 个",
-    "hiddenInCollapsedSources": "（其中 {{count}} 个在折叠的来源中）",
+    "notShownCount": "（其中 {{count}} 个未显示）",
     "selectHint": "点击 Skill 开始选择",
     "batchUpdate": "更新 {{count}} 个",
     "batchUpdated": "已批量更新 {{count}} 个 Skill",
@@ -441,7 +442,7 @@
     "batchUpdateFailed": "{{count}} 个 Skill 更新失败",
     "deleteSelected": "删除 {{count}} 个",
     "batchDeleteConfirm": "确定彻底删除选中的 {{count}} 个 Skill 吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
-    "batchDeleteHiddenInCollapsed": "其中 {{count}} 个在折叠的来源中。",
+    "batchDeleteConfirmWithHidden": "确定彻底删除选中的 {{count}} 个 Skill（其中 {{hidden}} 个未显示）吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
     "batchDeleted": "已删除 {{count}} 个 Skill",
     "batchDeleteFailed": "{{count}} 个 Skill 删除失败",
     "batchToggleFailed": "{{count}} 个 Skill 更新失败",

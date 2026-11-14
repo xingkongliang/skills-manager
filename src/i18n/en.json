@@ -404,7 +404,8 @@
       "local": "Local",
       "import": "Imported",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "website": "Website"
     },
     "groupBySource": "Group by source",
     "sourcePicker": {
@@ -433,7 +434,7 @@
     },
     "selectMode": "Select",
     "selectedCount": "{{count}} selected",
-    "hiddenInCollapsedSources": "({{count}} in collapsed sources)",
+    "notShownCount": "({{count}} not shown)",
     "selectHint": "Click skills to select",
     "batchUpdate": "Update {{count}}",
     "batchUpdated": "{{count}} skills refreshed",
@@ -441,7 +442,7 @@
     "batchUpdateFailed": "{{count}} skills failed to refresh",
     "deleteSelected": "Delete {{count}}",
     "batchDeleteConfirm": "Delete {{count}} selected skills permanently? This removes their central library files, preset links, and synced agent targets.",
-    "batchDeleteHiddenInCollapsed": "{{count}} of them are in collapsed sources.",
+    "batchDeleteConfirmWithHidden": "Delete {{count}} selected skills permanently, including {{hidden}} not shown in the list? This removes their central library files, preset links, and synced agent targets.",
     "batchDeleted": "{{count}} skills deleted",
     "batchDeleteFailed": "{{count}} skills failed to delete",
     "batchToggleFailed": "{{count}} skills failed to update",
