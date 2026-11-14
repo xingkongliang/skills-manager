@@ -56,6 +56,12 @@ jobs:
       - name: Build CLI binary
         run: cargo build --release --locked --manifest-path src-tauri/Cargo.toml --bin skills-manager-cli --target ${{ matrix.target }}
 
+      # Tauri strips the target suffix when installing a sidecar into Contents/MacOS.
+      - name: Stage CLI sidecar
+        run: |
+          mkdir -p src-tauri/binaries
+          install -m 755 "src-tauri/target/${{ matrix.target }}/release/skills-manager-cli" "src-tauri/binaries/skills-manager-cli-${{ matrix.target }}"
+
       - name: Build DMG
         run: npm run tauri:build -- --target ${{ matrix.target }} --bundles dmg --config src-tauri/tauri.macos-test.conf.json
 
