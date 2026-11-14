@@ -192,9 +192,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // reader can compute duration as done - start. Keeping the unit
       // identical to the other frontend startup marks avoids ambiguity in
       // the log file (see codex review note on #153).
-      api.logStartupEvent("refresh_app_data_start", performance.now()).catch(() => {});
+      api.logStartupEvent("refresh_app_data_start", performance.now()).catch(() => { });
       await refreshAppData();
-      api.logStartupEvent("refresh_app_data_done", performance.now()).catch(() => {});
+      api.logStartupEvent("refresh_app_data_done", performance.now()).catch(() => { });
       // Apply saved text size on startup
       const savedSize = await api.getSettings("text_size").catch(() => null);
       if (savedSize) {
@@ -337,7 +337,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
     }, 3000);
     return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading]);
 
   // The Rust scheduler owns automatic skill checks and applies the global settings.

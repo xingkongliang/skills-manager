@@ -102,7 +102,7 @@ it("leaves the original skill alone when no match exists or switching fails", as
   );
   apply.mockRejectedValue(new Error("download failed"));
   await act(async () => switchButton().click());
-  expect(container.querySelector('[role="alert"]')!.textContent).toContain("download failed");
+  expect(container.querySelector('[role="alert"]')!.textContent).toBe("common.error");
   expect(close).not.toHaveBeenCalled();
 });
 
@@ -131,6 +131,6 @@ it("cancels an in-flight conversion without closing or committing it", async () 
   )!;
   await act(async () => cancel.click());
   expect(mocks.cancel).toHaveBeenCalledWith("update:legacy");
-  expect(container.querySelector('[role="alert"]')!.textContent).toContain("cancelled");
+  expect(container.querySelector('[role="alert"]')!.textContent).toBe("common.error");
   expect(close).not.toHaveBeenCalled();
 });

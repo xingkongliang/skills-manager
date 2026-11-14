@@ -1752,6 +1752,7 @@ fn prefetch_market_remote(skill: &SkillRecord, proxy: Option<&str>) -> Prefetche
         },
         result,
         unchanged: HashSet::new(),
+        comparison_error: None,
     }
 }
 
@@ -4262,6 +4263,7 @@ mod tests {
             key: remote(source, None),
             result: Err("permission denied".into()),
             unchanged: HashSet::new(),
+            comparison_error: None,
         };
         assert!(
             check_skill_update_internal_with_remote(&repo.store, "market", true, Some(failed))

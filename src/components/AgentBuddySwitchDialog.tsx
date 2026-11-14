@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { fetchSkills, type MarketSkill } from "../byte/views/installSkills/frontend";
 import { cancelInstall, type ManagedSkill } from "../lib/tauri";
-import { getErrorMessage } from "../lib/error";
 
 export function AgentBuddySwitchDialog({
   skill,
@@ -21,15 +20,14 @@ export function AgentBuddySwitchDialog({
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [searched, setSearched] = useState(false);
+  const [hasError, setHasError] = useState(false);
   const request = useRef(0);
 
   const search = async (value: string) => {
     const id = ++request.current;
     setLoading(true);
     setSelected(null);
-    setError(null);
+    setHasError(false);
     setResults([]);
     try {
       // Read all result pages before deciding that an exact name is unique.
@@ -58,9 +56,8 @@ export function AgentBuddySwitchDialog({
       if (exact.length === 1 && !exact[0].disabled && !exact[0].no_permission && exact[0].version) {
         setSelected(exact[0]);
       }
-      setSearched(true);
     } catch (cause) {
-      if (id === request.current) setError(getErrorMessage(cause, t("common.error")));
+      if (id === request.current) setHasError(true);
     } finally {
       if (id === request.current) setLoading(false);
     }
@@ -135,15 +132,15 @@ export function AgentBuddySwitchDialog({
             {t("common.loading")}
           </p>
         )}
-        {error && (
-          <p role="alert" className="text-[13px] text-red-500">
-            {error}
-          </p>
-        )}
-        {searched && !loading && results.length === 0 && !error && (
-          <p className="text-[13px] text-muted">{t("mySkills.agentBuddy.noMatch")}</p>
-        )}
         <div className="min-h-0 space-y-2 overflow-y-auto">
+          {!loading && results.length === 0 && (
+            <div
+              role={hasError ? "alert" : "status"}
+              className="flex min-h-[144px] items-center justify-center rounded-lg border border-border-subtle bg-bg-secondary px-5 py-10 text-center text-[13px] text-muted"
+            >
+              {t("mySkills.agentBuddy.noMatch")}
+            </div>
+          )}
           {results.map((candidate) => (
             <div
               key={JSON.stringify([candidate.identifier, candidate.repository])}
@@ -178,9 +175,10 @@ export function AgentBuddySwitchDialog({
               <button
                 type="button"
                 onClick={() => {
-                  void openUrl(candidate.url).catch((cause) =>
-                    setError(getErrorMessage(cause, t("common.error"))),
-                  );
+                  void openUrl(candidate.url)
+                    .catch((cause) => {
+                      setHasError(true);
+                    });
                 }}
                 className="mt-2 text-[12px] text-accent"
               >
@@ -201,7 +199,8 @@ export function AgentBuddySwitchDialog({
               try {
                 await cancelInstall(`update:${skill.id}`);
               } catch (cause) {
-                setError(getErrorMessage(cause, t("common.error")));
+                console.error("Failed to cancel Agent Buddy switch:", cause);
+                setHasError(true);
                 setCancelling(false);
               }
             }}
@@ -214,12 +213,12 @@ export function AgentBuddySwitchDialog({
             onClick={async () => {
               if (!selected) return;
               setApplying(true);
-              setError(null);
+              setHasError(false);
               try {
                 await onSwitch(selected);
                 onClose();
               } catch (cause) {
-                setError(getErrorMessage(cause, t("common.error")));
+                setHasError(true);
               } finally {
                 setApplying(false);
                 setCancelling(false);

@@ -2107,7 +2107,7 @@ export function MySkills() {
       )}
 
       <SkillDetailPanel
-        key={selectedSkill?.id ?? "skill-detail-empty"}
+        key={`skill-detail-${selectedSkill?.id ?? "empty"}`}
         skill={selectedSkill}
         onClose={closeSkillDetail}
         tools={tools}
@@ -2122,7 +2122,7 @@ export function MySkills() {
 
       {switchingSkill && (
         <AgentBuddySwitchDialog
-          key={switchingSkill.id}
+          key={`agent-buddy-switch-${switchingSkill.id}`}
           skill={switchingSkill}
           onClose={() => setSwitchingSkill(null)}
           onSwitch={(target) => handleSwitchToBuddy(switchingSkill, target)}
