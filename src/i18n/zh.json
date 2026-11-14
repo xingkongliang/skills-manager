@@ -653,6 +653,7 @@
     "textSizeXLarge": "特大",
     "language": "语言",
     "help": "帮助",
+    "whatsNew": "更新内容",
     "website": "官网",
     "about": "关于",
     "version": "Skills Manager {{version}}",
@@ -1143,5 +1144,11 @@
     "exportLogsDone": "日志已保存到 {{path}}",
     "exportLogsFailed": "导出日志失败。",
     "reload": "重新加载"
+  },
+  "whatsNew": {
+    "title": "更新内容",
+    "gotIt": "知道了",
+    "fullChangelog": "查看完整更新日志",
+    "close": "关闭"
   }
 }

@@ -29,6 +29,7 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
+  Sparkles,
 } from "lucide-react";
 import {
   DndContext,
@@ -59,6 +60,8 @@ import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
 import { AgentIcon } from "../components/AgentIcon";
 import { ToggleSwitch } from "../components/ToggleSwitch";
+import { WhatsNewDialog } from "../components/WhatsNewDialog";
+import { loadChangelog, selectWhatsNew, type ChangelogEntry } from "../lib/changelog";
 import * as api from "../lib/tauri";
 import { applyTextSize } from "../lib/textScale";
 import { getErrorMessage } from "../lib/error";
@@ -172,6 +175,9 @@ export function Settings() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [appVersion, setAppVersion] = useState("");
+  // This version's "What's new"; empty hides the entry point.
+  const [currentRelease, setCurrentRelease] = useState<ChangelogEntry[]>([]);
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
   const [gitRemoteInput, setGitRemoteInput] = useState("");
   const [gitRemoteSaving, setGitRemoteSaving] = useState(false);
   const [gitRemoteDisconnecting, setGitRemoteDisconnecting] = useState(false);
@@ -320,6 +326,19 @@ export function Settings() {
     api.getCentralRepoWarnings().then(setRepoWarnings).catch(() => {});
     getVersion().then(setAppVersion).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!appVersion) return;
+    let cancelled = false;
+    loadChangelog(i18n.language)
+      .then((entries) => {
+        if (!cancelled) setCurrentRelease(selectWhatsNew(entries, appVersion, null));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [appVersion, i18n.language]);
 
   useEffect(() => {
     api.getSettings("sync_mode").then((v) => { if (v) setSyncMode(v); });
@@ -1851,6 +1870,15 @@ export function Settings() {
               >
                 <BookOpen className="w-3 h-3" /> {t("settings.help")}
               </button>
+              {currentRelease.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setWhatsNewOpen(true)}
+                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+                >
+                  <Sparkles className="w-3 h-3" /> {t("settings.whatsNew")}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleReportIssue}
@@ -1898,6 +1926,9 @@ export function Settings() {
           </div>
         </section>
       </div>
+      {whatsNewOpen && (
+        <WhatsNewDialog entries={currentRelease} onClose={() => setWhatsNewOpen(false)} />
+      )}
     </div>
   );
 }
