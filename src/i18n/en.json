@@ -653,6 +653,7 @@
     "textSizeXLarge": "Extra Large",
     "language": "Language",
     "help": "Help",
+    "whatsNew": "What's new",
     "website": "Website",
     "about": "About",
     "version": "Skills Manager {{version}}",
@@ -1143,5 +1144,11 @@
     "exportLogsDone": "Logs saved to {{path}}",
     "exportLogsFailed": "Failed to export logs.",
     "reload": "Reload"
+  },
+  "whatsNew": {
+    "title": "What's new",
+    "gotIt": "Got it",
+    "fullChangelog": "Full changelog",
+    "close": "Close"
   }
 }
