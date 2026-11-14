@@ -24,3 +24,30 @@ export function countHiddenSelected(
   }
   return selectedIds.size - visible;
 }
+
+/**
+ * The My Skills texts that disclose hidden selections: the toolbar note and the
+ * bulk-delete confirmation. Neither names a reason, because a selected skill
+ * can lose its row to a collapsed Source or to a filter changed after it was
+ * picked, and the count cannot tell which. The confirmation is one sentence
+ * per case, never two joined with a space.
+ */
+export function hiddenSelectionTexts(
+  t: (key: string, options: Record<string, number>) => string,
+  selectedCount: number,
+  hiddenCount: number
+): { toolbarNote: string | undefined; deleteConfirm: string } {
+  if (hiddenCount === 0) {
+    return {
+      toolbarNote: undefined,
+      deleteConfirm: t("mySkills.batchDeleteConfirm", { count: selectedCount }),
+    };
+  }
+  return {
+    toolbarNote: t("mySkills.notShownCount", { count: hiddenCount }),
+    deleteConfirm: t("mySkills.batchDeleteConfirmWithHidden", {
+      count: selectedCount,
+      hidden: hiddenCount,
+    }),
+  };
+}

@@ -50,19 +50,19 @@ describe("MultiSelectToolbar", () => {
   it("shows only the count when every selected skill is on screen", () => {
     const text = render();
     expect(text).toContain("5 selected");
-    expect(text).not.toContain("collapsed");
+    expect(text).not.toContain("not shown");
   });
 
-  it("names the hidden skills when some are inside collapsed sources", () => {
-    const text = render({ labels: { ...labels, hiddenSelected: "(2 in collapsed sources)" } });
+  it("adds the hidden note when some selected skills have no row on screen", () => {
+    const text = render({ labels: { ...labels, hiddenSelected: "(2 not shown)" } });
     expect(text).toContain("5 selected");
-    expect(text).toContain("(2 in collapsed sources)");
+    expect(text).toContain("(2 not shown)");
   });
 
   it("keeps the hidden note out of the hint state", () => {
     // No selection means nothing is hidden; the note would contradict the hint.
-    const text = render({ selectedCount: 0, labels: { ...labels, hiddenSelected: "(2 in)" } });
+    const text = render({ selectedCount: 0, labels: { ...labels, hiddenSelected: "(2 not shown)" } });
     expect(text).toContain("Click skills to select");
-    expect(text).not.toContain("(2 in)");
+    expect(text).not.toContain("(2 not shown)");
   });
 });

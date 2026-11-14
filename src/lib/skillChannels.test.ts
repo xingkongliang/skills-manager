@@ -15,6 +15,11 @@ describe("channelsForSkills", () => {
     expect(channelsForSkills(mixed)).toEqual(["local", "import", "git", "skillssh"]);
   });
 
+  it("adds the site channel only when the library holds one", () => {
+    expect(channelsForSkills([skill("git")])).not.toContain("well-known");
+    expect(channelsForSkills([skill("well-known")])).toEqual([...CHANNEL_ORDER, "well-known"]);
+  });
+
   it("appends a channel this build does not name, once and sorted", () => {
     const extra = [skill("well-known"), skill("well-known"), skill("zz-legacy")];
     expect(channelsForSkills(extra)).toEqual([
@@ -35,7 +40,8 @@ describe("isKnownChannel", () => {
   });
 
   it("does not claim the site channel is known", () => {
-    // `well-known` has no pill of its own; it renders as its raw source_type.
+    // `well-known` is not one of the fixed pills: it appears only when the
+    // library holds such a skill (see channelsForSkills).
     expect(isKnownChannel("well-known")).toBe(false);
   });
 });
@@ -48,7 +54,11 @@ describe("channelLabel", () => {
     expect(channelLabel(t, "skillssh")).toBe("mySkills.sourceFilter.skillssh");
   });
 
+  it("names the site channel instead of showing its source_type", () => {
+    expect(channelLabel(t, "well-known")).toBe("mySkills.sourceFilter.website");
+  });
+
   it("falls back to the raw value so an unknown channel still gets a pill", () => {
-    expect(channelLabel(t, "well-known")).toBe("well-known");
+    expect(channelLabel(t, "zz-legacy")).toBe("zz-legacy");
   });
 });
