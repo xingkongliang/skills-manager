@@ -1,6 +1,9 @@
 name: Build macOS Test Package
 
 on:
+  push:
+    branches:
+      - "feat/添加适配"
   workflow_dispatch:
     inputs:
       architecture:
@@ -23,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(inputs.architecture == 'both' && '["aarch64-apple-darwin", "x86_64-apple-darwin"]' || inputs.architecture == 'x64' && '["x86_64-apple-darwin"]' || '["aarch64-apple-darwin"]') }}
+        target: ${{ fromJSON((github.event_name == 'push' || inputs.architecture == 'both') && '["aarch64-apple-darwin", "x86_64-apple-darwin"]' || inputs.architecture == 'x64' && '["x86_64-apple-darwin"]' || '["aarch64-apple-darwin"]') }}
 
     steps:
       - name: Checkout repository
