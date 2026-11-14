@@ -636,6 +636,11 @@ struct UpdateReport {
     /// "already up to date".
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     held_back_removals: Vec<String>,
+    /// The status the update left behind, when it is not the ordinary one.
+    /// `refreshed: false` alone reads as "already up to date", which is exactly
+    /// the confusion a skill deleted upstream used to cause (#655).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    update_status: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1880,6 +1885,7 @@ fn run_update(
                             .iter()
                             .map(|p| format!("{}: {}", p.location, p.path))
                             .collect(),
+                        update_status: Some(r.skill.update_status.clone()),
                     },
                     Err(e) => UpdateReport {
                         skill_id: skill.id.clone(),
@@ -1888,6 +1894,7 @@ fn run_update(
                         refreshed: false,
                         error: Some(e.message.clone()),
                         held_back_removals: Vec::new(),
+                        update_status: None,
                     },
                 }
             }
@@ -1903,6 +1910,7 @@ fn run_update(
                         .iter()
                         .map(|p| format!("{}: {}", p.location, p.path))
                         .collect(),
+                    update_status: None,
                 },
                 Err(e) => UpdateReport {
                     skill_id: skill.id.clone(),
@@ -1911,6 +1919,7 @@ fn run_update(
                     refreshed: false,
                     error: Some(e.message.clone()),
                     held_back_removals: Vec::new(),
+                    update_status: None,
                 },
             },
             other => UpdateReport {
@@ -1920,6 +1929,7 @@ fn run_update(
                 refreshed: false,
                 error: Some(format!("source type '{other}' cannot be refreshed")),
                 held_back_removals: Vec::new(),
+                update_status: None,
             },
         };
         reports.push(report);
@@ -4382,6 +4392,7 @@ mod tests {
         assert_eq!(report.update_status, "source_gone");
         assert_eq!(report.last_check_error, None);
     }
+
 }
 
 #[cfg(test)]

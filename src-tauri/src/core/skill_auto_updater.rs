@@ -143,7 +143,26 @@ fn apply_enabled(store: &SkillStore) -> bool {
     )
 }
 
-fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
+/// What one round did, in the terms the log and the tests both need.
+///
+/// `gone` and `skipped_gone` are deliberately separate: one counts skills this
+/// round discovered to be deleted upstream, the other skills already known to
+/// be — a library with 17 of them must not read as if the round had just found
+/// 18 (#655).
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub struct RoundSummary {
+    pub checked: usize,
+    pub available: usize,
+    pub updated: usize,
+    pub held_back: usize,
+    pub failed: usize,
+    /// Deleted upstream, discovered by this round's apply.
+    pub gone: usize,
+    /// Already known to be deleted upstream: skipped without a fetch.
+    pub skipped_gone: usize,
+}
+
+fn run_round_blocking(store: &SkillStore) -> Result<RoundSummary, String> {
     let proxy = store.proxy_url();
     let apply = apply_enabled(store);
     let skills: Vec<(String, String)> = store
@@ -158,19 +177,18 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     // operation to a single skill's network round-trip (rather than the
     // entire round). A skill whose lock is busy — a manual install/update is
     // running — is simply skipped; the next scheduled round picks it up.
-    let (mut checked, mut available, mut updated, mut held_back, mut failed, mut gone) =
-        (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut round = RoundSummary::default();
     for (skill_id, status) in skills {
         // Nothing this round does can clear a settled "the Source deleted it":
         // no fetch, no update attempt, and deliberately no failure count (#655).
         if is_terminal_update_status(&status) {
-            gone += 1;
+            round.skipped_gone += 1;
             continue;
         }
         // Yield the lock to any waiting user-initiated operation before taking
         // it again for the next skill (see FOREGROUND_YIELD).
         std::thread::sleep(FOREGROUND_YIELD);
-        checked += 1;
+        round.checked += 1;
 
         // Resolve the remote before taking the lock: the lock must never be
         // held across a network round-trip, or a slow remote fails every
@@ -183,7 +201,7 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
             let _lock = match RepoLock::acquire("auto-update check") {
                 Ok(lock) => lock,
                 Err(_) => {
-                    failed += 1;
+                    round.failed += 1;
                     log::info!("skill auto-updater: skipping {skill_id} (repo busy)");
                     continue;
                 }
@@ -191,7 +209,7 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
             match check_skill_update_internal_with_remote(store, &skill_id, true, prefetched) {
                 Ok(dto) => dto.update_status,
                 Err(err) => {
-                    failed += 1;
+                    round.failed += 1;
                     log::warn!("skill auto-updater: check failed for {skill_id}: {err}");
                     continue;
                 }
@@ -199,28 +217,30 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         };
 
         if status != "update_available" {
+            // A skills.sh skill settles into `source_gone` only through the
+            // update below, so this is not where a deletion is discovered.
             continue;
         }
-        available += 1;
+        round.available += 1;
 
         if apply {
             match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None, None) {
                 // Nothing to update and nothing to retry: the Source deleted
                 // this skill (#655).
                 Ok(result) if result.skill.update_status == SOURCE_GONE => {
-                    gone += 1;
+                    round.gone += 1;
                 }
                 Ok(result) if !result.pending_removals.is_empty() => {
-                    held_back += 1;
+                    round.held_back += 1;
                     log::info!(
                         "skill auto-updater: holding back {skill_id} — updating would remove {} \
                          path(s) the new version does not have; update it by hand to review",
                         result.pending_removals.len()
                     );
                 }
-                Ok(_) => updated += 1,
+                Ok(_) => round.updated += 1,
                 Err(err) => {
-                    failed += 1;
+                    round.failed += 1;
                     log::warn!(
                         "skill auto-updater: update failed for {skill_id}: {}",
                         err.message
@@ -230,9 +250,16 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         }
     }
     log::info!(
-        "skill auto-updater: round done — checked={checked} available={available} updated={updated} held_back={held_back} failed={failed} gone={gone}"
+        "skill auto-updater: round done — checked={} available={} updated={} held_back={} failed={} gone={} skipped_gone={}",
+        round.checked,
+        round.available,
+        round.updated,
+        round.held_back,
+        round.failed,
+        round.gone,
+        round.skipped_gone
     );
-    Ok(())
+    Ok(round)
 }
 
 #[cfg(test)]
@@ -278,12 +305,20 @@ mod tests {
             })
             .unwrap();
 
-        run_round_blocking(&store).unwrap();
+        let round = run_round_blocking(&store).unwrap();
 
         let stored = store.get_skill_by_id("gone-skill").unwrap().unwrap();
         assert_eq!(stored.update_status, "source_gone");
         assert_eq!(stored.last_checked_at, None, "no fetch, no check");
         assert_eq!(stored.last_check_error, None);
+        assert_eq!(
+            round,
+            RoundSummary {
+                skipped_gone: 1,
+                ..RoundSummary::default()
+            },
+            "skipped, not checked, not failed, not updated"
+        );
     }
 
     #[test]
