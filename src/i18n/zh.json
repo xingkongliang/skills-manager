@@ -478,7 +478,17 @@
       "noAgents": "没有已安装并启用的 Agent。",
       "allSynced": "选中的 Skill 都已同步到这个 Agent"
     },
-    "batchSourceGone": "{count} 个技能的上游已删除，无法更新"
+    "batchSourceGone": "{count} 个技能的上游已删除，无法更新",
+    "cleanup": {
+      "entry": "清理 {{count}} 个上游已删除",
+      "title": "删除这 {{count}} 个上游已删除的技能？",
+      "message": "删除之前它们仍然正常安装和部署。删除会连同它们的部署与预设引用一起移除库里那一份，且无法恢复。",
+      "row": "{{name}} — 来源 {{subpath}} · 本地副本 {{path}} · {{deployments}} 个部署 · {{presets}} 个预设",
+      "rootSubpath": "(仓库根目录)",
+      "confirm": "删除 {{count}} 个技能",
+      "deleted": "已删除 {{count}} 个技能",
+      "failed": "{{count}} 个技能删除失败"
+    }
   },
   "install": {
     "title": "安装 Skills",

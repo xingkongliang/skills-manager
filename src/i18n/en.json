@@ -478,7 +478,17 @@
       "noAgents": "No installed and enabled agents.",
       "allSynced": "Every selected skill is already on this agent"
     },
-    "batchSourceGone": "{count} could not be updated: their Source no longer holds them"
+    "batchSourceGone": "{count} could not be updated: their Source no longer holds them",
+    "cleanup": {
+      "entry": "Clean up {{count}} deleted upstream",
+      "title": "Delete {{count}} skills their Source deleted?",
+      "message": "They stay installed and deployed until you delete them. Deleting removes the library copy with its deployments and preset mentions. This cannot be undone.",
+      "row": "{{name}} — from {{subpath}} · copy at {{path}} · {{deployments}} deployment(s) · {{presets}} preset(s)",
+      "rootSubpath": "(repository root)",
+      "confirm": "Delete {{count}} skills",
+      "deleted": "{{count}} skills deleted",
+      "failed": "{{count}} could not be deleted"
+    }
   },
   "install": {
     "title": "Install Skills",
