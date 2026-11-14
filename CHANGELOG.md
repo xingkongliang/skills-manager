@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.45.0] - 2026-11-14
+
+### Release Overview
+- After an update, the app now shows what changed.
+
+### User-facing
+- **See what's new after an update** — The first time you open the app after updating, a "What's new" dialog lists what changed for you in that release. If you skipped several releases, it covers each of them, up to five. It appears once per update; **What's new** in Settings, next to the version, opens it again at any time. The notes ship with the app, so the dialog works offline (#669).
+
+### Developer & Governance
+- The dialog reads the `CHANGELOG.md` / `CHANGELOG-zh.md` bundled at build time and shows only the "Release Overview" and "User-facing" sections. Each file is a separate chunk, loaded on demand. The last version seen is stored in the `whats_new_seen_version` setting, which stays on this machine and is not part of the backup (#669).
+- A frontend test now fails when the two CHANGELOG files list different releases, or when one of the latest ten releases uses a section heading other than the three standard ones. A release whose template is left unfilled opens no dialog (#669).
 ## [1.44.0] - 2026-11-12
 
 ### Release Overview
