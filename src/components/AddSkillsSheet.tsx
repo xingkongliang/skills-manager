@@ -15,6 +15,7 @@ import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { normalizeSkillSearch, skillSearchMatches } from "../lib/skillSearch";
+import { countHiddenSelected } from "../lib/selectionVisibility";
 import {
   classifySkill,
   targetsToInstall,
@@ -197,14 +198,11 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
 
   // Selected skills the filters have hidden. They are still installed, so the
   // footer has to say so rather than let the count disagree with the rows.
-  const hiddenSelectedCount = useMemo(() => {
-    const visibleIds = new Set(visible.map((skill) => skill.id));
-    let hidden = 0;
-    for (const id of selectedIds) {
-      if (!visibleIds.has(id)) hidden += 1;
-    }
-    return hidden;
-  }, [selectedIds, visible]);
+  // The drawer has no collapsed groups, so every skill in `visible` has a row.
+  const hiddenSelectedCount = useMemo(
+    () => countHiddenSelected(selectedIds, visible.map((skill) => skill.id)),
+    [selectedIds, visible]
+  );
 
   // Sort: available first, then installed/conflict/unavailable (greyed out at bottom)
   const ordered = useMemo(() => {
