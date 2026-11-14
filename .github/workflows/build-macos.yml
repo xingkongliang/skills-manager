@@ -67,10 +67,18 @@ jobs:
           install -m 755 "src-tauri/target/${{ matrix.target }}/release/skills-manager-cli" "src-tauri/binaries/skills-manager-cli-${{ matrix.target }}"
 
       - name: Build DMG
-        run: npm run tauri:build -- --target ${{ matrix.target }} --bundles dmg --config src-tauri/tauri.macos-test.conf.json
+        # Keep the app bundle so the next step can verify the actual packaged CLI.
+        run: npm run tauri:build -- --target ${{ matrix.target }} --bundles app,dmg --config src-tauri/tauri.macos-test.conf.json
 
       - name: Verify bundled CLI
-        run: test -x "src-tauri/target/${{ matrix.target }}/release/bundle/macos/skills-manager.app/Contents/MacOS/skills-manager-cli"
+        run: |
+          APP_BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle/macos/skills-manager.app"
+          if [ ! -x "$APP_BUNDLE/Contents/MacOS/skills-manager-cli" ]; then
+            find "src-tauri/target/${{ matrix.target }}/release/bundle" -maxdepth 5 -type f
+            echo "::error::Bundled CLI is missing or not executable in $APP_BUNDLE"
+            exit 1
+          fi
+          codesign --verify --deep --strict "$APP_BUNDLE"
 
       - name: Upload installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
