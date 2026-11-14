@@ -234,6 +234,13 @@
     "hint": "之后随时可以在侧边栏的「备份」页连接或恢复备份。"
   },
   "mySkills": {
+    "agentBuddy": {
+      "recommend": "建议优先切换到 Agent Buddy，以使用自动更新。当前来源仍支持手动更新。",
+      "switch": "切换到 Agent Buddy",
+      "switchDescription": "为 {{name}} 选择市场条目。切换会应用市场版本；成功后按设置自动更新。",
+      "noMatch": "未找到对应条目，请尝试其他关键词。当前技能和来源保持不变。",
+      "switched": "已切换到 Agent Buddy"
+    },
     "title": "技能库",
     "applyToDefault": "应用 Preset",
     "applied": "已应用",
@@ -474,7 +481,7 @@
   },
   "install": {
     "title": "安装 Skills",
-    "browseMarket": "浏览榜单",
+    "browseMarket": "Agent Buddy",
     "localInstall": "本地安装",
     "gitInstall": "Git 安装",
     "hot": "热门",
@@ -694,7 +701,7 @@
     "autoUpdate": {
       "title": "Skill 自动更新",
       "intervalLabel": "检查频率",
-      "intervalDesc": "后台按设定频率检查已安装 Skill 是否有上游更新。",
+      "intervalDesc": "后台按设定频率检查从 Agent Buddy 安装的技能是否有新版本。其他来源仅支持手动更新。",
       "intervalOff": "关闭",
       "interval1h": "每小时",
       "interval6h": "每 6 小时",
@@ -1143,5 +1150,16 @@
     "exportLogsDone": "日志已保存到 {{path}}",
     "exportLogsFailed": "导出日志失败。",
     "reload": "重新加载"
+  },
+  "bytedance": {
+    "refresh": "刷新",
+    "all": "全部",
+    "biweekly": "双周",
+    "monthly": "月度",
+    "search": "搜索字节技能市场...",
+    "web": "在字节技能平台查看",
+    "downloads": "下载量",
+    "unavailable": "不可安装",
+    "cancelling": "正在取消..."
   }
 }

@@ -1,0 +1,15 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "externalBin": ["binaries/skills-manager-cli"],
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    }
+  }
+}

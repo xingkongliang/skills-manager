@@ -63,7 +63,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [helpOpen, setHelpOpen] = useState(false);
   const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
-  const autoCheckInFlightRef = useRef(false);
   const appUpdateCheckedRef = useRef(false);
   const lastUpdateNotificationRef = useRef<string | null>(null);
   const lastActivePresetIdRef = useRef<string | null>(null);
@@ -341,80 +340,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading]);
 
-  // Check skill updates on startup (non-blocking, silent). When the user has
-  // opted in via the Settings toggle, also apply any available updates.
-  useEffect(() => {
-    if (loading || managedSkills.length === 0) return;
-    const hasGitSkills = managedSkills.some(
-      (s) => s.source_type === "git" || s.source_type === "skillssh"
-    );
-    if (!hasGitSkills || autoCheckInFlightRef.current) return;
-
-    // Delay to avoid slowing down initial render
-    const timer = setTimeout(() => {
-      autoCheckInFlightRef.current = true;
-      (async () => {
-        try {
-          await api.checkAllSkillUpdates(false);
-          let skills = await api.getManagedSkills();
-
-          const autoUpdate = await api
-            .getSettings("auto_update_apply")
-            .catch(() => null);
-          if (autoUpdate === "on") {
-            const ids = skills
-              .filter(
-                (s) =>
-                  s.update_status === "update_available" &&
-                  (s.source_type === "git" || s.source_type === "skillssh")
-              )
-              .map((s) => s.id);
-            if (ids.length > 0) {
-              const result = await api.batchUpdateSkills(ids);
-              skills = await api.getManagedSkills();
-              if (result.refreshed > 0) {
-                toast.success(
-                  i18n.t("mySkills.autoUpdated", { count: result.refreshed })
-                );
-              }
-              // Held back rather than applied: updating would have removed
-              // files the new version does not have, and nobody was here to ask.
-              if (result.held_back.length > 0) {
-                toast.warning(
-                  i18n.t("mySkills.batchHeldBack", {
-                    count: result.held_back.length,
-                    names: result.held_back.slice(0, 3).join("、"),
-                  })
-                );
-              }
-              if (result.failed.length > 0) {
-                console.warn("Auto-update failures:", result.failed);
-                toast.error(
-                  i18n.t("mySkills.autoUpdateFailed", {
-                    count: result.failed.length,
-                  })
-                );
-              }
-            }
-          }
-
-          setManagedSkills(skills);
-          notifyUpdatableSkills(skills);
-          api.setSettings("auto_update_last_run_at", new Date().toISOString())
-            .catch(() => {});
-        } catch (err) {
-          // Startup round is non-blocking and does not toast on failure, but
-          // log so a broken check/update is still diagnosable.
-          console.error("Startup skill update round failed:", err);
-        } finally {
-          autoCheckInFlightRef.current = false;
-        }
-      })();
-    }, 3000);
-    return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading]);
-
+  // The Rust scheduler owns automatic skill checks and applies the global settings.
+  // Its completion event refreshes this view without a second startup update round.
   // Refresh after a background auto-update round (Rust scheduler) or the
   // tray "check for updates" action finishes.
   useEffect(() => {

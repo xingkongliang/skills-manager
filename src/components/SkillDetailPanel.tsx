@@ -39,6 +39,7 @@ interface Props {
   isActivePreset: boolean;
   projects?: Project[];
   onProjectsChanged?: () => void;
+  onSwitchToBuddy?: (skill: ManagedSkill) => void;
 }
 
 export function SkillDetailPanel({
@@ -51,6 +52,7 @@ export function SkillDetailPanel({
   isActivePreset,
   projects,
   onProjectsChanged,
+  onSwitchToBuddy,
 }: Props) {
   if (!skill) return null;
 
@@ -75,6 +77,7 @@ export function SkillDetailPanel({
       isActivePreset={isActivePreset}
       projects={projects}
       onProjectsChanged={onProjectsChanged}
+      onSwitchToBuddy={onSwitchToBuddy}
     />
   );
 }
@@ -89,6 +92,7 @@ function SkillDetailPanelContent({
   isActivePreset,
   projects,
   onProjectsChanged,
+  onSwitchToBuddy,
 }: {
   skill: ManagedSkill;
   onClose: () => void;
@@ -100,6 +104,7 @@ function SkillDetailPanelContent({
   isActivePreset: boolean;
   projects?: Project[];
   onProjectsChanged?: () => void;
+  onSwitchToBuddy?: (skill: ManagedSkill) => void;
 }) {
   const { t } = useTranslation();
   const [doc, setDoc] = useState<SkillDocument | null>(null);
@@ -202,7 +207,8 @@ function SkillDetailPanelContent({
     }
   };
 
-  const sourceTypeLabel = (type: string) => (type === "skillssh" ? "skills.sh" : type);
+  const sourceTypeLabel = (type: string) =>
+    type === "bytedance" ? "Agent Buddy" : type === "skillssh" ? "skills.sh" : type;
 
   const metadataItems = [
     { label: t("mySkills.sourceType"), value: sourceTypeLabel(skill.source_type) },
@@ -256,6 +262,18 @@ function SkillDetailPanelContent({
           {skill.central_path}
         </span>
       </div>
+      {skill.source_type !== "bytedance" && onSwitchToBuddy && (
+        <div className="mt-4 rounded-xl border border-border-subtle bg-surface/70 p-4">
+          <p className="text-[13px] text-muted">{t("mySkills.agentBuddy.recommend")}</p>
+          <button
+            type="button"
+            onClick={() => onSwitchToBuddy(skill)}
+            className="mt-2 rounded-lg bg-accent px-3 py-1.5 text-[13px] text-white"
+          >
+            {t("mySkills.agentBuddy.switch")}
+          </button>
+        </div>
+      )}
       {metadataItems.length > 0 && (
         <div className="mt-4 rounded-xl border border-border-subtle bg-surface/70">
           <button

@@ -1,0 +1,19 @@
+# Build outputs
+dist
+dist-ssr
+build
+
+# Dependencies
+node_modules
+
+# Rust / Tauri
+src-tauri/target
+
+# Vendored / generated
+reference
+*.local
+
+# Lockfiles
+package-lock.json
+pnpm-lock.yaml
+yarn.lock

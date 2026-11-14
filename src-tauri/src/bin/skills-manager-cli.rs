@@ -1867,8 +1867,8 @@ fn run_update(
 
     for skill in targets {
         let report = match skill.source_type.as_str() {
-            "git" | "skillssh" => {
-                match cmd::update_git_skill_internal(store, &skill.id, proxy_url.as_deref(), None, None) {
+            "git" | "skillssh" | "bytedance" => {
+                match cmd::update_skill_internal(store, &skill.id, proxy_url.as_deref(), None, None) {
                     Ok(r) => UpdateReport {
                         skill_id: skill.id.clone(),
                         name: skill.name.clone(),
@@ -1943,7 +1943,7 @@ fn run_check(
         // app does (#590). Website snapshots have nothing to compare against.
         if !matches!(
             skill.source_type.as_str(),
-            "git" | "skillssh" | "local" | "import"
+            "git" | "skillssh" | "bytedance" | "local" | "import"
         ) {
             reports.push(CheckReport {
                 skill_id: skill.id.clone(),

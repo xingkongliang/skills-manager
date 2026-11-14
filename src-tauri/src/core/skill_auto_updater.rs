@@ -5,9 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::commands::skills::{
-    check_skill_update_internal_with_remote, prefetch_skill_remote, update_git_skill_internal,
-};
+use crate::commands::skills::{check_skill_update_internal_with_remote, prefetch_bytedance_remote};
 use crate::core::repo_lock::RepoLock;
 use crate::core::skill_store::SkillStore;
 
@@ -150,6 +148,7 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         .get_all_skills()
         .map_err(|err| format!("get_all_skills failed: {err}"))?
         .into_iter()
+        .filter(|s| s.source_type == "bytedance")
         .map(|s| s.id)
         .collect();
 
@@ -169,10 +168,10 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         // Resolve the remote before taking the lock: the lock must never be
         // held across a network round-trip, or a slow remote fails every
         // concurrent user-initiated operation with a 20s "busy" (#315).
-        let prefetched = prefetch_skill_remote(store, &skill_id, true, proxy.as_deref());
+        let prefetched = prefetch_bytedance_remote(store, &skill_id, proxy.as_deref());
 
         // The check holds the repo lock; it must be released before applying,
-        // because update_git_skill_internal acquires the lock itself.
+        // because the update acquires the lock itself.
         let status = {
             let _lock = match RepoLock::acquire("auto-update check") {
                 Ok(lock) => lock,
@@ -182,6 +181,13 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
                     continue;
                 }
             };
+            if !store
+                .get_skill_by_id(&skill_id)
+                .map_err(|error| error.to_string())?
+                .is_some_and(|skill| skill.source_type == "bytedance")
+            {
+                continue;
+            }
             match check_skill_update_internal_with_remote(store, &skill_id, true, prefetched) {
                 Ok(dto) => dto.update_status,
                 Err(err) => {
@@ -198,7 +204,14 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         available += 1;
 
         if apply {
-            match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None, None) {
+            match crate::bytedance::update::update(
+                store,
+                &skill_id,
+                proxy.as_deref(),
+                None,
+                None,
+                None,
+            ) {
                 Ok(result) if !result.pending_removals.is_empty() => {
                     held_back += 1;
                     log::info!(
@@ -227,6 +240,65 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_round_only_checks_market_skills_in_both_apply_modes() {
+        let _serial = crate::core::central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        crate::core::central_repo::set_test_base_dir_override(Some(temp.path().to_path_buf()));
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                crate::core::central_repo::set_test_base_dir_override(None);
+            }
+        }
+        let _reset = Reset;
+        let store = SkillStore::new(&temp.path().join("test.db")).unwrap();
+        for source_type in [
+            "git",
+            "skillssh",
+            "local",
+            "import",
+            "well-known",
+            "bytedance",
+        ] {
+            store
+                .insert_skill(&crate::core::skill_store::SkillRecord {
+                    id: source_type.into(),
+                    name: source_type.into(),
+                    description: None,
+                    source_type: source_type.into(),
+                    source_ref: Some("invalid market source".into()),
+                    source_ref_resolved: None,
+                    source_subpath: None,
+                    source_branch: None,
+                    source_revision: None,
+                    remote_revision: None,
+                    central_path: temp.path().join(source_type).to_string_lossy().into_owned(),
+                    content_hash: None,
+                    enabled: true,
+                    created_at: 1,
+                    updated_at: 1,
+                    status: "ok".into(),
+                    update_status: "unknown".into(),
+                    last_checked_at: None,
+                    last_check_error: None,
+                })
+                .unwrap();
+        }
+        for apply in ["off", "on"] {
+            store.set_setting(SETTING_APPLY, apply).unwrap();
+            run_round_blocking(&store).unwrap();
+            for source_type in ["git", "skillssh", "local", "import", "well-known"] {
+                let skill = store.get_skill_by_id(source_type).unwrap().unwrap();
+                assert_eq!(skill.update_status, "unknown");
+                assert_eq!(skill.last_checked_at, None);
+            }
+            let market = store.get_skill_by_id("bytedance").unwrap().unwrap();
+            assert_eq!(market.update_status, "error");
+            assert!(market.last_checked_at.is_some());
+        }
+    }
 
     #[test]
     fn parse_interval_known_values() {

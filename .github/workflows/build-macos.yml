@@ -1,0 +1,112 @@
+name: Build macOS Test Package
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: Mac architecture
+        type: choice
+        default: arm64
+        options:
+          - arm64
+          - x64
+          - both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON((github.event_name == 'push' || inputs.architecture == 'both') && '["aarch64-apple-darwin", "x86_64-apple-darwin"]' || inputs.architecture == 'x64' && '["x86_64-apple-darwin"]' || '["aarch64-apple-darwin"]') }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+          key: macos-test-${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # The desktop app installs this bundled CLI for agents on first launch.
+      - name: Build CLI binary
+        run: cargo build --release --locked --manifest-path src-tauri/Cargo.toml --bin skills-manager-cli --target ${{ matrix.target }}
+
+      # Tauri strips the target suffix when installing a sidecar into Contents/MacOS.
+      - name: Stage CLI sidecar
+        run: |
+          mkdir -p src-tauri/binaries
+          install -m 755 "src-tauri/target/${{ matrix.target }}/release/skills-manager-cli" "src-tauri/binaries/skills-manager-cli-${{ matrix.target }}"
+
+      - name: Build DMG
+        # Keep the app bundle so the next step can verify the actual packaged CLI.
+        run: npm run tauri:build -- --target ${{ matrix.target }} --bundles app,dmg --config src-tauri/tauri.macos-test.conf.json
+
+      - name: Verify bundled CLI
+        run: |
+          APP_BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle/macos/skills-manager.app"
+          if [ ! -x "$APP_BUNDLE/Contents/MacOS/skills-manager-cli" ]; then
+            find "src-tauri/target/${{ matrix.target }}/release/bundle" -maxdepth 5 -type f
+            echo "::error::Bundled CLI is missing or not executable in $APP_BUNDLE"
+            exit 1
+          fi
+          codesign --verify --deep --strict "$APP_BUNDLE"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: skills-manager-macos-${{ matrix.target }}-${{ github.sha }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  cleanup-artifacts:
+    name: Clean old branch installers
+    needs: build
+    if: ${{ success() && startsWith(github.ref, 'refs/heads/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Test artifact cleanup
+        run: node --test .github/scripts/tests/cleanup-macos-artifacts.cjs
+
+      - name: Delete older installers for this branch
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const cleanup = require('./.github/scripts/cleanup-macos-artifacts.cjs');
+            await cleanup({ github, context, core });
