@@ -2878,9 +2878,15 @@ pub fn check_skill_update_internal_with_remote(
                         // check would look (#655). Not an update — no head could
                         // ever make it one — and not a failed check either, so
                         // it is not retried every round. The local copy stays.
+                        //
+                        // Only a plain Git skill can be judged here: a
+                        // skills.sh skill has an id to look up, which needs
+                        // blobs this comparison does not fetch. Its missing path
+                        // may be a move, so it waits for the update to say so.
                         Some(_)
-                            if installed_subtree(&skill, &git_source)
-                                .is_some_and(|installed| missing.contains(&installed)) =>
+                            if git_source.locator_skill_id.is_none()
+                                && installed_subtree(&skill, &git_source)
+                                    .is_some_and(|installed| missing.contains(&installed)) =>
                         {
                             skill_store::SOURCE_GONE
                         }
@@ -3018,6 +3024,9 @@ fn should_skip_update_check(
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(60);
     let ttl_ms = ttl_minutes * 60 * 1000;
+    // A settled answer stays settled for the TTL — including `source_gone`,
+    // which no re-check inside the TTL can change unless the author restored
+    // the skill (#655). Anything unresolved keeps asking.
     let stable_status = !matches!(
         skill.update_status.as_str(),
         "unknown" | "checking" | "updating" | "error"
@@ -4634,6 +4643,26 @@ mod tests {
         assert_eq!(result.skill.update_status, "up_to_date");
         let stored = repo.store.get_skill_by_id("b").unwrap().unwrap();
         assert_eq!(stored.source_subpath.as_deref(), Some("other/b"));
+    }
+
+    /// A skills.sh skill keeps its id lookup for the update itself. A check that
+    /// only sees the recorded path missing must not call it deleted: the skill
+    /// may simply have moved, which the update would follow (#278, #655).
+    #[test]
+    fn a_check_does_not_call_a_skillssh_skill_gone() {
+        let repo = test_repo();
+        let (dir, url, installed) = monorepo(&repo);
+        insert_skillssh_skill(&repo.store, "b", "owner/repo/b", &url, Some("skills/b"), &installed);
+
+        fs::create_dir_all(dir.join("other")).unwrap();
+        git_in(&dir, &["mv", "skills/b", "other/b"]);
+        git_in(&dir, &["commit", "-qm", "move b"]);
+
+        let dto = check_skill_update_internal(&repo.store, "b", true, None).unwrap();
+        assert_eq!(
+            dto.update_status, "update_available",
+            "only the update, which can look by id, may decide"
+        );
     }
 
     /// A skills.sh skill its Source deleted is nowhere the update would look —
