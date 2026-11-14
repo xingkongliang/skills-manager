@@ -585,7 +585,11 @@
       "intervalLabel": "Frecuencia de comprobación",
       "intervalOff": "Desactivada",
       "lastRun": "última comprobación {{time}}",
-      "title": "Actualización automática de skills"
+      "title": "Actualización automática de skills",
+      "acceptRemovalsLabel": "Permitir eliminaciones en las actualizaciones automáticas",
+      "acceptRemovalsDesc": "Si está activado, una actualización automática que eliminaría archivos que la nueva versión ya no tiene se aplica de todos modos en lugar de quedar en espera. Las actualizaciones manuales siempre preguntan primero.",
+      "acceptRemovalsOff": "Desactivado (retener)",
+      "acceptRemovalsOn": "Activado (eliminar)"
     },
     "changeDir": "Cambiar directorio",
     "checkUpdate": "Buscar actualizaciones",

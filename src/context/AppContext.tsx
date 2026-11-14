@@ -362,6 +362,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             .getSettings("auto_update_apply")
             .catch(() => null);
           if (autoUpdate === "on") {
+            const acceptRemovals = await api
+              .getSettings("auto_update_accept_removals")
+              .catch(() => null);
             const ids = skills
               .filter(
                 (s) =>
@@ -370,7 +373,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
               )
               .map((s) => s.id);
             if (ids.length > 0) {
-              const result = await api.batchUpdateSkills(ids);
+              const result = await api.batchUpdateSkills(
+                ids,
+                acceptRemovals === "on"
+              );
               skills = await api.getManagedSkills();
               if (result.refreshed > 0) {
                 toast.success(

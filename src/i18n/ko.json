@@ -693,7 +693,11 @@
       "applyLabel": "업데이트 자동 적용",
       "applyDesc": "켜면 업데이트를 자동으로 받아 적용합니다. 끄면 라이브러리에 알림만 표시되며 업데이트는 직접 해야 합니다.",
       "applyOff": "끔(알림만)",
-      "applyOn": "켬"
+      "applyOn": "켬",
+      "acceptRemovalsLabel": "자동 업데이트 시 삭제 허용",
+      "acceptRemovalsDesc": "켜면 자동 업데이트가 새 버전에 없는 파일을 삭제하게 되더라도 확인을 기다리지 않고 그대로 적용합니다. 수동 업데이트는 여전히 먼저 물어봅니다.",
+      "acceptRemovalsOff": "끔(보류)",
+      "acceptRemovalsOn": "켬(자동 삭제)"
     },
     "gitSyncConfig": "Git 동기화 설정",
     "gitSyncConfigDesc": "백업은 전용 백업 페이지로 옮겼습니다. 고급 Git URL을 직접 수정할 때 쓰는 기존 항목은 그대로 남겨 뒀습니다.",

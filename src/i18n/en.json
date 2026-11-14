@@ -703,7 +703,11 @@
       "applyLabel": "Apply updates automatically",
       "applyDesc": "When on, updates are pulled and applied automatically; when off, they are only flagged in the Library for manual update.",
       "applyOff": "Off (notify only)",
-      "applyOn": "On"
+      "applyOn": "On",
+      "acceptRemovalsLabel": "Accept file deletions in auto-updates",
+      "acceptRemovalsDesc": "When on, an automatic update that would delete files the new version no longer has is applied anyway instead of being held back for review. Manual updates always ask first.",
+      "acceptRemovalsOff": "Off (hold back)",
+      "acceptRemovalsOn": "On (delete anyway)"
     },
     "gitSyncConfig": "Git Sync Configuration",
     "gitSyncConfigDesc": "Backup has moved to the dedicated Backup page. This legacy field is kept here for advanced Git URL edits.",
