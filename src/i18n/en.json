@@ -477,7 +477,8 @@
       "apply": "Sync {{count}}",
       "noAgents": "No installed and enabled agents.",
       "allSynced": "Every selected skill is already on this agent"
-    }
+    },
+    "batchSourceGone": "{count} could not be updated: their Source no longer holds them"
   },
   "install": {
     "title": "Install Skills",

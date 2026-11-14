@@ -349,6 +349,8 @@ export const updateSkill = (skillId: string, approvedRemovals?: string | null) =
 export interface BatchUpdateSkillsResult {
   refreshed: number;
   unchanged: number;
+  /** Skills their Source no longer holds: not updated, and not failures. */
+  gone: number;
   /** Skills left alone because updating would have removed files. */
   held_back: string[];
   failed: string[];

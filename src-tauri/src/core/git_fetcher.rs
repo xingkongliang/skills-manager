@@ -61,6 +61,13 @@ pub fn validate_git_url(url: &str) -> Result<()> {
         return Ok(());
     }
 
+    // Tests clone a repository that lives on disk. No shipped build reaches
+    // this: a `file://` Source is rejected in the app, as it always was.
+    #[cfg(test)]
+    if lower.starts_with("file://") {
+        return Ok(());
+    }
+
     // Allow GitHub/GitLab shorthand like "user/repo" or "user/repo.git"
     if !trimmed.contains("://")
         && !trimmed.contains('\\')

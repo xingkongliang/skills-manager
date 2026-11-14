@@ -797,6 +797,9 @@ export function MySkills() {
       if (result.unchanged > 0) {
         toast.info(t("mySkills.batchAlreadyUpToDate", { count: result.unchanged }));
       }
+      if (result.gone > 0) {
+        toast.info(t("mySkills.batchSourceGone", { count: result.gone }));
+      }
       if (result.held_back.length > 0) {
         toast.warning(
           t("mySkills.batchHeldBack", {
@@ -840,6 +843,9 @@ export function MySkills() {
       }
       if (result.unchanged > 0) {
         toast.info(t("mySkills.batchAlreadyUpToDate", { count: result.unchanged }));
+      }
+      if (result.gone > 0) {
+        toast.info(t("mySkills.batchSourceGone", { count: result.gone }));
       }
       if (result.held_back.length > 0) {
         toast.warning(

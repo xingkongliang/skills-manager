@@ -9,7 +9,7 @@ use crate::commands::skills::{
     check_skill_update_internal_with_remote, prefetch_skill_remote, update_git_skill_internal,
 };
 use crate::core::repo_lock::RepoLock;
-use crate::core::skill_store::{is_terminal_update_status, SkillStore};
+use crate::core::skill_store::{is_terminal_update_status, SkillStore, SOURCE_GONE};
 
 const SETTING_INTERVAL: &str = "auto_update_check_interval";
 const SETTING_LAST_RUN: &str = "auto_update_last_run_at";
@@ -205,6 +205,11 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
 
         if apply {
             match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None, None) {
+                // Nothing to update and nothing to retry: the Source deleted
+                // this skill (#655).
+                Ok(result) if result.skill.update_status == SOURCE_GONE => {
+                    gone += 1;
+                }
                 Ok(result) if !result.pending_removals.is_empty() => {
                     held_back += 1;
                     log::info!(

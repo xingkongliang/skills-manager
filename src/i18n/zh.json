@@ -477,7 +477,8 @@
       "apply": "同步 {{count}} 项",
       "noAgents": "没有已安装并启用的 Agent。",
       "allSynced": "选中的 Skill 都已同步到这个 Agent"
-    }
+    },
+    "batchSourceGone": "{count} 个技能的上游已删除，无法更新"
   },
   "install": {
     "title": "安装 Skills",

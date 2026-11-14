@@ -73,6 +73,9 @@ enum UpdateOutcome {
     Applied {
         content_changed: bool,
     },
+    /// The Source no longer holds the skill: nothing was touched, nothing can be
+    /// applied, and the status says so (#655).
+    SourceGone,
     /// Declined, having changed nothing.
     Held {
         pending: Vec<PendingRemoval>,
@@ -180,6 +183,8 @@ impl Drop for StagedPathGuard<'_> {
 pub struct BatchUpdateSkillsResult {
     pub refreshed: usize,
     pub unchanged: usize,
+    /// Skills their Source no longer holds: not updated, and not failures.
+    pub gone: usize,
     pub failed: Vec<String>,
     /// Skills left alone because updating would have removed files the new
     /// version does not have. Named so the user can go and look, rather than
@@ -1819,6 +1824,7 @@ pub async fn batch_update_skills(
     tauri::async_runtime::spawn_blocking(move || {
         let mut refreshed = 0usize;
         let mut unchanged = 0usize;
+        let mut gone = 0usize;
         let mut failed = Vec::new();
         let mut held_back = Vec::new();
 
@@ -1842,6 +1848,11 @@ pub async fn batch_update_skills(
                             // away files the new version does not have, and a
                             // batch has nobody to ask.
                             held_back.push(skill.name.clone());
+                        }
+                        // Nothing was updated and nothing failed: the Source
+                        // deleted this skill (#655).
+                        Ok(result) if result.skill.update_status == skill_store::SOURCE_GONE => {
+                            gone += 1
                         }
                         Ok(result) => {
                             if result.content_changed {
@@ -1871,6 +1882,7 @@ pub async fn batch_update_skills(
         Ok(BatchUpdateSkillsResult {
             refreshed,
             unchanged,
+            gone,
             failed,
             held_back,
         })
@@ -2161,11 +2173,27 @@ pub fn update_git_skill_internal(
     .map_err(AppError::classify_git_error)?;
     let update_result = (|| -> Result<UpdateOutcome, AppError> {
         git_fetcher::checkout_revision(&temp_dir, &remote_revision).map_err(AppError::git)?;
-        let skill_dir = resolve_skill_dir(
+        // Nowhere the update would look — the recorded path, and for a
+        // skills.sh skill also the id. Retrying cannot change that, so it is
+        // recorded as the terminal status rather than raised as a failure.
+        let Some(skill_dir) = locate_installed_skill_dir(
             &temp_dir,
             git_source.subpath.as_deref(),
             git_source.locator_skill_id.as_deref(),
-        )?;
+        )?
+        else {
+            let _lock =
+                RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
+            store
+                .update_skill_check_state(
+                    &skill.id,
+                    Some(&remote_revision),
+                    skill_store::SOURCE_GONE,
+                    None,
+                )
+                .map_err(AppError::db)?;
+            return Ok(UpdateOutcome::SourceGone);
+        };
 
         let new_hash =
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
@@ -2272,6 +2300,7 @@ pub fn update_git_skill_internal(
         Ok(outcome) => {
             let (content_changed, pending_removals, removal_approval) = match outcome {
                 UpdateOutcome::Applied { content_changed } => (content_changed, Vec::new(), None),
+                UpdateOutcome::SourceGone => (false, Vec::new(), None),
                 UpdateOutcome::Held { pending, approval } => (false, pending, Some(approval)),
             };
             let skill = managed_skill_by_id(store, skill_id)?;
@@ -3140,6 +3169,45 @@ pub fn resolve_skill_dir(
     subpath: Option<&str>,
     skill_id: Option<&str>,
 ) -> Result<PathBuf, AppError> {
+    match locate_skill_dir(repo_dir, subpath, skill_id)? {
+        LocatedSkillDir::At(dir) => Ok(dir),
+        // "Not there" is an answer, and a strict caller treats it as one.
+        LocatedSkillDir::Absent(error) => Err(error),
+    }
+}
+
+/// Where the update would put an already-installed skill: `None` when it is
+/// nowhere this lookup would find it.
+///
+/// The distinction matters because the two outcomes need different answers: an
+/// update that cannot find its skill has nothing to retry (#655), while a
+/// lookup that fails for another reason is a failed check.
+pub fn locate_installed_skill_dir(
+    repo_dir: &Path,
+    subpath: Option<&str>,
+    skill_id: Option<&str>,
+) -> Result<Option<PathBuf>, AppError> {
+    Ok(match locate_skill_dir(repo_dir, subpath, skill_id)? {
+        LocatedSkillDir::At(dir) => Some(dir),
+        LocatedSkillDir::Absent(_) => None,
+    })
+}
+
+/// The skill's directory in a checkout, or the reason it is not there.
+///
+/// The error travels with `Absent` so [`resolve_skill_dir`] keeps reporting
+/// exactly what it always did, while the update path can treat the same answer
+/// as terminal instead of exceptional.
+enum LocatedSkillDir {
+    At(PathBuf),
+    Absent(AppError),
+}
+
+fn locate_skill_dir(
+    repo_dir: &Path,
+    subpath: Option<&str>,
+    skill_id: Option<&str>,
+) -> Result<LocatedSkillDir, AppError> {
     if let Some(subpath) = subpath {
         let candidate = repo_dir.join(subpath);
         if !path_guard::is_path_safe(repo_dir, &candidate) {
@@ -3158,24 +3226,28 @@ pub fn resolve_skill_dir(
             candidate.is_dir()
         };
         if usable {
-            return Ok(candidate);
+            return Ok(LocatedSkillDir::At(candidate));
         }
         if skill_id.is_none() {
-            return Err(AppError::not_found(format!(
+            return Ok(LocatedSkillDir::Absent(AppError::not_found(format!(
                 "Path '{subpath}' does not exist in the repository"
-            )));
+            ))));
         }
     }
 
     // `find_skill_dir` joins the locator id onto the checkout in several places
     // before falling back to a recursive search, so its answer is checked too.
-    let resolved = git_fetcher::find_skill_dir(repo_dir, skill_id).map_err(AppError::git)?;
+    let resolved = match git_fetcher::find_skill_dir(repo_dir, skill_id) {
+        Ok(path) => path,
+        // With a locator, "nothing matched" is the only way this search fails.
+        Err(err) => return Ok(LocatedSkillDir::Absent(AppError::git(err))),
+    };
     if !path_guard::is_path_safe(repo_dir, &resolved) {
         return Err(AppError::invalid_input(
             "Resolved skill directory is outside the repository",
         ));
     }
-    Ok(resolved)
+    Ok(LocatedSkillDir::At(resolved))
 }
 
 pub fn resolve_skillssh_install_target(
@@ -4413,6 +4485,27 @@ mod tests {
             .unwrap();
     }
 
+    /// A skills.sh skill, recognised by the shorthand its `source_ref` holds:
+    /// the locator id is the part after the last `/`.
+    fn insert_skillssh_skill(
+        store: &SkillStore,
+        id: &str,
+        shorthand: &str,
+        clone_url: &str,
+        subpath: Option<&str>,
+        revision: &str,
+    ) {
+        let dir = write_skill_dir(id);
+        let mut skill = sample_skill(id, id, &dir);
+        skill.source_type = "skillssh".to_string();
+        skill.source_ref = Some(shorthand.to_string());
+        skill.source_ref_resolved = Some(clone_url.to_string());
+        skill.source_subpath = subpath.map(str::to_string);
+        skill.source_revision = Some(revision.to_string());
+        skill.update_status = "unknown".to_string();
+        store.insert_skill(&skill).unwrap();
+    }
+
     /// The reported bug, end to end through the real check: a commit that only
     /// touches `skills/a` is an update for `a` and nothing else in that repo —
     /// except a skill installed from the repository root, which still sees
@@ -4521,6 +4614,57 @@ mod tests {
         let dto =
             check_skill_update_internal_with_remote(&repo.store, "b", false, None).unwrap();
         assert_eq!(dto.update_status, "source_gone");
+    }
+
+    /// A skills.sh skill whose Source moved it: the locator finds it at its new
+    /// home, so the update follows it and records the new subpath. This is a
+    /// move, not a deletion (#278, #655).
+    #[test]
+    fn an_update_follows_a_skillssh_skill_that_moved() {
+        let repo = test_repo();
+        let (dir, url, installed) = monorepo(&repo);
+        insert_skillssh_skill(&repo.store, "b", "owner/repo/b", &url, Some("skills/b"), &installed);
+
+        fs::create_dir_all(dir.join("other")).unwrap();
+        git_in(&dir, &["mv", "skills/b", "other/b"]);
+        git_in(&dir, &["commit", "-qm", "move b"]);
+
+        let result = update_git_skill_internal(&repo.store, "b", None, None, None).unwrap();
+
+        assert_eq!(result.skill.update_status, "up_to_date");
+        let stored = repo.store.get_skill_by_id("b").unwrap().unwrap();
+        assert_eq!(stored.source_subpath.as_deref(), Some("other/b"));
+    }
+
+    /// A skills.sh skill its Source deleted is nowhere the update would look —
+    /// not at the recorded subpath, not by id. That is an answer, not a failure:
+    /// the status records it and the local copy is left alone (#655).
+    #[test]
+    fn an_update_whose_skill_the_source_deleted_records_source_gone() {
+        let repo = test_repo();
+        let (dir, url, installed) = monorepo(&repo);
+        insert_skillssh_skill(
+            &repo.store,
+            "b",
+            "owner/repo/b",
+            &url,
+            Some("skills/b"),
+            &installed,
+        );
+        let central = PathBuf::from(&repo.store.get_skill_by_id("b").unwrap().unwrap().central_path);
+        write_skill(&central, "b");
+
+        git_in(&dir, &["rm", "-r", "-q", "skills/b"]);
+        git_in(&dir, &["commit", "-qm", "drop b"]);
+
+        let result = update_git_skill_internal(&repo.store, "b", None, None, None).unwrap();
+
+        assert_eq!(result.skill.update_status, "source_gone");
+        assert!(!result.content_changed);
+        assert!(result.pending_removals.is_empty());
+        let stored = repo.store.get_skill_by_id("b").unwrap().unwrap();
+        assert_eq!(stored.last_check_error, None);
+        assert!(central.exists(), "the local copy is what the user still has");
     }
 
     /// "Check all" resolves each remote once. Its siblings — here installed at
