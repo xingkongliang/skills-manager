@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: macos-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -75,3 +79,26 @@ jobs:
           path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 14
+
+  cleanup-artifacts:
+    name: Clean old branch installers
+    needs: build
+    if: ${{ success() && startsWith(github.ref, 'refs/heads/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Test artifact cleanup
+        run: node --test .github/scripts/tests/cleanup-macos-artifacts.cjs
+
+      - name: Delete older installers for this branch
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const cleanup = require('./.github/scripts/cleanup-macos-artifacts.cjs');
+            await cleanup({ github, context, core });
