@@ -23,9 +23,9 @@ interface MultiSelectToolbarLabels {
   more: string;
   /**
    * Already-translated note shown after the count when some selected rows are
-   * not on screen (skills inside a collapsed Source). Omit it, or leave it out
-   * entirely, when everything selected is visible: the count then reads as it
-   * always has.
+   * not on screen (a collapsed Source, or a filter they no longer match). Omit
+   * it, or leave it out entirely, when everything selected is visible: the
+   * count then reads as it always has.
    */
   hiddenSelected?: string;
 }
