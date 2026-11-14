@@ -9,7 +9,7 @@ use crate::commands::skills::{
     check_skill_update_internal_with_remote, prefetch_skill_remote, update_git_skill_internal,
 };
 use crate::core::repo_lock::RepoLock;
-use crate::core::skill_store::SkillStore;
+use crate::core::skill_store::{is_terminal_update_status, SkillStore};
 
 const SETTING_INTERVAL: &str = "auto_update_check_interval";
 const SETTING_LAST_RUN: &str = "auto_update_last_run_at";
@@ -146,11 +146,11 @@ fn apply_enabled(store: &SkillStore) -> bool {
 fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     let proxy = store.proxy_url();
     let apply = apply_enabled(store);
-    let ids: Vec<String> = store
+    let skills: Vec<(String, String)> = store
         .get_all_skills()
         .map_err(|err| format!("get_all_skills failed: {err}"))?
         .into_iter()
-        .map(|s| s.id)
+        .map(|s| (s.id, s.update_status))
         .collect();
 
     // Take and release the central-repo lock around each individual skill
@@ -158,9 +158,15 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     // operation to a single skill's network round-trip (rather than the
     // entire round). A skill whose lock is busy — a manual install/update is
     // running — is simply skipped; the next scheduled round picks it up.
-    let (mut checked, mut available, mut updated, mut held_back, mut failed) =
-        (0usize, 0usize, 0usize, 0usize, 0usize);
-    for skill_id in ids {
+    let (mut checked, mut available, mut updated, mut held_back, mut failed, mut gone) =
+        (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+    for (skill_id, status) in skills {
+        // Nothing this round does can clear a settled "the Source deleted it":
+        // no fetch, no update attempt, and deliberately no failure count (#655).
+        if is_terminal_update_status(&status) {
+            gone += 1;
+            continue;
+        }
         // Yield the lock to any waiting user-initiated operation before taking
         // it again for the next skill (see FOREGROUND_YIELD).
         std::thread::sleep(FOREGROUND_YIELD);
@@ -219,7 +225,7 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         }
     }
     log::info!(
-        "skill auto-updater: round done — checked={checked} available={available} updated={updated} held_back={held_back} failed={failed}"
+        "skill auto-updater: round done — checked={checked} available={available} updated={updated} held_back={held_back} failed={failed} gone={gone}"
     );
     Ok(())
 }
@@ -227,6 +233,53 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::skill_store::SkillRecord;
+    use tempfile::tempdir;
+
+    /// A Source that deleted a skill will not put it back on its own, so a round
+    /// must not spend a fetch or a retry on it — and must not count it as a
+    /// failure. The remote here cannot be reached, so any attempt would land as
+    /// `error` (#655).
+    #[test]
+    fn a_round_skips_a_skill_its_source_deleted() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        let unreachable = "file:///nonexistent/skills-manager-test/repo";
+        store
+            .insert_skill(&SkillRecord {
+                id: "gone-skill".to_string(),
+                name: "gone-skill".to_string(),
+                description: None,
+                source_type: "git".to_string(),
+                source_ref: Some(unreachable.to_string()),
+                source_ref_resolved: Some(unreachable.to_string()),
+                source_subpath: Some("skills/gone-skill".to_string()),
+                source_branch: None,
+                source_revision: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
+                remote_revision: None,
+                central_path: tmp
+                    .path()
+                    .join("central/gone-skill")
+                    .to_string_lossy()
+                    .to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: 1,
+                updated_at: 1,
+                status: "ok".to_string(),
+                update_status: "source_gone".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+
+        run_round_blocking(&store).unwrap();
+
+        let stored = store.get_skill_by_id("gone-skill").unwrap().unwrap();
+        assert_eq!(stored.update_status, "source_gone");
+        assert_eq!(stored.last_checked_at, None, "no fetch, no check");
+        assert_eq!(stored.last_check_error, None);
+    }
 
     #[test]
     fn parse_interval_known_values() {

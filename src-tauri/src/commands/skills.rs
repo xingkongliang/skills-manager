@@ -17,7 +17,7 @@ use crate::core::{
     repo_lock::RepoLock,
     scanner, scenario_service,
     skill_metadata::{self, is_valid_skill_dir},
-    skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
+    skill_store::{self, SkillRecord, SkillStore, SkillTargetRecord},
     sync_engine, sync_metadata,
     timing::should_log_first_or_slow,
     well_known,
@@ -2853,7 +2853,7 @@ pub fn check_skill_update_internal_with_remote(
                             if installed_subtree(&skill, &git_source)
                                 .is_some_and(|installed| missing.contains(&installed)) =>
                         {
-                            "source_gone"
+                            skill_store::SOURCE_GONE
                         }
                         // The repo moved but this skill's directory did not
                         // (#561). Record the new head as its source, as an
@@ -4500,6 +4500,27 @@ mod tests {
             Some(installed.as_str()),
             "an update cannot be applied to something that is not there"
         );
+    }
+
+    /// A settled "the Source deleted it" costs no network inside the TTL: the
+    /// next round has nothing new to ask. A forced check still runs, which is
+    /// how a restored skill clears itself (#655).
+    #[test]
+    fn a_source_gone_skill_is_not_re_checked_within_the_ttl() {
+        let repo = test_repo();
+        let url = "https://example.test/a.git";
+        insert_monorepo_skill(&repo.store, "b", url, Some("skills/b"), "old-rev");
+        repo.store
+            .update_skill_check_state("b", Some("old-rev"), skill_store::SOURCE_GONE, None)
+            .unwrap();
+
+        assert!(
+            prefetch_skill_remote(&repo.store, "b", false, None).is_none(),
+            "a settled status costs no network"
+        );
+        let dto =
+            check_skill_update_internal_with_remote(&repo.store, "b", false, None).unwrap();
+        assert_eq!(dto.update_status, "source_gone");
     }
 
     /// "Check all" resolves each remote once. Its siblings — here installed at
