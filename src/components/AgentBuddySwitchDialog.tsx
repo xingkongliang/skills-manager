@@ -56,7 +56,7 @@ export function AgentBuddySwitchDialog({
       if (exact.length === 1 && !exact[0].disabled && !exact[0].no_permission && exact[0].version) {
         setSelected(exact[0]);
       }
-    } catch (cause) {
+    } catch {
       if (id === request.current) setHasError(true);
     } finally {
       if (id === request.current) setLoading(false);
@@ -176,7 +176,7 @@ export function AgentBuddySwitchDialog({
                 type="button"
                 onClick={() => {
                   void openUrl(candidate.url)
-                    .catch((cause) => {
+                    .catch(() => {
                       setHasError(true);
                     });
                 }}
@@ -217,7 +217,7 @@ export function AgentBuddySwitchDialog({
               try {
                 await onSwitch(selected);
                 onClose();
-              } catch (cause) {
+              } catch {
                 setHasError(true);
               } finally {
                 setApplying(false);
