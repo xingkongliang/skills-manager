@@ -354,8 +354,11 @@ export interface BatchUpdateSkillsResult {
   failed: string[];
 }
 
-export const batchUpdateSkills = (skillIds: string[]) =>
-  invoke<BatchUpdateSkillsResult>("batch_update_skills", { skillIds });
+export const batchUpdateSkills = (skillIds: string[], applyRemovals?: boolean) =>
+  invoke<BatchUpdateSkillsResult>("batch_update_skills", {
+    skillIds,
+    applyRemovals: applyRemovals ?? null,
+  });
 
 export interface ReimportSkillResult {
   skill: ManagedSkill;

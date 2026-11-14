@@ -693,7 +693,11 @@
       "applyLabel": "自動套用更新",
       "applyDesc": "開啟後自動拉取並覆寫本地內容；關閉則僅在技能庫標記，需手動更新。",
       "applyOff": "關閉（僅提示）",
-      "applyOn": "開啟"
+      "applyOn": "開啟",
+      "acceptRemovalsLabel": "自動更新時接受刪除",
+      "acceptRemovalsDesc": "開啟後，自動更新即使會刪除新版本裡沒有的檔案也照樣更新，不再暫停等待確認；手動更新仍會先詢問。",
+      "acceptRemovalsOff": "關閉（暫停等待確認）",
+      "acceptRemovalsOn": "開啟（自動刪除）"
     },
     "gitSyncConfig": "Git 同步設定",
     "gitSyncConfigDesc": "備份已移到獨立的「備份」頁面。這裡保留為進階 Git URL 編輯入口。",

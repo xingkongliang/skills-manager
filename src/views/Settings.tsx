@@ -183,6 +183,7 @@ export function Settings() {
   const [textSize, setTextSize] = useState("default");
   const [autoUpdateInterval, setAutoUpdateInterval] = useState("off");
   const [autoUpdateApply, setAutoUpdateApply] = useState("off");
+  const [autoUpdateAcceptRemovals, setAutoUpdateAcceptRemovals] = useState("off");
   const [autoUpdateLastRun, setAutoUpdateLastRun] = useState<string | null>(null);
   // Agent path editing
   const [editingPathKey, setEditingPathKey] = useState<string | null>(null);
@@ -332,6 +333,7 @@ export function Settings() {
     api.getSettings("text_size").then((v) => { if (v) { setTextSize(v); applyTextSize(v); } });
     api.getSettings("auto_update_check_interval").then((v) => { if (v) setAutoUpdateInterval(v); });
     api.getSettings("auto_update_apply").then((v) => { if (v) setAutoUpdateApply(v); });
+    api.getSettings("auto_update_accept_removals").then((v) => { if (v) setAutoUpdateAcceptRemovals(v); });
     // The `skills-auto-updated` listener may populate this concurrently, so
     // keep whichever timestamp is newer rather than blindly overwriting.
     api.getSettings("auto_update_last_run_at").then((v) => {
@@ -433,6 +435,11 @@ export function Settings() {
   const handleAutoUpdateApplyChange = async (value: string) => {
     setAutoUpdateApply(value);
     await api.setSettings("auto_update_apply", value);
+  };
+
+  const handleAutoUpdateAcceptRemovalsChange = async (value: string) => {
+    setAutoUpdateAcceptRemovals(value);
+    await api.setSettings("auto_update_accept_removals", value);
   };
 
   // Keep the last-run timestamp in sync with both the background scheduler
@@ -796,6 +803,10 @@ export function Settings() {
   const autoUpdateApplyOptions = [
     { value: "off", label: t("settings.autoUpdate.applyOff") },
     { value: "on", label: t("settings.autoUpdate.applyOn") },
+  ] as const;
+  const autoUpdateAcceptRemovalsOptions = [
+    { value: "off", label: t("settings.autoUpdate.acceptRemovalsOff") },
+    { value: "on", label: t("settings.autoUpdate.acceptRemovalsOn") },
   ] as const;
   const customTools = useMemo(() => tools.filter((tool) => tool.is_custom), [tools]);
   const builtInTools = useMemo(() => tools.filter((tool) => !tool.is_custom), [tools]);
@@ -1631,6 +1642,34 @@ export function Settings() {
                     className={cn(
                       segmentedButtonClass,
                       autoUpdateApply === option.value
+                        ? "bg-surface-active text-secondary"
+                        : "text-muted hover:text-tertiary"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+              <div className="min-w-0">
+                <h3 className="text-[14px] font-semibold text-primary">
+                  {t("settings.autoUpdate.acceptRemovalsLabel")}
+                </h3>
+                <p className="text-[12px] text-muted">
+                  {t("settings.autoUpdate.acceptRemovalsDesc")}
+                </p>
+              </div>
+              <div className="app-segmented flex-wrap bg-background">
+                {autoUpdateAcceptRemovalsOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={autoUpdateAcceptRemovals === option.value}
+                    onClick={() => handleAutoUpdateAcceptRemovalsChange(option.value)}
+                    className={cn(
+                      segmentedButtonClass,
+                      autoUpdateAcceptRemovals === option.value
                         ? "bg-surface-active text-secondary"
                         : "text-muted hover:text-tertiary"
                     )}

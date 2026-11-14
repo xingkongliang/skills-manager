@@ -1807,13 +1807,22 @@ pub async fn reimport_local_skill(
     .await?
 }
 
+/// Update several skills in one go.
+///
+/// `apply_removals` opts the caller out of the removal confirmation: when
+/// true, an update that would delete files the new version does not have is
+/// applied anyway. Only the *automatic* paths (startup round, background
+/// scheduler) set this, and only when the corresponding setting is on —
+/// user-initiated batches keep holding back so there is someone to ask.
 #[tauri::command]
 pub async fn batch_update_skills(
     skill_ids: Vec<String>,
+    apply_removals: Option<bool>,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<BatchUpdateSkillsResult, AppError> {
     let store = store.inner().clone();
     let proxy_url = store.proxy_url();
+    let apply_removals = apply_removals.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
         let mut refreshed = 0usize;
         let mut unchanged = 0usize;
@@ -1831,9 +1840,28 @@ pub async fn batch_update_skills(
 
             match skill.source_type.as_str() {
                 "git" | "skillssh" => {
-                    let outcome =
+                    let mut outcome =
                         update_git_skill_internal(&store, &skill_id, proxy_url.as_deref(), None, None);
                     log_update_outcome(&store, &skill_id, "git", outcome.as_ref());
+                    if apply_removals {
+                        if let Ok(result) = outcome.as_ref() {
+                            if !result.pending_removals.is_empty() {
+                                // The setting says deletions are acceptable:
+                                // replay the update with the exact approval it
+                                // came back with. If the remote moved in the
+                                // meantime the token no longer matches and it
+                                // is held again — never bypass a fresh list.
+                                outcome = update_git_skill_internal(
+                                    &store,
+                                    &skill_id,
+                                    proxy_url.as_deref(),
+                                    None,
+                                    result.removal_approval.as_deref(),
+                                );
+                                log_update_outcome(&store, &skill_id, "git", outcome.as_ref());
+                            }
+                        }
+                    }
                     match outcome {
                         Ok(result) if !result.pending_removals.is_empty() => {
                             // Held back rather than applied: it would have taken
@@ -1852,8 +1880,20 @@ pub async fn batch_update_skills(
                     }
                 }
                 "local" | "import" => {
-                    let outcome = reimport_local_skill_internal(&store, &skill_id, None);
+                    let mut outcome = reimport_local_skill_internal(&store, &skill_id, None);
                     log_reimport_outcome(&store, &skill_id, outcome.as_ref());
+                    if apply_removals {
+                        if let Ok(result) = outcome.as_ref() {
+                            if !result.pending_removals.is_empty() {
+                                outcome = reimport_local_skill_internal(
+                                    &store,
+                                    &skill_id,
+                                    result.removal_approval.as_deref(),
+                                );
+                                log_reimport_outcome(&store, &skill_id, outcome.as_ref());
+                            }
+                        }
+                    }
                     match outcome {
                         Ok(result) if !result.pending_removals.is_empty() => {
                             held_back.push(skill.name.clone());

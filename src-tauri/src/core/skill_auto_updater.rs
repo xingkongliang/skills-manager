@@ -14,6 +14,9 @@ use crate::core::skill_store::SkillStore;
 const SETTING_INTERVAL: &str = "auto_update_check_interval";
 const SETTING_LAST_RUN: &str = "auto_update_last_run_at";
 const SETTING_APPLY: &str = "auto_update_apply";
+/// Opt-in: when on, an auto-update that would delete files the new version
+/// does not have is applied anyway instead of being held back for review.
+const SETTING_ACCEPT_REMOVALS: &str = "auto_update_accept_removals";
 const EVENT_AUTO_UPDATED: &str = "skills-auto-updated";
 
 /// Initial delay before the first scheduler tick. Gives the app a chance to
@@ -143,9 +146,22 @@ fn apply_enabled(store: &SkillStore) -> bool {
     )
 }
 
+/// Whether auto-updates may delete files the new version does not have.
+fn accept_removals_enabled(store: &SkillStore) -> bool {
+    matches!(
+        store
+            .get_setting(SETTING_ACCEPT_REMOVALS)
+            .ok()
+            .flatten()
+            .as_deref(),
+        Some("on")
+    )
+}
+
 fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     let proxy = store.proxy_url();
     let apply = apply_enabled(store);
+    let accept_removals = accept_removals_enabled(store);
     let ids: Vec<String> = store
         .get_all_skills()
         .map_err(|err| format!("get_all_skills failed: {err}"))?
@@ -198,7 +214,31 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         available += 1;
 
         if apply {
-            match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None, None) {
+            let mut outcome =
+                update_git_skill_internal(store, &skill_id, proxy.as_deref(), None, None);
+            if accept_removals {
+                if let Ok(result) = outcome.as_ref() {
+                    if !result.pending_removals.is_empty() {
+                        // The setting accepts deletions: replay the update with
+                        // the exact approval it came back with. If the remote
+                        // moved in the meantime the token no longer matches and
+                        // the update is held again — never bypass a fresh list.
+                        log::info!(
+                            "skill auto-updater: applying {skill_id} despite {} pending removal(s) \
+                             (auto_update_accept_removals is on)",
+                            result.pending_removals.len()
+                        );
+                        outcome = update_git_skill_internal(
+                            store,
+                            &skill_id,
+                            proxy.as_deref(),
+                            None,
+                            result.removal_approval.as_deref(),
+                        );
+                    }
+                }
+            }
+            match outcome {
                 Ok(result) if !result.pending_removals.is_empty() => {
                     held_back += 1;
                     log::info!(

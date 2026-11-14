@@ -703,7 +703,11 @@
       "applyLabel": "自动应用更新",
       "applyDesc": "开启后自动拉取并覆盖本地内容；关闭则仅在技能库标记，需手动更新。",
       "applyOff": "关闭（仅提示）",
-      "applyOn": "开启"
+      "applyOn": "开启",
+      "acceptRemovalsLabel": "自动更新时接受删除",
+      "acceptRemovalsDesc": "开启后，自动更新即使会删除新版本里没有的文件也照样更新，不再挂起等待确认；手动更新仍会先询问。",
+      "acceptRemovalsOff": "关闭（挂起等待确认）",
+      "acceptRemovalsOn": "开启（自动删除）"
     },
     "gitSyncConfig": "Git 同步配置",
     "gitSyncConfigDesc": "备份已移到独立的「备份」页面。这里保留为高级 Git URL 编辑入口。",
