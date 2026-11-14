@@ -234,6 +234,13 @@
     "hint": "You can connect or restore a backup at any time from the Backup page in the sidebar."
   },
   "mySkills": {
+    "agentBuddy": {
+      "recommend": "Switch to Agent Buddy to use automatic updates. Manual updates from the current source remain available.",
+      "switch": "Switch to Agent Buddy",
+      "switchDescription": "Choose a marketplace entry for {{name}}. Switching applies the market version and enables automatic updates according to your settings.",
+      "noMatch": "No matching entry found. Try another search. Your current skill and source are preserved.",
+      "switched": "Switched to Agent Buddy"
+    },
     "title": "Library",
     "applyToDefault": "Apply Preset",
     "applied": "Applied",
@@ -694,7 +701,7 @@
     "autoUpdate": {
       "title": "Skill Auto-Update",
       "intervalLabel": "Check Frequency",
-      "intervalDesc": "How often the app checks installed skills for upstream updates in the background.",
+      "intervalDesc": "Check skills installed from Agent Buddy in the background. Skills from other sources only support manual updates.",
       "intervalOff": "Off",
       "interval1h": "Hourly",
       "interval6h": "Every 6 hours",

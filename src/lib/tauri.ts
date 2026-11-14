@@ -346,6 +346,19 @@ export const updateSkill = (skillId: string, approvedRemovals?: string | null) =
     approvedRemovals: approvedRemovals ?? null,
   });
 
+export const switchSkillToBytedance = (
+  skillId: string,
+  identifier: string,
+  repository: string,
+  approvedRemovals?: string | null,
+) =>
+  invoke<UpdateSkillResult>("switch_skill_to_bytedance", {
+    skillId,
+    identifier,
+    repository,
+    approvedRemovals: approvedRemovals ?? null,
+  });
+
 export interface BatchUpdateSkillsResult {
   refreshed: number;
   unchanged: number;

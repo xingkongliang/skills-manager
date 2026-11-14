@@ -1,0 +1,14 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    }
+  }
+}

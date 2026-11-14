@@ -129,7 +129,7 @@ pub(crate) fn pending_removals_for(
 }
 
 /// A stable name for one exact set of removals at one exact revision.
-fn removal_approval_token(revision: &str, pending: &[PendingRemoval]) -> String {
+pub(crate) fn removal_approval_token(revision: &str, pending: &[PendingRemoval]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(revision.as_bytes());
@@ -146,13 +146,13 @@ fn removal_approval_token(revision: &str, pending: &[PendingRemoval]) -> String 
 }
 
 /// Removes a staged directory unless the swap claimed it.
-struct StagedPathGuard<'a> {
+pub(crate) struct StagedPathGuard<'a> {
     path: &'a Path,
     armed: std::cell::Cell<bool>,
 }
 
 impl<'a> StagedPathGuard<'a> {
-    fn new(path: &'a Path, armed: bool) -> Self {
+    pub(crate) fn new(path: &'a Path, armed: bool) -> Self {
         Self {
             path,
             armed: std::cell::Cell::new(armed),
@@ -160,7 +160,7 @@ impl<'a> StagedPathGuard<'a> {
     }
 
     /// The swap has taken ownership of it; there is nothing left to clean.
-    fn release(&self) {
+    pub(crate) fn release(&self) {
         self.armed.set(false);
     }
 }
@@ -1543,6 +1543,24 @@ pub async fn check_all_skill_updates(
             resolve_remotes_concurrent(remotes, proxy_url.clone())
         };
 
+        let market_skills: HashMap<RemoteKey, SkillRecord> = skills
+            .iter()
+            .filter(|skill| skill.source_type == "bytedance")
+            .filter(|skill| !should_skip_update_check(&store, skill, force_check).unwrap_or(false))
+            .map(|skill| {
+                (
+                    RemoteKey {
+                        clone_url: skill.source_ref.clone().unwrap_or_default(),
+                        branch: None,
+                    },
+                    skill.clone(),
+                )
+            })
+            .collect();
+        let market_revisions = resolve_concurrent(market_skills.keys().cloned().collect(), |key| {
+            prefetch_market_remote(&market_skills[key], proxy_url.as_deref())
+        });
+
         // ── Phase B: apply the resolved revisions + local-source checks ──
         // Phase A already did every network read, so this loop only computes and
         // writes each skill's status columns. Re-take the central-repo lock per
@@ -1560,6 +1578,13 @@ pub async fn check_all_skill_updates(
                 git_source_from_skill(skill)
                     .ok()
                     .and_then(|source| remote_revisions.get(&RemoteKey::from(source)).cloned())
+            } else if skill.source_type == "bytedance" {
+                market_revisions
+                    .get(&RemoteKey {
+                        clone_url: skill.source_ref.clone().unwrap_or_default(),
+                        branch: None,
+                    })
+                    .cloned()
             } else {
                 None
             };
@@ -1688,10 +1713,13 @@ pub fn prefetch_skill_remote(
     proxy_url: Option<&str>,
 ) -> Option<PrefetchedRemote> {
     let skill = store.get_skill_by_id(skill_id).ok().flatten()?;
-    if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+    if should_skip_update_check(store, &skill, force).unwrap_or(false) {
         return None;
     }
-    if should_skip_update_check(store, &skill, force).unwrap_or(false) {
+    if skill.source_type == "bytedance" {
+        return Some(prefetch_market_remote(&skill, proxy_url));
+    }
+    if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
         return None;
     }
     let source = git_source_from_skill(&skill).ok()?;
@@ -1701,6 +1729,30 @@ pub fn prefetch_skill_remote(
         &installed,
         proxy_url,
     ))
+}
+
+/// Background checks must never fall back to a Git or local source after a race.
+pub fn prefetch_bytedance_remote(
+    store: &SkillStore,
+    skill_id: &str,
+    proxy: Option<&str>,
+) -> Option<PrefetchedRemote> {
+    let skill = store.get_skill_by_id(skill_id).ok().flatten()?;
+    (skill.source_type == "bytedance").then(|| prefetch_market_remote(&skill, proxy))
+}
+
+fn prefetch_market_remote(skill: &SkillRecord, proxy: Option<&str>) -> PrefetchedRemote {
+    let source = skill.source_ref.clone().unwrap_or_default();
+    let result = crate::bytedance::update::prefetch_version(&source, proxy)
+        .map_err(|error| error.message);
+    PrefetchedRemote {
+        key: RemoteKey {
+            clone_url: source,
+            branch: None,
+        },
+        result,
+        unchanged: HashSet::new(),
+    }
 }
 
 /// Upper bound on concurrent `ls-remote` queries during a batch check. Collapses
@@ -1777,15 +1829,22 @@ pub async fn update_skill(
     let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let outcome =
-            update_git_skill_internal(
-                &store,
-                &skill_id,
-                proxy_url.as_deref(),
-                Some(&cancel),
-                approved_removals.as_deref(),
-            );
-        log_update_outcome(&store, &skill_id, "git", outcome.as_ref());
+        let outcome = update_skill_internal(
+            &store,
+            &skill_id,
+            proxy_url.as_deref(),
+            Some(&cancel),
+            approved_removals.as_deref(),
+        );
+        log_update_outcome(
+            &store,
+            &skill_id,
+            outcome
+                .as_ref()
+                .map(|result| result.skill.source_type.as_str())
+                .unwrap_or("remote"),
+            outcome.as_ref(),
+        );
         outcome
     })
     .await?
@@ -1830,10 +1889,10 @@ pub async fn batch_update_skills(
             };
 
             match skill.source_type.as_str() {
-                "git" | "skillssh" => {
+                "git" | "skillssh" | "bytedance" => {
                     let outcome =
-                        update_git_skill_internal(&store, &skill_id, proxy_url.as_deref(), None, None);
-                    log_update_outcome(&store, &skill_id, "git", outcome.as_ref());
+                        update_skill_internal(&store, &skill_id, proxy_url.as_deref(), None, None);
+                    log_update_outcome(&store, &skill_id, &skill.source_type, outcome.as_ref());
                     match outcome {
                         Ok(result) if !result.pending_removals.is_empty() => {
                             // Held back rather than applied: it would have taken
@@ -2096,6 +2155,62 @@ pub fn managed_skill_by_id(
     let all_targets = store.get_all_targets().map_err(AppError::db)?;
     let tags_map = store.get_tags_map().map_err(AppError::db)?;
     Ok(managed_skill_to_dto(store, skill, &all_targets, &tags_map))
+}
+
+/// Dispatch remote updates while preserving each skill's installation source.
+pub fn update_skill_internal(
+    store: &SkillStore,
+    skill_id: &str,
+    proxy_url: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    approved_removals: Option<&str>,
+) -> Result<UpdateSkillResult, AppError> {
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+    if skill.source_type == "bytedance" {
+        crate::bytedance::update::update(
+            store,
+            skill_id,
+            proxy_url,
+            None,
+            cancel,
+            approved_removals,
+        )
+    } else {
+        update_git_skill_internal(store, skill_id, proxy_url, cancel, approved_removals)
+    }
+}
+
+#[tauri::command]
+pub async fn switch_skill_to_bytedance(
+    skill_id: String,
+    identifier: String,
+    repository: String,
+    approved_removals: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
+) -> Result<UpdateSkillResult, AppError> {
+    let store = store.inner().clone();
+    let registry = cancel_registry.inner().clone();
+    let key = format!("update:{}", skill_id);
+    let cancel = registry.register(&key);
+    let _guard = CancelRegistrationGuard::new(registry, key);
+    tauri::async_runtime::spawn_blocking(move || {
+        let proxy = store.proxy_url();
+        let outcome = crate::bytedance::update::update(
+            &store,
+            &skill_id,
+            proxy.as_deref(),
+            Some((&identifier, &repository)),
+            Some(&cancel),
+            approved_removals.as_deref(),
+        );
+        log_update_outcome(&store, &skill_id, "bytedance", outcome.as_ref());
+        outcome
+    })
+    .await?
 }
 
 /// Update an installed git-sourced skill.
@@ -2877,6 +2992,36 @@ pub fn check_skill_update_internal_with_remote(
                         )
                         .map_err(AppError::db)?;
                     return Err(AppError::git(message));
+                }
+            }
+        }
+        "bytedance" => {
+            let Some(remote) = prefetched.filter(|remote| {
+                Some(remote.key.clone_url.as_str()) == skill.source_ref.as_deref()
+            }) else {
+                return managed_skill_by_id(store, skill_id);
+            };
+            match remote.result {
+                Ok(version) => {
+                    let status = if skill.source_revision.as_deref() == Some(version.as_str()) {
+                        "up_to_date"
+                    } else {
+                        "update_available"
+                    };
+                    store
+                        .update_skill_check_state(skill_id, Some(&version), status, None)
+                        .map_err(AppError::db)?;
+                }
+                Err(message) => {
+                    store
+                        .update_skill_check_state(
+                            skill_id,
+                            skill.remote_revision.as_deref(),
+                            "error",
+                            Some(&message),
+                        )
+                        .map_err(AppError::db)?;
+                    return Err(AppError::network(message));
                 }
             }
         }
@@ -4079,6 +4224,73 @@ mod tests {
             unchanged: HashSet::new(),
             comparison_error: None,
         })
+    }
+
+    #[test]
+    fn market_checks_compare_versions_and_preserve_source_on_errors() {
+        let repo = test_repo();
+        let dir = write_skill_dir("market");
+        let mut skill = sample_skill("market", "market", &dir);
+        skill.source_type = "bytedance".into();
+        let source =
+            "https://skills.bytedance.net/skill/skills:internal/demo?repository=skills-byted";
+        skill.source_ref = Some(source.into());
+        skill.source_revision = Some("1.0".into());
+        repo.store.insert_skill(&skill).unwrap();
+        let check = |revision| {
+            check_skill_update_internal_with_remote(
+                &repo.store,
+                "market",
+                true,
+                prefetch(source, revision),
+            )
+            .unwrap()
+        };
+        assert_eq!(check("1.0").update_status, "up_to_date");
+        let changed = check("2.0");
+        assert_eq!(changed.update_status, "update_available");
+        assert_eq!(changed.source_revision.as_deref(), Some("1.0"));
+        let stale = check_skill_update_internal_with_remote(
+            &repo.store,
+            "market",
+            true,
+            prefetch("wrong source", "3.0"),
+        )
+        .unwrap();
+        assert_eq!(stale.remote_revision.as_deref(), Some("2.0"));
+        let failed = PrefetchedRemote {
+            key: remote(source, None),
+            result: Err("permission denied".into()),
+            unchanged: HashSet::new(),
+        };
+        assert!(
+            check_skill_update_internal_with_remote(&repo.store, "market", true, Some(failed))
+                .is_err()
+        );
+        let current = managed_skill_by_id(&repo.store, "market").unwrap();
+        assert_eq!(current.update_status, "error");
+        assert_eq!(current.remote_revision.as_deref(), Some("2.0"));
+        assert_eq!(current.source_revision.as_deref(), Some("1.0"));
+        repo.store
+            .update_skill_source_revision("market", "")
+            .unwrap();
+        assert_eq!(check("2.0").update_status, "update_available");
+    }
+
+    #[test]
+    fn background_market_prefetch_never_resolves_other_sources() {
+        let repo = test_repo();
+        for source_type in ["git", "skillssh", "local", "import", "well-known"] {
+            let dir = write_skill_dir(source_type);
+            let mut skill = sample_skill(source_type, source_type, &dir);
+            skill.source_type = source_type.into();
+            skill.source_ref = Some("https://example.invalid/old-source.git".into());
+            repo.store.insert_skill(&skill).unwrap();
+            assert!(
+                prefetch_bytedance_remote(&repo.store, source_type, Some("invalid proxy"))
+                    .is_none()
+            );
+        }
     }
 
     /// The happy path: a prefetch resolved for the skill's own remote is applied.

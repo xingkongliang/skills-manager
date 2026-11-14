@@ -265,6 +265,16 @@ npm run tauri:build
 npm run cli:build
 ```
 
+#### 从 Linux 打 macOS 测试安装包
+
+macOS 安装包需要在 macOS 上构建。可以在 Linux 提交代码，由 GitHub Actions 的 macOS runner 生成 `.dmg`：
+
+1. 将 `.github/workflows/build-macos.yml` 和 `src-tauri/tauri.macos-test.conf.json` 连同需要打包的代码推送到自己的 GitHub 仓库。首次使用时，工作流文件需要存在于仓库的默认分支，Actions 才会显示手动运行入口。
+2. 打开仓库的 **Actions → Build macOS Test Package → Run workflow**，选择代码分支和架构：Apple 芯片选择 `arm64`，Intel 选择 `x64`，同时构建两种版本选择 `both`。
+3. 构建成功后，在该次运行页面的 **Artifacts** 中下载对应架构的压缩包，解压得到 `.dmg`，在 Mac 上打开并将应用拖入 Applications。下载产物需要登录 GitHub，产物保留 14 天。
+
+此工作流使用临时签名（ad hoc），无需 Apple 或 Tauri 签名 Secrets，产物仅供自行安装测试。首次打开可能需要在 **系统设置 → 隐私与安全性** 中点击 **仍要打开**。测试配置关闭更新包生成和应用内更新；正式分发仍使用 `Build & Release` 工作流及 Developer ID 签名、公证。
+
 ## 常见问题
 
 **macOS 打不开应用。** 从 **v1.29.0** 起，发布版本都经过 Apple Developer ID 签名与公证，可以正常打开。如果看到「Apple 无法验证…」或「应用已损坏」，说明你用的是 v1.28.5 或更早的版本，升级即可解决。（升级会改变代码签名，macOS 可能会再问一次 `skills-manager-git-backup` 钥匙串权限，点「始终允许」。）

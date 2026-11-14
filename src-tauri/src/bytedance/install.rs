@@ -79,11 +79,11 @@ pub fn commit(
         source_type: "bytedance".into(),
         source_ref: Some(source_ref),
         source_ref_resolved: Some(downloaded.download_url),
-        source_revision: Some(downloaded.version),
+        source_revision: Some(downloaded.version.clone()),
         source_subpath: None,
         source_branch: None,
-        remote_revision: None,
-        update_status: "local_only".into(),
+        remote_revision: Some(downloaded.version),
+        update_status: "up_to_date".into(),
     };
     let result = store_installed_skill_unlocked(store, &installed, &metadata, None);
     // A metadata-file write can fail after the DB insert; preserve that installation.

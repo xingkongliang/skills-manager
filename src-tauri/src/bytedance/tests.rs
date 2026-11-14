@@ -10,6 +10,7 @@ use serde_json::json;
 use std::{
     io::{Cursor, Read, Write},
     net::TcpListener,
+    path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -472,6 +473,274 @@ fn downloaded() -> download::DownloadedSkill {
         download_url: "https://skills.byted.org/api/v4/skills/download/demo.zip".into(),
     }
 }
+
+#[test]
+fn market_source_identity_roundtrips_and_rejects_wrong_hosts() {
+    let source = source_url("skills:internal/team/my skill", "skills byted");
+    assert_eq!(
+        super::update::identity(&source).unwrap(),
+        (
+            "skills:internal/team/my skill".into(),
+            "skills byted".into()
+        )
+    );
+    for source in [
+        "https://example.com/skill/skills:demo?repository=public",
+        "http://skills.bytedance.net/skill/skills:demo?repository=public",
+        "https://skills.bytedance.net/skill/skills:demo",
+        "https://skills.bytedance.net/skill/skills:demo?repository=a&repository=b",
+    ] {
+        assert!(super::update::identity(source).is_err());
+    }
+}
+
+#[test]
+fn latest_version_checks_identity_permissions_and_availability() {
+    let mut disabled = package();
+    disabled["disabled"] = json!(true);
+    let mut forbidden = package();
+    forbidden["user_permission"]["download"] = json!(false);
+    let mut missing = package();
+    missing["newest_version"] = json!(null);
+    let mut wrong = package();
+    wrong["repository"] = json!("wrong");
+    for (item, expected) in [
+        (package(), None),
+        (disabled, Some("disabled")),
+        (forbidden, Some("permission")),
+        (missing, Some("no installable version")),
+        (wrong, Some("different package")),
+    ] {
+        let (base, server) = fixture(vec![(
+            200,
+            serde_json::to_vec(&json!({"message":"success", "data":item})).unwrap(),
+        )]);
+        let result = super::update::latest_version(
+            &MarketClient::for_test(base),
+            "skills:github.com/team/repo/demo",
+            "skills-public",
+        );
+        if let Some(message) = expected {
+            assert!(result.unwrap_err().message.contains(message));
+        } else {
+            assert_eq!(result.unwrap(), "1.2.3");
+        }
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].contains("/api/v2/package/"));
+    }
+    let (base, server) = fixture(vec![(503, b"unavailable".to_vec())]);
+    assert!(super::update::latest_version(
+        &MarketClient::for_test(base),
+        "skills:github.com/team/repo/demo",
+        "skills-public"
+    )
+    .is_err());
+    server.join().unwrap();
+}
+
+#[test]
+fn market_conversion_keeps_identity_and_only_commits_after_removal_approval() {
+    let _serial = central_repo::test_base_dir_lock();
+    let repo = tempfile::tempdir().unwrap();
+    central_repo::set_test_base_dir_override(Some(repo.path().to_path_buf()));
+    let _reset = RepoOverride;
+    let store = SkillStore::new(&repo.path().join("test.db")).unwrap();
+    let cancel = AtomicBool::new(false);
+    let id = install::commit(
+        &store,
+        downloaded(),
+        "skills:internal/team/demo",
+        "skills-byted",
+        &cancel,
+    )
+    .unwrap();
+    let original = store.get_skill_by_id(&id).unwrap().unwrap();
+    store
+        .update_skill_after_reinstall(
+            &id,
+            &original.name,
+            original.description.as_deref(),
+            "local",
+            Some("/old/source"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            original.content_hash.as_deref(),
+            "local_only",
+        )
+        .unwrap();
+    let original = store.get_skill_by_id(&id).unwrap().unwrap();
+    store
+        .set_tags_for_skill(&id, &["important".into()])
+        .unwrap();
+    store
+        .insert_scenario(&crate::core::skill_store::ScenarioRecord {
+            id: "preset".into(),
+            name: "Test preset".into(),
+            description: None,
+            icon: None,
+            sort_order: 0,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .unwrap();
+    store.add_skill_to_scenario("preset", &id).unwrap();
+    let deployed = repo.path().join("agent/demo");
+    std::fs::create_dir_all(&deployed).unwrap();
+    std::fs::copy(
+        Path::new(&original.central_path).join("SKILL.md"),
+        deployed.join("SKILL.md"),
+    )
+    .unwrap();
+    store
+        .insert_target(&crate::core::skill_store::SkillTargetRecord {
+            id: "copy-target".into(),
+            skill_id: id.clone(),
+            tool: "claude_code".into(),
+            target_path: deployed.to_string_lossy().into_owned(),
+            mode: "copy".into(),
+            status: "ok".into(),
+            synced_at: None,
+            last_error: None,
+            source_hash: None,
+        })
+        .unwrap();
+    std::fs::write(
+        Path::new(&original.central_path).join("notes.txt"),
+        "keep until approved",
+    )
+    .unwrap();
+    let apply = |identifier: &str, version: &str, approval: Option<&str>| {
+        let mut next = downloaded();
+        next.version = version.into();
+        std::fs::create_dir_all(next.skill_dir.join("scripts")).unwrap();
+        std::fs::write(next.skill_dir.join("scripts/new.txt"), "market version").unwrap();
+        super::update::apply_downloaded(
+            &store,
+            &original,
+            next,
+            identifier,
+            "skills-byted",
+            true,
+            &cancel,
+            approval,
+        )
+        .unwrap()
+    };
+    let held = apply("skills:internal/team/demo", "2.0", None);
+    assert!(!held.pending_removals.is_empty());
+    let unchanged = store.get_skill_by_id(&id).unwrap().unwrap();
+    assert_eq!(unchanged.source_type, "local");
+    assert_eq!(unchanged.source_ref, original.source_ref);
+    assert!(Path::new(&original.central_path).join("notes.txt").exists());
+    let stale = apply(
+        "skills:internal/team/demo",
+        "3.0",
+        held.removal_approval.as_deref(),
+    );
+    assert!(!stale.pending_removals.is_empty());
+    let different_package = apply(
+        "skills:internal/team/other",
+        "2.0",
+        held.removal_approval.as_deref(),
+    );
+    assert!(!different_package.pending_removals.is_empty());
+    let applied = apply(
+        "skills:internal/team/demo",
+        "2.0",
+        held.removal_approval.as_deref(),
+    );
+    assert_eq!(applied.skill.id, id);
+    assert_eq!(applied.skill.name, original.name);
+    assert_eq!(applied.skill.central_path, original.central_path);
+    assert_eq!(applied.skill.source_type, "bytedance");
+    assert_eq!(applied.skill.source_revision.as_deref(), Some("2.0"));
+    assert_eq!(applied.skill.update_status, "up_to_date");
+    assert_eq!(applied.skill.tags, vec!["important"]);
+    assert_eq!(applied.skill.preset_ids, vec!["preset"]);
+    assert_eq!(applied.skill.targets.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(deployed.join("scripts/new.txt")).unwrap(),
+        "market version"
+    );
+    let target = store.get_targets_for_skill(&id).unwrap().pop().unwrap();
+    assert_eq!(
+        target.source_hash,
+        store.get_skill_by_id(&id).unwrap().unwrap().content_hash
+    );
+    assert!(!Path::new(&original.central_path).join("notes.txt").exists());
+    assert!(!std::fs::read_dir(central_repo::skills_dir())
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("staged")));
+}
+
+#[test]
+fn metadata_only_market_update_preserves_files_and_rejects_stale_or_cancelled_commit() {
+    let _serial = central_repo::test_base_dir_lock();
+    let repo = tempfile::tempdir().unwrap();
+    central_repo::set_test_base_dir_override(Some(repo.path().to_path_buf()));
+    let _reset = RepoOverride;
+    let store = SkillStore::new(&repo.path().join("test.db")).unwrap();
+    let cancel = AtomicBool::new(false);
+    let id = install::commit(
+        &store,
+        downloaded(),
+        "skills:internal/team/demo",
+        "skills-byted",
+        &cancel,
+    )
+    .unwrap();
+    let original = store.get_skill_by_id(&id).unwrap().unwrap();
+    let mut next = downloaded();
+    next.version = "2.0".into();
+    let result = super::update::apply_downloaded(
+        &store,
+        &original,
+        next,
+        "skills:internal/team/demo",
+        "skills-byted",
+        false,
+        &cancel,
+        None,
+    )
+    .unwrap();
+    assert!(!result.content_changed);
+    assert_eq!(result.skill.source_revision.as_deref(), Some("2.0"));
+    assert!(super::update::apply_downloaded(
+        &store,
+        &original,
+        downloaded(),
+        "skills:internal/team/demo",
+        "skills-byted",
+        false,
+        &cancel,
+        None
+    )
+    .is_err());
+    let current = store.get_skill_by_id(&id).unwrap().unwrap();
+    assert!(super::update::apply_downloaded(
+        &store,
+        &current,
+        downloaded(),
+        "skills:internal/team/demo",
+        "skills-byted",
+        false,
+        &AtomicBool::new(true),
+        None
+    )
+    .is_err());
+    assert_eq!(
+        store.get_skill_by_id(&id).unwrap().unwrap().source_revision,
+        current.source_revision
+    );
+}
 #[test]
 fn persists_source_and_version_and_keeps_duplicate_install_identity() {
     let _serial = central_repo::test_base_dir_lock();
@@ -489,7 +758,8 @@ fn persists_source_and_version_and_keeps_duplicate_install_identity() {
         Some(source_url(identifier, "skills-byted").as_str())
     );
     assert_eq!(record.source_revision.as_deref(), Some("1.2.3"));
-    assert_eq!(record.update_status, "local_only");
+    assert_eq!(record.update_status, "up_to_date");
+    assert_eq!(record.remote_revision.as_deref(), Some("1.2.3"));
     assert!(record
         .source_ref_resolved
         .unwrap()

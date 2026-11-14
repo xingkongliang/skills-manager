@@ -37,6 +37,8 @@ import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useSkillViewMode } from "../hooks/useSkillViewMode";
 import { useMultiSelect } from "../hooks/useMultiSelect";
+import { AgentBuddySwitchDialog } from "../components/AgentBuddySwitchDialog";
+import type { MarketSkill } from "../byte/views/installSkills/frontend";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { TagRenameDialog } from "../components/TagRenameDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
@@ -811,7 +813,35 @@ export function MySkills() {
     /** Set when the pending replacement is a relink, so confirming re-uses the
      *  directory the user already chose instead of asking for it again. */
     relinkSource?: string;
+    marketTarget?: MarketSkill;
   } | null>(null);
+
+  const [switchingSkill, setSwitchingSkill] = useState<ManagedSkill | null>(null);
+  const handleSwitchToBuddy = async (
+    skill: ManagedSkill,
+    target: MarketSkill,
+    approval?: string,
+  ) => {
+    setUpdatingSkillId(skill.id);
+    try {
+      const result = await api.switchSkillToBytedance(
+        skill.id, target.identifier, target.repository, approval,
+      );
+      if (result.pending_removals.length > 0) {
+        setPendingRemoval({
+          skill,
+          removals: result.pending_removals,
+          approval: result.removal_approval,
+          marketTarget: target,
+        });
+        return;
+      }
+      toast.success(t("mySkills.agentBuddy.switched"));
+      await refreshManagedSkills();
+    } finally {
+      setUpdatingSkillId(null);
+    }
+  };
 
   const handleUpdateAvailableSkills = async () => {
     const updatableSkills = skills.filter(
@@ -874,6 +904,7 @@ export function MySkills() {
   };
 
   const handleCheckUpdate = async (skill: ManagedSkill) => {
+    if (skill.source_type !== "bytedance") toast.info(t("mySkills.agentBuddy.recommend"));
     setCheckingSkillId(skill.id);
     try {
       await api.checkSkillUpdate(skill.id, true);
@@ -887,6 +918,9 @@ export function MySkills() {
   };
 
   const handleRefreshSkill = async (skill: ManagedSkill, approvedRemovals?: string) => {
+    if (skill.source_type !== "bytedance" && !approvedRemovals) {
+      toast.info(t("mySkills.agentBuddy.recommend"));
+    }
     setUpdatingSkillId(skill.id);
     try {
       if (skill.source_type === "local" || skill.source_type === "import") {
@@ -1138,6 +1172,7 @@ export function MySkills() {
   };
 
   const canRefresh = (skill: ManagedSkill) =>
+    skill.source_type === "bytedance" ||
     skill.source_type === "git" ||
     skill.source_type === "skillssh" ||
     ((skill.source_type === "local" || skill.source_type === "import") && !!skill.source_ref);
@@ -1168,7 +1203,9 @@ export function MySkills() {
   }, [skills, selectedIds, viewedPreset, anyDisabled]);
 
   const sourceTypeLabel = (skill: ManagedSkill) =>
-    skill.source_type === "skillssh" ? "skills.sh" : skill.source_type;
+    skill.source_type === "bytedance"
+      ? "Agent Buddy"
+      : skill.source_type === "skillssh" ? "skills.sh" : skill.source_type;
 
   const refreshLabel = (skill: ManagedSkill) =>
     skill.source_type === "local" || skill.source_type === "import"
@@ -1675,6 +1712,15 @@ export function MySkills() {
                               disabled: checkingSkillId === skill.id,
                               onSelect: () => handleCheckUpdate(skill),
                             },
+                            ...(skill.source_type !== "bytedance"
+                              ? [{
+                                  key: "switch-buddy",
+                                  label: t("mySkills.agentBuddy.switch"),
+                                  icon: <Globe className="h-3.5 w-3.5" />,
+                                  disabled: updatingSkillId === skill.id,
+                                  onSelect: () => setSwitchingSkill(skill),
+                                }]
+                              : []),
                             ...(canRefresh(skill)
                               ? [{
                                   key: "refresh",
@@ -2015,6 +2061,15 @@ export function MySkills() {
                           disabled: checkingSkillId === skill.id,
                           onSelect: () => handleCheckUpdate(skill),
                         },
+                        ...(skill.source_type !== "bytedance"
+                          ? [{
+                              key: "switch-buddy",
+                              label: t("mySkills.agentBuddy.switch"),
+                              icon: <Globe className="h-3.5 w-3.5" />,
+                              disabled: updatingSkillId === skill.id,
+                              onSelect: () => setSwitchingSkill(skill),
+                            }]
+                          : []),
                         ...(canRefresh(skill)
                           ? [{
                               key: "refresh",
@@ -2062,7 +2117,17 @@ export function MySkills() {
         isActivePreset={Boolean(viewedPreset && viewedPreset.id === activePreset?.id)}
         projects={projects}
         onProjectsChanged={refreshProjects}
+        onSwitchToBuddy={setSwitchingSkill}
       />
+
+      {switchingSkill && (
+        <AgentBuddySwitchDialog
+          key={switchingSkill.id}
+          skill={switchingSkill}
+          onClose={() => setSwitchingSkill(null)}
+          onSwitch={(target) => handleSwitchToBuddy(switchingSkill, target)}
+        />
+      )}
 
       <ConfirmDialog
         open={pendingRemoval !== null}
@@ -2078,14 +2143,23 @@ export function MySkills() {
           r.location === "library" ? r.path : `${r.location}: ${r.path}`
         )}
         confirmLabel={t("mySkills.updateActions.removalConfirm")}
-        onClose={() => setPendingRemoval(null)}
+        onClose={() => setPendingRemoval((current) =>
+          current?.approval === pendingRemoval?.approval ? null : current
+        )}
         onConfirm={async () => {
           const target = pendingRemoval?.skill;
           const approval = pendingRemoval?.approval ?? undefined;
           const relinkSource = pendingRemoval?.relinkSource;
+          const marketTarget = pendingRemoval?.marketTarget;
           setPendingRemoval(null);
           if (!target) return;
-          if (relinkSource) {
+          if (marketTarget) {
+            try {
+              await handleSwitchToBuddy(target, marketTarget, approval);
+            } catch (error) {
+              toast.error(getErrorMessage(error, t("common.error")));
+            }
+          } else if (relinkSource) {
             await handleRelinkSource(target, relinkSource, approval);
           } else {
             await handleRefreshSkill(target, approval);

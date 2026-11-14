@@ -7,6 +7,7 @@ mod download;
 mod install;
 mod models;
 mod search_builder;
+pub(crate) mod update;
 
 #[cfg(test)]
 mod tests;
