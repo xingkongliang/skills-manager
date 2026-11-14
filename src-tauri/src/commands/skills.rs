@@ -1630,8 +1630,11 @@ pub struct PrefetchedRemote {
     key: RemoteKey,
     result: Result<String, String>,
     /// The `(source_revision, subpath)` pairs whose directory is the same tree
-    /// at the resolved revision — see [`git_fetcher::unchanged_subtrees`].
+    /// at the resolved revision — see [`git_fetcher::compare_subtrees`].
     unchanged: HashSet<(String, String)>,
+    /// The pairs whose path is no longer there at all: the Source deleted the
+    /// skill. Terminal until the author puts it back (#655).
+    missing: HashSet<(String, String)>,
     /// Why those directories could not be compared. A resolved head alone
     /// does not establish whether an installed subtree changed.
     comparison_error: Option<String>,
@@ -1645,7 +1648,7 @@ fn installed_subtree(skill: &SkillRecord, source: &GitSkillSource) -> Option<(St
     Some((skill.source_revision.clone()?, subpath.to_string()))
 }
 
-/// Resolve `key`'s head, then which of `installed` it leaves unchanged.
+/// Resolve `key`'s head, then what it says about `installed`.
 fn resolve_remote(
     key: RemoteKey,
     installed: &HashSet<(String, String)>,
@@ -1656,19 +1659,18 @@ fn resolve_remote(
             .map_err(|err| err.to_string())
     };
     let result = resolve();
-    let (unchanged, comparison_error) = match &result {
-        Ok(head) => {
-            match git_fetcher::unchanged_subtrees(&key.clone_url, head, installed, proxy_url) {
-                Ok(unchanged) => (unchanged, None),
-                Err(err) => (HashSet::new(), Some(err.to_string())),
-            }
-        }
-        Err(_) => (HashSet::new(), None),
+    let (unchanged, missing, comparison_error) = match &result {
+        Ok(head) => match git_fetcher::compare_subtrees(&key.clone_url, head, installed, proxy_url) {
+            Ok(comparison) => (comparison.unchanged, comparison.missing, None),
+            Err(err) => (HashSet::new(), HashSet::new(), Some(err.to_string())),
+        },
+        Err(_) => (HashSet::new(), HashSet::new(), None),
     };
     PrefetchedRemote {
         key,
         result,
         unchanged,
+        missing,
         comparison_error,
     }
 }
@@ -2809,6 +2811,7 @@ pub fn check_skill_update_internal_with_remote(
             let Some(PrefetchedRemote {
                 result: remote_result,
                 unchanged,
+                missing,
                 comparison_error,
                 ..
             }) = prefetched.filter(|prefetched| prefetched.key.matches(&git_source))
@@ -2842,6 +2845,16 @@ pub fn check_skill_update_internal_with_remote(
                     }
                     let update_status = match skill.source_revision.as_deref() {
                         Some(current) if current == remote_revision => "up_to_date",
+                        // The Source no longer holds this skill anywhere this
+                        // check would look (#655). Not an update — no head could
+                        // ever make it one — and not a failed check either, so
+                        // it is not retried every round. The local copy stays.
+                        Some(_)
+                            if installed_subtree(&skill, &git_source)
+                                .is_some_and(|installed| missing.contains(&installed)) =>
+                        {
+                            "source_gone"
+                        }
                         // The repo moved but this skill's directory did not
                         // (#561). Record the new head as its source, as an
                         // update that changed nothing would, so the next
@@ -4077,6 +4090,7 @@ mod tests {
             key: remote(url, None),
             result: Ok(revision.to_string()),
             unchanged: HashSet::new(),
+            missing: HashSet::new(),
             comparison_error: None,
         })
     }
@@ -4242,6 +4256,7 @@ mod tests {
                 key: remote("https://example.test/a.git", None),
                 result: Err("could not read from remote".to_string()),
                 unchanged: HashSet::new(),
+                missing: HashSet::new(),
                 comparison_error: None,
             }),
         )
@@ -4449,6 +4464,42 @@ mod tests {
         assert_eq!(b.update_status, "error");
         assert_eq!(b.last_check_error.as_deref(), Some(err.message.as_str()));
         assert_eq!(b.source_revision.as_deref(), Some(gone));
+    }
+
+    /// The Source deleted the skill: the recorded subpath is absent at head, or
+    /// no longer a directory. That is not an update — retrying can never make it
+    /// one — and it is not a failed check either. The siblings in the same
+    /// repository are unaffected (#655).
+    #[test]
+    fn a_skill_its_source_deleted_is_source_gone() {
+        let repo = test_repo();
+        let (dir, url, _) = monorepo(&repo);
+        write_skill(&dir.join("skills/c"), "c");
+        git_in(&dir, &["add", "-A"]);
+        git_in(&dir, &["commit", "-qm", "add c"]);
+        let installed = git_in(&dir, &["rev-parse", "HEAD"]);
+        insert_monorepo_skill(&repo.store, "a", &url, Some("skills/a"), &installed);
+        insert_monorepo_skill(&repo.store, "b", &url, Some("skills/b"), &installed);
+        insert_monorepo_skill(&repo.store, "c", &url, Some("skills/c"), &installed);
+
+        git_in(&dir, &["rm", "-r", "-q", "skills/b"]);
+        git_in(&dir, &["commit", "-qm", "drop b"]);
+        // A path that survives as a file is the same answer: no skill there.
+        fs::remove_dir_all(dir.join("skills/c")).unwrap();
+        commit_file(&dir, "skills/c", "not a skill directory\n");
+
+        let check = |id: &str| check_skill_update_internal(&repo.store, id, true, None).unwrap();
+        assert_eq!(check("b").update_status, "source_gone");
+        assert_eq!(check("c").update_status, "source_gone");
+        assert_eq!(check("a").update_status, "up_to_date");
+
+        let stored = repo.store.get_skill_by_id("b").unwrap().unwrap();
+        assert_eq!(stored.last_check_error, None, "a deletion is not an error");
+        assert_eq!(
+            stored.source_revision.as_deref(),
+            Some(installed.as_str()),
+            "an update cannot be applied to something that is not there"
+        );
     }
 
     /// "Check all" resolves each remote once. Its siblings — here installed at

@@ -1216,7 +1216,19 @@ pub fn resolve_remote_revision(
     anyhow::bail!("Unable to resolve remote revision for {}", url)
 }
 
-/// Which `(revision, subpath)` pairs hold exactly the same directory at `head`.
+/// What a `head` tree says about directories installed from an older revision.
+#[derive(Debug, Default, Clone)]
+pub struct SubtreeComparison {
+    /// Pairs whose directory is exactly the same at `head`.
+    pub unchanged: HashSet<(String, String)>,
+    /// Pairs whose path is absent at `head` — or no longer a directory. This is
+    /// the only observation that can call a skill deleted upstream: it is the
+    /// same lookup the update itself would make, against the same tree (#655).
+    pub missing: HashSet<(String, String)>,
+}
+
+/// Which `(revision, subpath)` pairs hold exactly the same directory at `head`,
+/// and which are no longer there at all.
 ///
 /// A skill installed from a subdirectory of a monorepo would otherwise be
 /// "out of date" after every commit anywhere in that repository (#561). An equal
@@ -1231,17 +1243,20 @@ pub fn resolve_remote_revision(
 /// are read with libgit2, which cannot lazily fetch a missing object the way
 /// git would in the partial repository that fetch leaves behind.
 ///
-/// A pair whose path is missing, or is not a directory, just stays out of the
-/// result, so the caller reports an update for it. A failure of the comparison
-/// as a whole — the fetch did not go through, the temporary repository could
-/// not be made — is returned instead: whether that still allows reporting an
-/// update depends on why it failed, which is for the caller to judge (#582).
-pub fn unchanged_subtrees(
+/// A pair whose path is missing, or is not a directory, is reported as missing
+/// rather than merely "changed", so a caller can tell "the Source deleted this
+/// skill" from "this skill has a new version" (#655). A pair that neither held
+/// nor vanished stays out of both sets, which reads as an update. A failure of
+/// the comparison as a whole — the fetch did not go through, the temporary
+/// repository could not be made — is returned instead: whether that still allows
+/// reporting an update depends on why it failed, which is for the caller to
+/// judge (#582).
+pub fn compare_subtrees(
     url: &str,
     head: &str,
     installed: &HashSet<(String, String)>,
     proxy_url: Option<&str>,
-) -> Result<HashSet<(String, String)>> {
+) -> Result<SubtreeComparison> {
     // Revisions reach the command line, so only full object ids get there.
     let is_object_id = |rev: &str| rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit());
     let pairs: Vec<&(String, String)> = installed
@@ -1249,12 +1264,12 @@ pub fn unchanged_subtrees(
         .filter(|(rev, subpath)| rev != head && is_object_id(rev) && !subpath.is_empty())
         .collect();
     if pairs.is_empty() || !is_object_id(head) {
-        return Ok(HashSet::new());
+        return Ok(SubtreeComparison::default());
     }
 
     let temp =
         std::env::temp_dir().join(format!("skills-manager-subtree-{}", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<HashSet<(String, String)>> {
+    let result = (|| -> Result<SubtreeComparison> {
         Repository::init_bare(&temp)?;
         let mut revs: Vec<&str> = pairs.iter().map(|(rev, _)| rev.as_str()).collect();
         revs.push(head);
@@ -1286,14 +1301,17 @@ pub fn unchanged_subtrees(
                 .collect();
             Some((entry.id(), attributes))
         };
-        Ok(pairs
-            .into_iter()
-            .filter(|(rev, subpath)| {
-                let now = checkout_inputs(head, subpath);
-                now.is_some() && now == checkout_inputs(rev, subpath)
-            })
-            .cloned()
-            .collect())
+        let mut comparison = SubtreeComparison::default();
+        for (rev, subpath) in pairs {
+            let Some(now) = checkout_inputs(head, subpath) else {
+                comparison.missing.insert((rev.clone(), subpath.clone()));
+                continue;
+            };
+            if checkout_inputs(rev, subpath) == Some(now) {
+                comparison.unchanged.insert((rev.clone(), subpath.clone()));
+            }
+        }
+        Ok(comparison)
     })();
     let _ = std::fs::remove_dir_all(&temp);
     result

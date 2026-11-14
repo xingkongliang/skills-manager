@@ -4303,6 +4303,85 @@ mod tests {
             .remove(0);
         assert!(report.skipped);
     }
+
+    fn git_in(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(args)
+            .output()
+            .expect("git must be runnable");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn file_url(path: &Path) -> String {
+        let raw = path.display().to_string().replace('\\', "/");
+        if raw.starts_with('/') {
+            format!("file://{raw}")
+        } else {
+            format!("file:///{raw}")
+        }
+    }
+
+    /// The status name has to reach `skills check --json`: scripts read this,
+    /// and they must see the same word the app shows (#655).
+    #[test]
+    fn check_reports_a_skill_its_source_deleted() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        let upstream = tmp.path().join("monorepo");
+        let skill_dir = upstream.join("skills/demo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "---\nname: demo\n---\nbody\n").unwrap();
+        git_in(&upstream, &["init", "-q"]);
+        git_in(&upstream, &["add", "-A"]);
+        git_in(&upstream, &["commit", "-qm", "init"]);
+        git_in(&upstream, &["config", "uploadpack.allowFilter", "true"]);
+        let installed = git_in(&upstream, &["rev-parse", "HEAD"]);
+        let url = file_url(&upstream);
+
+        let central = tmp.path().join("central/demo");
+        fs::create_dir_all(&central).unwrap();
+        fs::write(central.join("SKILL.md"), "---\nname: demo\n---\nbody\n").unwrap();
+        store
+            .insert_skill(&SkillRecord {
+                id: "demo".to_string(),
+                name: "demo".to_string(),
+                description: None,
+                source_type: "git".to_string(),
+                source_ref: Some(url.clone()),
+                source_ref_resolved: Some(url),
+                source_subpath: Some("skills/demo".to_string()),
+                source_branch: None,
+                source_revision: Some(installed.clone()),
+                remote_revision: Some(installed),
+                central_path: central.to_string_lossy().to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: 1,
+                updated_at: 1,
+                status: "ok".to_string(),
+                update_status: "up_to_date".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+
+        git_in(&upstream, &["rm", "-r", "-q", "skills/demo"]);
+        git_in(&upstream, &["commit", "-qm", "drop demo"]);
+
+        let report = run_check(&store, Some("demo"), false, true)
+            .unwrap()
+            .remove(0);
+        assert_eq!(report.update_status, "source_gone");
+        assert_eq!(report.last_check_error, None);
+    }
 }
 
 #[cfg(test)]
