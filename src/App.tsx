@@ -9,6 +9,7 @@ import { WhatsNewOnUpdate } from "./components/WhatsNewDialog";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./views/Dashboard";
 import { MySkills } from "./views/MySkills";
+import { SourceGone } from "./views/SourceGone";
 import { WorkspaceView } from "./views/WorkspaceView";
 import { CODING_WORKSPACE_CONFIG, LOBSTER_WORKSPACE_CONFIG } from "./views/workspaceConfigs";
 import { InstallSkills } from "./views/InstallSkills";
@@ -42,6 +43,7 @@ function App() {
             <Route element={<Layout />}>
               <Route path="/" element={<Dashboard />} />
               <Route path="/my-skills" element={<MySkills />} />
+              <Route path="/my-skills/source-gone" element={<SourceGone />} />
               <Route path="/global-workspace" element={<WorkspaceView config={CODING_WORKSPACE_CONFIG} />} />
               <Route path="/global-workspace/:agentKey" element={<WorkspaceView config={CODING_WORKSPACE_CONFIG} />} />
               <Route path="/lobster-workspace" element={<WorkspaceView config={LOBSTER_WORKSPACE_CONFIG} />} />

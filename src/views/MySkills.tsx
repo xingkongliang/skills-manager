@@ -190,7 +190,6 @@ export function MySkills() {
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const refreshAfterDeleteRef = useRef<number | null>(null);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
-  const [sourceGoneConfirm, setSourceGoneConfirm] = useState(false);
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
   const [batchSyncDialogOpen, setBatchSyncDialogOpen] = useState(false);
   const [batchToggling, setBatchToggling] = useState(false);
@@ -439,8 +438,7 @@ export function MySkills() {
       filterMode,
       viewedPreset?.id ?? null,
     ]),
-    escapeEnabled:
-      !batchTagDialogOpen && !batchSyncDialogOpen && !batchDeleteConfirm && !sourceGoneConfirm,
+    escapeEnabled: !batchTagDialogOpen && !batchSyncDialogOpen && !batchDeleteConfirm,
   });
 
   // Selected skills with no row on screen: the skills of a Source collapsed
@@ -693,31 +691,6 @@ export function MySkills() {
     } finally {
       exitMultiSelect();
       setBatchDeleteConfirm(false);
-      await Promise.all([refreshManagedSkills(), refreshPresets()]);
-    }
-  };
-
-  /**
-   * Deleting them is a choice about the library, not about the Source: the
-   * copies stay usable until the user confirms, and nothing is kept afterwards.
-   * Stays on the existing batch delete so deployments, presets and the audit
-   * log behave exactly as they do for a manual delete.
-   */
-  const handleDeleteSourceGone = async () => {
-    const ids = sourceGone.map((row) => row.id);
-    if (ids.length === 0) return;
-    try {
-      const result = await api.deleteManagedSkills(ids);
-      if (selectedSkill && ids.includes(selectedSkill.id)) closeSkillDetail();
-      if (result.deleted > 0) {
-        toast.success(t("mySkills.cleanup.deleted", { count: result.deleted }));
-      }
-      if (result.failed.length > 0) {
-        toast.error(t("mySkills.cleanup.failed", { count: result.failed.length }));
-      }
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
-    } finally {
       await Promise.all([refreshManagedSkills(), refreshPresets()]);
     }
   };
@@ -1342,7 +1315,7 @@ export function MySkills() {
             </button>
             {sourceGone.length > 0 && (
               <button
-                onClick={() => setSourceGoneConfirm(true)}
+                onClick={() => navigate("/my-skills/source-gone")}
                 className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -2096,23 +2069,6 @@ export function MySkills() {
         message={hiddenTexts.deleteConfirm}
         onClose={() => setBatchDeleteConfirm(false)}
         onConfirm={handleBatchDelete}
-      />
-      <ConfirmDialog
-        open={sourceGoneConfirm}
-        title={t("mySkills.cleanup.title", { count: sourceGone.length })}
-        message={t("mySkills.cleanup.message")}
-        details={sourceGone.map((row) =>
-          t("mySkills.cleanup.row", {
-            name: row.name,
-            subpath: row.subpath || t("mySkills.cleanup.rootSubpath"),
-            path: row.centralPath,
-            deployments: row.deployments,
-            presets: row.presets,
-          })
-        )}
-        confirmLabel={t("mySkills.cleanup.confirm", { count: sourceGone.length })}
-        onClose={() => setSourceGoneConfirm(false)}
-        onConfirm={handleDeleteSourceGone}
       />
       <ConfirmDialog
         open={skillToDelete !== null}

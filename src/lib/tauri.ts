@@ -359,6 +359,67 @@ export interface BatchUpdateSkillsResult {
 export const batchUpdateSkills = (skillIds: string[]) =>
   invoke<BatchUpdateSkillsResult>("batch_update_skills", { skillIds });
 
+export interface MoveCandidate {
+  subpath: string;
+  /** `content_hash` (same bytes) or `directory_name` (only the name matches). */
+  evidence: "content_hash" | "directory_name";
+}
+
+export interface SourceRepairItem {
+  skill_id: string;
+  name: string;
+  source_subpath: string | null;
+  central_path: string;
+  deployments: number;
+  presets: number;
+  local_changed: boolean;
+  placement: "at" | "moved" | "gone" | "unreachable";
+  candidates: MoveCandidate[];
+  installed_revision_present: boolean;
+}
+
+export interface SourceScanResult {
+  clone_url: string;
+  branch: string | null;
+  revision: string | null;
+  /** Present when the Source could not be reached; the items still carry it. */
+  error: string | null;
+  items: SourceRepairItem[];
+}
+
+/** One clone for the whole Source: the answers only exist once it is on disk. */
+export const scanGitSource = (cloneUrl: string, branch?: string | null) =>
+  invoke<SourceScanResult>("scan_git_source", {
+    cloneUrl,
+    branch: branch ?? null,
+  });
+
+/** Keep the library copy, drop the Source pointer. */
+export const detachSkillSource = (skillId: string) =>
+  invoke<ManagedSkill>("detach_skill_source", { skillId });
+
+export interface RepointSkillResult {
+  skill_id: string;
+  subpath: string | null;
+  content_changed: boolean;
+}
+
+/** Point an installed skill somewhere else in its Source, keeping its identity. */
+export const repointSkillSource = (
+  skillId: string,
+  gitUrl: string,
+  subpath: string | null,
+  force: boolean
+) =>
+  invoke<RepointSkillResult>("repoint_skill_source", {
+    skillId,
+    gitUrl,
+    subpath,
+    branch: null,
+    force,
+    dryRun: false,
+  });
+
 export interface ReimportSkillResult {
   skill: ManagedSkill;
   /** Non-empty means nothing was changed — see UpdateSkillResult. */
