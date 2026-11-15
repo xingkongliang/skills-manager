@@ -40,6 +40,40 @@ pub struct ContentEntry {
     /// so callers don't need a second `metadata()` syscall (or a separate
     /// recursive walk) just to learn when the content last changed.
     pub modified_ms: Option<i64>,
+    /// Size and change times from the same metadata, for [`stamp_entries`].
+    /// `None` when the walk could not read them.
+    stat: Option<FileStat>,
+}
+
+/// What a stamp records about one file instead of reading it.
+#[derive(Clone, Copy)]
+struct FileStat {
+    len: u64,
+    modified_ns: u128,
+    /// The inode change time on unix, which no tool can set back the way it
+    /// can the modification time. Zero elsewhere.
+    changed_ns: i128,
+}
+
+fn file_stat(meta: &std::fs::Metadata) -> Option<FileStat> {
+    let modified_ns = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    #[cfg(unix)]
+    let changed_ns = {
+        use std::os::unix::fs::MetadataExt;
+        i128::from(meta.ctime()) * 1_000_000_000 + i128::from(meta.ctime_nsec())
+    };
+    #[cfg(not(unix))]
+    let changed_ns = 0;
+    Some(FileStat {
+        len: meta.len(),
+        modified_ns,
+        changed_ns,
+    })
 }
 
 impl ContentEntry {
@@ -120,17 +154,19 @@ fn walk_content_files(dir: &Path, strict: bool, skip_deps: bool) -> Result<Vec<C
             let exec_bits = exec_bits_of(entry.path());
             // Reuse WalkDir's already-fetched metadata for the mtime: no extra
             // stat, and no separate recursive walk to answer "last modified?".
-            let modified_ms = entry
-                .metadata()
-                .ok()
+            let metadata = entry.metadata().ok();
+            let modified_ms = metadata
+                .as_ref()
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as i64);
+            let stat = metadata.as_ref().and_then(file_stat);
             ContentEntry {
                 relative_path,
                 path: entry.into_path(),
                 exec_bits,
                 modified_ms,
+                stat,
             }
         })
         .collect();
@@ -141,11 +177,31 @@ fn walk_content_files(dir: &Path, strict: bool, skip_deps: bool) -> Result<Vec<C
 /// caller that already walked the tree (via [`list_content_files`]) can hash
 /// and inspect the same entries without walking again (#248).
 pub fn hash_entries(entries: &[ContentEntry]) -> String {
+    hash_entries_reading(entries, false).expect("a lossy hash skips unreadable files")
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Files [`hash_entries_reading`] opened on this thread, so a test can tell
+    /// a reused hash from one that was read again and then discarded.
+    pub(crate) static FILES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The byte stream of [`hash_entries`]. With `strict`, a file that cannot be
+/// read is an error instead of hashing as if it were empty.
+fn hash_entries_reading(entries: &[ContentEntry], strict: bool) -> Result<String> {
     let mut hasher = Sha256::new();
     for entry in entries {
         hasher.update(entry.relative_path.as_bytes());
-        if let Ok(content) = std::fs::read(&entry.path) {
-            hasher.update(&content);
+        #[cfg(test)]
+        FILES_READ.with(|count| count.set(count.get() + 1));
+        match std::fs::read(&entry.path) {
+            Ok(content) => hasher.update(&content),
+            Err(err) if strict => {
+                return Err(anyhow::Error::new(err)
+                    .context(format!("failed to read {}", entry.path.display())));
+            }
+            Err(_) => {}
         }
         // Include executable bit so permission-only changes are detected.
         #[cfg(unix)]
@@ -153,7 +209,80 @@ pub fn hash_entries(entries: &[ContentEntry]) -> String {
             hasher.update(&bits.to_le_bytes());
         }
     }
-    hex::encode(hasher.finalize())
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// A cheap fingerprint of the files [`hash_entries`] would read: their paths,
+/// sizes, modification times and exec bits, plus the change time on unix — no
+/// content. `None` when any file's metadata was unreadable.
+///
+/// It stands in for the content only as far as timestamps do, the same bet
+/// git's index and rsync make: a rewrite that keeps both the size and the
+/// modification time (a tool that restores mtimes) reads as unchanged. On
+/// unix the change time still moves then; on Windows it is not available.
+/// Timestamps are only as fine as the filesystem keeps them: on FAT or HFS+
+/// (seconds) a same-size write within that tick of the scan can also slip by.
+fn stamp_entries(entries: &[ContentEntry]) -> Option<String> {
+    let mut hasher = Sha256::new();
+    for entry in entries {
+        let stat = entry.stat?;
+        let path = entry.relative_path.as_bytes();
+        hasher.update((path.len() as u64).to_le_bytes());
+        hasher.update(path);
+        hasher.update(stat.len.to_le_bytes());
+        hasher.update(stat.modified_ns.to_le_bytes());
+        hasher.update(stat.changed_ns.to_le_bytes());
+        hasher.update(entry.exec_bits.unwrap_or(0).to_le_bytes());
+    }
+    Some(hex::encode(hasher.finalize()))
+}
+
+/// [`hash_directory`]'s result, and the stamp it may be cached under.
+pub struct StampedHash {
+    pub hash: String,
+    /// Set only for a fresh hash whose every file was read, under a stamp that
+    /// did not move while it was read: a cache must never pair one state's
+    /// stamp with another state's hash, or every later lookup repeats the error.
+    pub stamp: Option<String>,
+}
+
+/// [`hash_directory`], except that `cached` — a `(stamp, hash)` pair an
+/// earlier call returned — is reused without reading any file while the
+/// directory's stamp still matches. A fresh hash is byte for byte the one
+/// [`hash_directory`] computes; a reused one is only as current as the stamp
+/// can tell — see [`stamp_entries`] for what it can miss.
+pub fn hash_directory_reusing(dir: &Path, cached: Option<(&str, &str)>) -> StampedHash {
+    let Ok(entries) = list_content_files_strict(dir) else {
+        return StampedHash {
+            hash: hash_entries(&list_content_files(dir)),
+            stamp: None,
+        };
+    };
+    let stamp = stamp_entries(&entries);
+    if let (Some(stamp), Some((cached_stamp, cached_hash))) = (&stamp, cached) {
+        if stamp == cached_stamp {
+            return StampedHash {
+                hash: cached_hash.to_string(),
+                stamp: None,
+            };
+        }
+    }
+    match (stamp, hash_entries_reading(&entries, true)) {
+        (Some(stamp), Ok(hash)) => {
+            let unchanged = list_content_files_strict(dir)
+                .ok()
+                .and_then(|again| stamp_entries(&again))
+                .is_some_and(|again| again == stamp);
+            StampedHash {
+                hash,
+                stamp: unchanged.then_some(stamp),
+            }
+        }
+        _ => StampedHash {
+            hash: hash_entries(&entries),
+            stamp: None,
+        },
+    }
 }
 
 /// Latest content-file modification time (ms since epoch) from a prepared
@@ -410,7 +539,29 @@ mod tests {
             path,
             exec_bits: None,
             modified_ms: None,
+            stat: None,
         }
+    }
+
+    /// Without a change time (Windows), the size is what still notices a
+    /// rewrite that put the modification time back. A file whose metadata
+    /// could not be read leaves nothing to stamp.
+    #[test]
+    fn a_stamp_needs_every_stat_and_moves_with_the_size() {
+        let with_len = |len| {
+            let mut file = entry("SKILL.md", PathBuf::from("SKILL.md"));
+            file.stat = Some(FileStat {
+                len,
+                modified_ns: 1,
+                changed_ns: 0,
+            });
+            file
+        };
+        let stamp = |len| stamp_entries(&[with_len(len)]).unwrap();
+        assert_ne!(stamp(1), stamp(2));
+
+        let unknown = entry("notes.md", PathBuf::from("notes.md"));
+        assert_eq!(stamp_entries(&[with_len(1), unknown]), None);
     }
 
     /// The tiebreaker only ever *suppresses* an update, so a file it could not

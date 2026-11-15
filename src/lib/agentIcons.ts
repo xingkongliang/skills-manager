@@ -30,6 +30,7 @@ const AGENT_ICON_FILES: Record<string, string> = {
   kiro: "kiro.svg",
   kode: "kode.png",
   mcpjam: "mcpjam.png",
+  minimax_code: "minimax_code.png",
   mistral_vibe: "mistral_vibe.svg",
   mux: "mux.png",
   neovate: "neovate.png",
@@ -48,6 +49,7 @@ const AGENT_ICON_FILES: Record<string, string> = {
   warp: "warp.svg",
   windsurf: "windsurf.svg",
   workbuddy: "workbuddy.png",
+  workbuddy_overseas: "workbuddy.png",
   zencoder: "zencoder.png",
   zcode: "zcode.svg",
 };

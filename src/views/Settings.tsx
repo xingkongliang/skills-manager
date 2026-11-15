@@ -29,6 +29,7 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
+  Sparkles,
 } from "lucide-react";
 import {
   DndContext,
@@ -59,6 +60,8 @@ import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
 import { AgentIcon } from "../components/AgentIcon";
 import { ToggleSwitch } from "../components/ToggleSwitch";
+import { WhatsNewDialog } from "../components/WhatsNewDialog";
+import { loadChangelog, selectWhatsNew, type ChangelogEntry } from "../lib/changelog";
 import * as api from "../lib/tauri";
 import { applyTextSize } from "../lib/textScale";
 import { getErrorMessage } from "../lib/error";
@@ -172,6 +175,9 @@ export function Settings() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [appVersion, setAppVersion] = useState("");
+  // This version's "What's new"; empty hides the entry point.
+  const [currentRelease, setCurrentRelease] = useState<ChangelogEntry[]>([]);
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
   const [gitRemoteInput, setGitRemoteInput] = useState("");
   const [gitRemoteSaving, setGitRemoteSaving] = useState(false);
   const [gitRemoteDisconnecting, setGitRemoteDisconnecting] = useState(false);
@@ -320,6 +326,19 @@ export function Settings() {
     api.getCentralRepoWarnings().then(setRepoWarnings).catch(() => {});
     getVersion().then(setAppVersion).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!appVersion) return;
+    let cancelled = false;
+    loadChangelog(i18n.language)
+      .then((entries) => {
+        if (!cancelled) setCurrentRelease(selectWhatsNew(entries, appVersion, null));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [appVersion, i18n.language]);
 
   useEffect(() => {
     api.getSettings("sync_mode").then((v) => { if (v) setSyncMode(v); });
@@ -490,10 +509,27 @@ export function Settings() {
       toast.success(t("settings.repoPathSaved"));
       if (pending) toast.info(t("settings.repoPathRestartNotice"));
     } catch (error) {
-      toast.error(String(error));
+      toast.error(centralRepoPathError(error));
     } finally {
       setSavingCentralRepoPath(false);
     }
+  };
+
+  // The backend refuses a move the next launch could not make as
+  // "<CODE>: <folder>" (`central_repo.rs`). Match the code exactly: the folder
+  // name itself may contain either code.
+  const centralRepoPathError = (error: unknown) => {
+    const message = getErrorMessage(error, t("common.error"));
+    const separator = message.indexOf(": ");
+    const code = separator === -1 ? "" : message.slice(0, separator);
+    const path = compactHomePath(message.slice(separator + 2));
+    if (code === "REPO_TARGET_NOT_EMPTY") {
+      return t("settings.repoPathTargetNotEmpty", { path });
+    }
+    if (code === "REPO_TARGET_INSIDE_LIBRARY") {
+      return t("settings.repoPathTargetInsideLibrary", { path });
+    }
+    return message;
   };
 
   const handleResetCentralRepoPath = async () => {
@@ -508,7 +544,7 @@ export function Settings() {
       toast.success(t("settings.repoPathReset"));
       if (pending) toast.info(t("settings.repoPathRestartNotice"));
     } catch (error) {
-      toast.error(String(error));
+      toast.error(centralRepoPathError(error));
     } finally {
       setSavingCentralRepoPath(false);
     }
@@ -1353,6 +1389,17 @@ export function Settings() {
                   t("settings.repoPathDefaultHint")
                 )}
               </div>
+              {/* Why this session is not on the configured path, next to it. */}
+              {repoWarnings.length > 0 && (
+                <div className="flex w-full items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" />
+                  <div className="min-w-0 flex-1 space-y-1 text-[13px] text-amber-800 dark:text-amber-300">
+                    {repoWarnings.map((code) => (
+                      <p key={code}>{t(`settings.repoWarning_${code}`)}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Sync mode */}
@@ -1718,16 +1765,6 @@ export function Settings() {
 
         {/* About */}
         <section className="space-y-2">
-          {repoWarnings.length > 0 && (
-            <div className="app-panel flex flex-wrap items-start gap-2 p-3 border border-amber-500/40 bg-amber-500/10">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" />
-              <div className="min-w-0 flex-1 space-y-1 text-[13px] text-amber-800 dark:text-amber-300">
-                {repoWarnings.map((code) => (
-                  <p key={code}>{t(`settings.repoWarning_${code}`)}</p>
-                ))}
-              </div>
-            </div>
-          )}
           {lastPanic && (
             <div className="app-panel flex flex-wrap items-center justify-between gap-2 p-3 border border-red-500/40 bg-red-500/10">
               <div className="flex min-w-0 items-center gap-2 text-[13px] text-red-700 dark:text-red-300">
@@ -1833,6 +1870,15 @@ export function Settings() {
               >
                 <BookOpen className="w-3 h-3" /> {t("settings.help")}
               </button>
+              {currentRelease.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setWhatsNewOpen(true)}
+                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+                >
+                  <Sparkles className="w-3 h-3" /> {t("settings.whatsNew")}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleReportIssue}
@@ -1880,6 +1926,9 @@ export function Settings() {
           </div>
         </section>
       </div>
+      {whatsNewOpen && (
+        <WhatsNewDialog entries={currentRelease} onClose={() => setWhatsNewOpen(false)} />
+      )}
     </div>
   );
 }

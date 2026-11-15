@@ -99,6 +99,13 @@ You can also download the `.dmg` for your Mac from the [latest release](https://
 
 Download the installer for your platform from the [latest release](https://github.com/xingkongliang/skills-manager/releases/latest): `.exe` or `.msi` for Windows, and `.AppImage`, `.deb`, or `.rpm` for Linux (x64 and arm64).
 
+On Windows you can also install with [Scoop](https://scoop.sh):
+
+```powershell
+scoop bucket add extras
+scoop install extras/skills-manager
+```
+
 Every installer ships the CLI inside the app — see [Where the binary lives](#where-the-binary-lives).
 
 ## Quick Start
@@ -149,9 +156,9 @@ The Backup page offers three levels: **disconnect this machine** (other devices 
 
 ## Supported Tools
 
-54 agents are supported out of the box, including:
+56 agents are supported out of the box, including:
 
-Claude Code · Codex · Cursor · GitHub Copilot · Gemini CLI · GitLab Duo · OpenCode · OpenClaw · Hermes Agent · OpenHands · Cline · Goose · Windsurf · Continue · Grok · Antigravity · Qwen Code · ZCode · Crush · Kilo Code · Roo Code · Amp · Kiro CLI · Droid · TRAE IDE · Warp · Qoder · CodeBuddy
+Claude Code · Codex · Cursor · GitHub Copilot · Gemini CLI · GitLab Duo · OpenCode · OpenClaw · Hermes Agent · OpenHands · Cline · Goose · Windsurf · Continue · Grok · Antigravity · Qwen Code · ZCode · Crush · Kilo Code · Roo Code · Amp · Kiro CLI · Droid · TRAE IDE · Warp · Qoder · CodeBuddy · MiniMax Code
 
 **Settings** lists them all, leading with the ones detected on your machine. You can also add custom tools there and manage their skills the same way.
 

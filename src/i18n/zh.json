@@ -362,6 +362,8 @@
     "agentToggleDisabled": "{{agent}} 已关闭",
     "agentToggleNotInstalled": "未安装",
     "agentToggleDisabledGlobally": "已在设置中禁用",
+    "agentTogglePendingSync": "待同步",
+    "agentTogglePendingSyncHint": "已在此 Preset 中启用，但还没有部署到这个 Agent。点击即部署。",
     "agentUnavailableCount": "{{count}} 个不可用",
     "updateStatus": {
       "unknown": "未知",
@@ -402,7 +404,14 @@
       "local": "本地",
       "import": "导入",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "website": "网站"
+    },
+    "groupBySource": "按来源分组",
+    "sourcePicker": {
+      "label": "来源",
+      "clear": "清除来源筛选",
+      "unknownSource": "未分类"
     },
     "tags": {
       "filter": "标签",
@@ -415,6 +424,9 @@
       "renameTag": "重命名标签",
       "deleteTag": "删除标签",
       "tagName": "标签名称",
+      "showAll": "展开全部 {{count}} 个",
+      "showFewer": "收起",
+      "foldedSelected": "（其中 {{count}} 个已选）",
       "manageHint": "右键重命名或删除",
       "tagRenamed": "标签已重命名",
       "tagDeleted": "标签已删除",
@@ -422,6 +434,7 @@
     },
     "selectMode": "多选",
     "selectedCount": "已选 {{count}} 个",
+    "notShownCount": "（其中 {{count}} 个未显示）",
     "selectHint": "点击 Skill 开始选择",
     "batchUpdate": "更新 {{count}} 个",
     "batchUpdated": "已批量更新 {{count}} 个 Skill",
@@ -429,6 +442,7 @@
     "batchUpdateFailed": "{{count}} 个 Skill 更新失败",
     "deleteSelected": "删除 {{count}} 个",
     "batchDeleteConfirm": "确定彻底删除选中的 {{count}} 个 Skill 吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
+    "batchDeleteConfirmWithHidden": "确定彻底删除选中的 {{count}} 个 Skill（其中 {{hidden}} 个未显示）吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
     "batchDeleted": "已删除 {{count}} 个 Skill",
     "batchDeleteFailed": "{{count}} 个 Skill 删除失败",
     "batchToggleFailed": "{{count}} 个 Skill 更新失败",
@@ -617,11 +631,13 @@
     "repoPathDesc": "所有 Skills 和 Preset 配置的默认存储位置。",
     "repoPathSaved": "中央仓库路径已更新",
     "repoPathReset": "中央仓库路径已恢复默认",
-    "repoPathRestartNotice": "重启应用后，新路径会正式生效并迁移已有数据。",
+    "repoPathRestartNotice": "完全退出应用（包括托盘）后重新打开，新路径才会生效并迁移已有数据。",
     "repoPathEmpty": "请先填写中央仓库路径",
     "repoPathDefaultHint": "当前使用默认中央仓库路径",
     "repoPathCustomHint": "当前使用自定义中央仓库路径",
-    "repoPathPendingHint": "重启应用后会把技能库迁移到 {{path}}；在此之前仍使用当前位置。",
+    "repoPathPendingHint": "完全退出应用（包括托盘）后重新打开，技能库会迁移到 {{path}}；在此之前仍使用当前位置。",
+    "repoPathTargetNotEmpty": "{{path}} 不是空文件夹。请为中央仓库选择一个空的或新建的文件夹。",
+    "repoPathTargetInsideLibrary": "{{path}} 在当前技能库里面。请选择技能库以外的文件夹。",
     "changeDir": "更改目录",
     "openInFinder": "打开文件夹",
     "syncMode": "默认同步模式",
@@ -643,6 +659,7 @@
     "textSizeXLarge": "特大",
     "language": "语言",
     "help": "帮助",
+    "whatsNew": "更新内容",
     "website": "官网",
     "about": "关于",
     "version": "Skills Manager {{version}}",
@@ -671,7 +688,7 @@
     "panicBanner": "上次运行 Skills Manager 时发生崩溃（{{time}}）。",
     "repoWarning_config_unreadable": "中央库配置文件已损坏或无法读取，本次启动已回退到默认路径（~/.skills-manager）。如果技能库看起来是空的，你的数据仍在之前配置的路径里——请到「中央仓库路径」重新指定。",
     "repoWarning_repo_path_invalid": "配置的中央仓库路径无效，本次启动已回退到默认路径（~/.skills-manager）。如果技能库看起来是空的，请到「中央仓库路径」重新指定数据所在位置。",
-    "repoWarning_migration_incomplete": "将中央库迁移到新位置的操作没有完成，本次启动仍在使用原位置的现有技能库——数据没有丢失。要完成迁移，请打开设置，把「中央仓库路径」指向一个空的、可写的文件夹（点「编辑」可查看你选择的目标位置），然后重启。迁移成功前，当前技能库会留在原地——请不要删除它。",
+    "repoWarning_migration_incomplete": "将中央库迁移到新位置的操作没有完成，本次启动仍在使用原位置的现有技能库——数据没有丢失。要完成迁移，请打开设置，把「中央仓库路径」指向一个空的、可写的文件夹（点「编辑」可查看你选择的目标位置），然后完全退出应用（包括托盘）再重新打开。迁移成功前，当前技能库会留在原地——请不要删除它。",
     "panicDismiss": "忽略",
     "gitBackup": "Git 同步",
     "gitBackupDesc": "将 Skill 库备份到 Git 仓库，支持版本管理和多机同步。",
@@ -831,6 +848,7 @@
     "selectAllSkills": "全选技能",
     "deselectAllSkills": "取消全选",
     "selectedCount": "已选 {{count}} 个",
+    "hiddenByFilters": "（其中 {{count}} 个被当前筛选隐藏）",
     "shiftHint": "按住 Shift 点击可批量选择",
     "clearTargets": "清空",
     "searchPlaceholder": "搜索技能库…",
@@ -1123,5 +1141,21 @@
       "deletedLocalBatch": "已删除 {{count}} 个本地 Skill",
       "deleteLocalBatchFailed": "{{count}} 个本地 Skill 删除失败"
     }
+  },
+  "errorBoundary": {
+    "title": "出错了",
+    "description": "窗口遇到了意外错误，重新加载即可继续。如果反复出现，请把下面的错误信息复制到 GitHub issue 里。",
+    "copy": "复制错误信息",
+    "copied": "已复制",
+    "exportLogs": "导出日志",
+    "exportLogsDone": "日志已保存到 {{path}}",
+    "exportLogsFailed": "导出日志失败。",
+    "reload": "重新加载"
+  },
+  "whatsNew": {
+    "title": "更新内容",
+    "gotIt": "知道了",
+    "fullChangelog": "查看完整更新日志",
+    "close": "关闭"
   }
 }

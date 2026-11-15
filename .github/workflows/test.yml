@@ -56,14 +56,13 @@ jobs:
         continue-on-error: true
         run: taskkill /f /im vctip.exe
 
-  # Linux is otherwise only compiled by the release workflow (tag push), so a
-  # Linux-only compile break — e.g. the keyring secret-service backend with
-  # its vendored libdbus build — would surface at release time. A cargo check
-  # here catches it on every push instead. Tests still run on macOS/Windows
-  # above; this job only needs to prove the Linux target compiles.
-  linux-check:
+  # Linux has its own code paths (the keyring secret-service backend with its
+  # vendored libdbus build, symlink handling on ext4), and it was otherwise
+  # only compiled by the release workflow at tag time. Run the tests here too,
+  # so a Linux-only break shows up on the pull request.
+  linux-tests:
     runs-on: ubuntu-22.04
-    name: Rust check (Linux)
+    name: Rust tests (Linux)
 
     steps:
       - name: Checkout repository
@@ -86,5 +85,5 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - name: Check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Run tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml

@@ -238,16 +238,22 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: Some(".opencode/skills".into()),
         },
         ToolAdapter {
+            // Antigravity (App / CLI / IDE) reads user-level skills from
+            // `~/.gemini/config/skills/` and workspace skills from
+            // `<workspace>/.agents/skills/`. `~/.gemini/antigravity/` is only
+            // the runtime appDataDir (brain/, scratch/, builtin/); the global
+            // skills there are legacy and no longer deployed to.
+            // See https://antigravity.google/docs/skills
             key: "antigravity".into(),
             display_name: "Antigravity".into(),
-            relative_skills_dir: ".gemini/antigravity/skills".into(),
+            relative_skills_dir: ".gemini/config/skills".into(),
             relative_detect_dir: ".gemini/antigravity".into(),
             additional_scan_dirs: vec![],
             override_skills_dir: None,
             category: ToolCategory::Coding,
             is_custom: false,
             recursive_scan: false,
-            project_relative_skills_dir: None,
+            project_relative_skills_dir: Some(".agents/skills".into()),
         },
         ToolAdapter {
             key: "amp".into(),
@@ -698,7 +704,9 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             category: ToolCategory::Coding,
             is_custom: false,
             recursive_scan: false,
-            project_relative_skills_dir: None,
+            // https://docs.trae.cn/solo_skills: project skills are read from
+            // `.trae/skills`; only the global directory is `~/.trae-cn/skills`.
+            project_relative_skills_dir: Some(".trae/skills".into()),
         },
         ToolAdapter {
             key: "zencoder".into(),
@@ -785,16 +793,43 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: None,
         },
         ToolAdapter {
-            // WorkBuddy's user skill directory is `~/.workbuddy/skills/` — that
-            // is where its own skill import unpacks to and what it scans as
-            // `source='user'`. `~/.workbuddy/skills-marketplace/` is a different
-            // thing: a vendor cache that `BuiltinSkillMarketplaceUpdater` wipes
-            // and re-extracts wholesale on every marketplace version bump, so
-            // anything deployed under it is destroyed on the next update.
+            // WorkBuddy ships two editions with separate data directories, and
+            // the directory name *is* the edition: the app reports `overseas`
+            // when its config directory contains `workbuddy-ai` and `cn`
+            // otherwise. This adapter is the domestic edition, whose user
+            // skills live under `~/.workbuddy/` — still the path its
+            // Chinese-language documentation describes. The overseas edition
+            // is `workbuddy_overseas` below.
+            //
+            // `skills-marketplace/` is a different thing: a vendor cache that
+            // `BuiltinSkillMarketplaceUpdater` wipes and re-extracts wholesale
+            // on every marketplace version bump, so anything deployed under it
+            // is destroyed on the next update.
             key: "workbuddy".into(),
             display_name: "WorkBuddy".into(),
             relative_skills_dir: ".workbuddy/skills".into(),
             relative_detect_dir: ".workbuddy".into(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: None,
+            category: ToolCategory::Lobster,
+            is_custom: false,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        },
+        ToolAdapter {
+            // The overseas edition keeps its data directory in
+            // `~/.workbuddy-ai/` and reads user skills from `skills/` beneath
+            // it. Deploying to the domestic path instead fails silently: the
+            // app reports nothing and the skill never loads (#587).
+            //
+            // `~/.workbuddy/` also exists on these machines — the app keeps
+            // writing its device id and logs there — so the domestic adapter
+            // above still reports as detected. The path shown for each agent is
+            // what tells the two apart.
+            key: "workbuddy_overseas".into(),
+            display_name: "WorkBuddy AI".into(),
+            relative_skills_dir: ".workbuddy-ai/skills".into(),
+            relative_detect_dir: ".workbuddy-ai".into(),
             additional_scan_dirs: vec![],
             override_skills_dir: None,
             category: ToolCategory::Lobster,
@@ -869,6 +904,56 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             is_custom: false,
             recursive_scan: false,
             project_relative_skills_dir: Some(".agents/skills".into()),
+        },
+        ToolAdapter {
+            // MiniMax Code is an Electron GUI over a bundled local runtime
+            // (v3.1.4). Its own skill roots are `~/.minimax/skills` at user
+            // level and `<repo>/.minimax/skills` at workspace level — the same
+            // relative path, so no project override is needed.
+            //
+            // One place the two models disagree. The runtime scans
+            // `.minimax/skills` in the directory it opened and in every ancestor
+            // up to the git root; this app writes into each registered project's
+            // own root. They agree when the project root is the repo MiniMax
+            // opens. If the app's project is a *subdirectory* of that repo, the
+            // runtime started at the repo root never walks down into it.
+            //
+            // Two directories next to the native root are deliberately not
+            // scanned. `~/.minimax/.builtin-skills` is re-seeded from the
+            // skills bundled with the app on every start, so anything deployed
+            // there would be managed and then silently overwritten.
+            // `~/.mavis` is the pre-rename data dir; the app keeps it as a
+            // compatibility symlink to `~/.minimax`, so scanning it would list
+            // every skill twice.
+            //
+            // The runtime also reads the shared `~/.agents/skills` root when
+            // `skills.external` is on (the default), and warns when one skill
+            // appears under two roots. It is listed for discovery only, like
+            // `codex`, `github_copilot`, `pi`, `deepseek_harness` and
+            // `gitlab_duo`; deployments still land in `.minimax/skills`. The
+            // two other compatibility roots it reads, `~/.claude/skills` and
+            // `~/.codex/skills`, stay out: those are other agents' private
+            // roots, not a shared one.
+            //
+            // Detection is the data dir, like every other adapter, which means
+            // "the app has been launched once", not "the app is installed".
+            // Windows needs no platform branch: the macOS and Windows builds
+            // share the data-dir code (`os.homedir()/.minimax`, no `%APPDATA%`),
+            // so the Windows root is `%USERPROFILE%\.minimax\skills`.
+            //
+            // Paths verified by reading the bundled runtime's skill-root
+            // resolver in both the macOS and the Windows 3.1.4 builds, not the
+            // documentation.
+            key: "minimax_code".into(),
+            display_name: "MiniMax Code".into(),
+            relative_skills_dir: ".minimax/skills".into(),
+            relative_detect_dir: ".minimax".into(),
+            additional_scan_dirs: vec![".agents/skills".into()],
+            override_skills_dir: None,
+            category: ToolCategory::Coding,
+            is_custom: false,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
         },
     ]
 }
@@ -1018,7 +1103,46 @@ mod tests {
             .find(|adapter| adapter.key == "antigravity")
             .expect("antigravity adapter should exist");
 
-        assert_eq!(adapter.relative_skills_dir, ".gemini/antigravity/skills");
+        // https://antigravity.google/docs/skills: global skills live in
+        // `~/.gemini/config/skills`, workspace skills in `.agents/skills`.
+        assert_eq!(adapter.relative_skills_dir, ".gemini/config/skills");
+        assert_eq!(adapter.project_relative_skills_dir(), ".agents/skills");
+        // Detection still keys off the appDataDir Antigravity creates.
+        assert_eq!(adapter.relative_detect_dir, ".gemini/antigravity");
+    }
+
+    #[test]
+    fn trae_cn_uses_expected_default_paths() {
+        let adapter = default_tool_adapters()
+            .into_iter()
+            .find(|adapter| adapter.key == "trae_cn")
+            .expect("trae_cn adapter should exist");
+
+        assert_eq!(adapter.relative_skills_dir, ".trae-cn/skills");
+        assert_eq!(adapter.relative_detect_dir, ".trae-cn");
+        assert_eq!(
+            adapter.project_relative_skills_dir.as_deref(),
+            Some(".trae/skills")
+        );
+        assert_eq!(adapter.project_relative_skills_dir(), ".trae/skills");
+    }
+
+    #[test]
+    fn workbuddy_editions_use_their_own_skill_paths() {
+        let adapters = default_tool_adapters();
+        let domestic = adapters
+            .iter()
+            .find(|adapter| adapter.key == "workbuddy")
+            .expect("workbuddy adapter should exist");
+        let overseas = adapters
+            .iter()
+            .find(|adapter| adapter.key == "workbuddy_overseas")
+            .expect("workbuddy_overseas adapter should exist");
+
+        assert_eq!(domestic.relative_skills_dir, ".workbuddy/skills");
+        assert_eq!(domestic.relative_detect_dir, ".workbuddy");
+        assert_eq!(overseas.relative_skills_dir, ".workbuddy-ai/skills");
+        assert_eq!(overseas.relative_detect_dir, ".workbuddy-ai");
     }
 
     #[test]
@@ -1050,6 +1174,32 @@ mod tests {
             Some(".omp/skills")
         );
         assert_eq!(adapter.project_relative_skills_dir(), ".omp/skills");
+    }
+
+    #[test]
+    fn minimax_code_deploys_to_its_data_dir_and_discovers_the_shared_root() {
+        let adapter = default_tool_adapters()
+            .into_iter()
+            .find(|adapter| adapter.key == "minimax_code")
+            .expect("minimax_code adapter should exist");
+
+        assert_eq!(adapter.display_name, "MiniMax Code");
+        assert_eq!(adapter.relative_skills_dir, ".minimax/skills");
+        assert_eq!(adapter.relative_detect_dir, ".minimax");
+        assert!(!adapter.recursive_scan);
+        // MiniMax Code reads `<repo>/.minimax/skills` natively — the same
+        // relative path as its user-level root — so no project override is
+        // needed, and the fallback yields exactly that path. (The adapter's
+        // comment above names the one case where this differs from what the
+        // runtime scans.)
+        assert_eq!(adapter.project_relative_skills_dir, None);
+        assert_eq!(adapter.project_relative_skills_dir(), ".minimax/skills");
+        // Shared root: discovery only, never a deploy target.
+        assert!(adapter
+            .additional_scan_dirs
+            .contains(&".agents/skills".to_string()));
+        assert_eq!(adapter.category, ToolCategory::Coding);
+        assert!(!adapter.is_custom);
     }
 
     #[test]

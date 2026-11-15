@@ -37,7 +37,7 @@ permissions:
 jobs:
   lint-and-build:
     runs-on: ubuntu-latest
-    name: Lint and build
+    name: Lint, test and build
 
     steps:
       - name: Checkout repository
@@ -54,6 +54,9 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Component tests
+        run: npm test
 
       # `tsc -b` is the real type check: the root tsconfig only holds project
       # references, so a bare `tsc --noEmit` checks no source file.

@@ -15,6 +15,10 @@ static HOME_DIR_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static SKILLS_DIR_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static STARTUP_WARNINGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static STARTUP_ERROR_LOG: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+/// Test-only redirection of `repo-config.json`, so a test can save a path
+/// without touching the real user config.
+#[cfg(test)]
+static CONFIG_PATH_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 fn push_startup_warning(code: &str) {
     let mut warnings = STARTUP_WARNINGS
@@ -117,7 +121,24 @@ pub(crate) fn set_test_home_dir_override(path: Option<PathBuf>) {
         .unwrap() = path;
 }
 
+#[cfg(test)]
+pub(crate) fn set_test_config_path_override(path: Option<PathBuf>) {
+    *CONFIG_PATH_OVERRIDE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap() = path;
+}
+
 fn config_file_path() -> PathBuf {
+    #[cfg(test)]
+    if let Some(path) = CONFIG_PATH_OVERRIDE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+    {
+        return path;
+    }
     dirs::config_dir()
         .unwrap_or_else(default_base_dir)
         .join("skills-manager")
@@ -417,6 +438,13 @@ pub fn set_base_dir_override(path: Option<String>) -> Result<PathBuf> {
     } else {
         None
     };
+    // Refuse now a move the next launch would refuse anyway: the app would
+    // keep using the old library, and the user would only see that the path
+    // "didn't change" after restarting (#509, #541).
+    if data_location.is_dir() && !paths_are_same_dir(&data_location, &next) {
+        check_migration_target(&data_location, &next)?;
+    }
+
     config.pending_migration_from = if next != data_location {
         Some(data_location.to_string_lossy().to_string())
     } else {
@@ -424,6 +452,30 @@ pub fn set_base_dir_override(path: Option<String>) -> Result<PathBuf> {
     };
     save_config(&config)?;
     Ok(next)
+}
+
+/// Error prefixes the Settings page maps to localized messages.
+pub const REPO_TARGET_INSIDE_LIBRARY: &str = "REPO_TARGET_INSIDE_LIBRARY";
+pub const REPO_TARGET_NOT_EMPTY: &str = "REPO_TARGET_NOT_EMPTY";
+
+/// The checks [`migrate_repo_if_needed`] makes before it moves the library,
+/// run when the new path is saved. Leftovers the migration clears on its own
+/// are accepted here, not removed. Passing does not promise the move will
+/// succeed: the folder can still change before the next launch.
+fn check_migration_target(source: &Path, target: &Path) -> Result<()> {
+    if is_within(target, source) {
+        anyhow::bail!("{REPO_TARGET_INSIDE_LIBRARY}: {}", target.display());
+    }
+    // Absent is fine: the migration creates it.
+    if !target.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(target)? {
+        if !is_regenerable(&entry?.path(), target) {
+            anyhow::bail!("{REPO_TARGET_NOT_EMPTY}: {}", target.display());
+        }
+    }
+    Ok(())
 }
 
 fn directory_has_entries(path: &Path) -> Result<bool> {
@@ -537,6 +589,37 @@ fn clear_regenerable_target(target: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Whether `target` lies inside `source` once symlinks are resolved, not only
+/// by spelling: `/tmp/alias/nested` is inside `/tmp/library` when `alias`
+/// links to it. The target may not exist yet, so its nearest existing
+/// ancestor is resolved and the rest joined back on.
+fn is_within(target: &Path, source: &Path) -> bool {
+    if target.starts_with(source) {
+        return true;
+    }
+    let Ok(source) = fs::canonicalize(source) else {
+        return false;
+    };
+    let mut existing = target;
+    let mut rest = Vec::new();
+    while fs::symlink_metadata(existing).is_err() {
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return false,
+        }
+    }
+    let Ok(mut resolved) = fs::canonicalize(existing) else {
+        return false;
+    };
+    for name in rest.iter().rev() {
+        resolved.push(name);
+    }
+    resolved.starts_with(&source)
+}
+
 /// Whether two paths resolve to the same directory. Falls back to a lexical
 /// comparison when either side can't be canonicalized (e.g. the target does not
 /// exist yet), so a purely cosmetic difference (case, `8.3` names, a symlink)
@@ -638,7 +721,7 @@ fn migrate_repo_if_needed(config: &mut RepoPathConfig, current_base: &Path) -> M
     }
 
     // A target nested inside the source can never be a valid destination.
-    if current_base.starts_with(&source) {
+    if is_within(current_base, &source) {
         record_startup_error(format!(
             "central repo: migration target {} is inside source {}; keeping data at the source",
             current_base.display(),
@@ -960,6 +1043,129 @@ mod tests {
         assert_eq!(config.pending_migration_from, None);
         assert!(config.repoint_from.is_some());
         assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"src");
+    }
+
+    /// Saving a new path and moving the library at the next launch must agree
+    /// on every target. Otherwise the user is told "saved" for a path that
+    /// will never take effect (#509, #541), or refused one that would have.
+    #[test]
+    fn the_save_time_check_agrees_with_the_startup_migration() {
+        fn verdicts(make_target: impl Fn(&Path, &Path) -> PathBuf) -> (Result<()>, bool) {
+            let src = tempfile::tempdir().unwrap();
+            let dst = tempfile::tempdir().unwrap();
+            fs::write(src.path().join("a.txt"), b"src").unwrap();
+            let target = make_target(src.path(), dst.path());
+            let saved = check_migration_target(src.path(), &target);
+            let mut config = config_migrating(src.path(), &target);
+            let moved = matches!(
+                migrate_repo_if_needed(&mut config, &target),
+                MigrationOutcome::Proceed
+            );
+            (saved, moved)
+        }
+
+        let (saved, moved) = verdicts(|_, dst| dst.join("lib"));
+        assert!(saved.is_ok() && moved, "an absent target is fine");
+
+        let (saved, moved) = verdicts(|_, dst| {
+            let target = dst.join("lib");
+            fs::create_dir_all(&target).unwrap();
+            fs::write(target.join(".DS_Store"), b"").unwrap();
+            target
+        });
+        assert!(
+            saved.is_ok() && moved,
+            "OS debris alone does not block the move"
+        );
+
+        let (saved, moved) = verdicts(|_, dst| {
+            let target = dst.join("lib");
+            fs::create_dir_all(&target).unwrap();
+            fs::write(target.join("notes.txt"), b"mine").unwrap();
+            target
+        });
+        assert!(!moved, "fixture: the migration refuses a non-empty target");
+        assert!(
+            saved
+                .unwrap_err()
+                .to_string()
+                .starts_with(REPO_TARGET_NOT_EMPTY),
+            "saving must refuse it too"
+        );
+
+        #[cfg(unix)]
+        {
+            let (saved, moved) = verdicts(|src, dst| {
+                let alias = dst.join("alias");
+                std::os::unix::fs::symlink(src, &alias).unwrap();
+                alias.join("nested")
+            });
+            assert!(!moved, "a target reached through a link into the library");
+            assert!(
+                saved
+                    .unwrap_err()
+                    .to_string()
+                    .starts_with(REPO_TARGET_INSIDE_LIBRARY),
+                "saving must refuse it too"
+            );
+        }
+
+        let (saved, moved) = verdicts(|src, _| src.join("nested"));
+        assert!(
+            !moved,
+            "fixture: the migration refuses a target inside the library"
+        );
+        assert!(
+            saved
+                .unwrap_err()
+                .to_string()
+                .starts_with(REPO_TARGET_INSIDE_LIBRARY),
+            "saving must refuse it too"
+        );
+    }
+
+    /// Through the real save entry point: a refused path is reported and the
+    /// config stays as it was; an accepted one is recorded for the next launch.
+    #[test]
+    fn saving_a_path_the_migration_would_refuse_leaves_the_config_alone() {
+        let _guard = test_base_dir_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("repo-config.json");
+        set_test_config_path_override(Some(config_path.clone()));
+        let library = tmp.path().join("library");
+        fs::create_dir_all(&library).unwrap();
+        fs::write(library.join("a.txt"), b"src").unwrap();
+        save_config(&RepoPathConfig {
+            repo_path: Some(library.to_string_lossy().to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        let before = fs::read(&config_path).unwrap();
+
+        let busy = tmp.path().join("busy");
+        fs::create_dir_all(&busy).unwrap();
+        fs::write(busy.join("notes.txt"), b"mine").unwrap();
+        let refused = set_base_dir_override(Some(busy.to_string_lossy().to_string()));
+        let after_refusal = fs::read(&config_path).unwrap();
+
+        let fresh = tmp.path().join("fresh");
+        let accepted = set_base_dir_override(Some(fresh.to_string_lossy().to_string()));
+        let config = load_config();
+        set_test_config_path_override(None);
+
+        assert!(refused
+            .unwrap_err()
+            .to_string()
+            .starts_with(REPO_TARGET_NOT_EMPTY));
+        assert_eq!(
+            after_refusal, before,
+            "a refused save must not touch the config"
+        );
+        assert!(accepted.is_ok());
+        assert_eq!(
+            config.pending_migration_from.as_deref(),
+            Some(library.to_string_lossy().as_ref())
+        );
     }
 
     #[test]

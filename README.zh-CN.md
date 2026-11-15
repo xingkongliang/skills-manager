@@ -95,6 +95,13 @@ brew install --cask skills-manager
 
 从 [最新 Release](https://github.com/xingkongliang/skills-manager/releases/latest) 下载对应平台的安装包：Windows 为 `.exe` 或 `.msi`，Linux 为 `.AppImage`、`.deb` 或 `.rpm`（提供 x64 和 arm64）。
 
+Windows 也可以用 [Scoop](https://scoop.sh) 安装：
+
+```powershell
+scoop bucket add extras
+scoop install extras/skills-manager
+```
+
 所有安装包都自带 CLI，位置见 [二进制放在哪](#二进制放在哪)。
 
 ## 快速上手
@@ -145,9 +152,9 @@ npx skills add xingkongliang/skills-manager
 
 ## 支持的工具
 
-开箱支持 54 个 Agent，包括：
+开箱支持 56 个 Agent，包括：
 
-Claude Code · Codex · Cursor · GitHub Copilot · Gemini CLI · GitLab Duo · OpenCode · OpenClaw · Hermes Agent · OpenHands · Cline · Goose · Windsurf · Continue · Grok · Antigravity · Qwen Code · ZCode · Crush · Kilo Code · Roo Code · Amp · Kiro CLI · Droid · TRAE IDE · Warp · Qoder · CodeBuddy
+Claude Code · Codex · Cursor · GitHub Copilot · Gemini CLI · GitLab Duo · OpenCode · OpenClaw · Hermes Agent · OpenHands · Cline · Goose · Windsurf · Continue · Grok · Antigravity · Qwen Code · ZCode · Crush · Kilo Code · Roo Code · Amp · Kiro CLI · Droid · TRAE IDE · Warp · Qoder · CodeBuddy · MiniMax Code
 
 **设置**页会列出全部，并优先展示在你机器上检测到的那些。你也可以在那里添加自定义工具，以相同方式管理其 Skills。
 
