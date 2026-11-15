@@ -12,19 +12,17 @@ import {
   Unlink,
 } from "lucide-react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import * as api from "../lib/tauri";
 import type { ManagedSkill, SourceScanResult } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import {
-  recordedPathUrl,
   repairGroups,
   repoUrl,
-  type RepairGroup,
+  REPAIR_GROUP_ORDER,
   type RepairRow,
   type ScanItem,
 } from "../lib/sourceRepair";
-
-const GROUP_ORDER: RepairGroup[] = ["at", "moved", "gone", "unreachable"];
 
 /**
  * The page for skills their Source no longer holds where they were installed.
@@ -44,6 +42,7 @@ export function SourceGone() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [overwrite, setOverwrite] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
 
   const refresh = useCallback(async () => {
     setSkills(await api.getManagedSkills());
@@ -54,7 +53,7 @@ export function SourceGone() {
   }, [refresh]);
 
   const groups = useMemo(() => repairGroups(skills, scans), [skills, scans]);
-  const rows = useMemo(() => GROUP_ORDER.flatMap((group) => groups[group]), [groups]);
+  const rows = useMemo(() => REPAIR_GROUP_ORDER.flatMap((group) => groups[group]), [groups]);
   const sources = useMemo(() => {
     const byKey = new Map<string, { key: string; cloneUrl: string; branch: string | null }>();
     for (const row of rows) {
@@ -69,11 +68,18 @@ export function SourceGone() {
   }, [rows]);
 
   const scanSource = async (source: { key: string; cloneUrl: string; branch: string | null }) => {
+    // One clone per Source per visit: the second click would learn the same
+    // thing and cost the same round trip.
+    if (scans[source.key]) return;
     setScanning((prev) => ({ ...prev, [source.key]: true }));
     try {
       const result: SourceScanResult = await api.scanGitSource(source.cloneUrl, source.branch);
       setScans((prev) => ({ ...prev, [source.key]: result.items }));
       setScanErrors((prev) => ({ ...prev, [source.key]: result.error ?? "" }));
+      const found = result.items.some((item) => item.placement !== "gone");
+      if (!result.error && !found) {
+        toast.info(t("mySkills.repair.noChange"));
+      }
     } catch (error: unknown) {
       setScanErrors((prev) => ({
         ...prev,
@@ -141,7 +147,11 @@ export function SourceGone() {
 
   const repoint = (row: RepairRow, subpath: string) =>
     run(async () => {
-      await api.repointSkillSource(row.id, row.cloneUrl ?? "", subpath, overwrite.has(row.id));
+      // `force` is about the library copy, not about the move: an untouched
+      // copy may be replaced by the new location's content, an edited one only
+      // when the user ticked it.
+      const force = !row.localChanged || overwrite.has(row.id);
+      await api.repointSkillSource(row.id, row.cloneUrl ?? "", subpath, force);
       toast.success(t("mySkills.repair.repointed", { name: row.name, subpath }));
     });
 
@@ -162,7 +172,7 @@ export function SourceGone() {
           </div>
         </div>
         <button
-          onClick={deleteSelected}
+          onClick={() => setDeleteConfirm(true)}
           disabled={busy || selected.size === 0}
           className="app-button-secondary text-red-600 disabled:opacity-50 dark:text-red-300"
         >
@@ -170,6 +180,29 @@ export function SourceGone() {
           {t("mySkills.repair.deleteSelected", { count: selected.size })}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={deleteConfirm}
+        title={t("mySkills.repair.deleteTitle", { count: selected.size })}
+        message={t("mySkills.repair.deleteWarning")}
+        details={rows
+          .filter((row) => selected.has(row.id))
+          .map((row) =>
+            t("mySkills.cleanup.row", {
+              name: row.name,
+              subpath: row.subpath || t("mySkills.cleanup.rootSubpath"),
+              path: row.centralPath,
+              deployments: row.deployments,
+              presets: row.presets,
+            })
+          )}
+        confirmLabel={t("mySkills.repair.deleteSelected", { count: selected.size })}
+        onClose={() => setDeleteConfirm(false)}
+        onConfirm={async () => {
+          await deleteSelected();
+          setDeleteConfirm(false);
+        }}
+      />
 
       {rows.length === 0 ? (
         <p className="mt-6 text-[13px] text-muted">{t("mySkills.repair.empty")}</p>
@@ -222,7 +255,7 @@ export function SourceGone() {
                   </p>
                 )}
 
-                {GROUP_ORDER.map((group) => {
+                {REPAIR_GROUP_ORDER.map((group) => {
                   const groupRows = sourceRows.filter((row) => row.group === group);
                   if (groupRows.length === 0) return null;
                   return (
@@ -256,7 +289,7 @@ export function SourceGone() {
                                       presets: row.presets,
                                     })}
                                   </span>
-                                  {row.scanned && (
+                                  {row.scanned && row.installedRevisionPresent !== null && (
                                     <span className="mt-1 block text-[12px] text-faint">
                                       {row.installedRevisionPresent
                                         ? t("mySkills.repair.revisionKnown")
@@ -267,21 +300,26 @@ export function SourceGone() {
                               </label>
 
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <button
-                                  onClick={() => {
-                                    const url = recordedPathUrl(
-                                      skills.find((skill) => skill.id === row.id)!
-                                    );
-                                    if (url) void openUrl(url).catch(() => {});
-                                  }}
-                                  className="rounded-full border border-border-subtle px-2 py-0.5 text-[12px] text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
-                                >
-                                  {t("mySkills.repair.openPath")}
-                                </button>
+                                {row.repoUrl && (
+                                  <button
+                                    onClick={() => void openUrl(row.repoUrl!).catch(() => {})}
+                                    className="rounded-full border border-border-subtle px-2 py-0.5 text-[12px] text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+                                  >
+                                    {t("mySkills.repair.openRepo")}
+                                  </button>
+                                )}
+                                {row.pathUrl && (
+                                  <button
+                                    onClick={() => void openUrl(row.pathUrl!).catch(() => {})}
+                                    className="rounded-full border border-border-subtle px-2 py-0.5 text-[12px] text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+                                  >
+                                    {t("mySkills.repair.openPath")}
+                                  </button>
+                                )}
                                 {row.group === "at" && (
                                   <button
                                     onClick={() => void update(row)}
-                                    disabled={busy || (row.localChanged && !overwrite.has(row.id))}
+                                    disabled={busy}
                                     className="inline-flex items-center gap-1 rounded-full border border-border-subtle px-2 py-0.5 text-[12px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
                                   >
                                     <RefreshCw className="h-3 w-3" />
@@ -297,7 +335,11 @@ export function SourceGone() {
                                       className="rounded-full border border-border-subtle px-2 py-0.5 text-[12px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
                                       title={t(`mySkills.repair.evidence.${candidate.evidence}`)}
                                     >
-                                      {t("mySkills.repair.repoint", { subpath: candidate.subpath })}
+                                      {t("mySkills.repair.repoint", {
+                                      subpath:
+                                        candidate.subpath ||
+                                        t("mySkills.cleanup.rootSubpath"),
+                                    })}
                                     </button>
                                   ))}
                                 {row.group !== "at" && (

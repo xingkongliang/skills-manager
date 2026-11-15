@@ -478,14 +478,11 @@
       "noAgents": "No installed and enabled agents.",
       "allSynced": "Every selected skill is already on this agent"
     },
-    "batchSourceGone": "{{count}} skill(s) were not updated — their Source no longer holds them",
+    "batchSourceGone": "{{count}} skill(s) are no longer in their Source where they were installed",
     "cleanup": {
-      "entry": "Clean up {{count}} skill(s) deleted upstream",
-      "title": "Delete {{count}} skill(s) whose Source deleted them?",
-      "message": "They stay installed and deployed until you delete them. Deleting removes the library copy with its deployments and preset mentions. This cannot be undone.",
+      "entry": "Repair {{count}} skill(s) their Source no longer holds",
       "row": "{{name}} — from {{subpath}} · copy at {{path}} · {{deployments}} deployment(s) · {{presets}} preset(s)",
       "rootSubpath": "(repository root)",
-      "confirm": "Delete {{count}} skills",
       "deleted": "{{count}} skills deleted",
       "failed": "{{count}} could not be deleted"
     },
@@ -519,7 +516,10 @@
       "evidence": {
         "content_hash": "The directory content matches what was installed",
         "directory_name": "Only the directory name matches — check before re-pointing"
-      }
+      },
+      "deleteTitle": "Delete {{count}} skill(s)?",
+      "deleteWarning": "They stay installed and deployed until you delete them. Deleting removes the library copy together with its deployments and preset mentions. This cannot be undone.",
+      "noChange": "Nothing new in this Source — every skill is still where it was installed."
     }
   },
   "install": {

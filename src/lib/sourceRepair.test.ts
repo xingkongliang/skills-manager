@@ -63,14 +63,22 @@ describe("repoUrl", () => {
 
 describe("recordedPathUrl", () => {
   it("points at the recorded subpath on the tracked branch", () => {
-    expect(recordedPathUrl(skill())).toBe(
+    expect(recordedPathUrl({
+      cloneUrl: skill().source_ref_resolved,
+      branch: skill().source_branch,
+      subpath: skill().source_subpath,
+    })).toBe(
       "https://github.com/owner/repo/tree/main/skills/b"
     );
   });
 
   it("has nothing to point at for a root install or an unknown host", () => {
-    expect(recordedPathUrl(skill({ source_subpath: null }))).toBeNull();
-    expect(recordedPathUrl(skill({ source_ref_resolved: "owner/repo" }))).toBeNull();
+    expect(
+      recordedPathUrl({ cloneUrl: "https://github.com/owner/repo", branch: "main", subpath: null })
+    ).toBeNull();
+    expect(
+      recordedPathUrl({ cloneUrl: "owner/repo", branch: "main", subpath: "skills/b" })
+    ).toBeNull();
   });
 });
 

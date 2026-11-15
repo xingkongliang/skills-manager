@@ -1,4 +1,5 @@
-import type { ManagedSkill } from "./tauri";
+import { SOURCE_GONE } from "./sourceGone";
+import type { ManagedSkill, MoveCandidate } from "./tauri";
 
 /**
  * What a scan of one Source said about one skill. Mirrors the backend's
@@ -6,18 +7,24 @@ import type { ManagedSkill } from "./tauri";
  */
 export interface ScanItem {
   skill_id: string;
-  placement: "at" | "moved" | "gone" | "unreachable";
+  placement: RepairGroup;
   candidates: RepairCandidate[];
   local_changed: boolean;
-  installed_revision_present: boolean;
+  /** `null` when the Source could not be reached: nobody looked. */
+  installed_revision_present: boolean | null;
 }
 
-export interface RepairCandidate {
-  subpath: string;
-  evidence: "content_hash" | "directory_name";
-}
+export type RepairCandidate = MoveCandidate;
 
 export type RepairGroup = "at" | "moved" | "gone" | "unreachable";
+
+/** The order the page shows them in: most repairable first. */
+export const REPAIR_GROUP_ORDER: readonly RepairGroup[] = [
+  "at",
+  "moved",
+  "gone",
+  "unreachable",
+];
 
 export interface RepairRow {
   id: string;
@@ -26,6 +33,10 @@ export interface RepairRow {
   cloneUrl: string | null;
   branch: string | null;
   subpath: string | null;
+  /** Browses the Source, when the clone URL says enough to build one. */
+  repoUrl: string | null;
+  /** The recorded path; a 404 there is the clearest evidence there is. */
+  pathUrl: string | null;
   centralPath: string;
   deployments: number;
   presets: number;
@@ -33,8 +44,8 @@ export interface RepairRow {
   candidates: RepairCandidate[];
   /** The library copy differs from what was installed: overwriting loses it. */
   localChanged: boolean;
-  /** False when the Source's history no longer holds the installed revision. */
-  installedRevisionPresent: boolean;
+  /** `null` when no scan has looked at the Source's history. */
+  installedRevisionPresent: boolean | null;
   scanned: boolean;
 }
 
@@ -64,11 +75,15 @@ export function repoUrl(cloneUrl: string | null): string | null {
  * It may 404 — and that is the point: seeing the repository without that folder
  * settles "moved or deleted" faster than any wording in this app.
  */
-export function recordedPathUrl(skill: ManagedSkill): string | null {
-  const repo = repoUrl(skill.source_ref_resolved ?? skill.source_ref);
-  const subpath = skill.source_subpath?.replace(/^\/+|\/+$/g, "");
+export function recordedPathUrl(where: {
+  cloneUrl: string | null;
+  branch: string | null;
+  subpath: string | null;
+}): string | null {
+  const repo = repoUrl(where.cloneUrl);
+  const subpath = where.subpath?.replace(/^\/+|\/+$/g, "");
   if (!repo || !subpath || !repo.startsWith("https://github.com/")) return null;
-  return `${repo}/tree/${skill.source_branch ?? "HEAD"}/${subpath}`;
+  return `${repo}/tree/${where.branch ?? "HEAD"}/${subpath}`;
 }
 
 /**
@@ -89,7 +104,7 @@ export function repairGroups(
     unreachable: [],
   };
   for (const skill of skills) {
-    if (skill.update_status !== "source_gone" && skill.update_status !== "error") {
+    if (skill.update_status !== SOURCE_GONE && skill.update_status !== "error") {
       continue;
     }
     const key = sourceKey(skill);
@@ -97,20 +112,27 @@ export function repairGroups(
     const group: RepairGroup =
       fromScan?.placement ??
       (skill.update_status === "error" ? "unreachable" : "gone");
+    const cloneUrl = skill.source_ref_resolved ?? skill.source_ref;
     groups[group].push({
       id: skill.id,
       name: skill.name,
       sourceKey: key,
-      cloneUrl: skill.source_ref_resolved ?? skill.source_ref,
+      cloneUrl,
       branch: skill.source_branch,
       subpath: skill.source_subpath,
+      repoUrl: repoUrl(cloneUrl),
+      pathUrl: recordedPathUrl({
+        cloneUrl,
+        branch: skill.source_branch,
+        subpath: skill.source_subpath,
+      }),
       centralPath: skill.central_path,
       deployments: skill.targets.length,
       presets: skill.preset_ids.length,
       group,
       candidates: fromScan?.candidates ?? [],
       localChanged: fromScan?.local_changed ?? false,
-      installedRevisionPresent: fromScan?.installed_revision_present ?? true,
+      installedRevisionPresent: fromScan?.installed_revision_present ?? null,
       scanned: fromScan !== undefined,
     });
   }

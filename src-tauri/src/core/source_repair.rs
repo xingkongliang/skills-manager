@@ -63,16 +63,41 @@ pub enum Placement {
     Gone,
 }
 
+/// The skill directories a checkout holds, walked once.
+///
+/// A scan asks about every skill of a Source, and each question would otherwise
+/// re-walk and re-hash the same tree. Building this once is what makes "one
+/// clone per Source" also mean one walk per Source (#655).
+pub struct CheckoutIndex {
+    checkout: PathBuf,
+    skills: Vec<PathBuf>,
+}
+
+impl CheckoutIndex {
+    pub fn build(checkout: &Path) -> Self {
+        Self {
+            checkout: checkout.to_path_buf(),
+            skills: skill_dirs(checkout).map(|entry| entry.into_path()).collect(),
+        }
+    }
+}
+
 /// Where does `skill` sit in `checkout`?
 ///
 /// Never fails: "not found" is [`Placement::Gone`], not an error, so a caller
 /// cannot mistake a scan for a failed one.
 pub fn locate(skill: &SkillRecord, checkout: &Path) -> Placement {
+    locate_in(&CheckoutIndex::build(checkout), skill)
+}
+
+/// [`locate`], against a tree already walked.
+pub fn locate_in(index: &CheckoutIndex, skill: &SkillRecord) -> Placement {
+    let checkout = index.checkout.as_path();
     if let Some(subpath) = stored_location(skill, checkout) {
         return Placement::At { subpath };
     }
 
-    let (by_hash, by_name) = scan(skill, checkout);
+    let (by_hash, by_name) = scan(skill, checkout, &index.skills);
     // Content is evidence; a shared name is a guess that has to be shown, not
     // acted on. When both exist, only the evidence is worth the user's time.
     let candidates = if by_hash.is_empty() { by_name } else { by_hash };
@@ -106,18 +131,20 @@ fn stored_location(skill: &SkillRecord, checkout: &Path) -> Option<String> {
 fn scan(
     skill: &SkillRecord,
     checkout: &Path,
+    skill_dirs: &[PathBuf],
 ) -> (Vec<MoveCandidate>, Vec<MoveCandidate>) {
     let mut by_hash = Vec::new();
     let mut by_name = Vec::new();
-    for entry in skill_dirs(checkout) {
-        let path = entry.path();
+    for path in skill_dirs {
+        let path = path.as_path();
         if let Some(hash) = skill.content_hash.as_deref() {
             if content_hash::hash_directory(path).is_ok_and(|live| live == hash) {
                 by_hash.push(candidate(checkout, path, MoveEvidence::ContentHash));
                 continue;
             }
         }
-        if entry.file_name().to_string_lossy() == skill.name {
+        let file_name = path.file_name().map(|name| name.to_string_lossy().to_string());
+        if file_name.as_deref() == Some(skill.name.as_str()) {
             by_name.push(candidate(checkout, path, MoveEvidence::DirectoryName));
         }
     }

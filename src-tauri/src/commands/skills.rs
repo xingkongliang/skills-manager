@@ -2063,19 +2063,37 @@ pub struct SourceRepairItem {
     /// The library copy differs from what was installed, so overwriting it
     /// loses something. The page asks before it does.
     pub local_changed: bool,
-    /// `at` | `moved` | `gone` | `unreachable`.
-    pub placement: &'static str,
+    pub placement: RepairPlacement,
     pub candidates: Vec<MoveCandidateDto>,
     /// Whether the revision this skill was installed from is still in the
-    /// Source's history. False means the history was rebuilt.
-    pub installed_revision_present: bool,
+    /// Source's history. `None` means nobody looked: a Source that could not be
+    /// reached must not claim its history was rebuilt.
+    pub installed_revision_present: Option<bool>,
+}
+
+/// What a scan answered. Serializes as `at` / `moved` / `gone` / `unreachable`
+/// so the wire format stays the words the spec agreed.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairPlacement {
+    At,
+    Moved,
+    Gone,
+    Unreachable,
 }
 
 #[derive(Debug, Serialize)]
 pub struct MoveCandidateDto {
     pub subpath: String,
-    /// `content_hash` (same bytes) or `directory_name` (only the name matches).
-    pub evidence: &'static str,
+    pub evidence: RepairEvidence,
+}
+
+/// What picked a candidate: the same bytes, or only the same directory name.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairEvidence {
+    ContentHash,
+    DirectoryName,
 }
 
 /// What a Source scan found, in one report.
@@ -2114,9 +2132,9 @@ fn repair_item(
             .count(),
         presets: store.get_scenarios_for_skill(&skill.id).unwrap_or_default().len(),
         local_changed,
-        placement: "unreachable",
+        placement: RepairPlacement::Unreachable,
         candidates: Vec::new(),
-        installed_revision_present: false,
+        installed_revision_present: None,
     }
 }
 
@@ -2153,14 +2171,20 @@ pub fn scan_source_internal(
         return Ok(report);
     }
 
+    // A Source we could not look at is an answer with its own actions, so the
+    // rows are still built — with nothing claimed about any of them.
+    let unreachable = |report: &mut SourceScanResult, message: String| {
+        report.error = Some(message);
+        report.items = skills
+            .iter()
+            .map(|skill| repair_item(store, skill, &targets))
+            .collect();
+    };
+
     let revision = match git_fetcher::resolve_remote_revision(clone_url, branch, proxy_url) {
         Ok(revision) => revision,
         Err(err) => {
-            report.error = Some(err.to_string());
-            report.items = skills
-                .iter()
-                .map(|skill| repair_item(store, skill, &targets))
-                .collect();
+            unreachable(&mut report, err.to_string());
             return Ok(report);
         }
     };
@@ -2168,11 +2192,7 @@ pub fn scan_source_internal(
         match git_fetcher::clone_repo_ref_scoped(clone_url, branch, None, None, proxy_url, None) {
             Ok(dir) => dir,
             Err(err) => {
-                report.error = Some(err.to_string());
-                report.items = skills
-                    .iter()
-                    .map(|skill| repair_item(store, skill, &targets))
-                    .collect();
+                unreachable(&mut report, err.to_string());
                 return Ok(report);
             }
         };
@@ -2188,38 +2208,46 @@ pub fn scan_source_internal(
             .filter_map(|skill| skill.source_revision.as_deref())
             .collect();
         git_fetcher::fetch_commits(&checkout, clone_url, &recorded, proxy_url);
+        // One walk of the tree serves every skill: the answers differ per skill,
+        // the tree does not.
+        let index = crate::core::source_repair::CheckoutIndex::build(&checkout);
         Ok(skills
             .iter()
             .map(|skill| {
                 let mut item = repair_item(store, skill, &targets);
-                match crate::core::source_repair::locate(skill, &checkout) {
-                    crate::core::source_repair::Placement::At { .. } => item.placement = "at",
+                match crate::core::source_repair::locate_in(&index, skill) {
+                    crate::core::source_repair::Placement::At { .. } => {
+                        item.placement = RepairPlacement::At
+                    }
                     crate::core::source_repair::Placement::Moved { candidates } => {
-                        item.placement = "moved";
+                        item.placement = RepairPlacement::Moved;
                         item.candidates = candidates
                             .into_iter()
                             .map(|candidate| MoveCandidateDto {
                                 subpath: candidate.subpath,
                                 evidence: match candidate.evidence {
                                     crate::core::source_repair::MoveEvidence::ContentHash => {
-                                        "content_hash"
+                                        RepairEvidence::ContentHash
                                     }
                                     crate::core::source_repair::MoveEvidence::DirectoryName => {
-                                        "directory_name"
+                                        RepairEvidence::DirectoryName
                                     }
                                 },
                             })
                             .collect();
                     }
-                    crate::core::source_repair::Placement::Gone => item.placement = "gone",
-                }
-                item.installed_revision_present = skill.source_revision.as_deref().is_some_and(|rev| {
-                    if git_fetcher::has_commit(&checkout, rev) {
-                        return true;
+                    crate::core::source_repair::Placement::Gone => {
+                        item.placement = RepairPlacement::Gone
                     }
-                    git_fetcher::fetch_commits(&checkout, clone_url, &[rev], proxy_url);
-                    git_fetcher::has_commit(&checkout, rev)
-                });
+                }
+                item.installed_revision_present =
+                    Some(skill.source_revision.as_deref().is_some_and(|rev| {
+                        if git_fetcher::has_commit(&checkout, rev) {
+                            return true;
+                        }
+                        git_fetcher::fetch_commits(&checkout, clone_url, &[rev], proxy_url);
+                        git_fetcher::has_commit(&checkout, rev)
+                    }));
                 item
             })
             .collect())
@@ -4970,14 +4998,14 @@ mod tests {
 
         assert_eq!(report.error, None);
         assert_eq!(report.items.len(), 3);
-        assert_eq!(item(&report, "a").placement, "at");
-        assert_eq!(item(&report, "b").placement, "moved");
+        assert!(matches!(item(&report, "a").placement, RepairPlacement::At));
+        assert!(matches!(item(&report, "b").placement, RepairPlacement::Moved));
         assert_eq!(item(&report, "b").candidates[0].subpath, "other/b");
-        assert_eq!(item(&report, "c").placement, "gone");
+        assert!(matches!(item(&report, "c").placement, RepairPlacement::Gone));
         assert!(report
             .items
             .iter()
-            .all(|item| item.installed_revision_present));
+            .all(|item| item.installed_revision_present == Some(true)));
     }
 
     /// A repository that cannot be reached is an answer the page has to show,
@@ -4991,7 +5019,10 @@ mod tests {
         let report = scan_source_internal(&repo.store, url, None, None).unwrap();
 
         assert!(report.error.is_some(), "the reason travels with the report");
-        assert_eq!(item(&report, "a").placement, "unreachable");
+        assert!(matches!(
+            item(&report, "a").placement,
+            RepairPlacement::Unreachable
+        ));
         assert_eq!(report.items.len(), 1, "the row still has actions");
     }
 
@@ -5030,8 +5061,8 @@ mod tests {
 
         let report = scan_source_internal(&repo.store, &url, None, None).unwrap();
 
-        assert_eq!(item(&report, "a").placement, "at");
-        assert!(!item(&report, "a").installed_revision_present);
+        assert!(matches!(item(&report, "a").placement, RepairPlacement::At));
+        assert_eq!(item(&report, "a").installed_revision_present, Some(false));
     }
 
     /// The Source is gone or no longer holds the skill, but the copy still
