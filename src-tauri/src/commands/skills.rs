@@ -2050,6 +2050,296 @@ pub async fn detach_local_skill_source(
     .await?
 }
 
+/// One skill's answer from a Source scan, with what the page needs to offer an
+/// action rather than a guess (#655).
+#[derive(Debug, Serialize)]
+pub struct SourceRepairItem {
+    pub skill_id: String,
+    pub name: String,
+    pub source_subpath: Option<String>,
+    pub central_path: String,
+    pub deployments: usize,
+    pub presets: usize,
+    /// The library copy differs from what was installed, so overwriting it
+    /// loses something. The page asks before it does.
+    pub local_changed: bool,
+    /// `at` | `moved` | `gone` | `unreachable`.
+    pub placement: &'static str,
+    pub candidates: Vec<MoveCandidateDto>,
+    /// Whether the revision this skill was installed from is still in the
+    /// Source's history. False means the history was rebuilt.
+    pub installed_revision_present: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MoveCandidateDto {
+    pub subpath: String,
+    /// `content_hash` (same bytes) or `directory_name` (only the name matches).
+    pub evidence: &'static str,
+}
+
+/// What a Source scan found, in one report.
+///
+/// Failure is a field, not an `Err`: a repository that is gone is one of the
+/// answers the page has to show, with its own actions.
+#[derive(Debug, Serialize)]
+pub struct SourceScanResult {
+    pub clone_url: String,
+    pub branch: Option<String>,
+    /// The head the answers were computed against, when one was resolved.
+    pub revision: Option<String>,
+    pub error: Option<String>,
+    pub items: Vec<SourceRepairItem>,
+}
+
+fn repair_item(
+    store: &SkillStore,
+    skill: &SkillRecord,
+    targets: &[SkillTargetRecord],
+) -> SourceRepairItem {
+    let local_changed = match skill.content_hash.as_deref() {
+        Some(recorded) => crate::core::content_hash::hash_directory(Path::new(&skill.central_path))
+            .map(|live| live != recorded)
+            .unwrap_or(false),
+        None => false,
+    };
+    SourceRepairItem {
+        skill_id: skill.id.clone(),
+        name: skill.name.clone(),
+        source_subpath: skill.source_subpath.clone(),
+        central_path: skill.central_path.clone(),
+        deployments: targets
+            .iter()
+            .filter(|target| target.skill_id == skill.id)
+            .count(),
+        presets: store.get_scenarios_for_skill(&skill.id).unwrap_or_default().len(),
+        local_changed,
+        placement: "unreachable",
+        candidates: Vec::new(),
+        installed_revision_present: false,
+    }
+}
+
+/// Ask one Source where each of its skills is.
+///
+/// One clone and one checkout for the whole group, because the answers only
+/// exist once the tree is on disk, and because scanning six repositories
+/// eagerly is what makes a page look hung. Writes nothing: a scan is a
+/// question, and the answer is about a head that will move.
+pub fn scan_source_internal(
+    store: &SkillStore,
+    clone_url: &str,
+    branch: Option<&str>,
+    proxy_url: Option<&str>,
+) -> Result<SourceScanResult, AppError> {
+    let skills: Vec<SkillRecord> = store
+        .get_all_skills()
+        .map_err(AppError::db)?
+        .into_iter()
+        .filter(|skill| {
+            skill.source_ref_resolved.as_deref() == Some(clone_url)
+                && skill.source_branch.as_deref() == branch
+        })
+        .collect();
+    let targets = store.get_all_targets().map_err(AppError::db)?;
+    let mut report = SourceScanResult {
+        clone_url: clone_url.to_string(),
+        branch: branch.map(str::to_string),
+        revision: None,
+        error: None,
+        items: Vec::new(),
+    };
+    if skills.is_empty() {
+        return Ok(report);
+    }
+
+    let revision = match git_fetcher::resolve_remote_revision(clone_url, branch, proxy_url) {
+        Ok(revision) => revision,
+        Err(err) => {
+            report.error = Some(err.to_string());
+            report.items = skills
+                .iter()
+                .map(|skill| repair_item(store, skill, &targets))
+                .collect();
+            return Ok(report);
+        }
+    };
+    let checkout =
+        match git_fetcher::clone_repo_ref_scoped(clone_url, branch, None, None, proxy_url, None) {
+            Ok(dir) => dir,
+            Err(err) => {
+                report.error = Some(err.to_string());
+                report.items = skills
+                    .iter()
+                    .map(|skill| repair_item(store, skill, &targets))
+                    .collect();
+                return Ok(report);
+            }
+        };
+
+    let scanned = (|| -> Result<Vec<SourceRepairItem>, AppError> {
+        git_fetcher::checkout_revision(&checkout, &revision).map_err(AppError::git)?;
+        // A shallow clone holds the head and nothing else, so "is the recorded
+        // revision still in this history?" needs the object fetched first. One
+        // fetch covers the group; anything still missing is fetched alone,
+        // which is also how a rebuilt history announces itself.
+        let recorded: Vec<&str> = skills
+            .iter()
+            .filter_map(|skill| skill.source_revision.as_deref())
+            .collect();
+        git_fetcher::fetch_commits(&checkout, clone_url, &recorded, proxy_url);
+        Ok(skills
+            .iter()
+            .map(|skill| {
+                let mut item = repair_item(store, skill, &targets);
+                match crate::core::source_repair::locate(skill, &checkout) {
+                    crate::core::source_repair::Placement::At { .. } => item.placement = "at",
+                    crate::core::source_repair::Placement::Moved { candidates } => {
+                        item.placement = "moved";
+                        item.candidates = candidates
+                            .into_iter()
+                            .map(|candidate| MoveCandidateDto {
+                                subpath: candidate.subpath,
+                                evidence: match candidate.evidence {
+                                    crate::core::source_repair::MoveEvidence::ContentHash => {
+                                        "content_hash"
+                                    }
+                                    crate::core::source_repair::MoveEvidence::DirectoryName => {
+                                        "directory_name"
+                                    }
+                                },
+                            })
+                            .collect();
+                    }
+                    crate::core::source_repair::Placement::Gone => item.placement = "gone",
+                }
+                item.installed_revision_present = skill.source_revision.as_deref().is_some_and(|rev| {
+                    if git_fetcher::has_commit(&checkout, rev) {
+                        return true;
+                    }
+                    git_fetcher::fetch_commits(&checkout, clone_url, &[rev], proxy_url);
+                    git_fetcher::has_commit(&checkout, rev)
+                });
+                item
+            })
+            .collect())
+    })();
+    git_fetcher::cleanup_temp(&checkout);
+
+    report.revision = Some(revision);
+    match scanned {
+        Ok(items) => report.items = items,
+        Err(err) => {
+            report.error = Some(err.message.clone());
+            report.items = skills
+                .iter()
+                .map(|skill| repair_item(store, skill, &targets))
+                .collect();
+        }
+    }
+    Ok(report)
+}
+
+#[tauri::command]
+pub async fn scan_git_source(
+    clone_url: String,
+    branch: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<SourceScanResult, AppError> {
+    let store = store.inner().clone();
+    let proxy_url = store.proxy_url();
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_source_internal(&store, &clone_url, branch.as_deref(), proxy_url.as_deref())
+    })
+    .await?
+}
+
+/// Turn a git skill into a local one, keeping everything the user has.
+///
+/// The Source is gone or no longer holds it, but the library copy still works
+/// in every agent. Detaching is the answer that keeps it: only the pointer is
+/// dropped, so files, deployments and preset membership stay exactly as they
+/// were (#655).
+pub fn detach_skill_source_internal(
+    store: &SkillStore,
+    skill_id: &str,
+) -> Result<ManagedSkillDto, AppError> {
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+    if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+        return Err(AppError::invalid_input(
+            "Only git-backed skills have a Source to detach",
+        ));
+    }
+    {
+        let _lock = RepoLock::acquire_foreground("detach skill source").map_err(AppError::db)?;
+        store
+            .update_skill_after_reinstall(
+                &skill.id,
+                &skill.name,
+                skill.description.as_deref(),
+                "local",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                skill.content_hash.as_deref(),
+                "local_only",
+            )
+            .map_err(AppError::db)?;
+        sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+    }
+    managed_skill_by_id(store, skill_id)
+}
+
+/// Point an installed skill at a new location in its Source, keeping its id,
+/// tags, preset membership and deployments.
+///
+/// This is the repair the page offers instead of "delete and reinstall": an
+/// install would give the skill a new id and drop everything keyed to the old
+/// one (#655).
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn repoint_skill_source(
+    skill_id: String,
+    git_url: String,
+    subpath: Option<String>,
+    branch: Option<String>,
+    force: Option<bool>,
+    dry_run: Option<bool>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<SetSourceResult, AppError> {
+    let store = store.inner().clone();
+    let proxy_url = store.proxy_url();
+    tauri::async_runtime::spawn_blocking(move || {
+        set_git_source_internal(
+            &store,
+            &skill_id,
+            &git_url,
+            subpath.as_deref(),
+            branch.as_deref(),
+            proxy_url.as_deref(),
+            force.unwrap_or(false),
+            dry_run.unwrap_or(false),
+        )
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn detach_skill_source(
+    skill_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<ManagedSkillDto, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || detach_skill_source_internal(&store, &skill_id))
+        .await?
+}
+
 fn managed_skill_to_dto(
     store: &SkillStore,
     skill: SkillRecord,
@@ -4646,6 +4936,137 @@ mod tests {
         let dto =
             check_skill_update_internal_with_remote(&repo.store, "b", false, None).unwrap();
         assert_eq!(dto.update_status, "source_gone");
+    }
+
+    fn item<'a>(report: &'a SourceScanResult, id: &str) -> &'a SourceRepairItem {
+        report
+            .items
+            .iter()
+            .find(|item| item.skill_id == id)
+            .unwrap_or_else(|| panic!("{id} missing from the scan"))
+    }
+
+    /// One clone answers the whole group, and the three answers stay distinct:
+    /// still there, moved, gone. The revision each was installed from is still
+    /// in this history, so no fake "rebuilt" signal (#655).
+    #[test]
+    fn a_scan_answers_every_skill_of_a_source() {
+        let repo = test_repo();
+        let (dir, url, _) = monorepo(&repo);
+        write_skill(&dir.join("skills/c"), "c");
+        git_in(&dir, &["add", "-A"]);
+        git_in(&dir, &["commit", "-qm", "add c"]);
+        let installed = git_in(&dir, &["rev-parse", "HEAD"]);
+        insert_monorepo_skill(&repo.store, "a", &url, Some("skills/a"), &installed);
+        insert_monorepo_skill(&repo.store, "b", &url, Some("skills/b"), &installed);
+        insert_monorepo_skill(&repo.store, "c", &url, Some("skills/c"), &installed);
+
+        fs::create_dir_all(dir.join("other")).unwrap();
+        git_in(&dir, &["mv", "skills/b", "other/b"]);
+        git_in(&dir, &["rm", "-r", "-q", "skills/c"]);
+        git_in(&dir, &["commit", "-qm", "reorg"]);
+
+        let report = scan_source_internal(&repo.store, &url, None, None).unwrap();
+
+        assert_eq!(report.error, None);
+        assert_eq!(report.items.len(), 3);
+        assert_eq!(item(&report, "a").placement, "at");
+        assert_eq!(item(&report, "b").placement, "moved");
+        assert_eq!(item(&report, "b").candidates[0].subpath, "other/b");
+        assert_eq!(item(&report, "c").placement, "gone");
+        assert!(report
+            .items
+            .iter()
+            .all(|item| item.installed_revision_present));
+    }
+
+    /// A repository that cannot be reached is an answer the page has to show,
+    /// not an error that blanks it out.
+    #[test]
+    fn a_scan_reports_an_unreachable_source_per_item() {
+        let repo = test_repo();
+        let url = "file:///nonexistent/skills-manager-test/repo";
+        insert_monorepo_skill(&repo.store, "a", url, Some("skills/a"), "old-rev");
+
+        let report = scan_source_internal(&repo.store, url, None, None).unwrap();
+
+        assert!(report.error.is_some(), "the reason travels with the report");
+        assert_eq!(item(&report, "a").placement, "unreachable");
+        assert_eq!(report.items.len(), 1, "the row still has actions");
+    }
+
+    /// A scan answers about a head that will move; it must not write back what
+    /// it found, or the next check would compare against a stale claim.
+    #[test]
+    fn a_scan_writes_nothing() {
+        let repo = test_repo();
+        let (dir, url, installed) = monorepo(&repo);
+        insert_monorepo_skill(&repo.store, "b", &url, Some("skills/b"), &installed);
+        repo.store
+            .update_skill_check_state("b", Some(&installed), skill_store::SOURCE_GONE, None)
+            .unwrap();
+
+        git_in(&dir, &["rm", "-r", "-q", "skills/b"]);
+        git_in(&dir, &["commit", "-qm", "drop b"]);
+        let before = repo.store.get_skill_by_id("b").unwrap().unwrap();
+        scan_source_internal(&repo.store, &url, None, None).unwrap();
+        let after = repo.store.get_skill_by_id("b").unwrap().unwrap();
+
+        assert_eq!(after.update_status, before.update_status);
+        assert_eq!(after.last_checked_at, before.last_checked_at);
+        assert_eq!(after.source_subpath, before.source_subpath);
+    }
+
+    /// A Source whose history was rebuilt no longer has the revision this skill
+    /// was installed from. That is a different story from "the skill was
+    /// deleted", and the scan says so (#655).
+    #[test]
+    fn a_recorded_revision_the_source_no_longer_has_is_reported() {
+        let repo = test_repo();
+        let (dir, url, _) = monorepo(&repo);
+        let unknown = "0123456789abcdef0123456789abcdef01234567";
+        insert_monorepo_skill(&repo.store, "a", &url, Some("skills/a"), unknown);
+        commit_file(&dir, "SKILL.md", "---\nname: root\n---\nx\n");
+
+        let report = scan_source_internal(&repo.store, &url, None, None).unwrap();
+
+        assert_eq!(item(&report, "a").placement, "at");
+        assert!(!item(&report, "a").installed_revision_present);
+    }
+
+    /// The Source is gone or no longer holds the skill, but the copy still
+    /// works in every agent: detaching drops the pointer and keeps the rest.
+    #[test]
+    fn detaching_a_git_skill_keeps_its_copy_deployments_and_presets() {
+        let repo = test_repo();
+        let url = "https://example.test/a.git";
+        insert_monorepo_skill(&repo.store, "b", url, Some("skills/b"), "old-rev");
+        let central = PathBuf::from(&repo.store.get_skill_by_id("b").unwrap().unwrap().central_path);
+        let target_dir = repo._tmp.path().join("agent/b");
+        fs::create_dir_all(&central).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        repo.store
+            .insert_target(&SkillTargetRecord {
+                id: "target-b".to_string(),
+                skill_id: "b".to_string(),
+                tool: "cursor".to_string(),
+                target_path: target_dir.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: None,
+            })
+            .unwrap();
+
+        let dto = detach_skill_source_internal(&repo.store, "b").unwrap();
+
+        assert_eq!(dto.update_status, "local_only");
+        assert_eq!(dto.source_type, "local");
+        assert_eq!(dto.source_ref, None);
+        assert_eq!(dto.source_subpath, None);
+        assert!(central.exists(), "the copy is the part worth keeping");
+        assert_eq!(dto.targets.len(), 1, "its deployments are unchanged");
     }
 
     /// A skills.sh skill whose Source moved it: the locator finds it at its new

@@ -1338,6 +1338,39 @@ pub fn compare_subtrees(
     result
 }
 
+/// Best-effort: bring `revisions` into this checkout so their history can be
+/// inspected. One fetch for the whole source; callers retry individually when
+/// one revision turns out to be unknown to the server, because git aborts the
+/// batch at the first ref it cannot find.
+pub fn fetch_commits(repo_dir: &Path, url: &str, revisions: &[&str], proxy_url: Option<&str>) {
+    let revs: Vec<&str> = revisions
+        .iter()
+        .copied()
+        .filter(|rev| rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()))
+        .collect();
+    if revs.is_empty() {
+        return;
+    }
+    let mut args = vec!["fetch", "--no-tags", "--depth=1", "--filter=blob:none", url];
+    args.extend(revs);
+    let _ = run_git_watched_at(repo_dir, &args, proxy_url, None, &None);
+}
+
+/// Whether `revision` is still in this checkout's history.
+///
+/// A Source that was rebuilt or force-pushed leaves the recorded revision
+/// unreachable; git says so without asking the host, which also works for
+/// private repositories (#655).
+pub fn has_commit(repo_dir: &Path, revision: &str) -> bool {
+    let Ok(oid) = git2::Oid::from_str(revision) else {
+        return false;
+    };
+    match Repository::open(repo_dir) {
+        Ok(repo) => repo.find_commit(oid).is_ok(),
+        Err(_) => false,
+    }
+}
+
 pub fn checkout_revision(repo_dir: &Path, revision: &str) -> Result<()> {
     let status = git_command()
         .arg("-C")
