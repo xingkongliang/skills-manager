@@ -8,7 +8,7 @@
     "prepare": "node scripts/install-hooks.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
+    "lint": "oxlint --disable-nested-config",
     "typecheck": "tsc -b",
     "preview": "vite preview",
     "tauri": "tauri",
@@ -21,7 +21,7 @@
     "e2e": "playwright test -c e2e/playwright.config.ts",
     "changeset": "changeset",
     "changeset:version": "changeset version && node scripts/sync-version.mjs",
-    "lint:fix": "oxlint --fix",
+    "lint:fix": "oxlint --disable-nested-config --fix",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },

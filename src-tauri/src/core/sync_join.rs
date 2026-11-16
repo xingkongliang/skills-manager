@@ -623,6 +623,7 @@ mod tests {
     use super::*;
     use crate::core::skill_store::ScenarioRecord;
     use crate::core::test_support::sample_skill;
+    use crate::core::tool_adapters::{all_tool_adapters, custom_tool_paths, default_tool_adapters};
     use std::process::Command;
     use std::sync::Arc;
 
@@ -671,10 +672,18 @@ mod tests {
             fs::create_dir_all(central_repo::skills_dir()).unwrap();
             let store = SkillStore::new(&base.join("test.db")).unwrap();
             store.set_setting("backup_device_name", name).unwrap();
-            Host {
+            let host = Host {
                 base,
                 ctx: HostCtx::headless(Arc::new(store)),
+            };
+            // Join and undo reapply the active preset, which deploys to every
+            // installed agent. Keep each agent's folder inside this fixture so
+            // no test writes to the real home.
+            for adapter in default_tool_adapters() {
+                host.redirect(&adapter.key, &adapter.relative_skills_dir);
             }
+            host.assert_confined();
+            host
         }
     }
 
@@ -685,6 +694,40 @@ mod tests {
 
         fn activate(&self) {
             central_repo::set_test_base_dir_override(Some(self.base.clone()));
+        }
+
+        /// Point an agent's skills folder at `rel` under this host's fake home.
+        fn redirect(&self, key: &str, rel: &str) {
+            let mut paths = custom_tool_paths(self.store());
+            paths.insert(
+                key.into(),
+                self.home().join(rel).to_string_lossy().into_owned(),
+            );
+            let json = serde_json::to_string(&paths).unwrap();
+            self.store()
+                .set_setting("custom_tool_paths", &json)
+                .unwrap();
+        }
+
+        fn home(&self) -> PathBuf {
+            self.base.join("home")
+        }
+
+        /// Every agent folder and recorded deployment is inside this fixture.
+        fn assert_confined(&self) {
+            for adapter in all_tool_adapters(self.store()) {
+                let dir = adapter.skills_dir();
+                assert!(dir.starts_with(&self.base), "{} -> {dir:?}", adapter.key);
+            }
+            for target in self.store().get_all_targets().unwrap() {
+                let path = Path::new(&target.target_path);
+                assert!(path.starts_with(&self.base), "deployed to {path:?}");
+            }
+        }
+
+        fn deployed(&self, rel_skills_dir: &str, skill: &str) -> Option<String> {
+            let dir = self.home().join(rel_skills_dir).join(skill);
+            fs::read_to_string(dir.join("SKILL.md")).ok()
         }
 
         fn add_skill(&self, id: &str, content: &str) {
@@ -825,6 +868,12 @@ mod tests {
         assert_eq!(b.preset_names(), ["Ops", "Web"]);
         assert_eq!(b.preset_skills("Web"), ["alpha"]);
         assert_eq!(b.preset_skills("Ops"), ["alpha", "gamma"]);
+        // The active preset deploys into this host's own agent folders.
+        assert_eq!(
+            b.deployed(".claude/skills", "gamma").as_deref(),
+            Some("gamma from B")
+        );
+        b.assert_confined();
         let active = b.store().get_active_scenario_id().unwrap().unwrap();
         assert_eq!(active, "ops-b");
 
@@ -859,6 +908,9 @@ mod tests {
                 .collect();
             let json = serde_json::to_string(&agents).unwrap();
             host.store().set_setting("custom_tools", &json).unwrap();
+            for agent in &agents {
+                host.redirect(&agent.key, &agent.skills_dir);
+            }
         };
         let hosts = Hosts::new();
         let a = hosts.host("a");
@@ -879,6 +931,7 @@ mod tests {
             .collect();
         agents.sort();
         assert_eq!(agents, [("x".into(), "X".into()), ("y".into(), "Y".into())]);
+        b.assert_confined();
     }
 
     #[test]
@@ -905,6 +958,7 @@ mod tests {
         b.activate();
         undo_join(&b.ctx, None).unwrap();
         assert_eq!(b.skill_md("alpha").as_deref(), Some("alpha from B"));
+        b.assert_confined();
         assert!(b.skill_md("beta").is_none());
         assert_eq!(b.preset_names(), ["Ops"]);
         assert_eq!(b.preset_skills("Ops"), ["alpha"]);
