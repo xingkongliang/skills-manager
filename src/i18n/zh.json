@@ -362,6 +362,8 @@
     "agentToggleDisabled": "{{agent}} 已关闭",
     "agentToggleNotInstalled": "未安装",
     "agentToggleDisabledGlobally": "已在设置中禁用",
+    "agentTogglePendingSync": "待同步",
+    "agentTogglePendingSyncHint": "已在此 Preset 中启用，但还没有部署到这个 Agent。点击即部署。",
     "agentUnavailableCount": "{{count}} 个不可用",
     "updateStatus": {
       "unknown": "未知",
@@ -402,7 +404,8 @@
       "local": "本地",
       "import": "导入",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "website": "网站"
     },
     "groupBySource": "按来源分组",
     "sourcePicker": {
@@ -421,6 +424,9 @@
       "renameTag": "重命名标签",
       "deleteTag": "删除标签",
       "tagName": "标签名称",
+      "showAll": "展开全部 {{count}} 个",
+      "showFewer": "收起",
+      "foldedSelected": "（其中 {{count}} 个已选）",
       "manageHint": "右键重命名或删除",
       "tagRenamed": "标签已重命名",
       "tagDeleted": "标签已删除",
@@ -428,6 +434,7 @@
     },
     "selectMode": "多选",
     "selectedCount": "已选 {{count}} 个",
+    "notShownCount": "（其中 {{count}} 个未显示）",
     "selectHint": "点击 Skill 开始选择",
     "batchUpdate": "更新 {{count}} 个",
     "batchUpdated": "已批量更新 {{count}} 个 Skill",
@@ -435,6 +442,7 @@
     "batchUpdateFailed": "{{count}} 个 Skill 更新失败",
     "deleteSelected": "删除 {{count}} 个",
     "batchDeleteConfirm": "确定彻底删除选中的 {{count}} 个 Skill 吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
+    "batchDeleteConfirmWithHidden": "确定彻底删除选中的 {{count}} 个 Skill（其中 {{hidden}} 个未显示）吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
     "batchDeleted": "已删除 {{count}} 个 Skill",
     "batchDeleteFailed": "{{count}} 个 Skill 删除失败",
     "batchToggleFailed": "{{count}} 个 Skill 更新失败",
@@ -651,6 +659,7 @@
     "textSizeXLarge": "特大",
     "language": "语言",
     "help": "帮助",
+    "whatsNew": "更新内容",
     "website": "官网",
     "about": "关于",
     "version": "Skills Manager {{version}}",
@@ -839,6 +848,7 @@
     "selectAllSkills": "全选技能",
     "deselectAllSkills": "取消全选",
     "selectedCount": "已选 {{count}} 个",
+    "hiddenByFilters": "（其中 {{count}} 个被当前筛选隐藏）",
     "shiftHint": "按住 Shift 点击可批量选择",
     "clearTargets": "清空",
     "searchPlaceholder": "搜索技能库…",
@@ -1239,5 +1249,11 @@
     "translationPaused": "翻译已暂停",
     "translationFailed": "部分翻译失败 · {{done}} / {{total}}",
     "translationSection": "阅读与翻译"
+  },
+  "whatsNew": {
+    "title": "更新内容",
+    "gotIt": "知道了",
+    "fullChangelog": "查看完整更新日志",
+    "close": "关闭"
   }
 }

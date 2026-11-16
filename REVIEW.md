@@ -54,8 +54,8 @@ look at whatever checks ran. A docs-only change triggers no workflow, so read
 that one by hand.
 
 `cfg(windows)` code moves a Standard change to Deep; a Deep one gets a
-Windows-specific check. Windows behaviour is verified only by CI here, and the
-Linux job only runs `cargo check`, not tests.
+Windows-specific check. Windows behaviour is verified only by CI here. The
+Linux job runs the same test suite.
 
 ## What goes wrong here
 

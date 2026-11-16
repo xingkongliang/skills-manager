@@ -1721,6 +1721,8 @@ function ProjectSkillDetailPanel({
       key: target.key,
       displayName: target.display_name,
       enabled: Boolean(variant),
+      // A project variant is a folder on disk, so enabled already is the fact.
+      deployed: Boolean(variant),
       isAvailable: target.installed && target.enabled,
       disabled: (!variant && (!target.installed || !target.enabled)),
       badgeLabel: !target.installed
@@ -1786,6 +1788,7 @@ function ProjectSkillDetailPanel({
         items={toggleItems}
         togglingKey={togglingAgent}
         onToggle={onToggleAgent}
+        showPendingSync={false}
         className="mb-4"
       />
 

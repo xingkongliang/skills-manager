@@ -19,7 +19,6 @@ import {
   SquareCheck,
   Square,
   GripVertical,
-  CircleSlash,
   Circle,
   ChevronDown,
   ChevronRight,
@@ -47,7 +46,7 @@ import { SyncDots } from "../components/SyncDots";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { CardActionMenu } from "../components/CardActionMenu";
 import * as api from "../lib/tauri";
-import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
+import { getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
   ManagedSkill,
   ToolInfo,
@@ -56,10 +55,16 @@ import type {
 } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { normalizeSkillSearch, skillSearchMatches } from "../lib/skillSearch";
+import { countHiddenSelected, hiddenSelectionTexts } from "../lib/selectionVisibility";
+import { buildSkillRows, renderedSkillIds, type SkillListRow } from "../lib/skillRows";
+import { channelsForSkills } from "../lib/skillChannels";
+import { ChannelPills } from "../components/ChannelPills";
+import { SourcePicker } from "../components/SourcePicker";
+import { TagFilterPills } from "../components/TagFilterPills";
 import {
   buildSourceGroups,
   getSkillSourceInfo,
-  type SkillSourceGroup,
+  sourceCandidates,
 } from "../lib/skillSource";
 import {
   DndContext,
@@ -143,19 +148,12 @@ function centralDirName(skill: ManagedSkill) {
   return skill.central_path.split(/[\\/]/).filter(Boolean).pop() || skill.name;
 }
 
-/**
- * One row of the list: either a source header or a skill. Keeping them in one
- * array lets the grouped and ungrouped views share the same render path.
- */
-type SkillListRow =
-  | { kind: "group"; group: SkillSourceGroup; expanded: boolean }
-  | { kind: "skill"; skill: ManagedSkill };
-
 export function MySkills() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const {
     viewedPreset,
+    activePreset,
     tools,
     managedSkills: skills,
     refreshPresets,
@@ -176,7 +174,6 @@ export function MySkills() {
   // default would hide the only skill it holds without saving a row.
   const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({});
   const [sourceSelection, setSourceSelection] = useState<Set<string>>(new Set());
-  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
   // Which channel (`source_type`) a skill came through — git, skills.sh, a
   // site, a local install, an import. Distinct from the Source grouping below.
@@ -276,12 +273,24 @@ export function MySkills() {
     return next;
   };
 
+  // The Channel pills: the known channels always, plus any this build does not
+  // name, so a skill is never unreachable by the filter that claims to list it.
+  const channels = useMemo(() => channelsForSkills(skills), [skills]);
+
+  // Whether the untagged pill has anything to filter: an empty pill would lie.
+  const hasUntaggedSkill = useMemo(() => skills.some((s) => s.tags.length === 0), [skills]);
+
+  // One definition of "a search is in progress": the same normalization that
+  // decides which skills match, so a query of `-` or `_` cannot open every
+  // Source while filtering nothing.
+  const normalizedQuery = normalizeSkillSearch(search);
+
   // A filter can outlive the control that set it (the tag row hides itself once
   // no tag is left), so the empty state carries the way out. `filterMode` is
   // reset too — its control never hides, but a button labelled "clear filters"
   // that leaves one of them on is a lie.
   const hasActiveFilters =
-    search.trim() !== "" ||
+    normalizedQuery !== "" ||
     channelFilters.size > 0 ||
     tagFilters.size > 0 ||
     sourceSelection.size > 0 ||
@@ -313,11 +322,10 @@ export function MySkills() {
     return displayNames;
   }, [skills]);
 
-  const { filtered, sourceCandidates, preSelectionSourceGroups } = useMemo(() => {
-    const query = normalizeSkillSearch(search);
+  const { filtered, sourceOptions, preSelectionSourceGroups } = useMemo(() => {
     const result = skills.filter((skill) => {
       const displayName = skillDisplayNames.get(skill.id) || skill.name;
-      const matchesSearch = skillSearchMatches(query, [
+      const matchesSearch = skillSearchMatches(normalizedQuery, [
         skill.name,
         displayName,
         centralDirName(skill),
@@ -363,18 +371,18 @@ export function MySkills() {
     // would remove the others from the menu the user needs in order to switch
     // sources.
     const groups = buildSourceGroups(result);
-    const candidates = groups.map(({ key, label, count }) => ({ key, label, count }));
+    const candidates = sourceCandidates(result);
 
     if (sourceSelection.size === 0) {
-      return { filtered: result, sourceCandidates: candidates, preSelectionSourceGroups: groups };
+      return { filtered: result, sourceOptions: candidates, preSelectionSourceGroups: groups };
     }
 
     return {
       filtered: result.filter((skill) => sourceSelection.has(getSkillSourceInfo(skill).key)),
-      sourceCandidates: candidates,
+      sourceOptions: candidates,
       preSelectionSourceGroups: groups,
     };
-  }, [skills, skillDisplayNames, search, channelFilters, tagFilters, sourceSelection, filterMode, viewedPreset, presetSkillOrder]);
+  }, [skills, skillDisplayNames, normalizedQuery, channelFilters, tagFilters, sourceSelection, filterMode, viewedPreset, presetSkillOrder]);
 
   // Without a source selection the groups from above already describe
   // `filtered`; only a narrowing selection forces a rebuild. That rebuild must
@@ -391,26 +399,19 @@ export function MySkills() {
     });
   }, [groupBySource, sourceSelection.size, preSelectionSourceGroups, filtered]);
 
-  // A group opens on click, and stays open while the user is searching: a query
-  // that matched something inside a collapsed group would otherwise look like
-  // no match at all.
-  const searching = search.trim() !== "";
-  const sourceRows = useMemo<SkillListRow[]>(() => {
-    if (!sourceGroups) {
-      return filtered.map((skill) => ({ kind: "skill", skill }) as SkillListRow);
-    }
-    const rows: SkillListRow[] = [];
-    for (const group of sourceGroups) {
-      // Every source gets a header, including one that holds a single skill, so
-      // the grouped view reads the same way whatever the group's size.
-      const expanded = searching || (groupOpen[group.key] ?? group.skills.length === 1);
-      rows.push({ kind: "group", group, expanded });
-      if (expanded) {
-        for (const skill of group.skills) rows.push({ kind: "skill", skill });
-      }
-    }
-    return rows;
-  }, [filtered, sourceGroups, groupOpen, searching]);
+  // A search forces every Source open: a query that matched something inside a
+  // collapsed group would otherwise look like no match at all.
+  const searching = normalizedQuery !== "";
+  const sourceRows = useMemo<SkillListRow[]>(
+    () =>
+      buildSkillRows({
+        groups: sourceGroups,
+        skills: filtered,
+        openBySource: groupOpen,
+        searching,
+      }),
+    [sourceGroups, filtered, groupOpen, searching]
+  );
 
   const {
     isMultiSelect, setIsMultiSelect,
@@ -438,6 +439,19 @@ export function MySkills() {
     ]),
     escapeEnabled: !batchTagDialogOpen && !batchSyncDialogOpen && !batchDeleteConfirm,
   });
+
+  // Selected skills with no row on screen: the skills of a Source collapsed
+  // after they were picked, the ones select-all swept up while collapsed, and
+  // ones a filter no longer matches since they were picked (removing a tag the
+  // tag filter is on, say). Bulk actions run on the selection, not on the
+  // rendered rows, so this is the gap between what the user selected and what
+  // they can count.
+  const hiddenSelectedCount = useMemo(
+    () =>
+      isMultiSelect ? countHiddenSelected(selectedIds, renderedSkillIds(sourceRows)) : 0,
+    [isMultiSelect, sourceRows, selectedIds]
+  );
+  const hiddenTexts = hiddenSelectionTexts(t, selectedIds.size, hiddenSelectedCount);
 
   const selectedSkill = useMemo(
     () => skills.find((skill) => skill.id === detailSkillId) || null,
@@ -1330,124 +1344,35 @@ export function MySkills() {
       </div>
 
       <div className="flex flex-wrap items-center gap-1 px-1 -mt-2 -mb-3">
-        {(["local", "import", "git", "skillssh"] as const).map((channel) => (
-          <button
-            key={channel}
-            onClick={() => setChannelFilters(toggleFilter(channelFilters, channel))}
-            className={cn(
-              "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-              channelFilters.has(channel)
-                ? "bg-accent text-white dark:bg-accent dark:text-white"
-                : "bg-surface-hover text-muted hover:text-secondary"
-            )}
-          >
-            {t(`mySkills.sourceFilter.${channel}`)}
-          </button>
-        ))}
-        {/* Sources are picked from a menu, not rendered as pills: a library can
-            hold dozens of repos and directories. */}
-        <div className="relative">
-          <button
-            onClick={() => setSourceMenuOpen((open) => !open)}
-            aria-expanded={sourceMenuOpen}
-            disabled={sourceCandidates.length === 0}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors disabled:opacity-40",
-              sourceSelection.size > 0
-                ? "bg-accent text-white dark:bg-accent dark:text-white"
-                : "bg-surface-hover text-muted hover:text-secondary"
-            )}
-          >
-            <FolderTree className="h-3 w-3" />
-            {t("mySkills.sourcePicker.label")}
-            {sourceSelection.size > 0 && ` (${sourceSelection.size})`}
-          </button>
-          {sourceMenuOpen && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setSourceMenuOpen(false)} />
-              {/* overscroll-contain stops a wheel that reaches the end of the
-                  list from scrolling the page underneath it. */}
-              <div className="absolute left-0 top-full z-50 mt-1 max-h-72 w-64 overflow-y-auto overscroll-contain rounded-lg border border-border bg-surface py-1 shadow-2xl">
-                {sourceSelection.size > 0 && (
-                  <button
-                    onClick={() => setSourceSelection(new Set())}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-muted hover:bg-surface-hover hover:text-secondary"
-                  >
-                    <X className="h-3 w-3" />
-                    {t("mySkills.sourcePicker.clear")}
-                  </button>
-                )}
-                {sourceCandidates.map((candidate) => {
-                  const label = candidate.label || t("mySkills.sourcePicker.unknownSource");
-                  const checked = sourceSelection.has(candidate.key);
-                  return (
-                    <button
-                      key={candidate.key}
-                      onClick={() =>
-                        setSourceSelection((prev) => toggleFilter(prev, candidate.key))
-                      }
-                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-secondary hover:bg-surface-hover"
-                      title={label}
-                    >
-                      {checked ? (
-                        <SquareCheck className="h-3.5 w-3.5 shrink-0 text-accent" />
-                      ) : (
-                        <Square className="h-3.5 w-3.5 shrink-0 text-faint" />
-                      )}
-                      <span className="min-w-0 flex-1 truncate">{label}</span>
-                      <span className="shrink-0 text-[11px] text-faint">{candidate.count}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </div>
-        {allTags.length > 0 && (
+        <ChannelPills
+          channels={channels}
+          selected={channelFilters}
+          onToggle={(channel) => setChannelFilters(toggleFilter(channelFilters, channel))}
+          className="gap-1"
+        />
+        <SourcePicker
+          candidates={sourceOptions}
+          selected={sourceSelection}
+          onChange={setSourceSelection}
+        />
+        {(allTags.length > 0 || hasUntaggedSkill) && (
           <>
             <span className="mx-0.5 h-3 w-px bg-border-subtle" />
-            {skills.some((s) => s.tags.length === 0) && (() => {
-              const isActive = tagFilters.has(UNTAGGED_FILTER);
-              return (
-                <button
-                  onClick={() => setTagFilters(toggleFilter(tagFilters, UNTAGGED_FILTER))}
-                  className={cn(
-                    "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-                    isActive
-                      ? "bg-surface-active text-primary"
-                      : "border border-dashed border-border text-muted hover:text-secondary"
-                  )}
-                  title={t("mySkills.tags.untagged")}
-                >
-                  <CircleSlash className="h-3 w-3" />
-                  {t("mySkills.tags.untagged")}
-                </button>
-              );
-            })()}
-            {allTags.map((tag) => {
-              const isActive = tagFilters.has(tag);
-              return (
-                <button
-                  key={tag}
-                  onClick={() => setTagFilters(toggleFilter(tagFilters, tag))}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setTagMenu({
-                      tag,
-                      x: Math.min(e.clientX, window.innerWidth - 160),
-                      y: Math.min(e.clientY, window.innerHeight - 90),
-                    });
-                  }}
-                  title={t("mySkills.tags.manageHint")}
-                  className={cn(
-                    "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-                    isActive ? getTagActiveColor(tag, allTags) : getTagColor(tag, allTags)
-                  )}
-                >
-                  {tag}
-                </button>
-              );
-            })}
+            <TagFilterPills
+              tags={allTags}
+              selected={tagFilters}
+              onToggle={(tag) => setTagFilters(toggleFilter(tagFilters, tag))}
+              onClear={() => setTagFilters(new Set())}
+              hasUntagged={hasUntaggedSkill}
+              onTagContextMenu={(tag, event) =>
+                setTagMenu({
+                  tag,
+                  x: Math.min(event.clientX, window.innerWidth - 160),
+                  y: Math.min(event.clientY, window.innerHeight - 90),
+                })
+              }
+              className="gap-1"
+            />
           </>
         )}
       </div>
@@ -1505,6 +1430,7 @@ export function MySkills() {
           labels={{
             hint: t("mySkills.selectHint"),
             selected: t("mySkills.selectedCount", { count: selectedIds.size }),
+            hiddenSelected: hiddenTexts.toolbarNote,
             selectAll: t("mySkills.selectAll"),
             deselectAll: t("mySkills.deselectAll"),
             cancel: t("common.cancel"),
@@ -1545,18 +1471,8 @@ export function MySkills() {
           {sourceRows.map((row) => {
             if (row.kind === "group") {
               const label = row.group.label || t("mySkills.sourcePicker.unknownSource");
-              return (
-                <button
-                  key={`group-${row.group.key}`}
-                  onClick={() =>
-                    setGroupOpen((prev) => ({ ...prev, [row.group.key]: !row.expanded }))
-                  }
-                  aria-expanded={row.expanded}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-md px-1 py-1.5 text-left text-[12px] font-semibold text-muted transition-colors hover:bg-surface-hover hover:text-secondary",
-                    viewMode === "grid" && "col-span-full"
-                  )}
-                >
+              const header = (
+                <>
                   {row.expanded ? (
                     <ChevronDown className="h-3.5 w-3.5 shrink-0" />
                   ) : (
@@ -1566,6 +1482,34 @@ export function MySkills() {
                   <span className="shrink-0 text-[11px] font-medium text-faint">
                     {row.group.count}
                   </span>
+                </>
+              );
+              const layout = cn(
+                "flex items-center gap-1.5 rounded-md px-1 py-1.5 text-left text-[12px] font-semibold text-muted",
+                viewMode === "grid" && "col-span-full"
+              );
+
+              // A search forces every source open, so folding is not available
+              // and a toggle would be a button that cannot do anything. It is a
+              // plain row until the query is cleared.
+              if (!row.collapsible) {
+                return (
+                  <div key={`group-${row.group.key}`} className={layout}>
+                    {header}
+                  </div>
+                );
+              }
+
+              return (
+                <button
+                  key={`group-${row.group.key}`}
+                  onClick={() =>
+                    setGroupOpen((prev) => ({ ...prev, [row.group.key]: !row.expanded }))
+                  }
+                  aria-expanded={row.expanded}
+                  className={cn(layout, "transition-colors hover:bg-surface-hover hover:text-secondary")}
+                >
+                  {header}
                 </button>
               );
             }
@@ -2058,6 +2002,7 @@ export function MySkills() {
         toolToggles={toolToggles}
         togglingTool={togglingToolKey}
         onToggleTool={handleToggleSkillTool}
+        isActivePreset={Boolean(viewedPreset && viewedPreset.id === activePreset?.id)}
         projects={projects}
         onProjectsChanged={refreshProjects}
       />
@@ -2092,7 +2037,7 @@ export function MySkills() {
       />
       <ConfirmDialog
         open={batchDeleteConfirm}
-        message={t("mySkills.batchDeleteConfirm", { count: selectedIds.size })}
+        message={hiddenTexts.deleteConfirm}
         onClose={() => setBatchDeleteConfirm(false)}
         onConfirm={handleBatchDelete}
       />

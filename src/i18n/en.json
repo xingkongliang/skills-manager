@@ -362,6 +362,8 @@
     "agentToggleDisabled": "{{agent}} disabled",
     "agentToggleNotInstalled": "Not installed",
     "agentToggleDisabledGlobally": "Disabled in Settings",
+    "agentTogglePendingSync": "Pending sync",
+    "agentTogglePendingSyncHint": "Enabled in this preset but not deployed to this agent yet. Click to deploy.",
     "agentUnavailableCount": "{{count}} unavailable",
     "updateStatus": {
       "unknown": "Unknown",
@@ -402,7 +404,8 @@
       "local": "Local",
       "import": "Imported",
       "git": "Git",
-      "skillssh": "skills.sh"
+      "skillssh": "skills.sh",
+      "website": "Website"
     },
     "groupBySource": "Group by source",
     "sourcePicker": {
@@ -421,6 +424,9 @@
       "renameTag": "Rename tag",
       "deleteTag": "Delete tag",
       "tagName": "Tag name",
+      "showAll": "Show all {{count}}",
+      "showFewer": "Show fewer",
+      "foldedSelected": "({{count}} selected)",
       "manageHint": "Right-click to rename or delete",
       "tagRenamed": "Tag renamed",
       "tagDeleted": "Tag deleted",
@@ -428,6 +434,7 @@
     },
     "selectMode": "Select",
     "selectedCount": "{{count}} selected",
+    "notShownCount": "({{count}} not shown)",
     "selectHint": "Click skills to select",
     "batchUpdate": "Update {{count}}",
     "batchUpdated": "{{count}} skills refreshed",
@@ -435,6 +442,7 @@
     "batchUpdateFailed": "{{count}} skills failed to refresh",
     "deleteSelected": "Delete {{count}}",
     "batchDeleteConfirm": "Delete {{count}} selected skills permanently? This removes their central library files, preset links, and synced agent targets.",
+    "batchDeleteConfirmWithHidden": "Delete {{count}} selected skills permanently, including {{hidden}} not shown in the list? This removes their central library files, preset links, and synced agent targets.",
     "batchDeleted": "{{count}} skills deleted",
     "batchDeleteFailed": "{{count}} skills failed to delete",
     "batchToggleFailed": "{{count}} skills failed to update",
@@ -651,6 +659,7 @@
     "textSizeXLarge": "Extra Large",
     "language": "Language",
     "help": "Help",
+    "whatsNew": "What's new",
     "website": "Website",
     "about": "About",
     "version": "Skills Manager {{version}}",
@@ -839,6 +848,7 @@
     "selectAllSkills": "Select all skills",
     "deselectAllSkills": "Deselect all skills",
     "selectedCount": "{{count}} selected",
+    "hiddenByFilters": "({{count}} hidden by the current filter)",
     "shiftHint": "Shift + click to select a range",
     "clearTargets": "Clear",
     "searchPlaceholder": "Search the library…",
@@ -1239,5 +1249,11 @@
     "translationPaused": "Translation paused",
     "translationFailed": "Translation incomplete · {{done}} / {{total}}",
     "translationSection": "Reading & translation"
+  },
+  "whatsNew": {
+    "title": "What's new",
+    "gotIt": "Got it",
+    "fullChangelog": "Full changelog",
+    "close": "Close"
   }
 }
