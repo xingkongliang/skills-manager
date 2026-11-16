@@ -24,6 +24,7 @@ import {
 import { SkillSourceDiffViewer } from "./SkillSourceDiffViewer";
 import { DetailSheet } from "./DetailSheet";
 import { SkillMarkdown } from "./SkillMarkdown";
+import { SkillReaderEntry } from "./SkillReaderEntry";
 import { AgentToggleSection, type AgentToggleItem } from "./AgentToggleSection";
 import { SkillProjectsSection } from "./SkillProjectsSection";
 import { SyncDots } from "./SyncDots";
@@ -337,8 +338,9 @@ function SkillDetailPanelContent({
         />
       )}
 
+      <div className="mb-4 flex items-start justify-between gap-3">
       {supportsSourceDiff && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {(["local", "diff", "source"] as const).map((tab) => (
             <button
               key={tab}
@@ -366,6 +368,18 @@ function SkillDetailPanelContent({
           )}
         </div>
       )}
+
+      {contentTab !== "diff" && (
+        <div className="ml-auto shrink-0">
+          <SkillReaderEntry
+            target={{ kind: "managed", skill_id: skill.id, origin: contentTab === "source" ? "source" : "local" }}
+            title={skill.name}
+            description={skill.description ?? undefined}
+          />
+        </div>
+      )}
+
+      </div>
 
       {loading ? (
         <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>

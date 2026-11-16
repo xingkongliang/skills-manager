@@ -856,7 +856,7 @@ fn copy_dir_contents(src: &Path, dst: &Path, cancel: Option<&Arc<AtomicBool>>) -
 /// `git clone -c` persisted whatever proxy was in effect when the cache was
 /// created, and a command line `-c` is what lets a since-changed proxy win over
 /// that stale value.
-fn run_git_watched_at(
+pub(crate) fn run_git_watched_at(
     dir: &Path,
     args: &[&str],
     proxy_url: Option<&str>,

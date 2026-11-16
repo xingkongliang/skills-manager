@@ -1,3 +1,4 @@
+import { ReaderSettings } from "../components/ReaderSettings";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Folder,
@@ -1557,6 +1558,8 @@ export function Settings() {
             </div>
           </div>
         </section>
+
+        <ReaderSettings />
 
         {/* Proxy config */}
         <section>

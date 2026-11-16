@@ -8,7 +8,7 @@ use super::audit_log::{AuditDraft, AuditEntry, MAX_ENTRIES as AUDIT_MAX_ENTRIES}
 use super::crypto;
 
 /// Settings keys whose values are encrypted at rest with AES-256-GCM.
-const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url"];
+const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url", "translation_config"];
 
 pub struct SkillStore {
     conn: Mutex<Connection>,

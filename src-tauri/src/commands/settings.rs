@@ -20,6 +20,8 @@ pub async fn get_settings(
     key: String,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Option<String>, AppError> {
+    // Translation credentials are only exposed through the redacted, typed settings API.
+    if key == "translation_config" { return Err(AppError::invalid_input("reader.translationConfigInvalid")); }
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || store.get_setting(&key).map_err(AppError::db))
         .await?
@@ -55,6 +57,7 @@ pub async fn set_settings(
     value: String,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
+    if key == "translation_config" { return Err(AppError::invalid_input("reader.translationConfigInvalid")); }
     let store = store.inner().clone();
     let key_for_store = key.clone();
     let value_for_store = value.clone();
