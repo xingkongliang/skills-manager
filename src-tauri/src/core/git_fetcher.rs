@@ -1393,15 +1393,6 @@ pub fn checkout_revision(repo_dir: &Path, revision: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn relative_subpath(repo_dir: &Path, skill_dir: &Path) -> Option<String> {
-    let relative = skill_dir.strip_prefix(repo_dir).ok()?;
-    if relative.as_os_str().is_empty() {
-        None
-    } else {
-        Some(relative.to_string_lossy().to_string())
-    }
-}
-
 fn normalize_url(url: &str) -> (String, Option<String>, Option<String>) {
     let trimmed = url.trim();
 
@@ -2069,34 +2060,6 @@ mod tests {
         let tmp = tempdir().unwrap();
         let found = find_skill_dir(tmp.path(), None).unwrap();
         assert_eq!(found, tmp.path());
-    }
-
-    // ── relative_subpath ──
-
-    #[test]
-    fn relative_subpath_nested() {
-        let tmp = tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        let skill = repo.join("tools").join("my-skill");
-        assert_eq!(
-            relative_subpath(&repo, &skill).map(|s| s.replace('\\', "/")),
-            Some("tools/my-skill".to_string())
-        );
-    }
-
-    #[test]
-    fn relative_subpath_root_returns_none() {
-        let tmp = tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        assert_eq!(relative_subpath(&repo, &repo), None);
-    }
-
-    #[test]
-    fn relative_subpath_unrelated_returns_none() {
-        let tmp = tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        let other = tmp.path().join("other").join("skill");
-        assert_eq!(relative_subpath(&repo, &other), None);
     }
 
     #[test]

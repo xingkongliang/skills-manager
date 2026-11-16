@@ -9,7 +9,8 @@ use app_lib::commands::{
 use app_lib::core::{
     app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
     installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
-    skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
+    skill_store::SkillStore, skillssh_api, subpath, sync_engine, sync_metadata, tool_adapters,
+    tool_service,
     well_known,
 };
 use clap::{Args, Parser, Subcommand};
@@ -1732,7 +1733,7 @@ fn install_git_action(
             source_type: "git".to_string(),
             source_ref: Some(parsed.original_url.clone()),
             source_ref_resolved: Some(parsed.clone_url.clone()),
-            source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
+            source_subpath: subpath::relative_to(&temp_dir, &skill_dir),
             source_branch: parsed.branch.clone(),
             source_revision: Some(revision.clone()),
             remote_revision: Some(revision),
@@ -1776,7 +1777,7 @@ fn install_skillssh_action(
             source_type: "skillssh".to_string(),
             source_ref: Some(source_ref),
             source_ref_resolved: Some(repo_url.clone()),
-            source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
+            source_subpath: subpath::relative_to(&temp_dir, &skill_dir),
             source_branch: None,
             source_revision: Some(revision.clone()),
             remote_revision: Some(revision),

@@ -23,6 +23,7 @@ use walkdir::{DirEntry, WalkDir};
 use crate::core::content_hash;
 use crate::core::path_guard;
 use crate::core::skill_metadata;
+use crate::core::subpath;
 use crate::core::skill_store::SkillRecord;
 
 /// Depth cap on the candidate scan. Matches the repo-wide locator search in
@@ -166,22 +167,9 @@ fn skill_dirs(checkout: &Path) -> impl Iterator<Item = DirEntry> {
 
 fn candidate(checkout: &Path, path: &Path, evidence: MoveEvidence) -> MoveCandidate {
     MoveCandidate {
-        subpath: relative_subpath(checkout, path),
+        subpath: subpath::relative_to(checkout, path).unwrap_or_default(),
         evidence,
     }
-}
-
-fn relative_subpath(checkout: &Path, path: &Path) -> String {
-    path.strip_prefix(checkout)
-        .ok()
-        .map(|relative| {
-            relative
-                .components()
-                .map(|part| part.as_os_str().to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-                .join("/")
-        })
-        .unwrap_or_default()
 }
 
 /// A stored subpath in the form this module compares and returns.

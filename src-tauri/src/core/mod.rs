@@ -31,6 +31,7 @@ pub mod skill_metadata;
 pub mod source_repair;
 pub mod skill_store;
 pub mod skillssh_api;
+pub mod subpath;
 pub mod sync_engine;
 pub mod sync_metadata;
 pub mod timing;

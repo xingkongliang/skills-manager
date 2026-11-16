@@ -18,7 +18,7 @@ use crate::core::{
     scanner, scenario_service,
     skill_metadata::{self, is_valid_skill_dir},
     skill_store::{self, SkillRecord, SkillStore, SkillTargetRecord},
-    sync_engine, sync_metadata,
+    subpath, sync_engine, sync_metadata,
     timing::should_log_first_or_slow,
     well_known,
 };
@@ -1097,7 +1097,7 @@ pub async fn install_git(
                     source_type: "git".to_string(),
                     source_ref: Some(parsed.original_url.clone()),
                     source_ref_resolved: Some(parsed.clone_url.clone()),
-                    source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
+                    source_subpath: subpath::relative_to(&temp_dir, &skill_dir),
                     source_branch: parsed.branch.clone(),
                     source_revision: Some(revision.clone()),
                     remote_revision: Some(revision),
@@ -1214,7 +1214,7 @@ pub async fn install_from_skillssh(
                     source_type: "skillssh".to_string(),
                     source_ref: Some(source_ref),
                     source_ref_resolved: Some(repo_url.clone()),
-                    source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
+                    source_subpath: subpath::relative_to(&temp_dir, &skill_dir),
                     source_branch: None,
                     source_revision: Some(revision.clone()),
                     remote_revision: Some(revision),
@@ -1450,12 +1450,12 @@ pub async fn confirm_git_install(
                 };
                 let result =
                     installer::install_from_git_dir(dir, install_name).map_err(AppError::io)?;
-                let subpath = git_fetcher::relative_subpath(&temp_path, dir);
+                let source_subpath = subpath::relative_to(&temp_path, dir);
                 let metadata = InstallSourceMetadata {
                     source_type: "git".to_string(),
                     source_ref: Some(repo_url.clone()),
                     source_ref_resolved: Some(parsed.clone_url.clone()),
-                    source_subpath: subpath,
+                    source_subpath,
                     source_branch: parsed.branch.clone(),
                     source_revision: Some(revision.clone()),
                     remote_revision: Some(revision.clone()),
@@ -2524,7 +2524,7 @@ pub fn update_git_skill_internal(
         let new_hash =
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
         let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
-        let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
+        let source_subpath = subpath::relative_to(&temp_dir, &skill_dir);
         let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
 
         // Stage first, then compare. The tree that lands in the library is the
@@ -2778,7 +2778,7 @@ pub fn set_git_source_internal(
     let outcome = (|| -> Result<(String, bool), AppError> {
         git_fetcher::checkout_revision(&temp_dir, &remote_revision).map_err(AppError::git)?;
         let skill_dir = resolve_repoint_skill_dir(&temp_dir, subpath.as_deref())?;
-        let resolved_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
+        let resolved_subpath = subpath::relative_to(&temp_dir, &skill_dir);
 
         let new_hash =
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
@@ -3380,12 +3380,20 @@ fn should_skip_update_check(
             .unwrap_or(false))
 }
 
+/// The Subpath a stored row means, in the form every reader compares against a
+/// git tree. A row written by a Windows build separated with `\\`, which
+/// libgit2 reads as part of one entry name — the Skill then resolved to nothing
+/// and was reported Source Gone (#671).
+fn stored_subpath(skill: &SkillRecord) -> Option<String> {
+    skill.source_subpath.as_deref().map(subpath::canonical)
+}
+
 pub fn git_source_from_skill(skill: &SkillRecord) -> Result<GitSkillSource, AppError> {
     if let Some(resolved) = &skill.source_ref_resolved {
         return Ok(GitSkillSource {
             clone_url: resolved.clone(),
             branch: skill.source_branch.clone(),
-            subpath: skill.source_subpath.clone(),
+            subpath: stored_subpath(skill),
             locator_skill_id: skill_ssh_id(skill),
         });
     }
@@ -3402,7 +3410,7 @@ pub fn git_source_from_skill(skill: &SkillRecord) -> Result<GitSkillSource, AppE
                 // Prefer the branch resolved at install time — it survives
                 // slash-branch tree URLs that the sync parse can't disambiguate.
                 branch: skill.source_branch.clone().or(parsed.branch),
-                subpath: skill.source_subpath.clone().or(parsed.subpath),
+                subpath: stored_subpath(skill).or(parsed.subpath),
                 locator_skill_id: None,
             })
         }
@@ -3416,7 +3424,7 @@ pub fn git_source_from_skill(skill: &SkillRecord) -> Result<GitSkillSource, AppE
             Ok(GitSkillSource {
                 clone_url: format!("https://github.com/{}.git", repo_source),
                 branch: skill.source_branch.clone(),
-                subpath: skill.source_subpath.clone(),
+                subpath: stored_subpath(skill),
                 locator_skill_id: Some(fallback_skill_id.to_string()),
             })
         }
@@ -5118,6 +5126,26 @@ mod tests {
         assert_eq!(result.skill.update_status, "up_to_date");
         let stored = repo.store.get_skill_by_id("b").unwrap().unwrap();
         assert_eq!(stored.source_subpath.as_deref(), Some("other/b"));
+    }
+
+    /// A Subpath written by a Windows build names the same directory as the
+    /// slash form. Every reader hands it to libgit2, which accepts only `/` —
+    /// the `\` form resolved to nothing and the Skill was reported as gone
+    /// (#671). Windows-only because unix may hold a directory whose name
+    /// contains `\`, and rewriting that would invent a different path.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_written_subpath_reads_back_as_a_git_path() {
+        let tmp = tempdir().unwrap();
+        let mut skill = sample_skill("b", "b", tmp.path());
+        skill.source_type = "git".to_string();
+        skill.source_ref_resolved = Some("https://example.test/a.git".to_string());
+        skill.source_subpath = Some(r"skills\b".to_string());
+
+        assert_eq!(
+            git_source_from_skill(&skill).unwrap().subpath.as_deref(),
+            Some("skills/b")
+        );
     }
 
     /// A skills.sh skill keeps its id lookup for the update itself. A check that
