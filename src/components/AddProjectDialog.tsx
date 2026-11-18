@@ -1,7 +1,8 @@
 import { Check, FolderOpen, Search, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useModalFocus } from "../hooks/useModalFocus";
 import { pickPath } from "../lib/pickPath";
 import * as api from "../lib/tauri";
 import { cn } from "../utils";
@@ -21,6 +22,10 @@ export function AddProjectDialog({ open, ...props }: Props) {
 
 function AddProjectDialogContent({ onClose, onAdded }: Omit<Props, "open">) {
   const { t } = useTranslation();
+  const titleId = useId();
+  const scanRootId = useId();
+  const dialogRef = useModalFocus(true, onClose);
+  const scanPending = useRef(false);
   const [tab, setTab] = useState<"linked" | "manual" | "scan">("manual");
   const [scanRoot, setScanRoot] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -59,18 +64,22 @@ function AddProjectDialogContent({ onClose, onAdded }: Omit<Props, "open">) {
   };
 
   const handleScan = async () => {
-    if (!scanRoot.trim()) return;
+    const root = scanRoot.trim();
+
+    if (!root || scanPending.current) return;
+    scanPending.current = true;
     setScanning(true);
     setScanned(false);
     setScanResults([]);
     setSelected(new Set());
 
     try {
-      const results = await api.scanProjects(scanRoot.trim());
+      const results = await api.scanProjects(root);
       setScanResults(results);
       setSelected(new Set(results));
       setScanned(true);
     } finally {
+      scanPending.current = false;
       setScanning(false);
     }
   };
@@ -133,11 +142,21 @@ function AddProjectDialogContent({ onClose, onAdded }: Omit<Props, "open">) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-[480px] rounded-xl border border-border bg-surface p-5 shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="relative w-full max-w-[480px] rounded-xl border border-border bg-surface p-5 shadow-2xl"
+      >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-[13px] font-semibold text-primary">{t("project.addProjectTitle")}</h2>
+          <h2 id={titleId} className="text-[13px] font-semibold text-primary">
+            {t("project.addProjectTitle")}
+          </h2>
           <button
             onClick={onClose}
+            aria-label={t("common.close")}
             className="rounded p-1 text-muted outline-none transition-colors hover:text-secondary"
           >
             <X className="h-4 w-4" />
@@ -176,7 +195,10 @@ function AddProjectDialogContent({ onClose, onAdded }: Omit<Props, "open">) {
           <div className="space-y-3">
             <p className="text-[13px] text-tertiary">{t("project.addManual")}</p>
             <button
-              onClick={handleSelectFolder}
+              onClick={(event) => {
+                event.currentTarget.focus();
+                void handleSelectFolder();
+              }}
               disabled={adding}
               className="flex w-full items-center gap-2 rounded-lg border border-dashed border-border-subtle bg-background px-3 py-2.5 text-[13px] text-tertiary outline-none transition-all hover:border-border hover:text-secondary"
             >
@@ -186,30 +208,46 @@ function AddProjectDialogContent({ onClose, onAdded }: Omit<Props, "open">) {
           </div>
         ) : tab === "scan" ? (
           <div className="space-y-3">
-            <div className="flex gap-2">
+            <form
+              className="flex gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleScan();
+              }}
+            >
+              <label htmlFor={scanRootId} className="sr-only">
+                {t("project.scanRoot")}
+              </label>
               <input
+                id={scanRootId}
                 type="text"
                 value={scanRoot}
                 onChange={(e) => setScanRoot(e.target.value)}
                 placeholder={t("project.scanDirPlaceholder")}
                 className={cn(inputClass, "flex-1")}
-                onKeyDown={(e) => e.key === "Enter" && handleScan()}
+                required
               />
               <button
-                onClick={handleSelectBrowse}
+                type="button"
+                onClick={(event) => {
+                  event.currentTarget.focus();
+                  void handleSelectBrowse();
+                }}
                 className="rounded-lg border border-border-subtle bg-background px-2.5 text-muted outline-none transition-all hover:border-border hover:text-secondary"
-                title={t("project.scanDir")}
+                title={t("project.browseScanDir")}
+                aria-label={t("project.browseScanDir")}
               >
                 <FolderOpen className="h-4 w-4" />
               </button>
               <button
-                onClick={handleScan}
+                type="submit"
+                aria-label={scanning ? t("project.scanning") : t("project.scanDir")}
                 disabled={!scanRoot.trim() || scanning}
                 className="rounded-lg border border-accent-border bg-accent-dark px-3 py-1.5 text-[13px] font-medium text-white outline-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {scanning ? t("project.scanning") : <Search className="h-4 w-4" />}
               </button>
-            </div>
+            </form>
 
             {scanned && scanResults.length === 0 && (
               <p className="py-4 text-center text-[13px] text-muted">{t("project.scanNoResult")}</p>
@@ -282,6 +320,7 @@ function AddProjectDialogContent({ onClose, onAdded }: Omit<Props, "open">) {
               value={linkedName}
               onChange={(e) => setLinkedName(e.target.value)}
               placeholder={t("project.linkedNamePlaceholder")}
+              aria-label={t("project.linkedNamePlaceholder")}
               className={inputClass}
             />
             <div className="flex gap-2">
@@ -290,10 +329,12 @@ function AddProjectDialogContent({ onClose, onAdded }: Omit<Props, "open">) {
                 value={linkedPath}
                 onChange={(e) => setLinkedPath(e.target.value)}
                 placeholder={t("project.linkedPathPlaceholder")}
+                aria-label={t("project.linkedPathPlaceholder")}
                 className={cn(inputClass, "flex-1")}
               />
               <button
-                onClick={async () => {
+                onClick={async (event) => {
+                  event.currentTarget.focus();
                   const dir = await pickPath({ directory: true }, { startPath: linkedPath.trim() });
 
                   if (dir) setLinkedPath(dir);

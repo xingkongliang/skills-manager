@@ -7,11 +7,12 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { type MouseEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type MouseEvent, useCallback, useEffect, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
+import { useModalFocus } from "../hooks/useModalFocus";
 import { getErrorMessage } from "../lib/error";
 import { classifySkill, type PickerContext, targetsToInstall } from "../lib/skillPickerStatus";
 import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
@@ -70,6 +71,8 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [anchorId, setAnchorId] = useState<null | string>(null);
   const [installing, setInstalling] = useState(false);
+  const titleId = useId();
+  const dialogRef = useModalFocus(true, installing ? undefined : onClose);
 
   const initialAgents = target.kind === "project" ? target.initialSelectedAgents : [];
   const [selectedAgents, setSelectedAgents] = useState<string[]>(initialAgents);
@@ -78,16 +81,6 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
   const [dirNameMap, setDirNameMap] = useState<Record<string, string>>({});
   const [dirNameMapError, setDirNameMapError] = useState(false);
   const [dirNameMapLoading, setDirNameMapLoading] = useState(target.kind === "project");
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !installing) onClose();
-    };
-
-    window.addEventListener("keydown", handler);
-
-    return () => window.removeEventListener("keydown", handler);
-  }, [installing, onClose]);
 
   // For project mode: precompute slugified dir names for managed skills
   useEffect(() => {
@@ -634,15 +627,25 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
         className="absolute inset-0 bg-black/40 backdrop-blur-[1px]"
         onClick={() => !installing && onClose()}
       />
-      <div className="absolute right-0 top-0 flex h-full w-full max-w-[480px] flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="absolute right-0 top-0 flex h-full w-full max-w-[480px] flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-2xl"
+      >
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border-subtle px-5 py-4">
           <div className="min-w-0 flex-1">
-            <h2 className="text-[14px] font-semibold text-primary">{t("addFromLibrary.title")}</h2>
+            <h2 id={titleId} className="text-[14px] font-semibold text-primary">
+              {t("addFromLibrary.title")}
+            </h2>
             <div className="mt-2">{targetSummary}</div>
           </div>
           <button
             onClick={onClose}
             disabled={installing}
+            aria-label={t("common.close")}
             className="shrink-0 rounded-md p-1.5 text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
           >
             <X className="h-4 w-4" />
@@ -657,8 +660,9 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t("addFromLibrary.searchPlaceholder")}
+              aria-label={t("addFromLibrary.searchPlaceholder")}
               className="app-input w-full pl-9"
-              autoFocus
+              data-modal-focus
             />
           </div>
 

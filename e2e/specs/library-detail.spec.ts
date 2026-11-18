@@ -23,10 +23,19 @@ test.beforeEach(async ({ page, backend }) => {
   await page.goto("/my-skills");
 });
 
-test("Escape and the Close button both close the detail", async ({ page }) => {
-  await openDetail(page);
+test("detail contains keyboard focus and returns it on close", async ({ page }) => {
+  const trigger = page.getByRole("button", { name: "alpha", exact: true });
+  await trigger.press("Enter");
+  await expect(drawer(page).getByRole("button", { name: "Close", exact: true })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect
+    .poll(() => drawer(page).evaluate((element) => element.contains(document.activeElement)))
+    .toBe(true);
+  await page.keyboard.press("Tab");
+  await expect(drawer(page).getByRole("button", { name: "Close", exact: true })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(drawer(page)).toHaveCount(0);
+  await expect(trigger).toBeFocused();
 
   await openDetail(page);
   await drawer(page).getByRole("button", { name: "Close" }).click();

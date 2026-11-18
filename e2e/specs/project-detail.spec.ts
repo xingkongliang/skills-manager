@@ -74,6 +74,22 @@ test("opens a skill's detail panel with its SKILL.md", async ({ page }) => {
   await expect(page.getByText("Project copy.")).toBeVisible();
 });
 
+test("Add from Library starts in search and keeps focus inside the sheet", async ({ page }) => {
+  const trigger = page.getByRole("button", { name: "Add Skill", exact: true });
+  await trigger.press("Enter");
+  const sheet = page.getByRole("dialog", { name: "Add from Library" });
+  await expect(sheet.getByRole("textbox", { name: "Search the library…" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(sheet.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect
+    .poll(() => sheet.evaluate((element) => element.contains(document.activeElement)))
+    .toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
 test("offers only the update the project status allows", async ({ page }) => {
   await expect(skillItem(page, "lint-rules")).toContainText("Project only");
   await expect(

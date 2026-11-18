@@ -297,7 +297,19 @@ export function LibrarySkillCard({
                 </span>
               ))}
               {tagEditing ? (
-                <div className="relative" onClick={(e) => e.stopPropagation()}>
+                <div
+                  className="relative"
+                  onClick={(e) => e.stopPropagation()}
+                  onBlur={(e) => {
+                    if (e.currentTarget.contains(e.relatedTarget)) return;
+
+                    if (e.target === tagInputRef.current && tagInput.trim()) onAddTag(skill);
+                    else {
+                      onTagEditSkillChange(null);
+                      onTagInputChange("");
+                    }
+                  }}
+                >
                   <input
                     ref={tagInputRef}
                     type="text"
@@ -309,13 +321,6 @@ export function LibrarySkillCard({
                       }
 
                       if (e.key === "Escape") {
-                        onTagEditSkillChange(null);
-                        onTagInputChange("");
-                      }
-                    }}
-                    onBlur={() => {
-                      if (tagInput.trim()) onAddTag(skill);
-                      else {
                         onTagEditSkillChange(null);
                         onTagInputChange("");
                       }
