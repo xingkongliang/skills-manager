@@ -134,7 +134,7 @@ Instruction and MCP support varies by agent and scope; see the [capability bound
 
 ### Prerequisites
 
-- Node.js 26.13.0 (the version CI uses; Vite 8 needs 20.19+ or 22.12+)
+- Node.js 26.13.1 (the version CI uses; Vite 8 needs 20.19+ or 22.12+)
 - [Bun](https://bun.sh) 1.4.4 (the version pinned in `package.json`) for installing packages and running scripts
 - Rust 1.99.1 or newer
 - [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS
