@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useApp } from "../context/AppContext";
+import { useModalFocus } from "../hooks/useModalFocus";
 import { getErrorMessage } from "../lib/error";
 import { getActiveHostId } from "../lib/hostCall";
 import { type PickOptions, type PickRequest, setRemotePicker } from "../lib/pickPath";
@@ -47,7 +48,7 @@ export function RemoteDirectoryPicker({ hostName, request, startPath, onClose }:
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<null | string>(null);
   const [selectedFile, setSelectedFile] = useState<null | string>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useModalFocus(true, () => onClose(null));
   // Only the latest listing is shown when folders are opened quickly.
   const loadId = useRef(0);
 
@@ -75,22 +76,8 @@ export function RemoteDirectoryPicker({ hostName, request, startPath, onClose }:
   );
 
   useEffect(() => {
-    panelRef.current?.focus();
     void show(startPath, ++loadId.current, true);
   }, [show, startPath]);
-
-  // Escape cancels; capturing keeps the dialogs underneath from seeing it.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopPropagation();
-      onClose(null);
-    };
-
-    window.addEventListener("keydown", onKey, true);
-
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
 
   const openFolder = (target: string) => {
     const trimmed = target.trim();

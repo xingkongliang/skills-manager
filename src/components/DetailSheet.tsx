@@ -1,7 +1,9 @@
 import { X } from "lucide-react";
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import { type ReactNode, useId } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+
+import { useModalFocus } from "../hooks/useModalFocus";
 
 const IS_MACOS = navigator.userAgent.includes("Mac");
 
@@ -24,38 +26,12 @@ export function DetailSheet({
 }: DetailSheetProps) {
   const { t } = useTranslation();
   const titleId = useId();
-  const sheetRef = useRef<HTMLDivElement>(null);
-
-  // Escape closes the drawer, unless a nested menu or dialog already handled it.
-  useEffect(() => {
-    if (!open) return;
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
-      const sheet = sheetRef.current;
-
-      if (!sheet) return;
-      const rect = sheet.getBoundingClientRect();
-
-      const topElement = document.elementFromPoint(
-        rect.x + rect.width / 2,
-        rect.y + rect.height / 2,
-      );
-
-      if (!topElement || !sheet.contains(topElement)) return;
-      e.preventDefault();
-      onClose();
-    };
-
-    window.addEventListener("keydown", onKey);
-
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  const sheetRef = useModalFocus(open, onClose);
 
   if (!open) return null;
 
   return createPortal(
-    <div ref={sheetRef} className="fixed bottom-0 left-[220px] right-0 top-[28px] isolate z-40">
+    <div className="fixed bottom-0 left-[220px] right-0 top-[28px] isolate z-40">
       <div
         className={
           IS_MACOS
@@ -65,9 +41,11 @@ export function DetailSheet({
         onClick={onClose}
       />
       <div
+        ref={sheetRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
         className="absolute inset-y-0 right-0 z-10 flex min-h-0 w-[min(760px,100%)] flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-2xl"
       >
         <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border-subtle px-4 py-2">

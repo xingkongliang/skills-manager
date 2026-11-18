@@ -1,8 +1,9 @@
 import { X } from "lucide-react";
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import { type ReactNode, useId } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 
+import { useModalFocus } from "../hooks/useModalFocus";
 import { cn } from "../utils";
 
 /** Shared modal focus, keyboard dismissal, and restoration across desktop webviews. */
@@ -24,19 +25,8 @@ export function Modal({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useModalFocus(open, locked || escapeDisabled ? undefined : onClose);
   const titleId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement;
-    const dialog = ref.current;
-    dialog?.querySelector<HTMLElement>("button:not([disabled])")?.focus();
-
-    return () => {
-      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
-    };
-  }, [open]);
 
   if (!open) return null;
 
@@ -56,42 +46,6 @@ export function Modal({
         ref={ref}
         aria-labelledby={titleId}
         aria-busy={locked}
-        onKeyDown={(event) => {
-          event.stopPropagation();
-
-          // Escape cancels IME composition without dismissing its dialog.
-          if (event.nativeEvent.isComposing) return;
-
-          if (event.key === "Escape") {
-            event.stopPropagation();
-            event.preventDefault();
-
-            if (!locked && !escapeDisabled) onClose();
-          }
-
-          if (event.key !== "Tab") return;
-          event.stopPropagation();
-
-          const controls = Array.from(
-            event.currentTarget.querySelectorAll<HTMLElement>(
-              "button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
-            ),
-          ).filter((element) => element.getClientRects().length > 0);
-
-          const first = controls[0];
-          const last = controls[controls.length - 1];
-
-          if (!first) {
-            event.preventDefault();
-            event.currentTarget.focus();
-          } else if (event.shiftKey && document.activeElement === first) {
-            event.preventDefault();
-            last.focus();
-          } else if (!event.shiftKey && document.activeElement === last) {
-            event.preventDefault();
-            first.focus();
-          }
-        }}
         onClick={(event) => event.stopPropagation()}
         className={cn(
           "max-h-[calc(90vh/var(--app-scale))] w-full overflow-auto rounded-xl border border-border bg-surface p-5 text-primary",

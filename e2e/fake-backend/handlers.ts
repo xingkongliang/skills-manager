@@ -986,7 +986,20 @@ export const handlers = {
     return { deleted: deletedIds.length, failed };
   },
   check_all_skill_updates: nothing,
+  scan_projects: (_args: { root: string }) => [],
+  list_directory: ({ path }: { path: null | string }) => ({
+    path: path ?? "/home/e2e",
+    parent: null,
+    entries: [],
+  }),
   get_all_tags: (_args, state) => [...new Set(state.skills.flatMap((s) => s.tags))].sort(),
+  set_skill_tags: ({ skillId, tags }: { skillId: string; tags: string[] }, state) => {
+    const skill = state.skills.find((entry) => entry.id === skillId);
+
+    if (skill) skill.tags = tags;
+
+    return null;
+  },
   rename_tag: ({ oldName, newName }: { oldName: string; newName: string }, state) => {
     for (const s of state.skills) {
       s.tags = [...new Set(s.tags.map((tag) => (tag === oldName ? newName : tag)))];

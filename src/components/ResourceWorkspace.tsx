@@ -1,5 +1,5 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useApp } from "../context/AppContext";
 import { useWorkspaceChanges } from "../context/WorkspaceChangesContext";
@@ -190,6 +190,17 @@ function ResourceWorkspaceBody({
   const tab: ResourceTab =
     allowResources && (resource === "instructions" || resource === "mcps") ? resource : "skills";
 
+  const tabListRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const list = tabListRef.current;
+    const focused = document.activeElement;
+
+    if (list?.contains(focused) && focused?.matches("[role='tab']")) {
+      list.querySelector<HTMLButtonElement>("[role='tab'][aria-selected='true']")?.focus();
+    }
+  }, [tab]);
+
   const setTab = (next: ResourceTab) =>
     void navigate({
       to: ".",
@@ -236,6 +247,7 @@ function ResourceWorkspaceBody({
     <div className="app-page gap-4">
       <WorkspaceHeader scope={scope} />
       <div
+        ref={tabListRef}
         role="tablist"
         aria-label="Resource type"
         className="flex flex-wrap items-center gap-2 border-b border-border-faint pb-2"

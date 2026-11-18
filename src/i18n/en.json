@@ -1139,6 +1139,8 @@
     "noSkills": "No skills in this project",
     "noSkillsHint": "No agent skills directories found. Create a skills directory (e.g. .claude/skills/) and add skill folders.",
     "addManual": "Select Repository Directory",
+    "browseScanDir": "Browse for scan directory",
+    "scanRoot": "Root directory to scan",
     "scanDir": "Scan Directory",
     "scanDirPlaceholder": "Enter root directory to scan, e.g. ~/Work",
     "scanResult": "Found {{count}} projects",
