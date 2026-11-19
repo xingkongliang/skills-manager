@@ -14,7 +14,11 @@ import {
 import { toast } from "sonner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import * as api from "../lib/tauri";
-import type { ManagedSkill, SourceScanResult } from "../lib/tauri";
+import type {
+  ManagedSkill,
+  PendingRemoval,
+  SourceScanResult,
+} from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import {
   repairGroups,
@@ -43,6 +47,11 @@ export function SourceGone() {
   const [overwrite, setOverwrite] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [pendingRemoval, setPendingRemoval] = useState<{
+    row: RepairRow;
+    removals: PendingRemoval[];
+    approval: string | null;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     setSkills(await api.getManagedSkills());
@@ -139,10 +148,29 @@ export function SourceGone() {
       toast.success(t("mySkills.repair.detached", { name: row.name }));
     });
 
+  const applyUpdate = async (row: RepairRow, approvedRemovals?: string) => {
+    const result = await api.updateSkill(row.id, approvedRemovals);
+    // Nothing was changed: the restored version would take away files the
+    // library copy has. Show them and let the user decide, as My Skills does
+    // (#256) — reporting success here would claim a repair that never happened.
+    if (result.pending_removals.length > 0) {
+      setPendingRemoval({
+        row,
+        removals: result.pending_removals,
+        approval: result.removal_approval,
+      });
+      return;
+    }
+    if (result.content_changed) {
+      toast.success(t("mySkills.repair.updated", { name: row.name }));
+    } else {
+      toast.info(t("mySkills.updateActions.alreadyUpToDate"));
+    }
+  };
+
   const update = (row: RepairRow) =>
     run(async () => {
-      await api.updateSkill(row.id);
-      toast.success(t("mySkills.repair.updated", { name: row.name }));
+      await applyUpdate(row);
     });
 
   const repoint = (row: RepairRow, subpath: string) =>
@@ -383,6 +411,31 @@ export function SourceGone() {
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingRemoval !== null}
+        tone="warning"
+        title={t("mySkills.updateActions.removalTitle")}
+        message={t("mySkills.updateActions.removalMessage", {
+          name: pendingRemoval?.row.name ?? "",
+          count: pendingRemoval?.removals.length ?? 0,
+        })}
+        // Every path, never a truncated sample: recognising one's own file is
+        // the whole point, and it might be the twenty-first.
+        details={pendingRemoval?.removals.map((removal) =>
+          removal.location === "library"
+            ? removal.path
+            : `${removal.location}: ${removal.path}`
+        )}
+        confirmLabel={t("mySkills.updateActions.removalConfirm")}
+        onClose={() => setPendingRemoval(null)}
+        onConfirm={async () => {
+          const target = pendingRemoval;
+          setPendingRemoval(null);
+          if (!target) return;
+          await run(() => applyUpdate(target.row, target.approval ?? undefined));
+        }}
+      />
     </div>
   );
 }

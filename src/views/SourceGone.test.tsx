@@ -2,8 +2,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ManagedSkill, MoveCandidate } from "../lib/tauri";
-import { sourceKey, type ScanItem } from "../lib/sourceRepair";
+import type { ManagedSkill, MoveCandidate, UpdateSkillResult } from "../lib/tauri";
+import type { ScanItem } from "../lib/sourceRepair";
 import { SourceGone } from "./SourceGone";
 
 vi.mock("react-i18next", () => ({
@@ -28,6 +28,8 @@ const api = vi.hoisted(() => ({
   deleteManagedSkills: vi.fn(),
 }));
 vi.mock("../lib/tauri", () => api);
+
+const { toast } = await import("sonner");
 
 const CLONE = "https://github.com/acme/skills.git";
 
@@ -65,6 +67,16 @@ function scanItem(overrides: Partial<ScanItem> = {}): ScanItem {
     candidates: [],
     local_changed: false,
     installed_revision_present: true,
+    ...overrides,
+  };
+}
+
+function updateResult(overrides: Partial<UpdateSkillResult> = {}): UpdateSkillResult {
+  return {
+    skill: skill(),
+    content_changed: true,
+    pending_removals: [],
+    removal_approval: null,
     ...overrides,
   };
 }
@@ -165,4 +177,56 @@ describe("SourceGone actions", () => {
     );
   });
 
+  it("asks before removing files, and claims nothing when it holds", async () => {
+    api.updateSkill.mockResolvedValue(
+      updateResult({
+        content_changed: false,
+        pending_removals: [
+          { path: "old.md", location: "library" },
+          { path: "gone.md", location: "target" },
+        ],
+        removal_approval: "approve-me",
+      })
+    );
+
+    await render([skill()]);
+    await click("mySkills.repair.update");
+
+    expect(api.updateSkill).toHaveBeenCalledWith("b", undefined);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("mySkills.updateActions.removalTitle");
+    expect(container.textContent).toContain("old.md");
+    expect(container.textContent).toContain("gone.md");
+  });
+
+  it("runs the held update with the approval the dialog carries", async () => {
+    api.updateSkill
+      .mockResolvedValueOnce(
+        updateResult({
+          content_changed: false,
+          pending_removals: [{ path: "old.md", location: "library" }],
+          removal_approval: "approve-me",
+        })
+      )
+      .mockResolvedValueOnce(updateResult({ content_changed: true }));
+
+    await render([skill()]);
+    await click("mySkills.repair.update");
+    await click("mySkills.updateActions.removalConfirm");
+
+    expect(api.updateSkill).toHaveBeenLastCalledWith("b", "approve-me");
+    expect(toast.success).toHaveBeenCalledWith(
+      expect.stringContaining("mySkills.repair.updated")
+    );
+  });
+
+  it("says already up to date when the update changed nothing", async () => {
+    api.updateSkill.mockResolvedValue(updateResult({ content_changed: false }));
+
+    await render([skill()]);
+    await click("mySkills.repair.update");
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledWith("mySkills.updateActions.alreadyUpToDate");
+  });
 });
