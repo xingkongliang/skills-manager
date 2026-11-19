@@ -140,10 +140,11 @@ impl SkillStore {
         conn.execute(
             "INSERT INTO skills (
                 id, name, description, source_type, source_ref, source_ref_resolved, source_subpath,
-                source_branch, source_revision, remote_revision, central_path, content_hash, enabled,
-                created_at, updated_at, status, update_status, last_checked_at, last_check_error
+                source_branch, source_revision, remote_revision, central_path, content_hash,
+                installed_hash, enabled, created_at, updated_at, status, update_status,
+                last_checked_at, last_check_error
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 skill.id,
                 skill.name,
@@ -364,7 +365,8 @@ impl SkillStore {
         conn.execute(
             "UPDATE skills
              SET name = ?1, description = ?2, source_revision = ?3, remote_revision = ?4, content_hash = ?5,
-                 updated_at = ?6, update_status = ?7, last_checked_at = ?6, last_check_error = NULL
+                 installed_hash = ?5, updated_at = ?6, update_status = ?7, last_checked_at = ?6,
+                 last_check_error = NULL
              WHERE id = ?8",
             params![
                 name,
@@ -378,6 +380,21 @@ impl SkillStore {
             ],
         )?;
         Ok(())
+    }
+
+    /// The hash of the content the Source installed, as opposed to
+    /// [`SkillRecord::content_hash`], which the startup reindex keeps rewriting
+    /// from the disk. `None` when unknown — an older row, or a Skill that no
+    /// Source installed (import, local) — and callers must treat unknown as
+    /// "cannot prove it is untouched".
+    pub fn get_installed_hash(&self, id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT installed_hash FROM skills WHERE id = ?1")?;
+        let mut rows = stmt.query(params![id])?;
+        match rows.next()? {
+            Some(row) => Ok(row.get(0)?),
+            None => Ok(None),
+        }
     }
 
     pub fn update_skill_source_ref(&self, id: &str, source_ref: &str) -> Result<()> {
@@ -411,7 +428,8 @@ impl SkillStore {
             "UPDATE skills
              SET name = ?1, description = ?2, source_type = ?3, source_ref = ?4, source_ref_resolved = ?5,
                  source_subpath = ?6, source_branch = ?7, source_revision = ?8, remote_revision = ?9,
-                 content_hash = ?10, updated_at = ?11, status = 'ok', update_status = ?12, last_checked_at = ?11,
+                 content_hash = ?10, installed_hash = ?10, updated_at = ?11, status = 'ok',
+                 update_status = ?12, last_checked_at = ?11,
                  last_check_error = NULL
              WHERE id = ?13",
             params![
@@ -1709,5 +1727,89 @@ mod tag_tests {
         let map = store.get_tags_map().unwrap();
         assert_eq!(map.get("a").unwrap(), &vec!["keep".to_string()]);
         assert!(map.get("b").is_none());
+    }
+}
+
+#[cfg(test)]
+mod installed_hash_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn skill(id: &str) -> SkillRecord {
+        SkillRecord {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            source_type: "git".to_string(),
+            source_ref: None,
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: format!("/tmp/{id}"),
+            content_hash: None,
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        }
+    }
+
+    /// The hash of what the Source installed, kept apart from the hash of what
+    /// is on disk now: the startup reindex rewrites the latter and must leave
+    /// the former alone, or an edited Library Copy stops being recognisable.
+    #[test]
+    fn an_install_records_the_hash_it_installed() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let mut record = skill("k1");
+        record.content_hash = Some("installed".to_string());
+        store.insert_skill(&record).unwrap();
+
+        assert_eq!(
+            store.get_installed_hash("k1").unwrap().as_deref(),
+            Some("installed")
+        );
+    }
+
+    /// What the startup reindex does: the same row, with the content hash
+    /// recomputed from disk. The installed hash is not its business.
+    #[test]
+    fn a_reindex_rewrite_keeps_the_installed_hash() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let mut record = skill("k1");
+        record.content_hash = Some("installed".to_string());
+        store.insert_skill(&record).unwrap();
+
+        let mut reread = store.get_skill_by_id("k1").unwrap().unwrap();
+        reread.content_hash = Some("edited-on-disk".to_string());
+        store.upsert_skill(&reread).unwrap();
+
+        let after = store.get_skill_by_id("k1").unwrap().unwrap();
+        assert_eq!(after.content_hash.as_deref(), Some("edited-on-disk"));
+        assert_eq!(
+            store.get_installed_hash("k1").unwrap().as_deref(),
+            Some("installed"),
+            "the reindex must not claim the edited copy is what was installed"
+        );
+    }
+
+    /// A restored or adopted row (`upsert`) has no baseline: nothing in this
+    /// app installed it, and inventing one from the disk is the bug.
+    #[test]
+    fn a_row_no_install_wrote_has_no_installed_hash() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let mut record = skill("k1");
+        record.content_hash = Some("whatever-the-disk-says".to_string());
+        store.upsert_skill(&record).unwrap();
+
+        assert_eq!(store.get_installed_hash("k1").unwrap(), None);
+        assert_eq!(store.get_installed_hash("missing").unwrap(), None);
     }
 }

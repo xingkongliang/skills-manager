@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 9;
+const LATEST_VERSION: u32 = 10;
 
 /// Run all pending migrations on the database.
 ///
@@ -56,6 +56,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         6 => migrate_v6_to_v7(conn),
         7 => migrate_v7_to_v8(conn),
         8 => migrate_v8_to_v9(conn),
+        9 => migrate_v9_to_v10(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -338,6 +339,19 @@ fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v9 → v10: the hash of what a Source installed, apart from the hash of what
+/// is on disk now (#672). The startup reindex rewrites the content hash from
+/// the disk, so it cannot say whether a Library Copy was edited; this column
+/// can, because only an install, update or re-point writes it.
+///
+/// Left NULL for every existing row: there is no way to tell a copy that was
+/// installed and then edited from one that was only installed, so the app has
+/// to ask instead of guessing.
+fn migrate_v9_to_v10(conn: &Connection) -> Result<()> {
+    add_column_if_missing(conn, "skills", "installed_hash", "TEXT")?;
+    Ok(())
+}
+
 // ── Helpers ──
 
 fn add_column_if_missing(
@@ -377,6 +391,35 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A library written before the column existed gains it on upgrade, and no
+    /// value is invented for the rows already there: only an install can say
+    /// what a Source installed.
+    #[test]
+    fn test_upgrade_adds_the_installed_hash_without_guessing() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute_batch(
+            "ALTER TABLE skills DROP COLUMN installed_hash;
+             PRAGMA user_version = 9;",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO skills (id, name, source_type, central_path, content_hash)
+             VALUES ('k1', 'k1', 'git', '/tmp/k1', 'whatever-the-disk-said')",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let installed: Option<String> = conn
+            .query_row("SELECT installed_hash FROM skills WHERE id = 'k1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(installed, None);
+    }
 
     #[test]
     fn test_fresh_database_migrates_to_latest() {

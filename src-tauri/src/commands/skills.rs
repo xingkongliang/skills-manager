@@ -2167,7 +2167,14 @@ pub fn update_git_skill_internal(
 
         let new_hash =
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
-        let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
+        // Compared against what the Source installed, not against the row's
+        // content hash: the startup reindex recomputes that one from the disk,
+        // so after a restart it says "the copy equals itself" rather than
+        // "the copy is what we installed" (#672). Unknown counts as changed —
+        // a copy we cannot vouch for is not one to overwrite unasked.
+        let installed = store.get_installed_hash(&skill.id).map_err(AppError::db)?;
+        let content_changed =
+            crate::core::content_hash::differs_from_installed(installed.as_deref(), &new_hash);
         let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
         let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
 
@@ -2303,11 +2310,13 @@ pub struct SetSourceResult {
     pub subpath: Option<String>,
     pub branch: Option<String>,
     pub revision: String,
-    /// Whether the new source's content differs from the hash recorded for the
-    /// library copy. False means the re-point is metadata-only — no file is
-    /// rewritten. Compared against the recorded hash, not a fresh hash of the
+    /// Whether the new source's content differs from what its Source installed.
+    /// False means the re-point is metadata-only — no file is rewritten.
+    /// Compared against the installed hash, never against a fresh hash of the
     /// central directory, so hand-edits made after install do not count as a
-    /// difference (and are left in place, since no file work runs).
+    /// difference (and are left in place, since no file work runs). A Skill
+    /// with no installed hash counts as changed: there is nothing to compare,
+    /// so the copy is not overwritten without `force`.
     pub content_changed: bool,
     pub dry_run: bool,
 }
@@ -4397,6 +4406,7 @@ mod tests {
             .update_skill_source_metadata(id, Some(url), subpath, None, Some(revision))
             .unwrap();
     }
+
 
     /// The reported bug, end to end through the real check: a commit that only
     /// touches `skills/a` is an update for `a` and nothing else in that repo —

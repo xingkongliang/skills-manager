@@ -246,6 +246,16 @@ pub struct StampedHash {
     pub stamp: Option<String>,
 }
 
+/// Whether `current` can be told apart from the content a Source installed.
+///
+/// `installed` is the recorded baseline, `current` a fresh hash. Unknown counts
+/// as different: a copy nobody can vouch for is not one to overwrite without
+/// asking. The row's content hash is not a baseline — the startup reindex
+/// recomputes it from the disk, so it always says "the copy equals itself".
+pub fn differs_from_installed(installed: Option<&str>, current: &str) -> bool {
+    installed != Some(current)
+}
+
 /// [`hash_directory`], except that `cached` — a `(stamp, hash)` pair an
 /// earlier call returned — is reused without reading any file while the
 /// directory's stamp still matches. A fresh hash is byte for byte the one
@@ -900,5 +910,22 @@ mod tests {
         let by_name = |name: &str| entries.iter().find(|e| e.relative_path == name).unwrap();
         assert!(by_name("run.sh").is_executable());
         assert!(!by_name("plain.txt").is_executable());
+    }
+
+    #[test]
+    fn a_copy_matching_what_was_installed_has_not_changed() {
+        assert!(!differs_from_installed(Some("abc"), "abc"));
+    }
+
+    #[test]
+    fn a_copy_matching_nothing_recorded_has_changed() {
+        assert!(differs_from_installed(Some("abc"), "def"));
+    }
+
+    /// No baseline is not "no change": the reindex can leave a row with a hash
+    /// that describes the disk, and nothing that describes the install.
+    #[test]
+    fn an_unknown_baseline_counts_as_changed() {
+        assert!(differs_from_installed(None, "def"));
     }
 }
