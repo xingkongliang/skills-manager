@@ -48,6 +48,12 @@ pub fn parse_git_source(url: &str) -> ParsedGitSource {
 /// Only permits `https://`, `http://`, `ssh://`, and SCP-style `git@` URLs,
 /// plus shorthand like `user/repo` (no scheme). Rejects everything else
 /// including `file://`, `ext::`, bare local paths, and UNC paths.
+///
+/// One exception, and it exists only in unit-test builds: a `file://` URL
+/// pointing into the system temp directory, which is where the tests build the
+/// repositories they clone. It is not in a shipped binary, and it is not
+/// visible to the `skills-manager-cli` binary either — that links this library
+/// without `cfg(test)`, so a CLI test cannot use a `file://` Source.
 pub fn validate_git_url(url: &str) -> Result<()> {
     let trimmed = url.trim();
     let lower = trimmed.to_lowercase();
@@ -59,6 +65,21 @@ pub fn validate_git_url(url: &str) -> Result<()> {
         || lower.starts_with("git@")
     {
         return Ok(());
+    }
+
+    // Tests clone the repositories they build, and those live in the temp
+    // directory. Nothing else on disk is exempt.
+    #[cfg(test)]
+    if lower.starts_with("file://") {
+        let rest = &trimmed["file://".len()..];
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let canonical = std::fs::canonicalize(rest)
+            .or_else(|_| std::fs::canonicalize(rest.trim_start_matches('/')));
+        if canonical.is_ok_and(|path| path.starts_with(&temp)) {
+            return Ok(());
+        }
     }
 
     // Allow GitHub/GitLab shorthand like "user/repo" or "user/repo.git"
@@ -1216,7 +1237,19 @@ pub fn resolve_remote_revision(
     anyhow::bail!("Unable to resolve remote revision for {}", url)
 }
 
-/// Which `(revision, subpath)` pairs hold exactly the same directory at `head`.
+/// What a `head` tree says about directories installed from an older revision.
+#[derive(Debug, Default, Clone)]
+pub struct SubtreeComparison {
+    /// Pairs whose directory is exactly the same at `head`.
+    pub unchanged: HashSet<(String, String)>,
+    /// Pairs whose path is absent at `head` — or no longer a directory. This is
+    /// the only observation that can call a skill deleted upstream: it is the
+    /// same lookup the update itself would make, against the same tree (#655).
+    pub missing: HashSet<(String, String)>,
+}
+
+/// Which `(revision, subpath)` pairs hold exactly the same directory at `head`,
+/// and which are no longer there at all.
 ///
 /// A skill installed from a subdirectory of a monorepo would otherwise be
 /// "out of date" after every commit anywhere in that repository (#561). An equal
@@ -1231,17 +1264,20 @@ pub fn resolve_remote_revision(
 /// are read with libgit2, which cannot lazily fetch a missing object the way
 /// git would in the partial repository that fetch leaves behind.
 ///
-/// A pair whose path is missing, or is not a directory, just stays out of the
-/// result, so the caller reports an update for it. A failure of the comparison
-/// as a whole — the fetch did not go through, the temporary repository could
-/// not be made — is returned instead: whether that still allows reporting an
-/// update depends on why it failed, which is for the caller to judge (#582).
-pub fn unchanged_subtrees(
+/// A pair whose path is missing, or is not a directory, is reported as missing
+/// rather than merely "changed", so a caller can tell "the Source deleted this
+/// skill" from "this skill has a new version" (#655). A pair that neither held
+/// nor vanished stays out of both sets, which reads as an update. A failure of
+/// the comparison as a whole — the fetch did not go through, the temporary
+/// repository could not be made — is returned instead: whether that still allows
+/// reporting an update depends on why it failed, which is for the caller to
+/// judge (#582).
+pub fn compare_subtrees(
     url: &str,
     head: &str,
     installed: &HashSet<(String, String)>,
     proxy_url: Option<&str>,
-) -> Result<HashSet<(String, String)>> {
+) -> Result<SubtreeComparison> {
     // Revisions reach the command line, so only full object ids get there.
     let is_object_id = |rev: &str| rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit());
     let pairs: Vec<&(String, String)> = installed
@@ -1249,12 +1285,12 @@ pub fn unchanged_subtrees(
         .filter(|(rev, subpath)| rev != head && is_object_id(rev) && !subpath.is_empty())
         .collect();
     if pairs.is_empty() || !is_object_id(head) {
-        return Ok(HashSet::new());
+        return Ok(SubtreeComparison::default());
     }
 
     let temp =
         std::env::temp_dir().join(format!("skills-manager-subtree-{}", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<HashSet<(String, String)>> {
+    let result = (|| -> Result<SubtreeComparison> {
         Repository::init_bare(&temp)?;
         let mut revs: Vec<&str> = pairs.iter().map(|(rev, _)| rev.as_str()).collect();
         revs.push(head);
@@ -1286,17 +1322,53 @@ pub fn unchanged_subtrees(
                 .collect();
             Some((entry.id(), attributes))
         };
-        Ok(pairs
-            .into_iter()
-            .filter(|(rev, subpath)| {
-                let now = checkout_inputs(head, subpath);
-                now.is_some() && now == checkout_inputs(rev, subpath)
-            })
-            .cloned()
-            .collect())
+        let mut comparison = SubtreeComparison::default();
+        for (rev, subpath) in pairs {
+            let Some(now) = checkout_inputs(head, subpath) else {
+                comparison.missing.insert((rev.clone(), subpath.clone()));
+                continue;
+            };
+            if checkout_inputs(rev, subpath) == Some(now) {
+                comparison.unchanged.insert((rev.clone(), subpath.clone()));
+            }
+        }
+        Ok(comparison)
     })();
     let _ = std::fs::remove_dir_all(&temp);
     result
+}
+
+/// Best-effort: bring `revisions` into this checkout so their history can be
+/// inspected. One fetch for the whole source; callers retry individually when
+/// one revision turns out to be unknown to the server, because git aborts the
+/// batch at the first ref it cannot find.
+pub fn fetch_commits(repo_dir: &Path, url: &str, revisions: &[&str], proxy_url: Option<&str>) {
+    let revs: Vec<&str> = revisions
+        .iter()
+        .copied()
+        .filter(|rev| rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()))
+        .collect();
+    if revs.is_empty() {
+        return;
+    }
+    let mut args = vec!["fetch", "--no-tags", "--depth=1", "--filter=blob:none", url];
+    args.extend(revs);
+    let _ = run_git_watched_at(repo_dir, &args, proxy_url, None, &None);
+}
+
+/// Whether `revision` is still in this checkout's history.
+///
+/// A Source that was rebuilt or force-pushed leaves the recorded revision
+/// unreachable; git says so without asking the host, which also works for
+/// private repositories (#655).
+pub fn has_commit(repo_dir: &Path, revision: &str) -> bool {
+    let Ok(oid) = git2::Oid::from_str(revision) else {
+        return false;
+    };
+    match Repository::open(repo_dir) {
+        Ok(repo) => repo.find_commit(oid).is_ok(),
+        Err(_) => false,
+    }
 }
 
 pub fn checkout_revision(repo_dir: &Path, revision: &str) -> Result<()> {
@@ -1319,15 +1391,6 @@ pub fn checkout_revision(repo_dir: &Path, revision: &str) -> Result<()> {
     repo.set_head_detached(oid)?;
     repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
     Ok(())
-}
-
-pub fn relative_subpath(repo_dir: &Path, skill_dir: &Path) -> Option<String> {
-    let relative = skill_dir.strip_prefix(repo_dir).ok()?;
-    if relative.as_os_str().is_empty() {
-        None
-    } else {
-        Some(relative.to_string_lossy().to_string())
-    }
 }
 
 fn normalize_url(url: &str) -> (String, Option<String>, Option<String>) {
@@ -1706,6 +1769,23 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    /// The test-only `file://` exemption is bounded by the temp directory:
+    /// everything else on disk stays refused, which is the part a shipped build
+    /// has always enforced.
+    #[test]
+    fn a_file_url_outside_the_temp_directory_is_still_rejected() {
+        let outside = std::env::current_dir().unwrap().join("some-repo");
+        assert!(
+            validate_git_url(&format!("file://{}", outside.display())).is_err(),
+            "only the temp directory is exempt, and only in tests"
+        );
+        let inside = tempdir().unwrap();
+        assert!(
+            validate_git_url(&format!("file://{}", inside.path().display())).is_ok(),
+            "the repositories the tests clone live here"
+        );
+    }
+
     // ── parse_git_source ──
 
     #[test]
@@ -1980,34 +2060,6 @@ mod tests {
         let tmp = tempdir().unwrap();
         let found = find_skill_dir(tmp.path(), None).unwrap();
         assert_eq!(found, tmp.path());
-    }
-
-    // ── relative_subpath ──
-
-    #[test]
-    fn relative_subpath_nested() {
-        let tmp = tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        let skill = repo.join("tools").join("my-skill");
-        assert_eq!(
-            relative_subpath(&repo, &skill).map(|s| s.replace('\\', "/")),
-            Some("tools/my-skill".to_string())
-        );
-    }
-
-    #[test]
-    fn relative_subpath_root_returns_none() {
-        let tmp = tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        assert_eq!(relative_subpath(&repo, &repo), None);
-    }
-
-    #[test]
-    fn relative_subpath_unrelated_returns_none() {
-        let tmp = tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        let other = tmp.path().join("other").join("skill");
-        assert_eq!(relative_subpath(&repo, &other), None);
     }
 
     #[test]

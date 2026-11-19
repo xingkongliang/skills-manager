@@ -370,7 +370,8 @@
       "available": "可更新",
       "error": "檢查失敗",
       "localOnly": "本機來源",
-      "sourceMissing": "原路徑遺失"
+      "sourceMissing": "原路徑遺失",
+      "sourceGone": "來源失配"
     },
     "updateActions": {
       "check": "檢查",
@@ -468,6 +469,49 @@
       "apply": "同步 {{count}} 項",
       "noAgents": "沒有已安裝並啟用的 Agent。",
       "allSynced": "選取的 Skill 都已同步到這個 Agent"
+    },
+    "batchSourceGone": "{{count}} 個技能的來源已不提供它們",
+    "cleanup": {
+      "entry": "處理 {{count}} 個來源失配的技能",
+      "row": "{{name}} — 來源 {{subpath}} · 本機副本 {{path}} · {{deployments}} 個部署 · {{presets}} 個預設",
+      "rootSubpath": "(倉庫根目錄)",
+      "deleted": "已刪除 {{count}} 個技能",
+      "failed": "{{count}} 個技能刪除失敗"
+    },
+    "repair": {
+      "back": "返回我的技能",
+      "title": "來源不再提供這些技能",
+      "subtitle": "{{count}} 個技能需要決定怎麼處理",
+      "sourceMeta": "{{count}} 個技能 · 分支 {{branch}}",
+      "defaultBranch": "預設分支",
+      "openRepo": "開啟倉庫",
+      "openPath": "開啟記錄的路徑",
+      "scan": "掃描並找出新位置",
+      "scanFailed": "掃描失敗：{{reason}}",
+      "empty": "沒有需要處理的技能 —— 每個來源都還在原來的位置提供它們。",
+      "deleteSelected": "刪除 {{count}} 個",
+      "rowMeta": "來源 {{subpath}} · 本機副本 {{path}} · {{deployments}} 個部署 · {{presets}} 個預設",
+      "revisionKnown": "安裝時的提交仍在這條歷史裡",
+      "revisionGone": "倉庫歷史被重寫過 —— 安裝時的提交已不存在",
+      "update": "原地更新",
+      "repoint": "重指到 {{subpath}}",
+      "overwrite": "保留本機改動？確認覆寫本機副本",
+      "detached": "{{name}} 已轉為本機技能",
+      "updated": "{{name}} 已原地更新",
+      "repointed": "{{name}} 已重指到 {{subpath}}",
+      "groups": {
+        "at": "可以原地更新（{{count}}）",
+        "moved": "在倉庫裡換了位置（{{count}}）",
+        "gone": "倉庫裡找不到（{{count}}）",
+        "unreachable": "來源不可達（{{count}}）"
+      },
+      "evidence": {
+        "content_hash": "目錄內容與安裝時一致",
+        "directory_name": "只有目錄名相同，重指前請先確認"
+      },
+      "deleteTitle": "刪除這 {{count}} 個技能？",
+      "deleteWarning": "刪除之前它們仍然正常安裝和部署。刪除會連同它們的部署與預設引用一起移除庫裡那一份，且無法復原。",
+      "noChange": "這個來源沒有發現新情況 —— 技能都還在安裝時的位置。"
     }
   },
   "install": {

@@ -56,6 +56,7 @@ import type {
 import { getErrorMessage } from "../lib/error";
 import { normalizeSkillSearch, skillSearchMatches } from "../lib/skillSearch";
 import { countHiddenSelected, hiddenSelectionTexts } from "../lib/selectionVisibility";
+import { SOURCE_GONE, sourceGoneRows } from "../lib/sourceGone";
 import { buildSkillRows, renderedSkillIds, type SkillListRow } from "../lib/skillRows";
 import { channelsForSkills } from "../lib/skillChannels";
 import { ChannelPills } from "../components/ChannelPills";
@@ -797,6 +798,9 @@ export function MySkills() {
       if (result.unchanged > 0) {
         toast.info(t("mySkills.batchAlreadyUpToDate", { count: result.unchanged }));
       }
+      if (result.gone > 0) {
+        toast.info(t("mySkills.batchSourceGone", { count: result.gone }));
+      }
       if (result.held_back.length > 0) {
         toast.warning(
           t("mySkills.batchHeldBack", {
@@ -840,6 +844,9 @@ export function MySkills() {
       }
       if (result.unchanged > 0) {
         toast.info(t("mySkills.batchAlreadyUpToDate", { count: result.unchanged }));
+      }
+      if (result.gone > 0) {
+        toast.info(t("mySkills.batchSourceGone", { count: result.gone }));
       }
       if (result.held_back.length > 0) {
         toast.warning(
@@ -1163,6 +1170,11 @@ export function MySkills() {
     () => skills.filter((skill) => skill.update_status === "update_available" && canRefresh(skill)).length,
     [skills]
   );
+  /**
+   * The skills their Source deleted, and only them: the cleanup deletes what it
+   * lists, so the list is computed from status alone (#655).
+   */
+  const sourceGone = useMemo(() => sourceGoneRows(skills), [skills]);
   const refreshableSelectedCount = useMemo(
     () => skills.filter((skill) => selectedIds.has(skill.id) && canRefresh(skill)).length,
     [skills, selectedIds]
@@ -1193,6 +1205,14 @@ export function MySkills() {
       return {
         label: "Update",
         className: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
+      };
+    }
+    // Still installed, still deploying, and nothing to do about it: the Source
+    // no longer holds this skill (#655). Muted, not red — it is not an error.
+    if (skill.update_status === SOURCE_GONE) {
+      return {
+        label: t("mySkills.updateStatus.sourceGone"),
+        className: "bg-surface-active text-secondary",
       };
     }
     if (skill.update_status === "source_missing") {
@@ -1293,6 +1313,15 @@ export function MySkills() {
               <RotateCcw className={cn("h-3.5 w-3.5", batchUpdating && "animate-spin")} />
               {t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
             </button>
+            {sourceGone.length > 0 && (
+              <button
+                onClick={() => navigate("/my-skills/source-gone")}
+                className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {t("mySkills.cleanup.entry", { count: sourceGone.length })}
+              </button>
+            )}
             <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 self-center bg-border-subtle" />
             <button
               onClick={() => setViewMode("grid")}

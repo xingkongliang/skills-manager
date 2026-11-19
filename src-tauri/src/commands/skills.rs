@@ -17,8 +17,8 @@ use crate::core::{
     repo_lock::RepoLock,
     scanner, scenario_service,
     skill_metadata::{self, is_valid_skill_dir},
-    skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
-    sync_engine, sync_metadata,
+    skill_store::{self, SkillRecord, SkillStore, SkillTargetRecord},
+    subpath, sync_engine, sync_metadata,
     timing::should_log_first_or_slow,
     well_known,
 };
@@ -73,6 +73,9 @@ enum UpdateOutcome {
     Applied {
         content_changed: bool,
     },
+    /// The Source no longer holds the skill: nothing was touched, nothing can be
+    /// applied, and the status says so (#655).
+    SourceGone,
     /// Declined, having changed nothing.
     Held {
         pending: Vec<PendingRemoval>,
@@ -180,6 +183,8 @@ impl Drop for StagedPathGuard<'_> {
 pub struct BatchUpdateSkillsResult {
     pub refreshed: usize,
     pub unchanged: usize,
+    /// Skills their Source no longer holds: not updated, and not failures.
+    pub gone: usize,
     pub failed: Vec<String>,
     /// Skills left alone because updating would have removed files the new
     /// version does not have. Named so the user can go and look, rather than
@@ -831,6 +836,14 @@ fn log_update_outcome(
                 ))
                 .ok();
         }
+        // Deleted upstream, not "nothing to do": the trail is what #655 was
+        // measured in, so it must not read the same as an unchanged skill.
+        Ok(result) if result.skill.update_status == skill_store::SOURCE_GONE => {
+            draft = draft
+                .skill(result.skill.id.clone(), result.skill.name.clone())
+                .detail(format!("{source_label}; source gone"))
+                .ok();
+        }
         Ok(result) => {
             draft = draft
                 .skill(result.skill.id.clone(), result.skill.name.clone())
@@ -1084,7 +1097,7 @@ pub async fn install_git(
                     source_type: "git".to_string(),
                     source_ref: Some(parsed.original_url.clone()),
                     source_ref_resolved: Some(parsed.clone_url.clone()),
-                    source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
+                    source_subpath: subpath::relative_to(&temp_dir, &skill_dir),
                     source_branch: parsed.branch.clone(),
                     source_revision: Some(revision.clone()),
                     remote_revision: Some(revision),
@@ -1201,7 +1214,7 @@ pub async fn install_from_skillssh(
                     source_type: "skillssh".to_string(),
                     source_ref: Some(source_ref),
                     source_ref_resolved: Some(repo_url.clone()),
-                    source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
+                    source_subpath: subpath::relative_to(&temp_dir, &skill_dir),
                     source_branch: None,
                     source_revision: Some(revision.clone()),
                     remote_revision: Some(revision),
@@ -1437,12 +1450,12 @@ pub async fn confirm_git_install(
                 };
                 let result =
                     installer::install_from_git_dir(dir, install_name).map_err(AppError::io)?;
-                let subpath = git_fetcher::relative_subpath(&temp_path, dir);
+                let source_subpath = subpath::relative_to(&temp_path, dir);
                 let metadata = InstallSourceMetadata {
                     source_type: "git".to_string(),
                     source_ref: Some(repo_url.clone()),
                     source_ref_resolved: Some(parsed.clone_url.clone()),
-                    source_subpath: subpath,
+                    source_subpath,
                     source_branch: parsed.branch.clone(),
                     source_revision: Some(revision.clone()),
                     remote_revision: Some(revision.clone()),
@@ -1630,8 +1643,11 @@ pub struct PrefetchedRemote {
     key: RemoteKey,
     result: Result<String, String>,
     /// The `(source_revision, subpath)` pairs whose directory is the same tree
-    /// at the resolved revision — see [`git_fetcher::unchanged_subtrees`].
+    /// at the resolved revision — see [`git_fetcher::compare_subtrees`].
     unchanged: HashSet<(String, String)>,
+    /// The pairs whose path is no longer there at all: the Source deleted the
+    /// skill. Terminal until the author puts it back (#655).
+    missing: HashSet<(String, String)>,
     /// Why those directories could not be compared. A resolved head alone
     /// does not establish whether an installed subtree changed.
     comparison_error: Option<String>,
@@ -1645,7 +1661,7 @@ fn installed_subtree(skill: &SkillRecord, source: &GitSkillSource) -> Option<(St
     Some((skill.source_revision.clone()?, subpath.to_string()))
 }
 
-/// Resolve `key`'s head, then which of `installed` it leaves unchanged.
+/// Resolve `key`'s head, then what it says about `installed`.
 fn resolve_remote(
     key: RemoteKey,
     installed: &HashSet<(String, String)>,
@@ -1656,19 +1672,18 @@ fn resolve_remote(
             .map_err(|err| err.to_string())
     };
     let result = resolve();
-    let (unchanged, comparison_error) = match &result {
-        Ok(head) => {
-            match git_fetcher::unchanged_subtrees(&key.clone_url, head, installed, proxy_url) {
-                Ok(unchanged) => (unchanged, None),
-                Err(err) => (HashSet::new(), Some(err.to_string())),
-            }
-        }
-        Err(_) => (HashSet::new(), None),
+    let (unchanged, missing, comparison_error) = match &result {
+        Ok(head) => match git_fetcher::compare_subtrees(&key.clone_url, head, installed, proxy_url) {
+            Ok(comparison) => (comparison.unchanged, comparison.missing, None),
+            Err(err) => (HashSet::new(), HashSet::new(), Some(err.to_string())),
+        },
+        Err(_) => (HashSet::new(), HashSet::new(), None),
     };
     PrefetchedRemote {
         key,
         result,
         unchanged,
+        missing,
         comparison_error,
     }
 }
@@ -1817,6 +1832,7 @@ pub async fn batch_update_skills(
     tauri::async_runtime::spawn_blocking(move || {
         let mut refreshed = 0usize;
         let mut unchanged = 0usize;
+        let mut gone = 0usize;
         let mut failed = Vec::new();
         let mut held_back = Vec::new();
 
@@ -1840,6 +1856,11 @@ pub async fn batch_update_skills(
                             // away files the new version does not have, and a
                             // batch has nobody to ask.
                             held_back.push(skill.name.clone());
+                        }
+                        // Nothing was updated and nothing failed: the Source
+                        // deleted this skill (#655).
+                        Ok(result) if result.skill.update_status == skill_store::SOURCE_GONE => {
+                            gone += 1
                         }
                         Ok(result) => {
                             if result.content_changed {
@@ -1869,6 +1890,7 @@ pub async fn batch_update_skills(
         Ok(BatchUpdateSkillsResult {
             refreshed,
             unchanged,
+            gone,
             failed,
             held_back,
         })
@@ -2028,6 +2050,324 @@ pub async fn detach_local_skill_source(
     .await?
 }
 
+/// One skill's answer from a Source scan, with what the page needs to offer an
+/// action rather than a guess (#655).
+#[derive(Debug, Serialize)]
+pub struct SourceRepairItem {
+    pub skill_id: String,
+    pub name: String,
+    pub source_subpath: Option<String>,
+    pub central_path: String,
+    pub deployments: usize,
+    pub presets: usize,
+    /// The library copy differs from what was installed, so overwriting it
+    /// loses something. The page asks before it does.
+    pub local_changed: bool,
+    pub placement: RepairPlacement,
+    pub candidates: Vec<MoveCandidateDto>,
+    /// Whether the revision this skill was installed from is still in the
+    /// Source's history. `None` means nobody looked: a Source that could not be
+    /// reached must not claim its history was rebuilt.
+    pub installed_revision_present: Option<bool>,
+}
+
+/// What a scan answered. Serializes as `at` / `moved` / `gone` / `unreachable`
+/// so the wire format stays the words the spec agreed.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairPlacement {
+    At,
+    Moved,
+    Gone,
+    Unreachable,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MoveCandidateDto {
+    pub subpath: String,
+    pub evidence: RepairEvidence,
+}
+
+/// What picked a candidate: the same bytes, or only the same directory name.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairEvidence {
+    ContentHash,
+    DirectoryName,
+}
+
+/// What a Source scan found, in one report.
+///
+/// Failure is a field, not an `Err`: a repository that is gone is one of the
+/// answers the page has to show, with its own actions.
+#[derive(Debug, Serialize)]
+pub struct SourceScanResult {
+    pub clone_url: String,
+    pub branch: Option<String>,
+    /// The head the answers were computed against, when one was resolved.
+    pub revision: Option<String>,
+    pub error: Option<String>,
+    pub items: Vec<SourceRepairItem>,
+}
+
+fn repair_item(
+    store: &SkillStore,
+    skill: &SkillRecord,
+    targets: &[SkillTargetRecord],
+) -> SourceRepairItem {
+    let local_changed = match skill.content_hash.as_deref() {
+        Some(recorded) => crate::core::content_hash::hash_directory(Path::new(&skill.central_path))
+            .map(|live| live != recorded)
+            .unwrap_or(false),
+        None => false,
+    };
+    SourceRepairItem {
+        skill_id: skill.id.clone(),
+        name: skill.name.clone(),
+        source_subpath: skill.source_subpath.clone(),
+        central_path: skill.central_path.clone(),
+        deployments: targets
+            .iter()
+            .filter(|target| target.skill_id == skill.id)
+            .count(),
+        presets: store.get_scenarios_for_skill(&skill.id).unwrap_or_default().len(),
+        local_changed,
+        placement: RepairPlacement::Unreachable,
+        candidates: Vec::new(),
+        installed_revision_present: None,
+    }
+}
+
+/// Ask one Source where each of its skills is.
+///
+/// One clone and one checkout for the whole group, because the answers only
+/// exist once the tree is on disk, and because scanning six repositories
+/// eagerly is what makes a page look hung. Writes nothing: a scan is a
+/// question, and the answer is about a head that will move.
+pub fn scan_source_internal(
+    store: &SkillStore,
+    clone_url: &str,
+    branch: Option<&str>,
+    proxy_url: Option<&str>,
+) -> Result<SourceScanResult, AppError> {
+    let skills: Vec<SkillRecord> = store
+        .get_all_skills()
+        .map_err(AppError::db)?
+        .into_iter()
+        .filter(|skill| {
+            skill.source_ref_resolved.as_deref() == Some(clone_url)
+                && skill.source_branch.as_deref() == branch
+        })
+        .collect();
+    let targets = store.get_all_targets().map_err(AppError::db)?;
+    let mut report = SourceScanResult {
+        clone_url: clone_url.to_string(),
+        branch: branch.map(str::to_string),
+        revision: None,
+        error: None,
+        items: Vec::new(),
+    };
+    if skills.is_empty() {
+        return Ok(report);
+    }
+
+    // A Source we could not look at is an answer with its own actions, so the
+    // rows are still built — with nothing claimed about any of them.
+    let unreachable = |report: &mut SourceScanResult, message: String| {
+        report.error = Some(message);
+        report.items = skills
+            .iter()
+            .map(|skill| repair_item(store, skill, &targets))
+            .collect();
+    };
+
+    let revision = match git_fetcher::resolve_remote_revision(clone_url, branch, proxy_url) {
+        Ok(revision) => revision,
+        Err(err) => {
+            unreachable(&mut report, err.to_string());
+            return Ok(report);
+        }
+    };
+    let checkout =
+        match git_fetcher::clone_repo_ref_scoped(clone_url, branch, None, None, proxy_url, None) {
+            Ok(dir) => dir,
+            Err(err) => {
+                unreachable(&mut report, err.to_string());
+                return Ok(report);
+            }
+        };
+
+    let scanned = (|| -> Result<Vec<SourceRepairItem>, AppError> {
+        git_fetcher::checkout_revision(&checkout, &revision).map_err(AppError::git)?;
+        // A shallow clone holds the head and nothing else, so "is the recorded
+        // revision still in this history?" needs the object fetched first. One
+        // fetch covers the group; anything still missing is fetched alone,
+        // which is also how a rebuilt history announces itself.
+        let recorded: Vec<&str> = skills
+            .iter()
+            .filter_map(|skill| skill.source_revision.as_deref())
+            .collect();
+        git_fetcher::fetch_commits(&checkout, clone_url, &recorded, proxy_url);
+        // One walk of the tree serves every skill: the answers differ per skill,
+        // the tree does not.
+        let index = crate::core::source_repair::CheckoutIndex::build(&checkout);
+        Ok(skills
+            .iter()
+            .map(|skill| {
+                let mut item = repair_item(store, skill, &targets);
+                match crate::core::source_repair::locate_in(&index, skill) {
+                    crate::core::source_repair::Placement::At { .. } => {
+                        item.placement = RepairPlacement::At
+                    }
+                    crate::core::source_repair::Placement::Moved { candidates } => {
+                        item.placement = RepairPlacement::Moved;
+                        item.candidates = candidates
+                            .into_iter()
+                            .map(|candidate| MoveCandidateDto {
+                                subpath: candidate.subpath,
+                                evidence: match candidate.evidence {
+                                    crate::core::source_repair::MoveEvidence::ContentHash => {
+                                        RepairEvidence::ContentHash
+                                    }
+                                    crate::core::source_repair::MoveEvidence::DirectoryName => {
+                                        RepairEvidence::DirectoryName
+                                    }
+                                },
+                            })
+                            .collect();
+                    }
+                    crate::core::source_repair::Placement::Gone => {
+                        item.placement = RepairPlacement::Gone
+                    }
+                }
+                item.installed_revision_present =
+                    Some(skill.source_revision.as_deref().is_some_and(|rev| {
+                        if git_fetcher::has_commit(&checkout, rev) {
+                            return true;
+                        }
+                        git_fetcher::fetch_commits(&checkout, clone_url, &[rev], proxy_url);
+                        git_fetcher::has_commit(&checkout, rev)
+                    }));
+                item
+            })
+            .collect())
+    })();
+    git_fetcher::cleanup_temp(&checkout);
+
+    report.revision = Some(revision);
+    match scanned {
+        Ok(items) => report.items = items,
+        Err(err) => {
+            report.error = Some(err.message.clone());
+            report.items = skills
+                .iter()
+                .map(|skill| repair_item(store, skill, &targets))
+                .collect();
+        }
+    }
+    Ok(report)
+}
+
+#[tauri::command]
+pub async fn scan_git_source(
+    clone_url: String,
+    branch: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<SourceScanResult, AppError> {
+    let store = store.inner().clone();
+    let proxy_url = store.proxy_url();
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_source_internal(&store, &clone_url, branch.as_deref(), proxy_url.as_deref())
+    })
+    .await?
+}
+
+/// Turn a git skill into a local one, keeping everything the user has.
+///
+/// The Source is gone or no longer holds it, but the library copy still works
+/// in every agent. Detaching is the answer that keeps it: only the pointer is
+/// dropped, so files, deployments and preset membership stay exactly as they
+/// were (#655).
+pub fn detach_skill_source_internal(
+    store: &SkillStore,
+    skill_id: &str,
+) -> Result<ManagedSkillDto, AppError> {
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+    if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+        return Err(AppError::invalid_input(
+            "Only git-backed skills have a Source to detach",
+        ));
+    }
+    {
+        let _lock = RepoLock::acquire_foreground("detach skill source").map_err(AppError::db)?;
+        store
+            .update_skill_after_reinstall(
+                &skill.id,
+                &skill.name,
+                skill.description.as_deref(),
+                "local",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                skill.content_hash.as_deref(),
+                "local_only",
+            )
+            .map_err(AppError::db)?;
+        sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+    }
+    managed_skill_by_id(store, skill_id)
+}
+
+/// Point an installed skill at a new location in its Source, keeping its id,
+/// tags, preset membership and deployments.
+///
+/// This is the repair the page offers instead of "delete and reinstall": an
+/// install would give the skill a new id and drop everything keyed to the old
+/// one (#655).
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn repoint_skill_source(
+    skill_id: String,
+    git_url: String,
+    subpath: Option<String>,
+    branch: Option<String>,
+    force: Option<bool>,
+    dry_run: Option<bool>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<SetSourceResult, AppError> {
+    let store = store.inner().clone();
+    let proxy_url = store.proxy_url();
+    tauri::async_runtime::spawn_blocking(move || {
+        set_git_source_internal(
+            &store,
+            &skill_id,
+            &git_url,
+            subpath.as_deref(),
+            branch.as_deref(),
+            proxy_url.as_deref(),
+            force.unwrap_or(false),
+            dry_run.unwrap_or(false),
+        )
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn detach_skill_source(
+    skill_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<ManagedSkillDto, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || detach_skill_source_internal(&store, &skill_id))
+        .await?
+}
+
 fn managed_skill_to_dto(
     store: &SkillStore,
     skill: SkillRecord,
@@ -2159,16 +2499,32 @@ pub fn update_git_skill_internal(
     .map_err(AppError::classify_git_error)?;
     let update_result = (|| -> Result<UpdateOutcome, AppError> {
         git_fetcher::checkout_revision(&temp_dir, &remote_revision).map_err(AppError::git)?;
-        let skill_dir = resolve_skill_dir(
+        // Nowhere the update would look — the recorded path, and for a
+        // skills.sh skill also the id. Retrying cannot change that, so it is
+        // recorded as the terminal status rather than raised as a failure.
+        let Some(skill_dir) = locate_installed_skill_dir(
             &temp_dir,
             git_source.subpath.as_deref(),
             git_source.locator_skill_id.as_deref(),
-        )?;
+        )?
+        else {
+            let _lock =
+                RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
+            store
+                .update_skill_check_state(
+                    &skill.id,
+                    Some(&remote_revision),
+                    skill_store::SOURCE_GONE,
+                    None,
+                )
+                .map_err(AppError::db)?;
+            return Ok(UpdateOutcome::SourceGone);
+        };
 
         let new_hash =
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
         let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
-        let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
+        let source_subpath = subpath::relative_to(&temp_dir, &skill_dir);
         let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
 
         // Stage first, then compare. The tree that lands in the library is the
@@ -2270,6 +2626,7 @@ pub fn update_git_skill_internal(
         Ok(outcome) => {
             let (content_changed, pending_removals, removal_approval) = match outcome {
                 UpdateOutcome::Applied { content_changed } => (content_changed, Vec::new(), None),
+                UpdateOutcome::SourceGone => (false, Vec::new(), None),
                 UpdateOutcome::Held { pending, approval } => (false, pending, Some(approval)),
             };
             let skill = managed_skill_by_id(store, skill_id)?;
@@ -2421,7 +2778,7 @@ pub fn set_git_source_internal(
     let outcome = (|| -> Result<(String, bool), AppError> {
         git_fetcher::checkout_revision(&temp_dir, &remote_revision).map_err(AppError::git)?;
         let skill_dir = resolve_repoint_skill_dir(&temp_dir, subpath.as_deref())?;
-        let resolved_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
+        let resolved_subpath = subpath::relative_to(&temp_dir, &skill_dir);
 
         let new_hash =
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
@@ -2809,6 +3166,7 @@ pub fn check_skill_update_internal_with_remote(
             let Some(PrefetchedRemote {
                 result: remote_result,
                 unchanged,
+                missing,
                 comparison_error,
                 ..
             }) = prefetched.filter(|prefetched| prefetched.key.matches(&git_source))
@@ -2841,7 +3199,41 @@ pub fn check_skill_update_internal_with_remote(
                         return Err(AppError::git(message));
                     }
                     let update_status = match skill.source_revision.as_deref() {
+                        // An update already established that a skills.sh skill is
+                        // gone. This check cannot re-establish anything — the id
+                        // lookup needs blobs it does not fetch — so it must not
+                        // flip the answer back into an update, which would clone
+                        // the whole Source next round to learn the same thing.
+                        //
+                        // When the author puts the skill back at its recorded
+                        // path, the head moves and the pair drops out of
+                        // `missing`, so the arms below take over again.
+                        Some(current)
+                            if skill.update_status == skill_store::SOURCE_GONE
+                                && git_source.locator_skill_id.is_some()
+                                && (current == remote_revision
+                                    || installed_subtree(&skill, &git_source)
+                                        .is_some_and(|installed| missing.contains(&installed))) =>
+                        {
+                            skill_store::SOURCE_GONE
+                        }
                         Some(current) if current == remote_revision => "up_to_date",
+                        // The Source no longer holds this skill anywhere this
+                        // check would look (#655). Not an update — no head could
+                        // ever make it one — and not a failed check either, so
+                        // it is not retried every round. The local copy stays.
+                        //
+                        // Only a plain Git skill can be judged here: a
+                        // skills.sh skill has an id to look up, which needs
+                        // blobs this comparison does not fetch. Its missing path
+                        // may be a move, so it waits for the update to say so.
+                        Some(_)
+                            if git_source.locator_skill_id.is_none()
+                                && installed_subtree(&skill, &git_source)
+                                    .is_some_and(|installed| missing.contains(&installed)) =>
+                        {
+                            skill_store::SOURCE_GONE
+                        }
                         // The repo moved but this skill's directory did not
                         // (#561). Record the new head as its source, as an
                         // update that changed nothing would, so the next
@@ -2976,10 +3368,10 @@ fn should_skip_update_check(
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(60);
     let ttl_ms = ttl_minutes * 60 * 1000;
-    let stable_status = !matches!(
-        skill.update_status.as_str(),
-        "unknown" | "checking" | "updating" | "error"
-    );
+    // A settled answer stays settled for the TTL — including `source_gone`,
+    // which no re-check inside the TTL can change unless the author restored
+    // the skill (#655). Anything unresolved keeps asking.
+    let stable_status = skill_store::is_settled_update_status(&skill.update_status);
 
     Ok(stable_status
         && skill
@@ -2988,12 +3380,20 @@ fn should_skip_update_check(
             .unwrap_or(false))
 }
 
+/// The Subpath a stored row means, in the form every reader compares against a
+/// git tree. A row written by a Windows build separated with `\\`, which
+/// libgit2 reads as part of one entry name — the Skill then resolved to nothing
+/// and was reported Source Gone (#671).
+fn stored_subpath(skill: &SkillRecord) -> Option<String> {
+    skill.source_subpath.as_deref().map(subpath::canonical)
+}
+
 pub fn git_source_from_skill(skill: &SkillRecord) -> Result<GitSkillSource, AppError> {
     if let Some(resolved) = &skill.source_ref_resolved {
         return Ok(GitSkillSource {
             clone_url: resolved.clone(),
             branch: skill.source_branch.clone(),
-            subpath: skill.source_subpath.clone(),
+            subpath: stored_subpath(skill),
             locator_skill_id: skill_ssh_id(skill),
         });
     }
@@ -3010,7 +3410,7 @@ pub fn git_source_from_skill(skill: &SkillRecord) -> Result<GitSkillSource, AppE
                 // Prefer the branch resolved at install time — it survives
                 // slash-branch tree URLs that the sync parse can't disambiguate.
                 branch: skill.source_branch.clone().or(parsed.branch),
-                subpath: skill.source_subpath.clone().or(parsed.subpath),
+                subpath: stored_subpath(skill).or(parsed.subpath),
                 locator_skill_id: None,
             })
         }
@@ -3024,7 +3424,7 @@ pub fn git_source_from_skill(skill: &SkillRecord) -> Result<GitSkillSource, AppE
             Ok(GitSkillSource {
                 clone_url: format!("https://github.com/{}.git", repo_source),
                 branch: skill.source_branch.clone(),
-                subpath: skill.source_subpath.clone(),
+                subpath: stored_subpath(skill),
                 locator_skill_id: Some(fallback_skill_id.to_string()),
             })
         }
@@ -3127,6 +3527,45 @@ pub fn resolve_skill_dir(
     subpath: Option<&str>,
     skill_id: Option<&str>,
 ) -> Result<PathBuf, AppError> {
+    match locate_skill_dir(repo_dir, subpath, skill_id)? {
+        LocatedSkillDir::At(dir) => Ok(dir),
+        // "Not there" is an answer, and a strict caller treats it as one.
+        LocatedSkillDir::Absent(error) => Err(error),
+    }
+}
+
+/// Where the update would put an already-installed skill: `None` when it is
+/// nowhere this lookup would find it.
+///
+/// The distinction matters because the two outcomes need different answers: an
+/// update that cannot find its skill has nothing to retry (#655), while a
+/// lookup that fails for another reason is a failed check.
+pub fn locate_installed_skill_dir(
+    repo_dir: &Path,
+    subpath: Option<&str>,
+    skill_id: Option<&str>,
+) -> Result<Option<PathBuf>, AppError> {
+    Ok(match locate_skill_dir(repo_dir, subpath, skill_id)? {
+        LocatedSkillDir::At(dir) => Some(dir),
+        LocatedSkillDir::Absent(_) => None,
+    })
+}
+
+/// The skill's directory in a checkout, or the reason it is not there.
+///
+/// The error travels with `Absent` so [`resolve_skill_dir`] keeps reporting
+/// exactly what it always did, while the update path can treat the same answer
+/// as terminal instead of exceptional.
+enum LocatedSkillDir {
+    At(PathBuf),
+    Absent(AppError),
+}
+
+fn locate_skill_dir(
+    repo_dir: &Path,
+    subpath: Option<&str>,
+    skill_id: Option<&str>,
+) -> Result<LocatedSkillDir, AppError> {
     if let Some(subpath) = subpath {
         let candidate = repo_dir.join(subpath);
         if !path_guard::is_path_safe(repo_dir, &candidate) {
@@ -3145,24 +3584,28 @@ pub fn resolve_skill_dir(
             candidate.is_dir()
         };
         if usable {
-            return Ok(candidate);
+            return Ok(LocatedSkillDir::At(candidate));
         }
         if skill_id.is_none() {
-            return Err(AppError::not_found(format!(
+            return Ok(LocatedSkillDir::Absent(AppError::not_found(format!(
                 "Path '{subpath}' does not exist in the repository"
-            )));
+            ))));
         }
     }
 
     // `find_skill_dir` joins the locator id onto the checkout in several places
     // before falling back to a recursive search, so its answer is checked too.
-    let resolved = git_fetcher::find_skill_dir(repo_dir, skill_id).map_err(AppError::git)?;
+    let resolved = match git_fetcher::find_skill_dir(repo_dir, skill_id) {
+        Ok(path) => path,
+        // With a locator, "nothing matched" is the only way this search fails.
+        Err(err) => return Ok(LocatedSkillDir::Absent(AppError::git(err))),
+    };
     if !path_guard::is_path_safe(repo_dir, &resolved) {
         return Err(AppError::invalid_input(
             "Resolved skill directory is outside the repository",
         ));
     }
-    Ok(resolved)
+    Ok(LocatedSkillDir::At(resolved))
 }
 
 pub fn resolve_skillssh_install_target(
@@ -4077,6 +4520,7 @@ mod tests {
             key: remote(url, None),
             result: Ok(revision.to_string()),
             unchanged: HashSet::new(),
+            missing: HashSet::new(),
             comparison_error: None,
         })
     }
@@ -4242,6 +4686,7 @@ mod tests {
                 key: remote("https://example.test/a.git", None),
                 result: Err("could not read from remote".to_string()),
                 unchanged: HashSet::new(),
+                missing: HashSet::new(),
                 comparison_error: None,
             }),
         )
@@ -4398,6 +4843,27 @@ mod tests {
             .unwrap();
     }
 
+    /// A skills.sh skill, recognised by the shorthand its `source_ref` holds:
+    /// the locator id is the part after the last `/`.
+    fn insert_skillssh_skill(
+        store: &SkillStore,
+        id: &str,
+        shorthand: &str,
+        clone_url: &str,
+        subpath: Option<&str>,
+        revision: &str,
+    ) {
+        let dir = write_skill_dir(id);
+        let mut skill = sample_skill(id, id, &dir);
+        skill.source_type = "skillssh".to_string();
+        skill.source_ref = Some(shorthand.to_string());
+        skill.source_ref_resolved = Some(clone_url.to_string());
+        skill.source_subpath = subpath.map(str::to_string);
+        skill.source_revision = Some(revision.to_string());
+        skill.update_status = "unknown".to_string();
+        store.insert_skill(&skill).unwrap();
+    }
+
     /// The reported bug, end to end through the real check: a commit that only
     /// touches `skills/a` is an update for `a` and nothing else in that repo —
     /// except a skill installed from the repository root, which still sees
@@ -4449,6 +4915,311 @@ mod tests {
         assert_eq!(b.update_status, "error");
         assert_eq!(b.last_check_error.as_deref(), Some(err.message.as_str()));
         assert_eq!(b.source_revision.as_deref(), Some(gone));
+    }
+
+    /// The Source deleted the skill: the recorded subpath is absent at head, or
+    /// no longer a directory. That is not an update — retrying can never make it
+    /// one — and it is not a failed check either. The siblings in the same
+    /// repository are unaffected (#655).
+    #[test]
+    fn a_skill_its_source_deleted_is_source_gone() {
+        let repo = test_repo();
+        let (dir, url, _) = monorepo(&repo);
+        write_skill(&dir.join("skills/c"), "c");
+        git_in(&dir, &["add", "-A"]);
+        git_in(&dir, &["commit", "-qm", "add c"]);
+        let installed = git_in(&dir, &["rev-parse", "HEAD"]);
+        insert_monorepo_skill(&repo.store, "a", &url, Some("skills/a"), &installed);
+        insert_monorepo_skill(&repo.store, "b", &url, Some("skills/b"), &installed);
+        insert_monorepo_skill(&repo.store, "c", &url, Some("skills/c"), &installed);
+
+        git_in(&dir, &["rm", "-r", "-q", "skills/b"]);
+        git_in(&dir, &["commit", "-qm", "drop b"]);
+        // A path that survives as a file is the same answer: no skill there.
+        fs::remove_dir_all(dir.join("skills/c")).unwrap();
+        commit_file(&dir, "skills/c", "not a skill directory\n");
+
+        let check = |id: &str| check_skill_update_internal(&repo.store, id, true, None).unwrap();
+        assert_eq!(check("b").update_status, "source_gone");
+        assert_eq!(check("c").update_status, "source_gone");
+        assert_eq!(check("a").update_status, "up_to_date");
+
+        let stored = repo.store.get_skill_by_id("b").unwrap().unwrap();
+        assert_eq!(stored.last_check_error, None, "a deletion is not an error");
+        assert_eq!(
+            stored.source_revision.as_deref(),
+            Some(installed.as_str()),
+            "an update cannot be applied to something that is not there"
+        );
+    }
+
+    /// A settled "the Source deleted it" costs no network inside the TTL: the
+    /// next round has nothing new to ask. A forced check still runs, which is
+    /// how a restored skill clears itself (#655).
+    #[test]
+    fn a_source_gone_skill_is_not_re_checked_within_the_ttl() {
+        let repo = test_repo();
+        let url = "https://example.test/a.git";
+        insert_monorepo_skill(&repo.store, "b", url, Some("skills/b"), "old-rev");
+        repo.store
+            .update_skill_check_state("b", Some("old-rev"), skill_store::SOURCE_GONE, None)
+            .unwrap();
+
+        assert!(
+            prefetch_skill_remote(&repo.store, "b", false, None).is_none(),
+            "a settled status costs no network"
+        );
+        let dto =
+            check_skill_update_internal_with_remote(&repo.store, "b", false, None).unwrap();
+        assert_eq!(dto.update_status, "source_gone");
+    }
+
+    fn item<'a>(report: &'a SourceScanResult, id: &str) -> &'a SourceRepairItem {
+        report
+            .items
+            .iter()
+            .find(|item| item.skill_id == id)
+            .unwrap_or_else(|| panic!("{id} missing from the scan"))
+    }
+
+    /// One clone answers the whole group, and the three answers stay distinct:
+    /// still there, moved, gone. The revision each was installed from is still
+    /// in this history, so no fake "rebuilt" signal (#655).
+    #[test]
+    fn a_scan_answers_every_skill_of_a_source() {
+        let repo = test_repo();
+        let (dir, url, _) = monorepo(&repo);
+        write_skill(&dir.join("skills/c"), "c");
+        git_in(&dir, &["add", "-A"]);
+        git_in(&dir, &["commit", "-qm", "add c"]);
+        let installed = git_in(&dir, &["rev-parse", "HEAD"]);
+        insert_monorepo_skill(&repo.store, "a", &url, Some("skills/a"), &installed);
+        insert_monorepo_skill(&repo.store, "b", &url, Some("skills/b"), &installed);
+        insert_monorepo_skill(&repo.store, "c", &url, Some("skills/c"), &installed);
+
+        fs::create_dir_all(dir.join("other")).unwrap();
+        git_in(&dir, &["mv", "skills/b", "other/b"]);
+        git_in(&dir, &["rm", "-r", "-q", "skills/c"]);
+        git_in(&dir, &["commit", "-qm", "reorg"]);
+
+        let report = scan_source_internal(&repo.store, &url, None, None).unwrap();
+
+        assert_eq!(report.error, None);
+        assert_eq!(report.items.len(), 3);
+        assert!(matches!(item(&report, "a").placement, RepairPlacement::At));
+        assert!(matches!(item(&report, "b").placement, RepairPlacement::Moved));
+        assert_eq!(item(&report, "b").candidates[0].subpath, "other/b");
+        assert!(matches!(item(&report, "c").placement, RepairPlacement::Gone));
+        assert!(report
+            .items
+            .iter()
+            .all(|item| item.installed_revision_present == Some(true)));
+    }
+
+    /// A repository that cannot be reached is an answer the page has to show,
+    /// not an error that blanks it out.
+    #[test]
+    fn a_scan_reports_an_unreachable_source_per_item() {
+        let repo = test_repo();
+        let url = "file:///nonexistent/skills-manager-test/repo";
+        insert_monorepo_skill(&repo.store, "a", url, Some("skills/a"), "old-rev");
+
+        let report = scan_source_internal(&repo.store, url, None, None).unwrap();
+
+        assert!(report.error.is_some(), "the reason travels with the report");
+        assert!(matches!(
+            item(&report, "a").placement,
+            RepairPlacement::Unreachable
+        ));
+        assert_eq!(report.items.len(), 1, "the row still has actions");
+    }
+
+    /// A scan answers about a head that will move; it must not write back what
+    /// it found, or the next check would compare against a stale claim.
+    #[test]
+    fn a_scan_writes_nothing() {
+        let repo = test_repo();
+        let (dir, url, installed) = monorepo(&repo);
+        insert_monorepo_skill(&repo.store, "b", &url, Some("skills/b"), &installed);
+        repo.store
+            .update_skill_check_state("b", Some(&installed), skill_store::SOURCE_GONE, None)
+            .unwrap();
+
+        git_in(&dir, &["rm", "-r", "-q", "skills/b"]);
+        git_in(&dir, &["commit", "-qm", "drop b"]);
+        let before = repo.store.get_skill_by_id("b").unwrap().unwrap();
+        scan_source_internal(&repo.store, &url, None, None).unwrap();
+        let after = repo.store.get_skill_by_id("b").unwrap().unwrap();
+
+        assert_eq!(after.update_status, before.update_status);
+        assert_eq!(after.last_checked_at, before.last_checked_at);
+        assert_eq!(after.source_subpath, before.source_subpath);
+    }
+
+    /// A Source whose history was rebuilt no longer has the revision this skill
+    /// was installed from. That is a different story from "the skill was
+    /// deleted", and the scan says so (#655).
+    #[test]
+    fn a_recorded_revision_the_source_no_longer_has_is_reported() {
+        let repo = test_repo();
+        let (dir, url, _) = monorepo(&repo);
+        let unknown = "0123456789abcdef0123456789abcdef01234567";
+        insert_monorepo_skill(&repo.store, "a", &url, Some("skills/a"), unknown);
+        commit_file(&dir, "SKILL.md", "---\nname: root\n---\nx\n");
+
+        let report = scan_source_internal(&repo.store, &url, None, None).unwrap();
+
+        assert!(matches!(item(&report, "a").placement, RepairPlacement::At));
+        assert_eq!(item(&report, "a").installed_revision_present, Some(false));
+    }
+
+    /// The Source is gone or no longer holds the skill, but the copy still
+    /// works in every agent: detaching drops the pointer and keeps the rest.
+    #[test]
+    fn detaching_a_git_skill_keeps_its_copy_deployments_and_presets() {
+        let repo = test_repo();
+        let url = "https://example.test/a.git";
+        insert_monorepo_skill(&repo.store, "b", url, Some("skills/b"), "old-rev");
+        let central = PathBuf::from(&repo.store.get_skill_by_id("b").unwrap().unwrap().central_path);
+        let target_dir = repo._tmp.path().join("agent/b");
+        fs::create_dir_all(&central).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        repo.store
+            .insert_target(&SkillTargetRecord {
+                id: "target-b".to_string(),
+                skill_id: "b".to_string(),
+                tool: "cursor".to_string(),
+                target_path: target_dir.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: None,
+            })
+            .unwrap();
+
+        let dto = detach_skill_source_internal(&repo.store, "b").unwrap();
+
+        assert_eq!(dto.update_status, "local_only");
+        assert_eq!(dto.source_type, "local");
+        assert_eq!(dto.source_ref, None);
+        assert_eq!(dto.source_subpath, None);
+        assert!(central.exists(), "the copy is the part worth keeping");
+        assert_eq!(dto.targets.len(), 1, "its deployments are unchanged");
+    }
+
+    /// A skills.sh skill whose Source moved it: the locator finds it at its new
+    /// home, so the update follows it and records the new subpath. This is a
+    /// move, not a deletion (#278, #655).
+    #[test]
+    fn an_update_follows_a_skillssh_skill_that_moved() {
+        let repo = test_repo();
+        let (dir, url, installed) = monorepo(&repo);
+        insert_skillssh_skill(&repo.store, "b", "owner/repo/b", &url, Some("skills/b"), &installed);
+
+        fs::create_dir_all(dir.join("other")).unwrap();
+        git_in(&dir, &["mv", "skills/b", "other/b"]);
+        git_in(&dir, &["commit", "-qm", "move b"]);
+
+        let result = update_git_skill_internal(&repo.store, "b", None, None, None).unwrap();
+
+        assert_eq!(result.skill.update_status, "up_to_date");
+        let stored = repo.store.get_skill_by_id("b").unwrap().unwrap();
+        assert_eq!(stored.source_subpath.as_deref(), Some("other/b"));
+    }
+
+    /// A Subpath written by a Windows build names the same directory as the
+    /// slash form. Every reader hands it to libgit2, which accepts only `/` —
+    /// the `\` form resolved to nothing and the Skill was reported as gone
+    /// (#671). Windows-only because unix may hold a directory whose name
+    /// contains `\`, and rewriting that would invent a different path.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_written_subpath_reads_back_as_a_git_path() {
+        let tmp = tempdir().unwrap();
+        let mut skill = sample_skill("b", "b", tmp.path());
+        skill.source_type = "git".to_string();
+        skill.source_ref_resolved = Some("https://example.test/a.git".to_string());
+        skill.source_subpath = Some(r"skills\b".to_string());
+
+        assert_eq!(
+            git_source_from_skill(&skill).unwrap().subpath.as_deref(),
+            Some("skills/b")
+        );
+    }
+
+    /// A skills.sh skill keeps its id lookup for the update itself. A check that
+    /// only sees the recorded path missing must not call it deleted: the skill
+    /// may simply have moved, which the update would follow (#278, #655).
+    #[test]
+    fn a_check_does_not_call_a_skillssh_skill_gone() {
+        let repo = test_repo();
+        let (dir, url, installed) = monorepo(&repo);
+        insert_skillssh_skill(&repo.store, "b", "owner/repo/b", &url, Some("skills/b"), &installed);
+
+        fs::create_dir_all(dir.join("other")).unwrap();
+        git_in(&dir, &["mv", "skills/b", "other/b"]);
+        git_in(&dir, &["commit", "-qm", "move b"]);
+
+        let dto = check_skill_update_internal(&repo.store, "b", true, None).unwrap();
+        assert_eq!(
+            dto.update_status, "update_available",
+            "only the update, which can look by id, may decide"
+        );
+    }
+
+    /// Once an update has called a skills.sh skill deleted, a check keeps that
+    /// answer: it has no blobs, so it cannot look by id, and turning the status
+    /// back into "update available" would re-clone the whole Source next round
+    /// only to learn the same thing (#655).
+    #[test]
+    fn a_check_keeps_a_settled_source_gone_for_a_skillssh_skill() {
+        let repo = test_repo();
+        let (dir, url, installed) = monorepo(&repo);
+        insert_skillssh_skill(&repo.store, "b", "owner/repo/b", &url, Some("skills/b"), &installed);
+        repo.store
+            .update_skill_check_state("b", Some(&installed), skill_store::SOURCE_GONE, None)
+            .unwrap();
+
+        // Nothing has moved yet: the check still has no grounds to disagree.
+        let dto = check_skill_update_internal(&repo.store, "b", true, None).unwrap();
+        assert_eq!(dto.update_status, "source_gone");
+
+        git_in(&dir, &["rm", "-r", "-q", "skills/b"]);
+        git_in(&dir, &["commit", "-qm", "drop b"]);
+        let dto = check_skill_update_internal(&repo.store, "b", true, None).unwrap();
+        assert_eq!(dto.update_status, "source_gone");
+    }
+
+    /// A skills.sh skill its Source deleted is nowhere the update would look —
+    /// not at the recorded subpath, not by id. That is an answer, not a failure:
+    /// the status records it and the local copy is left alone (#655).
+    #[test]
+    fn an_update_whose_skill_the_source_deleted_records_source_gone() {
+        let repo = test_repo();
+        let (dir, url, installed) = monorepo(&repo);
+        insert_skillssh_skill(
+            &repo.store,
+            "b",
+            "owner/repo/b",
+            &url,
+            Some("skills/b"),
+            &installed,
+        );
+        let central = PathBuf::from(&repo.store.get_skill_by_id("b").unwrap().unwrap().central_path);
+        write_skill(&central, "b");
+
+        git_in(&dir, &["rm", "-r", "-q", "skills/b"]);
+        git_in(&dir, &["commit", "-qm", "drop b"]);
+
+        let result = update_git_skill_internal(&repo.store, "b", None, None, None).unwrap();
+
+        assert_eq!(result.skill.update_status, "source_gone");
+        assert!(!result.content_changed);
+        assert!(result.pending_removals.is_empty());
+        let stored = repo.store.get_skill_by_id("b").unwrap().unwrap();
+        assert_eq!(stored.last_check_error, None);
+        assert!(central.exists(), "the local copy is what the user still has");
     }
 
     /// "Check all" resolves each remote once. Its siblings — here installed at

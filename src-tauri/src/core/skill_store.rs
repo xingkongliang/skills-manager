@@ -15,6 +15,35 @@ pub struct SkillStore {
     secret_key: [u8; 32],
 }
 
+/// The Source no longer holds this skill anywhere an update would look (#655).
+///
+/// Written by the check when the recorded subpath is gone from the `head` tree,
+/// and by an update when neither the subpath nor the skills.sh locator finds it.
+/// Nothing automatic can clear it: only the author restoring the skill (seen by
+/// the next check a user starts) or the user re-pointing the Source can.
+pub const SOURCE_GONE: &str = "source_gone";
+
+/// Whether a re-check could change this status on its own.
+///
+/// A settled answer is one that exists because something was already established:
+/// up to date, an update waiting, a Source that no longer holds the skill, a
+/// local copy with nothing to compare. Only the four transient states keep asking.
+/// The check TTL sits on this set; adding a status here is what makes it settled,
+/// so the two questions below can never drift apart.
+pub fn is_settled_update_status(status: &str) -> bool {
+    !matches!(status, "unknown" | "checking" | "updating" | "error")
+}
+
+/// Whether an automatic round can do anything about this status.
+///
+/// `source_gone` is the one settled answer that no retry improves: the skill is
+/// not in the Source, so a fetch, an update attempt and a failure count are all
+/// wasted work. A round skips these skills entirely rather than counting them as
+/// failures — the state is a fact about the Source, not an error to recover from.
+pub fn is_terminal_update_status(status: &str) -> bool {
+    status == SOURCE_GONE
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillRecord {
     pub id: String,

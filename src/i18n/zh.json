@@ -373,7 +373,8 @@
       "available": "可更新",
       "error": "检查失败",
       "localOnly": "本地来源",
-      "sourceMissing": "原路径丢失"
+      "sourceMissing": "原路径丢失",
+      "sourceGone": "来源失配"
     },
     "updateActions": {
       "check": "检查",
@@ -476,6 +477,49 @@
       "apply": "同步 {{count}} 项",
       "noAgents": "没有已安装并启用的 Agent。",
       "allSynced": "选中的 Skill 都已同步到这个 Agent"
+    },
+    "batchSourceGone": "{{count}} 个技能的来源已不提供它们",
+    "cleanup": {
+      "entry": "处理 {{count}} 个来源失配的技能",
+      "row": "{{name}} — 来源 {{subpath}} · 本地副本 {{path}} · {{deployments}} 个部署 · {{presets}} 个预设",
+      "rootSubpath": "(仓库根目录)",
+      "deleted": "已删除 {{count}} 个技能",
+      "failed": "{{count}} 个技能删除失败"
+    },
+    "repair": {
+      "back": "返回我的技能",
+      "title": "来源不再提供这些技能",
+      "subtitle": "{{count}} 个技能需要决定怎么处理",
+      "sourceMeta": "{{count}} 个技能 · 分支 {{branch}}",
+      "defaultBranch": "默认分支",
+      "openRepo": "打开仓库",
+      "openPath": "打开记录的路径",
+      "scan": "扫描并找出新位置",
+      "scanFailed": "扫描失败：{{reason}}",
+      "empty": "没有需要处理的技能 —— 每个来源都还在原来的位置提供它们。",
+      "deleteSelected": "删除 {{count}} 个",
+      "rowMeta": "来源 {{subpath}} · 本地副本 {{path}} · {{deployments}} 个部署 · {{presets}} 个预设",
+      "revisionKnown": "安装时的提交仍在这条历史里",
+      "revisionGone": "仓库历史被重写过 —— 安装时的提交已不存在",
+      "update": "原地更新",
+      "repoint": "重指到 {{subpath}}",
+      "overwrite": "保留本地改动？确认覆盖本地副本",
+      "detached": "{{name}} 已转为本地技能",
+      "updated": "{{name}} 已原地更新",
+      "repointed": "{{name}} 已重指到 {{subpath}}",
+      "groups": {
+        "at": "可以原地更新（{{count}}）",
+        "moved": "在仓库里换了位置（{{count}}）",
+        "gone": "仓库里找不到（{{count}}）",
+        "unreachable": "来源不可达（{{count}}）"
+      },
+      "evidence": {
+        "content_hash": "目录内容与安装时一致",
+        "directory_name": "只有目录名相同，重指前请先确认"
+      },
+      "deleteTitle": "删除这 {{count}} 个技能？",
+      "deleteWarning": "删除之前它们仍然正常安装和部署。删除会连同它们的部署与预设引用一起移除库里那一份，且无法恢复。",
+      "noChange": "这个来源没有发现新情况 —— 技能都还在安装时的位置。"
     }
   },
   "install": {

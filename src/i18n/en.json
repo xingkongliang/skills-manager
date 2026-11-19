@@ -373,7 +373,8 @@
       "available": "Update available",
       "error": "Check failed",
       "localOnly": "Local source",
-      "sourceMissing": "Source missing"
+      "sourceMissing": "Source missing",
+      "sourceGone": "Source mismatch"
     },
     "updateActions": {
       "check": "Check",
@@ -476,6 +477,49 @@
       "apply": "Sync {{count}}",
       "noAgents": "No installed and enabled agents.",
       "allSynced": "Every selected skill is already on this agent"
+    },
+    "batchSourceGone": "{{count}} skill(s) are no longer in their Source where they were installed",
+    "cleanup": {
+      "entry": "Repair {{count}} skill(s) their Source no longer holds",
+      "row": "{{name}} — from {{subpath}} · copy at {{path}} · {{deployments}} deployment(s) · {{presets}} preset(s)",
+      "rootSubpath": "(repository root)",
+      "deleted": "{{count}} skills deleted",
+      "failed": "{{count}} could not be deleted"
+    },
+    "repair": {
+      "back": "Back to My Skills",
+      "title": "Skills their Source no longer holds",
+      "subtitle": "{{count}} skill(s) need a decision",
+      "sourceMeta": "{{count}} skill(s) · branch {{branch}}",
+      "defaultBranch": "default branch",
+      "openRepo": "Open repository",
+      "openPath": "Open recorded path",
+      "scan": "Scan for a new location",
+      "scanFailed": "Could not scan: {{reason}}",
+      "empty": "Nothing to repair — every Source still holds its skills where they were installed.",
+      "deleteSelected": "Delete {{count}}",
+      "rowMeta": "from {{subpath}} · copy at {{path}} · {{deployments}} deployment(s) · {{presets}} preset(s)",
+      "revisionKnown": "The installed revision is still in the Source history",
+      "revisionGone": "The Source history was rebuilt — the installed revision is gone",
+      "update": "Update in place",
+      "repoint": "Re-point to {{subpath}}",
+      "overwrite": "Keep the library copy as it is? Updating overwrites your local changes.",
+      "detached": "{{name}} is now a local skill",
+      "updated": "{{name}} updated in place",
+      "repointed": "{{name}} re-pointed to {{subpath}}",
+      "groups": {
+        "at": "Can be updated in place ({{count}})",
+        "moved": "Moved in the Source ({{count}})",
+        "gone": "Not found in the Source ({{count}})",
+        "unreachable": "Source unreachable ({{count}})"
+      },
+      "evidence": {
+        "content_hash": "The directory content matches what was installed",
+        "directory_name": "Only the directory name matches — check before re-pointing"
+      },
+      "deleteTitle": "Delete {{count}} skill(s)?",
+      "deleteWarning": "They stay installed and deployed until you delete them. Deleting removes the library copy together with its deployments and preset mentions. This cannot be undone.",
+      "noChange": "Nothing new in this Source — every skill is still where it was installed."
     }
   },
   "install": {
