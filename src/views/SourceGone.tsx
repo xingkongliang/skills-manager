@@ -151,7 +151,15 @@ export function SourceGone() {
       // copy may be replaced by the new location's content, an edited one only
       // when the user ticked it.
       const force = !row.localChanged || overwrite.has(row.id);
-      await api.repointSkillSource(row.id, row.cloneUrl ?? "", subpath, force);
+      // The branch the row is tracked on: the candidate was found there, and
+      // this is what every later update will follow.
+      await api.repointSkillSource(
+        row.id,
+        row.cloneUrl ?? "",
+        subpath,
+        row.branch,
+        force
+      );
       toast.success(t("mySkills.repair.repointed", { name: row.name, subpath }));
     });
 

@@ -409,13 +409,17 @@ export const repointSkillSource = (
   skillId: string,
   gitUrl: string,
   subpath: string | null,
+  branch: string | null,
   force: boolean
 ) =>
   invoke<RepointSkillResult>("repoint_skill_source", {
     skillId,
     gitUrl,
     subpath,
-    branch: null,
+    // The branch the Skill is tracked on, not the Source's default: the
+    // candidate was found there, and whatever is recorded here is what every
+    // later update follows.
+    branch,
     force,
     dryRun: false,
   });
