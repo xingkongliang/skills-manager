@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStderr, Command, Stdio};
+use std::process::{ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -643,9 +643,17 @@ pub fn clone_repo_ref_scoped(
 
 /// Whether an error is a user cancellation rather than a fault worth retrying
 /// differently.
+///
+/// Every cause in the chain is inspected, not just the outermost message: a
+/// cancelled git command is usually wrapped in a context describing what was
+/// being attempted, and reading only that layer would report a cancellation as
+/// an ordinary failure — which is exactly the case that falls back to a full
+/// clone and keeps working after the user asked it to stop.
 fn is_cancellation(err: &anyhow::Error) -> bool {
-    let message = err.to_string();
-    message.contains("cancelled") || message.contains("canceled")
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("cancelled") || message.contains("canceled")
+    })
 }
 
 /// Turn a stored subpath into a sparse-checkout pattern, or `None` when it is not
@@ -741,61 +749,100 @@ fn skill_subpath_from_repo_tree(
     skill_id: &str,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<String> {
-    if cancel.is_some_and(|cancel| cancel.load(Ordering::SeqCst)) {
-        bail!("Installation cancelled");
-    }
-    let output = git_command()
+    let mut command = git_command();
+    command
         .arg("-C")
         .arg(repo)
-        .args(["ls-tree", "-r", "-z", "--name-only", "HEAD"])
-        .output()
+        .args(["ls-tree", "-r", "-z", "--name-only", "HEAD"]);
+    // The cache lock is held across this call, and a partial clone can answer a
+    // tree walk with a promisor fetch. Supervise it like every other git command
+    // on a cache instead of blocking the lock on `.output()`.
+    let stdout = run_git_watched_collecting_stdout(command, cancel, &None)
         .context("Failed to index the repository tree")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git ls-tree exited with {}: {}", output.status, stderr.trim());
-    }
-    if cancel.is_some_and(|cancel| cancel.load(Ordering::SeqCst)) {
-        bail!("Installation cancelled");
-    }
 
-    resolve_skill_subpath_from_tree(&output.stdout, skill_id)
+    resolve_skill_subpath_from_tree(&stdout, skill_id)
         .ok_or_else(|| anyhow::anyhow!("No unique skill directory found for '{skill_id}'"))
 }
 
+/// Levels below the checkout root that `find_skill_dir`'s recursive search
+/// reaches. A tree answer deeper than this is one the installer's own locator
+/// cannot find on the checkout it is handed, so narrowing to it would fail an
+/// install that the full checkout resolves.
+const SKILL_LOCATOR_MAX_DEPTH: usize = 6;
+
+/// Pick the directory `find_skill_dir` would return on a full checkout, using
+/// only the paths in a blobless tree.
+///
+/// The clone has already succeeded by the time the installer searches its
+/// checkout, so a tree answer that disagrees with that search cannot fall back —
+/// it installs the wrong skill, or fails outright. Everything here is therefore
+/// a prediction of `find_skill_dir`, and anything that cannot be predicted is
+/// `None` (a full checkout) rather than a guess:
+///
+/// * The same three fixed locations, probed in the same order, each taken only
+///   when it holds a skill marker.
+/// * The same depth limit for the recursive basename search, and the same
+///   "refuse to choose between several" rule where the walk order would decide.
+/// * A directory that answers a probe only case-insensitively is refused. On a
+///   case-insensitive filesystem — the macOS and Windows default — `foo/`
+///   answers a lookup for `FOO`, and that is what a full checkout resolves; the
+///   tree compares exact strings and would pick `skills/FOO` instead.
+/// * Frontmatter `name:` matches need file contents, so they are never
+///   predicted: a layout that only resolves through one takes the full
+///   checkout. That is not a gap in the prediction, because a full checkout
+///   always prefers an exact basename match over a frontmatter match, and this
+///   function only answers when it found one.
 fn resolve_skill_subpath_from_tree(tree_paths: &[u8], skill_id: &str) -> Option<String> {
     let skill_id = sparse_pattern(Some(skill_id))?;
-    let directories: HashSet<String> = tree_paths
-        .split(|byte| *byte == 0)
-        .filter_map(|path| {
-            let path = std::str::from_utf8(path).ok()?;
-            let (directory, file_name) = path.rsplit_once('/')?;
-            file_name
-                .eq_ignore_ascii_case("SKILL.md")
-                .then(|| directory.to_string())
-        })
-        .collect();
+    let directories = tree_skill_directories(tree_paths);
 
-    if directories.contains(&skill_id) {
-        return Some(skill_id);
+    // `find_skill_dir` probes `<id>`, `skills/<id>`, then `.agents/skills/<id>`
+    // before it searches, and takes the first that is a skill. A probe answered
+    // only case-insensitively ends the prediction there, because that is the
+    // answer a case-insensitive checkout gives.
+    for probe in [
+        skill_id.clone(),
+        format!("skills/{skill_id}"),
+        format!(".agents/skills/{skill_id}"),
+    ] {
+        if directories.contains(&probe) {
+            return Some(probe);
+        }
+        if directories
+            .iter()
+            .any(|directory| directory.eq_ignore_ascii_case(&probe))
+        {
+            return None;
+        }
     }
+    // `e.file_name() == id` can never hold for an id with a separator, so the
+    // recursive branch is unreachable and the three probes were the last chance.
     if skill_id.contains('/') {
         return None;
     }
 
-    for candidate in [
-        format!("skills/{skill_id}"),
-        format!(".agents/skills/{skill_id}"),
-    ] {
-        if directories.contains(&candidate) {
-            return Some(candidate);
-        }
-    }
-
-    let mut matches = directories
-        .into_iter()
-        .filter(|directory| directory.rsplit('/').next() == Some(skill_id.as_str()));
+    // Depth-limited exact basename matches, as the walk sees them. Several of
+    // them would be settled by the filesystem's own read order, so that is not
+    // something to predict.
+    let mut matches = directories.into_iter().filter(|directory| {
+        directory.rsplit('/').next() == Some(skill_id.as_str())
+            && directory.split('/').count() <= SKILL_LOCATOR_MAX_DEPTH
+    });
     let first = matches.next()?;
     matches.next().is_none().then_some(first)
+}
+
+/// Directories in `tree_paths` that hold a skill marker file under its exact
+/// recognised name, as `/`-joined paths relative to the tree root.
+fn tree_skill_directories(tree_paths: &[u8]) -> HashSet<String> {
+    tree_paths
+        .split(|byte| *byte == 0)
+        .filter_map(|path| {
+            let path = std::str::from_utf8(path).ok()?;
+            let (directory, file_name) = path.rsplit_once('/')?;
+            skill_metadata::is_skill_marker_file(file_name).then(|| directory.to_string())
+        })
+        .collect()
 }
 
 fn sparse_clone_into(
@@ -994,18 +1041,41 @@ fn run_git_watched_at(
 /// call this: it has no end-to-end test coverage, so the safe move is to add a
 /// path beside it, not to rewrite it.
 fn run_git_watched(
-    mut command: Command,
+    command: Command,
     cancel: Option<&Arc<AtomicBool>>,
     on_progress: &Option<ProgressCallback>,
 ) -> Result<()> {
+    run_git_watched_collecting_stdout(command, cancel, on_progress).map(|_| ())
+}
+
+/// The same cancel/timeout supervision as [`run_git_watched`], also returning
+/// what git wrote to stdout.
+///
+/// `Command::output()` is the obvious way to read a command's stdout and the
+/// wrong one here: it waits to completion with no deadline and no way to react
+/// to a cancelled install, and the cache lock is held for the whole time. A
+/// wedged git — an object fetch behind a promisor remote, a stalled pack
+/// negotiation — would park that lock until the process was killed externally.
+/// So stdout is drained on its own thread next to stderr while the supervisor
+/// polls `cancel` and the deadline, exactly as the no-stdout path does.
+///
+/// The stdout pipe must be drained concurrently, not after the wait: a command
+/// that fills it blocks on write, and a supervisor that only reads afterwards
+/// then waits on a child that is waiting on it.
+fn run_git_watched_collecting_stdout(
+    mut command: Command,
+    cancel: Option<&Arc<AtomicBool>>,
+    on_progress: &Option<ProgressCallback>,
+) -> Result<Vec<u8>> {
     let mut child = command
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("Failed to start git")?;
 
     let (stderr_rx, stderr_thread) =
         spawn_stderr_collector(child.stderr.take(), on_progress.is_some());
+    let stdout_thread = spawn_stdout_collector(child.stdout.take());
     let deadline = Instant::now() + Duration::from_secs(CLONE_TIMEOUT_SECS);
 
     loop {
@@ -1025,11 +1095,12 @@ fn run_git_watched(
 
         match child.try_wait() {
             Ok(Some(status)) => {
-                let collected = stderr_thread.join().unwrap_or_default();
+                let stderr = stderr_thread.join().unwrap_or_default();
+                let stdout = stdout_thread.join().unwrap_or_default();
                 if status.success() {
-                    return Ok(());
+                    return Ok(stdout);
                 }
-                bail!("git exited with {}: {}", status, collected.trim());
+                bail!("git exited with {}: {}", status, stderr.trim());
             }
             Ok(None) => {
                 if Instant::now() > deadline {
@@ -1046,6 +1117,17 @@ fn run_git_watched(
             }
         }
     }
+}
+
+/// Drain a child's stdout on its own thread so the supervisor never blocks on it.
+fn spawn_stdout_collector(stdout: Option<ChildStdout>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut collected = Vec::new();
+        if let Some(mut stdout) = stdout {
+            let _ = stdout.read_to_end(&mut collected);
+        }
+        collected
+    })
 }
 
 fn clone_repo_full(
@@ -2461,6 +2543,12 @@ mod tests {
             resolve_skill_subpath_from_tree(tree, "music-to-video").as_deref(),
             Some("skills/music-to-video")
         );
+        // A directory holding a marker only under a different spelling is not a
+        // skill for `is_valid_skill_dir`, so it is not one here either.
+        assert_eq!(
+            resolve_skill_subpath_from_tree(b"skills/x/Readme.md\0skills/x/skill.MD\0", "x"),
+            None
+        );
     }
 
     #[test]
@@ -2477,14 +2565,105 @@ mod tests {
             Some("skills/music-to-video")
         );
 
+        // Two candidates the fixed probes do not cover: the full checkout picks
+        // whichever its walk reaches first, so this is not predictable. Removing
+        // the "exactly one" branch turns this into `Some` of one of them.
         let tree = b"tools/music-to-video/SKILL.md\0examples/music-to-video/SKILL.md\0";
         assert_eq!(resolve_skill_subpath_from_tree(tree, "music-to-video"), None);
     }
 
+    /// Both repro cases from the review, as the tree sees them.
     #[test]
-    fn tree_locator_rejects_unsafe_or_unresolved_ids() {
+    fn tree_locator_falls_back_when_the_full_checkout_would_choose_differently() {
+        // A case-insensitive filesystem answers a lookup for `FOO` with `foo/`,
+        // and `find_skill_dir` takes that first probe. The tree cannot express
+        // the filesystem's answer, so it refuses to narrow at all.
+        let case = b"foo/SKILL.md\0skills/FOO/SKILL.md\0";
+        assert_eq!(resolve_skill_subpath_from_tree(case, "FOO"), None);
+        // The exact-case id still narrows to its own directory.
+        assert_eq!(
+            resolve_skill_subpath_from_tree(case, "foo").as_deref(),
+            Some("foo")
+        );
+
+        // `wanted` sits seven levels down, past the installer's six-level walk,
+        // so the full checkout resolves the frontmatter alias instead. Narrowing
+        // to the deep directory would install something the locator never sees.
+        let depth = b"alias/SKILL.md\0a/b/c/d/e/f/wanted/SKILL.md\0";
+        assert_eq!(resolve_skill_subpath_from_tree(depth, "wanted"), None);
+        assert_eq!(
+            resolve_skill_subpath_from_tree(b"alias/SKILL.md\0", "wanted"),
+            None,
+            "a name-field match needs file contents and is never predicted"
+        );
+    }
+
+    #[test]
+    fn tree_locator_stops_at_the_installers_depth_limit() {
+        // `a/b/c/d/e/wanted` is six levels down, which `max_depth(6)` reaches.
+        assert_eq!(
+            resolve_skill_subpath_from_tree(b"a/b/c/d/e/wanted/SKILL.md\0", "wanted").as_deref(),
+            Some("a/b/c/d/e/wanted")
+        );
+        // One level deeper is not reachable, so there is nothing to narrow to.
+        assert_eq!(
+            resolve_skill_subpath_from_tree(b"a/b/c/d/e/f/wanted/SKILL.md\0", "wanted"),
+            None
+        );
+    }
+
+    /// The id is used verbatim as a sparse-checkout pattern and joined onto the
+    /// checkout by the caller, so one that is not already a clean path is refused
+    /// rather than tidied into one.
+    ///
+    /// `x/foo ` is the case that proves it: a trailing space is a legal unix
+    /// directory name, so the recursive basename branch below would answer
+    /// `Some("x/foo ")` if the id reached it unexamined — and the caller would
+    /// then narrow to a path it cannot round-trip. Delete the `sparse_pattern`
+    /// call and this assertion turns red on every platform.
+    #[test]
+    fn tree_locator_only_answers_ids_it_can_hand_back_verbatim() {
+        assert_eq!(
+            resolve_skill_subpath_from_tree(b"x/foo /SKILL.md\0", "foo "),
+            None
+        );
+        assert_eq!(
+            resolve_skill_subpath_from_tree(b"x \0", "x "),
+            None,
+            "the same name without a marker is not a skill either"
+        );
+
         let tree = b"skills/music-to-video/SKILL.md\0";
-        assert_eq!(resolve_skill_subpath_from_tree(tree, "../music-to-video"), None);
+        for dirty in [
+            "../music-to-video",
+            "skills//music-to-video",
+            "./skills/music-to-video",
+            "skills/music-to-video/",
+            " /skills/music-to-video",
+        ] {
+            assert_eq!(
+                sparse_pattern(Some(dirty)),
+                None,
+                "{dirty} must not be usable as a sparse pattern"
+            );
+            assert_eq!(
+                resolve_skill_subpath_from_tree(tree, dirty),
+                None,
+                "{dirty} must not be narrowed"
+            );
+        }
+        // A backslash cannot be part of a Windows directory name, so there it is
+        // normalized rather than refused (the same `cfg` `content_hash` uses).
+        // On unix it is a legal character and rewriting it would select a
+        // different directory than the caller joins onto.
+        #[cfg(windows)]
+        assert_eq!(
+            sparse_pattern(Some("skills\\music-to-video")).as_deref(),
+            Some("skills/music-to-video")
+        );
+        #[cfg(unix)]
+        assert_eq!(sparse_pattern(Some("skills\\music-to-video")), None);
+
         assert_eq!(resolve_skill_subpath_from_tree(tree, "missing"), None);
     }
 
@@ -2516,6 +2695,31 @@ mod tests {
             skill_subpath_from_repo_tree(&repo_dir, "music-to-video", None).unwrap(),
             "skills/music-to-video"
         );
+    }
+
+    /// The tree walk runs while the cache lock is held, so it has to answer a
+    /// cancelled install instead of finishing.
+    #[test]
+    fn tree_indexing_honours_cancellation() {
+        let tmp = tempdir().unwrap();
+        let repo_dir = tmp.path().join("repo");
+        fs::create_dir_all(repo_dir.join("skills/foo")).unwrap();
+        fs::write(repo_dir.join("skills/foo/SKILL.md"), "---\nname: foo\n---\n").unwrap();
+        let repo = Repository::init(&repo_dir).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("skills/foo/SKILL.md")).unwrap();
+        let tree_id = index.write_tree().unwrap();
+        {
+            let tree = repo.find_tree(tree_id).unwrap();
+            let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+            repo.commit(Some("HEAD"), &signature, &signature, "test", &tree, &[])
+                .unwrap();
+        }
+        drop(repo);
+
+        let cancel = Arc::new(AtomicBool::new(true));
+        let err = skill_subpath_from_repo_tree(&repo_dir, "foo", Some(&cancel)).unwrap_err();
+        assert!(is_cancellation(&err), "got {err}");
     }
 
     /// The pattern handed to git has to name the same directory the caller will
@@ -2748,6 +2952,234 @@ mod tests {
         cleanup_temp(&checkout);
         central_repo::set_test_base_dir_override(None);
     }
+    // ── narrow clone by skill id, end to end over a local partial clone ──
+
+    /// Serve `repo` over `file://` and turn on the filter that makes a partial
+    /// clone possible, exactly as a hosting server would.
+    ///
+    /// `file://` needs forward slashes and, on Windows, a slash before the drive
+    /// letter: `file:///C:/…` where unix wants `file:///tmp/…`.
+    fn serve_partial_clone(repo: &Path) -> String {
+        git_in(repo, &["config", "uploadpack.allowFilter", "true"]);
+        let raw = repo.display().to_string().replace('\\', "/");
+        if raw.starts_with('/') {
+            format!("file://{raw}")
+        } else {
+            format!("file:///{raw}")
+        }
+    }
+
+    fn git_in(dir: &Path, args: &[&str]) -> std::process::Output {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git must be runnable")
+    }
+
+    /// Commit `files` (`path`, `contents`) as the repository's only revision.
+    fn commit_tree(repo: &Path, files: &[(&str, &str)]) {
+        fs::create_dir_all(repo).unwrap();
+        git_in(repo, &["init", "-q"]);
+        for (path, contents) in files {
+            let full = repo.join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(full, contents).unwrap();
+        }
+        git_in(repo, &["add", "-A"]);
+        git_in(
+            repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "init",
+            ],
+        );
+    }
+
+    /// What a full checkout of the served repository resolves for `skill_id`,
+    /// as the directory's path relative to the checkout root.
+    ///
+    /// Canonicalized before it is made relative because `find_skill_dir` returns
+    /// the path it joined, not the one it found: on a case-insensitive filesystem
+    /// a lookup for `FOO` is answered by `foo/` and comes back spelled `FOO`. The
+    /// physical directory is what decides which skill gets installed.
+    fn full_checkout_answer(url: &str, skill_id: &str) -> Option<String> {
+        let tmp = tempdir().unwrap();
+        let checkout = tmp.path().join("full");
+        let cloned = Command::new("git")
+            .args(["clone", "-q"])
+            .arg(url)
+            .arg(&checkout)
+            .output()
+            .unwrap();
+        assert!(
+            cloned.status.success(),
+            "full clone failed: {}",
+            String::from_utf8_lossy(&cloned.stderr)
+        );
+        let root = fs::canonicalize(&checkout).unwrap();
+        find_skill_dir(&checkout, Some(skill_id)).ok().map(|found| {
+            let relative = fs::canonicalize(&found)
+                .expect("the resolved directory must exist")
+                .strip_prefix(&root)
+                .expect("the answer must be inside the checkout")
+                .to_string_lossy()
+                .replace('\\', "/");
+            relative
+        })
+    }
+
+    /// Run the real narrow-clone path over a filter-capable `file://` remote and
+    /// report what the installer's own resolver finds in the checkout it returns,
+    /// as a path relative to that checkout.
+    ///
+    /// Both halves are what production runs: `clone_repo_ref_for_skill_id` is the
+    /// function the skills.sh installer calls, and `resolve_skill_dir` is what it
+    /// then calls on the result. A tree answer that disagrees with the full
+    /// checkout shows up here as a different directory or an error, which is
+    /// exactly the failure a unit test on the tree parser cannot see.
+    fn narrow_checkout_answer(url: &str, skill_id: &str) -> Option<String> {
+        let checkout = clone_repo_ref_for_skill_id(url, None, skill_id, None, None, None)
+            .expect("the narrow clone must not fail the install");
+        let root = fs::canonicalize(&checkout).unwrap();
+        let answer = crate::commands::skills::resolve_skill_dir(&checkout, None, Some(skill_id))
+            .ok()
+            .map(|resolved| {
+                fs::canonicalize(&resolved)
+                    .expect("the resolved directory must exist")
+                    .strip_prefix(&root)
+                    .expect("the answer must be inside the checkout")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            });
+        cleanup_temp(&checkout);
+        answer
+    }
+
+    /// Case (i): an id whose exact-case directory is not the one a
+    /// case-insensitive filesystem answers first.
+    ///
+    /// `foo/` and `skills/FOO/` both exist and the id is `FOO`. On the macOS and
+    /// Windows default a full checkout's first probe (`<id>`) reaches `foo/`, so
+    /// that is the skill installed. A tree that compared exact strings would
+    /// narrow to `skills/FOO` and install a different skill under the same name.
+    #[test]
+    fn a_narrow_clone_agrees_with_the_full_checkout_on_case_insensitive_layouts() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let repo = tmp.path().join("case-repo");
+        commit_tree(
+            &repo,
+            &[
+                ("foo/SKILL.md", "---\nname: foo\n---\n"),
+                ("skills/FOO/SKILL.md", "---\nname: FOO\n---\n"),
+            ],
+        );
+        let url = serve_partial_clone(&repo);
+
+        let narrow = narrow_checkout_answer(&url, "FOO");
+        let full = full_checkout_answer(&url, "FOO").expect("a full checkout resolves the id");
+        // What the full checkout resolves is the platform's answer: on a
+        // case-insensitive filesystem the first probe `FOO` is answered by `foo/`,
+        // on Linux it is not a directory at all and the next probe wins.
+        let expected = if cfg!(windows) || cfg!(target_os = "macos") {
+            "foo"
+        } else {
+            "skills/FOO"
+        };
+        assert_eq!(full, expected, "the full checkout's own answer, pinned");
+        assert_eq!(
+            narrow.as_deref(), Some(full.as_str()),
+            "the narrow clone must install the same directory a full checkout resolves"
+        );
+
+        // The exact-case id is unambiguous and still narrows.
+        assert_eq!(narrow_checkout_answer(&url, "foo").as_deref(), Some("foo"));
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    /// Case (ii): a candidate past the installer's six-level walk.
+    ///
+    /// `alias/` declares `name: wanted` and `a/b/c/d/e/f/wanted/` is seven levels
+    /// down. A full checkout installs `alias` through the frontmatter match
+    /// because the walk never reaches the deep directory; narrowing to it would
+    /// make `resolve_skill_dir` fail with "not found".
+    #[test]
+    fn a_narrow_clone_agrees_with_the_full_checkout_on_names_beyond_the_depth_limit() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let repo = tmp.path().join("depth-repo");
+        commit_tree(
+            &repo,
+            &[
+                ("alias/SKILL.md", "---\nname: wanted\n---\n"),
+                ("a/b/c/d/e/f/wanted/SKILL.md", "---\nname: wanted\n---\n"),
+            ],
+        );
+        let url = serve_partial_clone(&repo);
+
+        let narrow = narrow_checkout_answer(&url, "wanted");
+        let full = full_checkout_answer(&url, "wanted").expect("a full checkout resolves the alias");
+        assert_eq!(full, "alias", "the full checkout resolves the frontmatter alias");
+        assert_eq!(
+            narrow.as_deref(), Some(full.as_str()),
+            "a directory the installer's walk cannot reach must not be the narrow answer"
+        );
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    /// The case the feature exists for: a nested skill whose tree answer
+    /// `find_skill_dir` also gives, which is narrowed — and the checkout really
+    /// holds only that directory.
+    #[test]
+    fn a_narrow_clone_installs_a_nested_skill_the_locator_can_find() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let repo = tmp.path().join("nested-repo");
+        commit_tree(
+            &repo,
+            &[
+                ("README.md", "# repo\n"),
+                ("skills/needed/SKILL.md", "---\nname: needed\n---\n"),
+                ("skills/sibling/SKILL.md", "---\nname: sibling\n---\n"),
+            ],
+        );
+        let url = serve_partial_clone(&repo);
+
+        assert_eq!(
+            narrow_checkout_answer(&url, "needed").as_deref(),
+            Some("skills/needed"),
+            "the tree answer is the one the locator gives, so it must be installed"
+        );
+        assert_eq!(
+            full_checkout_answer(&url, "needed").as_deref(),
+            Some("skills/needed")
+        );
+
+        // The whole point of narrowing: the sibling was never fetched into a
+        // checkout. (Its objects are in the shared cache slot either way.)
+        let narrow = clone_repo_ref_for_skill_id(&url, None, "needed", None, None, None).unwrap();
+        assert!(narrow.join("skills/needed/SKILL.md").is_file());
+        assert!(
+            !narrow.join("skills/sibling").exists(),
+            "a sibling must not be checked out"
+        );
+        cleanup_temp(&narrow);
+        central_repo::set_test_base_dir_override(None);
+    }
+
     // ── the promisor boundary ──
 
     /// The rule this locks in: nothing handed outside this module is a partial
