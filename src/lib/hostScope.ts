@@ -14,6 +14,7 @@ export const HOST_SCOPED_COMMANDS: ReadonlySet<string> = new Set([
   "operation_results_request",
   "instructions_request",
   "mcps_request",
+  "project_setup_request",
   "resource_sync_request",
   // Tools
   "get_tool_status",

@@ -22,6 +22,7 @@ pub const COMMANDS: &[&str] = &[
     "operation_results_request",
     "instructions_request",
     "mcps_request",
+    "project_setup_request",
     "resource_sync_request",
     // Tools
     "get_tool_status",
@@ -211,6 +212,7 @@ pub fn dispatch(ctx: &HostCtx, command: &str, args: &Value) -> Result<Value, App
         ),
         "instructions_request" => crate::core::instructions::dispatch(ctx, a.req("request")?),
         "mcps_request" => crate::core::mcps::dispatch(ctx, a.req("request")?),
+        "project_setup_request" => crate::core::project_setup::dispatch(ctx, a.req("request")?),
         "resource_sync_request" => crate::core::resource_sync::dispatch(ctx, a.req("request")?),
         // Tools
         "get_tool_status" => reply(tools::get_tool_status_core(ctx)),

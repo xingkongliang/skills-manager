@@ -1,6 +1,7 @@
+use std::io;
 use std::path::PathBuf;
 
-use app_lib::core::{app_state, central_repo, serve};
+use app_lib::core::{app_state, central_repo, host::HostCtx, mcp_server, serve};
 use clap::{Args, Parser, Subcommand};
 
 use crate::args::{GitArgs, PresetArgs, RepoArgs, RepoCommand, SkillsArgs, SyncArgs, ToolsArgs};
@@ -61,6 +62,9 @@ enum Commands {
     /// Answer the app's commands over stdin/stdout, for a Skills Manager app
     /// on another machine connected over ssh.
     Serve(ServeArgs),
+    /// Run a local MCP server on stdin/stdout for coding agents. It opens the
+    /// library read-only.
+    Mcp,
 }
 
 #[derive(Args, Debug)]
@@ -137,9 +141,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         central_repo::set_runtime_base_dir_override(Some(base_dir.clone()));
     }
 
-    let resource_dry_run = matches!(&cli.command,
-        Commands::Instructions(args) | Commands::Mcps(args) if args.dry_run);
-    let store = if resource_dry_run {
+    let read_only = matches!(&cli.command,
+        Commands::Instructions(args) | Commands::Mcps(args) if args.dry_run)
+        || matches!(&cli.command, Commands::Mcp);
+    let store = if read_only {
         std::sync::Arc::new(
             app_lib::core::skill_store::SkillStore::open_resource_read_only(
                 &central_repo::db_path(),
@@ -162,6 +167,17 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Git(args) => run_git(args, &store, cli.json),
         // stdout carries the protocol; nothing else may print there.
         Commands::Serve(_) => Ok(serve::serve_stdio(store)?),
+        Commands::Mcp => {
+            // Reading Sync status runs `git status`, which may otherwise
+            // refresh the library's index file.
+            std::env::set_var("GIT_OPTIONAL_LOCKS", "0");
+            let ctx = HostCtx::headless(store);
+            Ok(mcp_server::run(
+                io::stdin().lock(),
+                io::stdout().lock(),
+                &ctx,
+            )?)
+        }
     }
 }
 
