@@ -280,13 +280,6 @@ fn detect_upstream_health(dir: &Path, has_remote: bool) -> String {
     "healthy".to_string()
 }
 
-/// Initialize a new git repository in the skills directory.
-#[allow(dead_code)]
-pub fn init_repo(skills_dir: &Path, device_name: &str) -> Result<()> {
-    let _lock = RepoLock::acquire_foreground("git init")?;
-    init_repo_unlocked(skills_dir, device_name)
-}
-
 pub(crate) fn init_repo_unlocked(skills_dir: &Path, device_name: &str) -> Result<()> {
     if skills_dir.join(".git").exists() {
         anyhow::bail!("Already a git repository");
@@ -453,13 +446,6 @@ fn remove_remote_unlocked(skills_dir: &Path) -> Result<()> {
 /// untracked). Cheap porcelain probe used by the auto-backup round.
 pub(crate) fn has_uncommitted_changes(skills_dir: &Path) -> Result<bool> {
     Ok(!run_git(skills_dir, &["status", "--porcelain"])?.is_empty())
-}
-
-/// Stage all changes and create a commit.
-#[allow(dead_code)]
-pub fn commit_all(skills_dir: &Path, message: &str) -> Result<()> {
-    let _lock = RepoLock::acquire_foreground("git commit")?;
-    commit_all_unlocked(skills_dir, message)
 }
 
 pub(crate) fn commit_all_unlocked(skills_dir: &Path, message: &str) -> Result<()> {
@@ -860,14 +846,6 @@ pub fn list_snapshot_versions(
     Ok(versions)
 }
 
-/// Restore skills files to a snapshot tag by creating a new restore commit.
-/// Returns the safety-point tag capturing the pre-restore state.
-#[allow(dead_code)]
-pub fn restore_snapshot_version(skills_dir: &Path, tag: &str) -> Result<String> {
-    let _lock = RepoLock::acquire_foreground("git restore snapshot")?;
-    restore_snapshot_version_unlocked(skills_dir, tag)
-}
-
 pub(crate) fn restore_snapshot_version_unlocked(skills_dir: &Path, tag: &str) -> Result<String> {
     ensure_repo(skills_dir)?;
 
@@ -937,34 +915,14 @@ pub(crate) fn restore_snapshot_version_unlocked(skills_dir: &Path, tag: &str) ->
     }
 }
 
-/// Clone a remote repository into the skills directory.
-/// The skills directory must be empty or non-existent.
-#[allow(dead_code)]
-pub fn clone_into(skills_dir: &Path, url: &str) -> Result<()> {
-    let _lock = RepoLock::acquire_foreground("git clone")?;
-    clone_into_unlocked(skills_dir, url, &[]).map(|_| ())
-}
-
-/// Clone variant that refuses to merge a populated non-git directory into the
-/// cloned repo. Used by agent-facing entry points (e.g. CLI `--skills-root`)
-/// where an accidental pointing at an unrelated populated directory would
-/// otherwise silently absorb its contents.
-///
-/// The check runs inside the same `RepoLock` as the clone, so any other
-/// skills-manager process attempting to populate the target between check
-/// and clone is serialized.
-pub fn clone_into_strict(skills_dir: &Path, url: &str) -> Result<()> {
-    let _lock = RepoLock::acquire_foreground("git clone")?;
-    ensure_clean_clone_target(skills_dir)?;
-    clone_into_unlocked(skills_dir, url, &[]).map(|_| ())
-}
-
 /// Refuse a clone target that is a file, or a non-empty directory that is not
-/// already a git repo. An empty or non-existent target is fine, and an
+/// already a git repo. Agent-facing clones (the CLI's `--skills-root`) run it
+/// under the same lock as the clone: pointed at an unrelated populated folder
+/// by accident, the clone would otherwise silently absorb its contents. An empty or non-existent target is fine, and an
 /// existing `.git` is left to `clone_into_unlocked` to reject with its own
 /// message. Pure logic — no locking — so callers must hold their own lock if
 /// they need atomicity with a subsequent operation.
-fn ensure_clean_clone_target(skills_dir: &Path) -> Result<()> {
+pub(crate) fn ensure_clean_clone_target(skills_dir: &Path) -> Result<()> {
     if !skills_dir.exists() {
         return Ok(());
     }

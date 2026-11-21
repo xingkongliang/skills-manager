@@ -98,17 +98,29 @@ Internally, presets are still stored as scenarios for backward-compatible Git Ba
 # From skills.sh marketplace
 "$SM" skills install vercel-labs/agent-skills@react-best-practices
 
-# Any git URL (use /tree/branch/subpath form when the skill lives in a sub-directory)
-"$SM" skills install https://github.com/anthropics/skills.git
-"$SM" skills install https://github.com/foo/bar/tree/main/skills/baz
+# Any git URL. A repository whose root is the skill installs as is;
+# point at the skill's folder with the /tree/branch/subpath form otherwise
+"$SM" skills install https://github.com/foo/single-skill.git
+"$SM" skills install https://github.com/anthropics/skills/tree/main/skills/pdf
 
-# Local folder
+# Local folder (the skill itself, or a folder holding exactly one skill)
 "$SM" skills install ./my-skill
 
 # Force a source type when the ref is ambiguous
 "$SM" skills install foo/bar --skillssh
 "$SM" skills install ./looks-like/owner-repo --local
 ```
+
+`skills install` takes exactly one skill. It looks where the app's installer
+looks: the folder a tree URL or local path points at, otherwise the
+repository root, else its `skills/` folder. When that place holds several
+skills — a repository that groups them under `skills/`, a folder of skills —
+it is refused with `code: "MULTIPLE_SKILLS_FOUND"`, and nothing is installed.
+`details.candidates` lists each one as `{path, name}`, `path` relative to the
+repository root (or the given folder). Show the user the names, then install the
+chosen ones one at a time: on GitHub, `<repo>/tree/<branch>/<path>`; locally,
+`<folder>/<path>`. A source with no `SKILL.md` anywhere is refused with
+`code: "SKILL_NOT_FOUND"`.
 
 **Default is library-only** — the skill enters the DB but doesn't appear in any agent yet. Prefer an explicit follow-up deployment so scope is unambiguous:
 
@@ -140,12 +152,14 @@ Each result has `install_ref` (paste straight into `skills install`), `installs`
 # Re-fetch one skill (git/skillssh re-clones, local/import re-imports source dir)
 "$SM" skills update <skill-name-or-id>
 
-# Re-fetch all eligible skills
+# Re-fetch every skill that can be refreshed (website skills come back skipped: true)
 "$SM" skills update --all
 
 # Just probe remote revisions, don't touch files
 "$SM" skills check --all
 ```
+
+If any skill fails to update, `update` exits non-zero with the usual error envelope on stderr; the per-skill reports still go to stdout, each failed one with its `error`, and the skills that did update stay updated. Naming a website skill is such a failure; `--all` passes over it instead.
 
 `check` is the dry-run partner of `update`. A skill installed from a local folder is compared with that folder, not with any Git remote: `update_available` means the folder changed since it was imported, and `source_missing` means the folder is gone. This check always runs; the cache that spares Git remotes a round-trip within an hour (bypass it with `--force`) does not apply to it. Website skills have nothing to compare against and come back `skipped: true`.
 
@@ -406,7 +420,7 @@ Report which skills actually refreshed (`refreshed: true` in the JSON) vs which 
 - **Install succeeded but skill doesn't appear in the agent** → install defaults to library-only. Use `skills deploy <skill> --agent <key>`.
 - **Preset membership changed but agent files did not** → membership is organization only. Follow with `presets deploy` or `skills deploy` when the user also asked to make it visible.
 - **No active preset** only affects legacy `skills sync` / `presets apply`; additive deploy commands do not require one.
-- **Adopted skills can't be `update`d from git** → `npx skills add` and manual `git clone` don't leave source metadata, so adopt has to treat them as `local`. Re-point them with `skills set-source`. Do **not** reach for `adopt --git-url` here: adopt only ever creates new library entries, and it fails *late* — `--dry-run` returns `ok: true` with the skill sitting in `skipped`, and only the real run errors with `--git-url requires exactly one adoptable skill, found 0`. Do **not** remove-then-reinstall either — that drops the skill id, and with it the tags, preset membership and every per-agent deployment.
+- **Adopted skills can't be `update`d from git** → `npx skills add` and manual `git clone` don't leave source metadata, so adopt has to treat them as `local`. Re-point them with `skills set-source`. Do **not** reach for `adopt --git-url` here: adopt only ever creates new library entries, so on an already-adopted skill it refuses with `--git-url requires exactly one adoptable skill, found 0` (the `--dry-run` refuses the same way). Do **not** remove-then-reinstall either — that drops the skill id, and with it the tags, preset membership and every per-agent deployment.
 - **Deployed into a project but `skills status` does not show it** → expected. Project deployments are read with `projects show`.
 - **`projects ...` says "project not registered"** → run `projects add <path>` only if the user wants that folder managed.
 - Use `--dry-run` before bulk remove, tag delete, preset delete, deploy, or undeploy operations, including the `projects` ones. Use `check` before `update`.

@@ -23,7 +23,7 @@ fn classify_git_chain(e: anyhow::Error) -> AppError {
 /// Push the persisted engine choice (`git_backup_engine` = "git2" | "system")
 /// and proxy setting into the core layer, which has no store access. Called
 /// at the entry of every command that can touch the network.
-pub(crate) fn sync_engine_pref(store: &SkillStore) {
+pub fn sync_engine_pref(store: &SkillStore) {
     let git2_enabled = store
         .get_setting("git_backup_engine")
         .ok()
@@ -112,15 +112,7 @@ pub async fn git_backup_status(
 #[tauri::command]
 pub async fn git_backup_init(store: State<'_, Arc<SkillStore>>) -> Result<(), AppError> {
     let store = store.inner().clone();
-    let skills_dir = central_repo::skills_dir();
-    tokio::task::spawn_blocking(move || {
-        git_backup::with_repo_lock("git init", || {
-            sync_metadata::write_all_from_db_unlocked(&store)?;
-            git_backup::init_repo_unlocked(&skills_dir, &effective_device_name(&store))
-        })
-        .map_err(AppError::git)
-    })
-    .await?
+    tokio::task::spawn_blocking(move || init_backup_repo(&store).map_err(AppError::git)).await?
 }
 
 /// Move credentials embedded in `url` into the OS keychain and return the
@@ -143,6 +135,134 @@ fn sanitize_url_to_keychain(url: &str) -> String {
             url.to_string()
         }
     }
+}
+
+/// Run `op` with the URL's credentials moved into the keychain; `op` gets the
+/// credential-free URL. Unlike [`sanitize_url_to_keychain`] there is no
+/// fallback to keeping a token in the URL: if the keychain will not take it,
+/// nothing runs. The keychain holds one credential per host, so when `op`
+/// fails — a refused target, a wrong token — whatever was there before is put
+/// back instead of leaving a working credential replaced.
+fn with_url_credentials<T>(
+    url: &str,
+    op: impl FnOnce(&str) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let Some((cred, sanitized)) = git_credentials::split_credentials_from_url(url) else {
+        return op(url);
+    };
+    let host = git_credentials::https_host(&sanitized)
+        .context("the credentials in this URL cannot be stored safely")?;
+    let previous = git_credentials::load_credential(&host)
+        .context("could not read the system keychain, so nothing was changed")?;
+    git_credentials::store_credential(&host, &cred).context(
+        "could not save the URL's credentials to the system keychain, so nothing was changed; \
+         use the URL without credentials, or connect the backup in the app",
+    )?;
+    let result = op(&sanitized);
+    if result.is_err() {
+        let restored = match &previous {
+            Some(previous) => git_credentials::store_credential(&host, previous),
+            None => git_credentials::delete_credential(&host),
+        };
+        if let Err(e) = restored {
+            log::warn!("git credentials: failed to restore the previous credential: {e:#}");
+        }
+    }
+    result
+}
+
+// ── Shared with the CLI ──
+// The CLI is its own crate and has no Tauri state. These take the steps the
+// commands in this file take, so a backup an agent drives through the CLI
+// ends up like one made in the app.
+
+/// Initialize the backup repo. The library's metadata (tags, presets,
+/// sources) is written first, so the first snapshot carries it.
+pub fn init_backup_repo(store: &SkillStore) -> anyhow::Result<()> {
+    let skills_dir = central_repo::skills_dir();
+    git_backup::with_repo_lock("git init", || {
+        sync_metadata::write_all_from_db_unlocked(store)?;
+        git_backup::init_repo_unlocked(&skills_dir, &effective_device_name(store))
+    })
+}
+
+fn commit_with_metadata_unlocked(
+    store: &SkillStore,
+    skills_dir: &Path,
+    message: &str,
+) -> anyhow::Result<()> {
+    apply_device_identity(store, skills_dir);
+    sync_metadata::write_all_from_db_unlocked(store)?;
+    git_backup::commit_all_unlocked(skills_dir, message)
+}
+
+/// Commit the library as the app's commit does (device identity, metadata
+/// written first) and tag it as a snapshot, all under one lock. Returns the
+/// snapshot tag.
+pub fn commit_backup_snapshot(store: &SkillStore, message: &str) -> anyhow::Result<String> {
+    let skills_dir = central_repo::skills_dir();
+    git_backup::with_repo_lock("git commit", || {
+        commit_with_metadata_unlocked(store, &skills_dir, message)?;
+        git_backup::create_snapshot_tag_unlocked(&skills_dir)
+    })
+}
+
+/// Restore a snapshot and rebuild the index from what it put on disk.
+/// Returns the safety-point tag that captured the state before.
+pub fn restore_backup_version(store: &SkillStore, tag: &str) -> anyhow::Result<String> {
+    let skills_dir = central_repo::skills_dir();
+    git_backup::with_repo_lock("git restore snapshot", || {
+        // The safety-point and restore commits are made by this device.
+        apply_device_identity(store, &skills_dir);
+        let safety_tag = git_backup::restore_snapshot_version_unlocked(&skills_dir, tag)?;
+        reconcile_skills_index_unlocked(store)?;
+        Ok(safety_tag)
+    })
+}
+
+/// Clone a backup into the library: the saved git engine applies,
+/// credentials in the URL go to the keychain, and the index is rebuilt from
+/// what arrived. Unlike the app, a token the keychain will not take fails the
+/// clone instead of landing in `.git/config`, and a failed clone puts the
+/// host's previous credential back. `strict_target` also refuses a
+/// populated folder that is not a repo (the CLI's `--skills-root`).
+pub fn clone_backup(store: &SkillStore, url: &str, strict_target: bool) -> anyhow::Result<()> {
+    git_fetcher::validate_git_url(url)?;
+    sync_engine_pref(store);
+    with_url_credentials(url.trim(), |clean| {
+        clone_backup_unchecked(store, clean, strict_target)
+    })
+}
+
+fn clone_backup_unchecked(
+    store: &SkillStore,
+    url: &str,
+    strict_target: bool,
+) -> anyhow::Result<()> {
+    let skills_dir = central_repo::skills_dir();
+    git_backup::with_repo_lock("git clone", || {
+        if strict_target {
+            git_backup::ensure_clean_clone_target(&skills_dir)?;
+        }
+        git_backup::clone_into_unlocked(&skills_dir, url, &[])?;
+        apply_device_identity(store, &skills_dir);
+        reconcile_skills_index_unlocked(store)
+    })
+}
+
+/// Point the backup at a remote, as the app's backup settings do: the saved
+/// git engine applies, credentials in the URL go to the keychain (or the call
+/// fails; they never reach `.git/config`, and a failure puts the host's
+/// previous credential back), and the remote setting is saved with the
+/// credential-free URL, which is returned.
+pub fn set_backup_remote(store: &SkillStore, url: &str) -> anyhow::Result<String> {
+    git_fetcher::validate_git_url(url)?;
+    sync_engine_pref(store);
+    with_url_credentials(url.trim(), |clean| {
+        git_backup::set_remote(&central_repo::skills_dir(), clean)?;
+        store.set_setting("git_backup_remote_url", clean)?;
+        Ok(clean.to_string())
+    })
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -352,9 +472,7 @@ pub async fn git_backup_commit(
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
         git_backup::with_repo_lock("git commit", || {
-            apply_device_identity(&store, &skills_dir);
-            sync_metadata::write_all_from_db_unlocked(&store)?;
-            git_backup::commit_all_unlocked(&skills_dir, &message)
+            commit_with_metadata_unlocked(&store, &skills_dir, &message)
         })
         .map_err(AppError::git)
     })
@@ -708,16 +826,8 @@ pub async fn git_backup_restore_version(
     tag: String,
 ) -> Result<String, AppError> {
     let store = store.inner().clone();
-    let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
-        git_backup::with_repo_lock("git restore snapshot", || {
-            // The safety-point and restore commits are made by this device.
-            apply_device_identity(&store, &skills_dir);
-            let safety_tag = git_backup::restore_snapshot_version_unlocked(&skills_dir, &tag)?;
-            reconcile_skills_index_unlocked(&store)?;
-            Ok(safety_tag)
-        })
-        .map_err(AppError::git)
+        restore_backup_version(&store, &tag).map_err(AppError::git)
     })
     .await?
 }
@@ -1109,6 +1219,113 @@ mod tests {
             env.store.get_setting("git_backup_remote_url").unwrap().as_deref(),
             Some(token_url)
         );
+    }
+
+    // ── Entry points shared with the CLI ──
+
+    /// The CLI wrote the URL to `.git/config` as given, token and all. It now
+    /// takes the app's route: the token goes to the keychain, and origin and
+    /// the saved setting hold the credential-free URL.
+    #[test]
+    fn set_backup_remote_keeps_the_token_out_of_config_and_settings() {
+        let env = test_env();
+        crate::core::git_backup::init_repo_unlocked(&env.skills_dir, "Device A").unwrap();
+        // Unreachable, so the initial fetch fails fast; set-remote tolerates that.
+        let token_url = "https://user:sometok@127.0.0.1:1/acme/repo.git";
+        let clean_url = "https://127.0.0.1:1/acme/repo.git";
+
+        assert_eq!(set_backup_remote(&env.store, token_url).unwrap(), clean_url);
+        assert_eq!(origin_url(&env.skills_dir), clean_url);
+        assert_eq!(
+            env.store.get_setting("git_backup_remote_url").unwrap().as_deref(),
+            Some(clean_url)
+        );
+        // keyring's mock keeps each entry's password on that entry object, so
+        // a read through a fresh entry cannot confirm the write; getting the
+        // clean URL back is what says the keychain took it.
+    }
+
+    /// A refused set-remote (no repo yet) changes neither the setting nor the
+    /// origin. The keychain side, putting the previous credential back, is
+    /// not observable through keyring's mock.
+    #[test]
+    fn a_refused_set_backup_remote_changes_nothing() {
+        let env = test_env();
+        let token_url = "https://user:sometok@127.0.0.1:1/acme/repo.git";
+
+        assert!(set_backup_remote(&env.store, token_url).is_err());
+        assert_eq!(env.store.get_setting("git_backup_remote_url").unwrap(), None);
+        assert!(!env.skills_dir.join(".git").exists());
+    }
+
+    /// The CLI's `git init` skipped writing the metadata, so the first
+    /// snapshot of a library whose presets had never been written out did not
+    /// carry them.
+    #[test]
+    fn init_backup_repo_puts_the_metadata_in_the_first_snapshot() {
+        let env = test_env();
+        env.store
+            .insert_scenario(&crate::core::skill_store::ScenarioRecord {
+                id: "p1".to_string(),
+                name: "Work".to_string(),
+                description: None,
+                icon: None,
+                sort_order: 0,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        assert!(!sync_metadata::metadata_dir().exists());
+
+        init_backup_repo(&env.store).unwrap();
+
+        let tracked = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&env.skills_dir)
+            .args(["ls-files", ".skills-manager/scenarios"])
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&tracked.stdout).trim().is_empty(),
+            "the preset's metadata is not in the first commit"
+        );
+    }
+
+    /// The CLI's `git clone` left the index as it was. A backup made before
+    /// metadata existed holds only skill folders, which nothing at startup
+    /// indexes, so the cloned skills stayed invisible.
+    #[test]
+    fn clone_backup_indexes_what_it_cloned() {
+        let env = test_env();
+        let source = env._tmp.path().join("source");
+        std::fs::create_dir_all(source.join("foo")).unwrap();
+        std::fs::write(source.join("foo/SKILL.md"), "---\nname: foo\n---\n").unwrap();
+        git(&source, &["init", "-b", "main"]);
+        git(&source, &["add", "-A"]);
+        git(
+            &source,
+            &["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-m", "old backup"],
+        );
+        let remote = env._tmp.path().join("remote.git");
+        assert!(std::process::Command::new("git")
+            .args(["clone", "--bare"])
+            .arg(&source)
+            .arg(&remote)
+            .output()
+            .unwrap()
+            .status
+            .success());
+
+        clone_backup_unchecked(&env.store, remote.to_str().unwrap(), false).unwrap();
+
+        let names: Vec<String> = env
+            .store
+            .get_all_skills()
+            .unwrap()
+            .into_iter()
+            .map(|skill| skill.name)
+            .collect();
+        assert_eq!(names, vec!["foo".to_string()]);
     }
 }
 
