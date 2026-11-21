@@ -170,6 +170,92 @@ fn skip_check_mode(existing_mode: &str, desired: sync_engine::SyncMode) -> Optio
     }
 }
 
+/// Whether a target recorded in `recorded_mode` already is what a deployment
+/// in `desired` mode would leave behind, so a resync has no reason to rewrite
+/// it for its mode alone. Same rule as the skip path ([`skip_check_mode`]): a
+/// recorded link no longer satisfies `Copy`, a recorded copy still satisfies
+/// `Symlink` (the Windows fallback, #153).
+pub fn recorded_mode_satisfies(recorded_mode: &str, desired: sync_engine::SyncMode) -> bool {
+    skip_check_mode(recorded_mode, desired).is_some()
+}
+
+/// The `(skill_id, tool)` pairs whose recorded target the `sync_mode` setting
+/// no longer allows (#654), limited to tools a batch deployment would write
+/// to: enabled, known and installed.
+fn targets_off_sync_mode(store: &SkillStore) -> Result<Vec<(String, String)>, AppError> {
+    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+    let disabled = tool_service::get_disabled_tools(store);
+    let mut pairs: Vec<(String, String)> = store
+        .get_all_targets()
+        .map_err(AppError::db)?
+        .into_iter()
+        .filter(|target| target.status == "ok")
+        .filter(|target| {
+            !recorded_mode_satisfies(
+                &target.mode,
+                sync_engine::sync_mode_for_tool(&target.tool, configured_mode.as_deref()),
+            )
+        })
+        .filter(|target| !disabled.contains(&target.tool))
+        .filter(|target| {
+            tool_adapters::find_adapter_with_store(store, &target.tool)
+                .is_some_and(|adapter| adapter.is_installed())
+        })
+        .map(|target| (target.skill_id, target.tool))
+        .collect();
+    pairs.sort();
+    pairs.dedup();
+    Ok(pairs)
+}
+
+/// Rewrite every recorded deployment that the current `sync_mode` setting no
+/// longer allows, after the user changed that setting (#654). Without this,
+/// switching from Symlink to Copy left every existing link in place until
+/// something else happened to resync that pair.
+///
+/// Each skill goes through the batch deployment with only its stale tools, so
+/// the ownership checks and the shared-directory handling are the batch's own
+/// and no pair that was not deployed gets deployed. Returns how many pairs
+/// were converted; any pair still on the old mode afterwards is an error, not
+/// a silent success.
+pub fn resync_targets_to_sync_mode(store: &SkillStore) -> Result<usize, AppError> {
+    let stale = targets_off_sync_mode(store)?;
+    if stale.is_empty() {
+        return Ok(0);
+    }
+    let mut tools_by_skill: Vec<(String, Vec<String>)> = Vec::new();
+    for (skill_id, tool) in &stale {
+        match tools_by_skill.last_mut() {
+            Some((last, tools)) if last.as_str() == skill_id.as_str() => tools.push(tool.clone()),
+            _ => tools_by_skill.push((skill_id.clone(), vec![tool.clone()])),
+        }
+    }
+    let mut first_error: Option<AppError> = None;
+    for (skill_id, tools) in &tools_by_skill {
+        if let Err(e) = apply_add(store, std::slice::from_ref(skill_id), tools, false) {
+            log::warn!("sync mode resync: skill {skill_id} was not converted: {e}");
+            first_error.get_or_insert(e);
+        }
+    }
+    if let Some(e) = first_error {
+        return Err(e);
+    }
+    let remaining = targets_off_sync_mode(store)?;
+    if !remaining.is_empty() {
+        return Err(AppError::io(format!(
+            "Converted {} of {} deployment(s) to the new sync mode; still on the old mode: {}",
+            stale.len().saturating_sub(remaining.len()),
+            stale.len(),
+            remaining
+                .iter()
+                .map(|(skill_id, tool)| format!("{skill_id}@{tool}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    Ok(stale.len())
+}
+
 /// Remove a recorded deployment, keeping (and reporting) anything that no
 /// longer matches the record. Every row-driven removal in this module goes
 /// through here so none of them can fall back to "delete whatever is there".
