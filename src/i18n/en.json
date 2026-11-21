@@ -1254,6 +1254,7 @@
         "all": "All"
       },
       "elsewhere": "Used, but not in any config file (built-ins, plugins, connectors)",
+      "daysAgo_zero": "today",
       "daysAgo_one": "{{count}} day ago",
       "daysAgo_other": "{{count}} days ago"
     }

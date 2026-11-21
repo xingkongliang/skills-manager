@@ -1248,6 +1248,7 @@
         "all": "全部"
       },
       "elsewhere": "已使用，但不在任何配置文件中（内置、插件、连接器）",
+      "daysAgo_zero": "今天",
       "daysAgo_other": "{{count}} 天前"
     }
   }
