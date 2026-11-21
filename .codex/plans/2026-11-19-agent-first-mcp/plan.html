@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Make Agents Manager agent-first through MCP</title>
+<style>
+:root{color-scheme:light dark;--surface:#f1f5f6;--paper:#fff;--text:#18262e;--muted:#3c515c;--line:#c1d2d9;--accent:#005d56}
+@media(prefers-color-scheme:dark){:root{--surface:#121c22;--paper:#18262e;--text:#ebf1f3;--muted:#c1d2d9;--line:#45616b;--accent:#8bd8c7}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface);color:var(--text);font:1rem/1.6 system-ui,sans-serif;padding:clamp(.75rem,3vw,2rem)}
+main{margin-inline:auto;max-width:46rem;background:var(--paper);padding:clamp(1rem,4vw,2.75rem);border:1px solid var(--line);display:grid;gap:.85rem}
+h1,h2,p,ul,ol{margin:0;overflow-wrap:anywhere}
+h1{font:600 clamp(1.65rem,4vw,2.55rem)/1.15 Georgia,serif;text-wrap:balance}
+h2{border-top:1px solid var(--line);padding-top:.9rem;font-size:1rem;line-height:1.35}
+p,li{max-width:66ch}
+ul,ol{padding-inline-start:1.4rem;display:grid;gap:.38rem}
+main>p:last-child{margin-top:.35rem}
+a{color:var(--accent);text-underline-offset:.22em}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+</style>
+</head>
+<body>
+<main>
+<h1>Make Agents Manager agent-first through MCP</h1>
+<p>One request should let an agent find the right target, manage Skills, Instructions, and MCP connections, then verify the result without opening the desktop app.</p>
+<h2>Agreed</h2>
+<ul>
+<li>Cover the whole Agents Manager, including its Library, projects, and hosts.</li>
+<li>A clear request authorizes routine changes. Ask when scope is unclear, edits conflict, or new access is required.</li>
+<li>First end-to-end test is <strong>“Set up this project.”</strong> Include target discovery, deployment, and verification. Decide the fixture and completion evidence on the map.</li>
+</ul>
+<h2>Decision sequence</h2>
+<ol>
+<li>Define what project setup includes and which requests the first release must finish. Research Codex and Claude Code setup in parallel.</li>
+<li>Decide how requests identify their project, agent, and host. Use client research to decide first-run setup.</li>
+<li>Define what a clear request authorizes, how to handle exceptions, and how to verify and retry changes.</li>
+<li>Decide how to report effects across hosts without changing Sync behavior. Draft the implementation plan for Yi’s explicit approval.</li>
+</ol>
+<h2>Performance bound</h2>
+<p>Aim for one MCP call after setup for a fully specified routine change. One validation pass over relevant state, one apply and verification per affected host, and only requested inputs, changed config, and compact results cross boundaries. Test at 10× current project and Library size. At 100×, host fan-out and result size set the limit. Page large reads and bound remote work.</p>
+<p><a href="https://linear.app/abrian/issue/SKI-27/make-agents-manager-agent-first-through-mcp">Canonical Wayfinder map in Linear</a></p>
+</main>
+</body>
+</html>

@@ -62,3 +62,8 @@ _Avoid_: Drift, diverged, project newer
 **Project status**:
 How a project's copy of a library skill compares with the library: Up to date, Update available, Edited here or Both changed.
 _Avoid_: In sync, center newer, diverged
+
+## Project Workspaces
+
+**Project setup**:
+The saved selection of Library Skills, Instruction bundles, and MCP connections for a project, with the agents each item targets.
