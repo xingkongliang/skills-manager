@@ -14,7 +14,6 @@ import {
   ArrowUpCircle,
   Wrench,
   Loader2,
-  X,
   SquareCheck,
   Square,
   GripVertical,
