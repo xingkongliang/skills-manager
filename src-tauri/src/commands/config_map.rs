@@ -501,6 +501,10 @@ pub fn build_config_map(home: &Path) -> ConfigMap {
                 .map(PathBuf::from)
                 .unwrap_or_default();
             let plugin_name = id.split('@').next().unwrap_or(id);
+            let plugin_enabled = enabled
+                .and_then(|e| e.get(id))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let skill_names = names_in(&install_path.join("skills"), false);
             for s in &skill_names {
                 let dir = install_path.join("skills").join(s);
@@ -511,7 +515,8 @@ pub fn build_config_map(home: &Path) -> ConfigMap {
                     group: id.clone(),
                     path: tilde(home, &dir),
                     link: None,
-                    state: state_for(overrides, &[&format!("{plugin_name}:{s}"), s]),
+                    // `skillOverrides` does not apply to plugin skills: they follow the plugin.
+                    state: if plugin_enabled { "on" } else { "off" }.into(),
                 });
             }
             plugins.push(MapPlugin {
@@ -521,10 +526,7 @@ pub fn build_config_map(home: &Path) -> ConfigMap {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                enabled: enabled
-                    .and_then(|e| e.get(id))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
+                enabled: plugin_enabled,
                 skills: skill_names,
                 commands: names_in(&install_path.join("commands"), true),
                 agents: names_in(&install_path.join("agents"), true),
@@ -627,12 +629,27 @@ mod tests {
         .unwrap();
         fs::write(
             home.join(".claude/settings.json"),
-            r#"{"skillOverrides":{"alpha":"off"},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
+            r#"{"skillOverrides":{"alpha":"off","beta":"off"},"enabledPlugins":{"kit@m":true},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
         )
         .unwrap();
         fs::write(
             home.join(".claude.json"),
             r#"{"mcpServers":{"srv":{"command":"x","env":{"API_TOKEN":"secret-value"}}}}"#,
+        )
+        .unwrap();
+        let plugin = home.join(".claude/plugins/cache/kit");
+        fs::create_dir_all(plugin.join("skills/beta")).unwrap();
+        fs::write(
+            plugin.join("skills/beta/SKILL.md"),
+            "---\nname: beta\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            home.join(".claude/plugins/installed_plugins.json"),
+            format!(
+                r#"{{"plugins":{{"kit@m":[{{"installPath":{},"version":"1"}}]}}}}"#,
+                serde_json::to_string(&plugin.to_string_lossy()).unwrap()
+            ),
         )
         .unwrap();
         fs::create_dir_all(home.join("proj/.claude")).unwrap();
@@ -641,8 +658,11 @@ mod tests {
         fs::write(home.join("node_modules/x/CLAUDE.md"), "ignored").unwrap();
 
         let map = build_config_map(home);
-        assert_eq!(map.skills.len(), 1);
+        assert_eq!(map.skills.len(), 2);
         assert_eq!(map.skills[0].state, "off");
+        // Overrides do not reach plugin skills: they follow the enabled plugin.
+        assert_eq!(map.skills[1].name, "kit:beta");
+        assert_eq!(map.skills[1].state, "on");
         assert_eq!(map.skills[0].description, "First skill");
         assert_eq!(map.mcp_servers[0].env_keys, vec!["API_TOKEN".to_string()]);
         assert_eq!(map.hooks[0].command, "echo hi");
