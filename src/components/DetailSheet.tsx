@@ -148,7 +148,12 @@ function SheetDescription({ text }: { text: string }) {
     <div className="mt-1 flex min-w-0 items-end gap-2">
       <p
         ref={ref}
-        className={cn("min-w-0 flex-1 text-[13px] leading-5 text-secondary", !expanded && "line-clamp-2")}
+        // Expanded, a very long description scrolls inside the header so the
+        // columns and the Collapse button stay on screen.
+        className={cn(
+          "min-w-0 flex-1 text-[13px] leading-5 text-secondary",
+          expanded ? "max-h-[30vh] overflow-y-auto" : "line-clamp-2"
+        )}
       >
         {text}
       </p>

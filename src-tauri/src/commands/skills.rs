@@ -539,7 +539,12 @@ fn read_skill_file_in(dir: &Path, relative_path: &str) -> Result<SkillFileConten
     let (kind, text) = if too_large {
         ("too_large", None)
     } else {
-        classify_diff_bytes(std::fs::read(&entry.path).ok())
+        // A read failure (permissions, a file removed since the walk) is an
+        // error, not "binary": classify_diff_bytes treats None as binary for
+        // the diff, where it means a side without the file.
+        let bytes = std::fs::read(&entry.path)
+            .map_err(|e| AppError::io(format!("Failed to read {relative_path}: {e}")))?;
+        classify_diff_bytes(Some(bytes))
     };
     Ok(SkillFileContentDto {
         relative_path: entry.relative_path,
@@ -5030,6 +5035,29 @@ mod tests {
         let big = read_skill_file_in(&skill, "big.txt").unwrap();
         assert_eq!(big.content_kind, "too_large");
         assert!(big.text.is_none());
+    }
+
+    /// An unreadable file pins both rules: a large one is judged from its size
+    /// without being read (reading it would fail), and a small one reports the
+    /// read failure instead of passing for binary.
+    #[cfg(unix)]
+    #[test]
+    fn read_skill_file_judges_size_unread_and_reports_read_failures() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, skill) = skill_files_fixture();
+        let small = skill.join("locked.md");
+        fs::write(&small, "locked").unwrap();
+        for name in ["big.txt", "locked.md"] {
+            fs::set_permissions(skill.join(name), fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        // Root reads through 0o000, so there is nothing to pin.
+        if fs::read(&small).is_ok() {
+            return;
+        }
+
+        let big = read_skill_file_in(&skill, "big.txt").unwrap();
+        assert_eq!(big.content_kind, "too_large");
+        assert!(read_skill_file_in(&skill, "locked.md").is_err());
     }
 
     #[test]
