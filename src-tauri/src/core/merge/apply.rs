@@ -62,7 +62,18 @@ pub fn object_merge_pull_unlocked(store: &SkillStore, skills_dir: &Path) -> Resu
     // P1: project the DB to metadata files, then commit anything dirty.
     sync_metadata::write_all_from_db_unlocked(store)?;
     if git_backup::has_uncommitted_changes(skills_dir)? {
-        git_backup::commit_all_unlocked(skills_dir, "backup")?;
+        if let Err(e) = git_backup::commit_all_unlocked(skills_dir, "backup") {
+            // With `core.autocrlf=true` (Git for Windows' default) a checkout
+            // leaves metadata in CRLF; the projection above rewrites it in
+            // LF, so status reports it modified until `git add` normalizes it
+            // back and finds nothing to commit. A clean tree after staging is
+            // exactly what P1 wants. Anything still dirty is a real failure,
+            // and P2 below refuses to merge over it either way.
+            if git_backup::has_uncommitted_changes(skills_dir)? {
+                return Err(e);
+            }
+            log::info!("sync: pre-merge changes were line endings only; nothing to commit");
+        }
     }
     // P2: the tree must now be clean (gitignored files aside — porcelain
     // does not list them).

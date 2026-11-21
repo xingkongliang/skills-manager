@@ -260,6 +260,40 @@ fn content_edit_plus_rename_compose_and_both_directions_converge() {
     assert_eq!(a.tree_oid(), b.tree_oid());
 }
 
+// ── line endings (core.autocrlf) ──
+
+/// Git for Windows defaults to `core.autocrlf=true`, so a checkout writes the
+/// metadata files in CRLF. The next sync's pre-merge projection rewrites them
+/// in LF; `git status` reports them modified, `git add` normalizes them back,
+/// and the pre-merge commit then finds nothing to commit. That must not abort
+/// the sync.
+#[test]
+fn line_ending_only_changes_before_a_merge_do_not_abort_the_sync() {
+    let env = setup();
+    let (a, b) = seeded_pair(&env);
+
+    // Check B's tree out again the way Git for Windows would.
+    b.activate();
+    git(&b.skills, &["config", "core.autocrlf", "true"]);
+    git(&b.skills, &["rm", "-r", "-q", "--cached", "."]);
+    git(&b.skills, &["reset", "-q", "--hard"]);
+    let schema = std::fs::read(b.skills.join(".skills-manager/schema.json")).unwrap();
+    assert!(
+        schema.windows(2).any(|w| w == b"\r\n"),
+        "metadata is checked out in CRLF"
+    );
+
+    // A pushes a change, so B has something to merge.
+    a.activate();
+    a.write_skill("skill-1", "alpha", "edited on A");
+    a.commit("edit on A");
+    a.push();
+
+    let summary = b.pull();
+    assert!(summary.new_conflicts.is_empty(), "{summary:?}");
+    assert_eq!(b.skill_md("alpha"), "edited on A");
+}
+
 // ── true conflict → pending → cross-device visibility → resolutions ──
 
 #[test]
