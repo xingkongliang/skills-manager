@@ -153,10 +153,11 @@ function AgentGroupDnd({ items, sensors, dragLabel, onDragEnd, renderAgentCard }
 export function Settings() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { tools, refreshTools, openHelp, appUpdate, refreshAppUpdate } = useApp();
+  const { tools, refreshTools, refreshManagedSkills, openHelp, appUpdate, refreshAppUpdate } = useApp();
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const { theme, setTheme } = useThemeContext();
   const [syncMode, setSyncMode] = useState("symlink");
+  const [savingSyncMode, setSavingSyncMode] = useState(false);
   const [closeAction, setCloseAction] = useState("");
   const [showTrayIcon, setShowTrayIcon] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -413,8 +414,19 @@ export function Settings() {
   };
 
   const handleSyncModeChange = async (mode: string) => {
+    if (savingSyncMode) return;
     setSyncMode(mode);
-    await api.setSettings("sync_mode", mode);
+    setSavingSyncMode(true);
+    try {
+      // Saving the mode also converts the deployments made in the old mode
+      // (#654), so a failure here names what is still on the old mode.
+      await api.setSettings("sync_mode", mode);
+    } catch (e) {
+      toast.error(getErrorMessage(e, t("common.error")));
+    } finally {
+      setSavingSyncMode(false);
+      await refreshManagedSkills();
+    }
   };
 
   const handleCloseActionChange = async (action: string) => {
@@ -1411,6 +1423,7 @@ export function Settings() {
               <div className="app-segmented flex-wrap bg-background">
                 <button
                   onClick={() => handleSyncModeChange("symlink")}
+                  disabled={savingSyncMode}
                   className={cn(
                     segmentedButtonClass,
                     syncMode === "symlink" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
@@ -1420,6 +1433,7 @@ export function Settings() {
                 </button>
                 <button
                   onClick={() => handleSyncModeChange("copy")}
+                  disabled={savingSyncMode}
                   className={cn(
                     segmentedButtonClass,
                     syncMode === "copy" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
