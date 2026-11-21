@@ -11,7 +11,7 @@ use crate::core::{
     audit_log::AuditDraft,
     central_repo,
     error::AppError,
-    git_fetcher,
+    file_manager, git_fetcher,
     install_cancel::InstallCancelRegistry,
     installer, path_guard,
     repo_lock::RepoLock,
@@ -252,6 +252,24 @@ pub struct SourceSkillDocumentDto {
     pub revision: String,
 }
 
+/// One file in a skill's central copy, from the same enumeration as the
+/// content hash and the source diff.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct SkillFileDto {
+    pub relative_path: String,
+    pub size: u64,
+    pub executable: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SkillFileContentDto {
+    pub relative_path: String,
+    /// "text" | "binary" | "too_large"
+    pub content_kind: String,
+    /// Present only when `content_kind == "text"`.
+    pub text: Option<String>,
+}
+
 /// Whole-directory diff between the central copy (`original`) and the source
 /// (`updated`), covering the same file scope that drives the update badge so
 /// the diff can never come back empty while the badge says "update available".
@@ -481,6 +499,112 @@ pub async fn get_source_skill_document(
 
         git_fetcher::cleanup_temp(&temp_dir);
         result
+    })
+    .await?
+}
+
+fn skill_central_dir(store: &SkillStore, skill_id: &str) -> Result<PathBuf, AppError> {
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+    Ok(PathBuf::from(skill.central_path))
+}
+
+fn list_skill_files_in(dir: &Path) -> Vec<SkillFileDto> {
+    crate::core::content_hash::list_content_files(dir)
+        .into_iter()
+        .map(|entry| SkillFileDto {
+            size: std::fs::metadata(&entry.path).map(|m| m.len()).unwrap_or(0),
+            executable: entry.is_executable(),
+            relative_path: entry.relative_path,
+        })
+        .collect()
+}
+
+/// Reads only a file the content enumeration returned, looked up by exact
+/// `relative_path`. The requested string is never joined onto the directory,
+/// so `../`, absolute paths and symlinks out of the skill (the walk does not
+/// follow them) cannot be reached.
+fn read_skill_file_in(dir: &Path, relative_path: &str) -> Result<SkillFileContentDto, AppError> {
+    let entry = crate::core::content_hash::list_content_files(dir)
+        .into_iter()
+        .find(|entry| entry.relative_path == relative_path)
+        .ok_or_else(|| AppError::not_found(format!("File not found in skill: {relative_path}")))?;
+    // Judge the size before reading, so a large model or archive in the skill
+    // is not pulled into memory just to be reported as too large.
+    let too_large = std::fs::metadata(&entry.path)
+        .map(|m| m.len() > MAX_DIFF_FILE_BYTES as u64)
+        .unwrap_or(false);
+    let (kind, text) = if too_large {
+        ("too_large", None)
+    } else {
+        // A read failure (permissions, a file removed since the walk) is an
+        // error, not "binary": classify_diff_bytes treats None as binary for
+        // the diff, where it means a side without the file.
+        let bytes = std::fs::read(&entry.path)
+            .map_err(|e| AppError::io(format!("Failed to read {relative_path}: {e}")))?;
+        classify_diff_bytes(Some(bytes))
+    };
+    Ok(SkillFileContentDto {
+        relative_path: entry.relative_path,
+        content_kind: kind.into(),
+        text,
+    })
+}
+
+#[tauri::command]
+pub async fn list_skill_files(
+    skill_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<SkillFileDto>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = skill_central_dir(&store, &skill_id)?;
+        Ok(list_skill_files_in(&dir))
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn read_skill_file(
+    skill_id: String,
+    relative_path: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<SkillFileContentDto, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = skill_central_dir(&store, &skill_id)?;
+        read_skill_file_in(&dir, &relative_path)
+    })
+    .await?
+}
+
+/// Shows the skill's central copy in the file manager. The path comes from
+/// the id, never from the frontend (same reasoning as `reveal_project_folder`).
+#[tauri::command]
+pub async fn reveal_skill_folder(
+    skill_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = skill_central_dir(&store, &skill_id)?;
+        if !path.is_dir() {
+            return Err(AppError::invalid_input(format!(
+                "Folder does not exist: {}",
+                path.display()
+            )));
+        }
+        // explorer.exe exits non-zero even when it succeeds, so the platform
+        // branch is judged by `exit_is_failure` rather than checked here.
+        let status = file_manager::reveal_item(&path).map_err(AppError::io)?;
+        if file_manager::exit_is_failure(status.success()) {
+            return Err(AppError::io(format!(
+                "File manager exited with status: {status}"
+            )));
+        }
+        Ok(())
     })
     .await?
 }
@@ -4835,5 +4959,136 @@ mod tests {
         .unwrap();
         assert_eq!(installed.name, "lark-doc-2");
         assert_eq!(fs::read_to_string(stray.join("notes.md")).unwrap(), "mine");
+    }
+
+    fn skill_files_fixture() -> (TempDir, PathBuf) {
+        let tmp = tempdir().unwrap();
+        let skill = tmp.path().join("skill");
+        fs::create_dir_all(skill.join("references")).unwrap();
+        fs::write(skill.join("SKILL.md"), "# Demo\n").unwrap();
+        fs::write(skill.join("references/notes.md"), "notes").unwrap();
+        fs::write(skill.join("logo.bin"), [0u8, 1, 2, 3]).unwrap();
+        fs::write(skill.join("big.txt"), "a".repeat(MAX_DIFF_FILE_BYTES + 1)).unwrap();
+        // A sibling outside the skill that a traversal would reach.
+        fs::write(tmp.path().join("secret.txt"), "outside").unwrap();
+        (tmp, skill)
+    }
+
+    #[test]
+    fn list_skill_files_returns_content_scope_with_sizes() {
+        let (_tmp, skill) = skill_files_fixture();
+        fs::create_dir_all(skill.join(".git")).unwrap();
+        fs::write(skill.join(".git/HEAD"), "ref").unwrap();
+
+        let files = list_skill_files_in(&skill);
+        let paths: Vec<&str> = files.iter().map(|f| f.relative_path.as_str()).collect();
+        assert_eq!(
+            paths,
+            ["SKILL.md", "big.txt", "logo.bin", "references/notes.md"]
+        );
+        let notes = files
+            .iter()
+            .find(|f| f.relative_path == "references/notes.md")
+            .unwrap();
+        assert_eq!(notes.size, 5);
+        assert!(!notes.executable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_skill_files_marks_executables() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, skill) = skill_files_fixture();
+        let script = skill.join("run.sh");
+        fs::write(&script, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let files = list_skill_files_in(&skill);
+        assert!(
+            files
+                .iter()
+                .find(|f| f.relative_path == "run.sh")
+                .unwrap()
+                .executable
+        );
+        assert!(
+            !files
+                .iter()
+                .find(|f| f.relative_path == "SKILL.md")
+                .unwrap()
+                .executable
+        );
+    }
+
+    #[test]
+    fn read_skill_file_classifies_text_binary_and_too_large() {
+        let (_tmp, skill) = skill_files_fixture();
+
+        let text = read_skill_file_in(&skill, "references/notes.md").unwrap();
+        assert_eq!(text.content_kind, "text");
+        assert_eq!(text.text.as_deref(), Some("notes"));
+
+        let binary = read_skill_file_in(&skill, "logo.bin").unwrap();
+        assert_eq!(binary.content_kind, "binary");
+        assert!(binary.text.is_none());
+
+        let big = read_skill_file_in(&skill, "big.txt").unwrap();
+        assert_eq!(big.content_kind, "too_large");
+        assert!(big.text.is_none());
+    }
+
+    /// An unreadable file pins both rules: a large one is judged from its size
+    /// without being read (reading it would fail), and a small one reports the
+    /// read failure instead of passing for binary.
+    #[cfg(unix)]
+    #[test]
+    fn read_skill_file_judges_size_unread_and_reports_read_failures() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, skill) = skill_files_fixture();
+        let small = skill.join("locked.md");
+        fs::write(&small, "locked").unwrap();
+        for name in ["big.txt", "locked.md"] {
+            fs::set_permissions(skill.join(name), fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        // Root reads through 0o000, so there is nothing to pin.
+        if fs::read(&small).is_ok() {
+            return;
+        }
+
+        let big = read_skill_file_in(&skill, "big.txt").unwrap();
+        assert_eq!(big.content_kind, "too_large");
+        assert!(read_skill_file_in(&skill, "locked.md").is_err());
+    }
+
+    #[test]
+    fn read_skill_file_only_reads_listed_paths() {
+        let (tmp, skill) = skill_files_fixture();
+        let outside = tmp.path().join("secret.txt");
+        let absolute = outside.to_string_lossy().into_owned();
+        for path in [
+            "../secret.txt",
+            "references/../../secret.txt",
+            absolute.as_str(),
+            "./SKILL.md",
+            "references",
+            "missing.md",
+        ] {
+            assert!(
+                read_skill_file_in(&skill, path).is_err(),
+                "{path} must not be readable"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_skill_file_does_not_follow_symlinks_out_of_the_skill() {
+        let (tmp, skill) = skill_files_fixture();
+        std::os::unix::fs::symlink(tmp.path().join("secret.txt"), skill.join("link.txt")).unwrap();
+
+        assert!(list_skill_files_in(&skill)
+            .iter()
+            .all(|f| f.relative_path != "link.txt"));
+        assert!(read_skill_file_in(&skill, "link.txt").is_err());
     }
 }

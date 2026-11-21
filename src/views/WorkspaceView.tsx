@@ -17,6 +17,9 @@ import {
   Trash2,
   Unlink,
   Upload,
+  CloudOff,
+  FileQuestion,
+  FolderOpen,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -27,6 +30,8 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PresetBar } from "../components/PresetBar";
 import { AgentIcon } from "../components/AgentIcon";
 import { DetailSheet } from "../components/DetailSheet";
+import { SegmentedTabs } from "../components/SegmentedTabs";
+import { DetailEmptyPaper, DetailPaper } from "../components/DetailPaper";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import * as api from "../lib/tauri";
@@ -1167,68 +1172,58 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       <DetailSheet
         open={!!localDetailSkill}
         title={localDetailSkill?.name ?? ""}
+        icon={<FolderOpen className="h-[18px] w-[18px]" />}
+        subtitle={
+          // The folder is usually named after the skill; repeating the title says nothing.
+          localDetailSkill && localDetailSkill.relative_path !== localDetailSkill.name ? (
+            <span className="font-mono">{localDetailSkill.relative_path}</span>
+          ) : null
+        }
         description={localDetailSkill?.description}
         meta={
           localDetailSkill ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={cn("rounded-full px-2.5 py-1 text-[12px] font-medium", getLocalStatusMeta(t, localDetailSkill.sync_status).className)}>
-                {getLocalStatusMeta(t, localDetailSkill.sync_status).label}
-              </span>
-              <span className="rounded-full bg-surface-hover px-2.5 py-1 text-[12px] text-muted">
-                {localDetailSkill.relative_path}
-              </span>
-            </div>
+            <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium", getLocalStatusMeta(t, localDetailSkill.sync_status).className)}>
+              {getLocalStatusMeta(t, localDetailSkill.sync_status).label}
+            </span>
           ) : null
         }
         onClose={() => setLocalDetailSkill(null)}
       >
         {localDetailSkill?.center_skill_id && (
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            {(["local", "diff", "center"] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setLocalContentTab(tab)}
-                className={cn(
-                  "rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
-                  localContentTab === tab
-                    ? "bg-accent text-white"
-                    : "bg-surface-hover text-muted hover:text-secondary"
-                )}
-                disabled={(tab === "diff" || tab === "center") && localCenterDocLoading}
-              >
-                {tab === "local"
-                  ? t("mySkills.docTabs.local")
-                  : tab === "diff"
-                    ? t("mySkills.docTabs.diff")
-                    : t("project.docTabs.center")}
-              </button>
-            ))}
-          </div>
+          <SegmentedTabs
+            className="mb-4"
+            value={localContentTab}
+            onChange={setLocalContentTab}
+            tabs={[
+              { key: "local", label: t("mySkills.docTabs.local") },
+              { key: "diff", label: t("mySkills.docTabs.diff"), disabled: localCenterDocLoading },
+              { key: "center", label: t("project.docTabs.center"), disabled: localCenterDocLoading },
+            ]}
+          />
         )}
 
         {localDocLoading ? (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+          <DetailEmptyPaper loading text={t("common.loading")} />
         ) : localContentTab === "diff" ? (
           localDocContent && localCenterDocContent ? (
             <DocumentDiffViewer original={localDocContent} updated={localCenterDocContent} />
           ) : localCenterDocLoading ? (
-            <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+            <DetailEmptyPaper loading text={t("common.loading")} />
           ) : (
-            <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+            <DetailEmptyPaper icon={CloudOff} text={t("mySkills.sourceDiffUnavailable")} />
           )
         ) : localContentTab === "center" ? (
           localCenterDocLoading ? (
-            <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+            <DetailEmptyPaper loading text={t("common.loading")} />
           ) : localCenterDocContent ? (
-            <SkillMarkdown content={localCenterDocContent} />
+            <DetailPaper><SkillMarkdown content={localCenterDocContent} /></DetailPaper>
           ) : (
-            <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+            <DetailEmptyPaper icon={CloudOff} text={t("mySkills.sourceDiffUnavailable")} />
           )
         ) : localDocContent ? (
-          <SkillMarkdown content={localDocContent} />
+          <DetailPaper><SkillMarkdown content={localDocContent} /></DetailPaper>
         ) : (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
+          <DetailEmptyPaper icon={FileQuestion} text={t("common.documentMissing")} />
         )}
       </DetailSheet>
 
