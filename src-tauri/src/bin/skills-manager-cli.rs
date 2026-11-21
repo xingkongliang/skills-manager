@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
 use app_lib::commands::{
-    presets as preset_cmd, projects as project_cmd, skills as cmd, tools as tool_cmd,
+    git_backup as git_cmd, presets as preset_cmd, projects as project_cmd, skills as cmd,
+    tools as tool_cmd,
 };
 use app_lib::core::{
     app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
@@ -3734,31 +3735,25 @@ fn run_git(
     has_skills_root: bool,
     json: bool,
 ) -> anyhow::Result<()> {
+    // The app applies the saved git engine (git2 / system) and proxy before
+    // anything that can reach the network; the CLI does the same.
+    git_cmd::sync_engine_pref(store);
     match args.command {
         GitCommand::Status => {
             print_json(&git_backup::get_status(&central_repo::skills_dir())?, json)
         }
         GitCommand::Init => {
-            // No settings store on this path; the hostname default matches
-            // what the GUI derives, and the GUI reconciles the repo identity
-            // on its next backup anyway.
-            git_backup::init_repo(
-                &central_repo::skills_dir(),
-                &git_backup::default_device_name(),
-            )?;
+            git_cmd::init_backup_repo(store)?;
             print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
         }
         GitCommand::Clone { url } => {
-            let target = central_repo::skills_dir();
-            if has_skills_root {
-                git_backup::clone_into_strict(&target, &url)?;
-            } else {
-                git_backup::clone_into(&target, &url)?;
-            }
-            print_json(&git_backup::get_status(&target)?, json);
+            // `--skills-root` may point anywhere, so a populated folder that is
+            // not a repo is refused rather than merged into the clone.
+            git_cmd::clone_backup(store, &url, has_skills_root)?;
+            print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
         }
         GitCommand::SetRemote { url } => {
-            git_backup::set_remote(&central_repo::skills_dir(), &url)?;
+            git_cmd::set_backup_remote(store, &url)?;
             print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
         }
         GitCommand::Pull => {
@@ -3787,8 +3782,7 @@ fn run_git(
             print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
         }
         GitCommand::Commit { message } => {
-            git_backup::commit_all(&central_repo::skills_dir(), &message)?;
-            let tag = git_backup::create_snapshot_tag(&central_repo::skills_dir())?;
+            let tag = git_cmd::commit_backup_snapshot(store, &message)?;
             print_json(&serde_json::json!({"ok": true, "tag": tag}), json);
         }
         GitCommand::Versions { limit } => print_json(
@@ -3796,7 +3790,7 @@ fn run_git(
             json,
         ),
         GitCommand::Restore { tag } => {
-            git_backup::restore_snapshot_version(&central_repo::skills_dir(), &tag)?;
+            git_cmd::restore_backup_version(store, &tag)?;
             print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
         }
         GitCommand::PruneSyncRefs => {
