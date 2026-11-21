@@ -1002,6 +1002,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Tools
             commands::tools::get_tool_status,
+            // Config map (read-only)
+            commands::config_map::get_config_map,
             commands::tools::set_tool_enabled,
             commands::tools::set_all_tools_enabled,
             commands::tools::get_tool_order_cmd,

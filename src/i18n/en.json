@@ -13,7 +13,8 @@
     "newPreset": "New Preset",
     "projects": "Project Workspaces",
     "addProject": "Link Project",
-    "settings": "Settings"
+    "settings": "Settings",
+    "configMap": "Config Map"
   },
   "help": {
     "eyebrow": "Guide",
@@ -1157,5 +1158,104 @@
     "gotIt": "Got it",
     "fullChangelog": "Full changelog",
     "close": "Close"
+  },
+  "configMap": {
+    "title": "Config Map",
+    "subtitle": "Where your agent configuration lives on this machine",
+    "summary": "{{skills}} skills · {{plugins}} plugins · {{mcp}} MCP servers · {{memory}} memory files",
+    "rescan": "Rescan",
+    "scanning": "Scanning home directory…",
+    "truncated": "Too many memory files: the list was cut short.",
+    "empty": "Nothing found.",
+    "close": "Close",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "resetView": "Reset view",
+    "treeSearch": "Filter folders, skills, files…",
+    "memorySearch": "Filter by path…",
+    "symlink": "symlink",
+    "moreResults": "{{count}} more — refine the filter",
+    "tabs": {
+      "map": "Map",
+      "tree": "Tree",
+      "mcp": "MCP",
+      "memory": "CLAUDE.md",
+      "hooks": "Hooks",
+      "usage": "Usage"
+    },
+    "columns": {
+      "config": "Configuration",
+      "skills": "Where skills live",
+      "targets": "Servers & targets",
+      "projects": "Projects & memory"
+    },
+    "kinds": {
+      "config": "Config file",
+      "skills": "Skill folder",
+      "plugin": "Plugin",
+      "mcp": "MCP servers",
+      "external": "Symlink target",
+      "project": "Project folder",
+      "memory": "Memory"
+    },
+    "state": {
+      "on": "on",
+      "manual": "manual",
+      "off": "off"
+    },
+    "stats": {
+      "overrides": "Skill overrides",
+      "plugins": "Plugins",
+      "hooks": "Hooks",
+      "mcpServers": "MCP servers",
+      "linkedSkills": "Linked skills",
+      "skillsCommandsAgents": "Skills · commands · agents",
+      "size": "Size",
+      "claudeAgents": "CLAUDE · AGENTS",
+      "symlinks": "Symlinks"
+    },
+    "edge": {
+      "overrides_one": "{{count}} override",
+      "overrides_other": "{{count}} overrides",
+      "symlinks_one": "{{count}} symlink",
+      "symlinks_other": "{{count}} symlinks",
+      "servers_one": "{{count}} server",
+      "servers_other": "{{count}} servers"
+    },
+    "items": {
+      "skill": "Skills",
+      "claude": "CLAUDE.md",
+      "agents": "AGENTS.md",
+      "dotdir": ".claude / .agents",
+      "mcp": "MCP",
+      "plugin": "Plugins"
+    },
+    "scope": {
+      "user": "user",
+      "project": "project",
+      "settings": "settings"
+    },
+    "usage": {
+      "sessions": "Sessions read",
+      "usedSkills": "Skills used",
+      "neverUsed": "Never used",
+      "window": "Counted from Claude Code transcripts since {{date}}. Claude Code keeps them for {{days}} days (cleanupPeriodDays), so older use is not visible.",
+      "noTranscripts": "No Claude Code transcripts found in ~/.claude/projects.",
+      "never": "never used",
+      "usedLine_one": "{{count}} use · {{days}}d ago",
+      "usedLine_other": "{{count}} uses · {{days}}d ago",
+      "calls_one": "{{count}} call",
+      "calls_other": "{{count}} calls",
+      "unusedShort_one": "{{count}} unused",
+      "unusedShort_other": "{{count}} unused",
+      "filter": {
+        "unused": "Never used",
+        "used": "Used",
+        "all": "All"
+      },
+      "elsewhere": "Used, but not in any config file (built-ins, plugins, connectors)",
+      "daysAgo_one": "{{count}} day ago",
+      "daysAgo_other": "{{count}} days ago"
+    }
   }
 }
