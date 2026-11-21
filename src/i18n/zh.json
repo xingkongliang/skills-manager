@@ -13,7 +13,8 @@
     "newPreset": "新建 Preset",
     "projects": "项目工作区",
     "addProject": "关联项目",
-    "settings": "设置"
+    "settings": "设置",
+    "configMap": "配置地图"
   },
   "help": {
     "eyebrow": "操作指南",
@@ -1157,5 +1158,98 @@
     "gotIt": "知道了",
     "fullChangelog": "查看完整更新日志",
     "close": "关闭"
+  },
+  "configMap": {
+    "title": "配置地图",
+    "subtitle": "这台机器上智能体配置的实际位置",
+    "summary": "{{skills}} 个技能 · {{plugins}} 个插件 · {{mcp}} 个 MCP 服务器 · {{memory}} 个记忆文件",
+    "rescan": "重新扫描",
+    "scanning": "正在扫描主目录…",
+    "truncated": "记忆文件过多：列表已截断。",
+    "empty": "未找到内容。",
+    "close": "关闭",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "resetView": "重置视图",
+    "treeSearch": "筛选文件夹、技能、文件…",
+    "memorySearch": "按路径筛选…",
+    "symlink": "符号链接",
+    "moreResults": "还有 {{count}} 项 — 请缩小筛选范围",
+    "tabs": {
+      "map": "地图",
+      "usage": "使用情况",
+      "tree": "目录树",
+      "mcp": "MCP",
+      "memory": "CLAUDE.md",
+      "hooks": "钩子"
+    },
+    "columns": {
+      "config": "配置",
+      "skills": "技能所在位置",
+      "targets": "服务器与目标",
+      "projects": "项目与记忆"
+    },
+    "kinds": {
+      "config": "配置文件",
+      "skills": "技能文件夹",
+      "plugin": "插件",
+      "mcp": "MCP 服务器",
+      "external": "符号链接目标",
+      "project": "项目文件夹",
+      "memory": "记忆"
+    },
+    "state": {
+      "on": "开启",
+      "manual": "手动",
+      "off": "关闭"
+    },
+    "stats": {
+      "overrides": "技能覆盖",
+      "plugins": "插件",
+      "hooks": "钩子",
+      "mcpServers": "MCP 服务器",
+      "linkedSkills": "链接的技能",
+      "skillsCommandsAgents": "技能 · 命令 · 智能体",
+      "size": "大小",
+      "claudeAgents": "CLAUDE · AGENTS",
+      "symlinks": "符号链接"
+    },
+    "edge": {
+      "overrides_other": "{{count}} 个覆盖",
+      "symlinks_other": "{{count}} 个符号链接",
+      "servers_other": "{{count}} 个服务器"
+    },
+    "items": {
+      "skill": "技能",
+      "claude": "CLAUDE.md",
+      "agents": "AGENTS.md",
+      "dotdir": ".claude / .agents",
+      "mcp": "MCP",
+      "plugin": "插件"
+    },
+    "scope": {
+      "user": "用户",
+      "project": "项目",
+      "settings": "设置"
+    },
+    "usage": {
+      "sessions": "已读取会话",
+      "usedSkills": "已使用技能",
+      "neverUsed": "从未使用",
+      "window": "基于 {{date}} 以来的 Claude Code 会话记录统计。Claude Code 只保留 {{days}} 天（cleanupPeriodDays），更早的使用无法统计。",
+      "noTranscripts": "在 ~/.claude/projects 中未找到 Claude Code 会话记录。",
+      "never": "从未使用",
+      "usedLine_other": "使用 {{count}} 次 · {{days}} 天前",
+      "calls_other": "{{count}} 次调用",
+      "unusedShort_other": "{{count}} 个未使用",
+      "filter": {
+        "unused": "从未使用",
+        "used": "已使用",
+        "all": "全部"
+      },
+      "elsewhere": "已使用，但不在任何配置文件中（内置、插件、连接器）",
+      "daysAgo_zero": "今天",
+      "daysAgo_other": "{{count}} 天前"
+    }
   }
 }

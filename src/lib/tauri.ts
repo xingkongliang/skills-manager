@@ -863,3 +863,86 @@ export const updateGlobalLocalSkillFromCenter = (agent: string, skillRelativePat
 
 export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string) =>
   invoke<void>("delete_global_local_skill", { agent, skillRelativePath });
+
+// ── Config map (read-only) ──
+
+export interface MapSkill {
+  name: string;
+  description: string;
+  source: "user" | "agents" | "plugin";
+  group: string;
+  path: string;
+  link: string | null;
+  state: string;
+}
+
+export interface MapPlugin {
+  id: string;
+  version: string;
+  enabled: boolean;
+  skills: string[];
+  commands: string[];
+  agents: string[];
+  has_hooks: boolean;
+  has_mcp: boolean;
+  path: string;
+}
+
+export interface MapMcpServer {
+  name: string;
+  scope: "user" | "project" | "settings";
+  defined_in: string;
+  transport: string;
+  env_keys: string[];
+}
+
+export interface MapHook {
+  event: string;
+  matcher: string;
+  command: string;
+}
+
+export interface MapMemoryFile {
+  path: string;
+  dir: string;
+  file: string;
+  size: number;
+  symlink: boolean;
+}
+
+export interface MapDotDir {
+  path: string;
+  kind: string;
+  skills: number;
+  commands: number;
+  agents: number;
+  files: string[];
+}
+
+export interface ConfigMap {
+  home: string;
+  skills: MapSkill[];
+  plugins: MapPlugin[];
+  mcp_servers: MapMcpServer[];
+  hooks: MapHook[];
+  memory_files: MapMemoryFile[];
+  dot_dirs: MapDotDir[];
+  override_count: number;
+  truncated: boolean;
+  usage: Usage;
+}
+
+export interface UsageEntry {
+  count: number;
+  last_used: string;
+}
+
+export interface Usage {
+  sessions: number;
+  since: string | null;
+  retention_days: number;
+  skills: Record<string, UsageEntry>;
+  mcp: Record<string, UsageEntry>;
+}
+
+export const getConfigMap = () => invoke<ConfigMap>("get_config_map");
