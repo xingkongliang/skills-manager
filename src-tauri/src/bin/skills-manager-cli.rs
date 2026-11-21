@@ -629,6 +629,9 @@ struct UpdateReport {
     source_type: String,
     refreshed: bool,
     error: Option<String>,
+    /// `--all` passes over a source that has nothing to refresh from (a
+    /// website snapshot) instead of failing on it, as `skills check` does.
+    skipped: bool,
     /// Present when the update was held back because it would have removed
     /// these paths (#256). Nothing changed, and the CLI offers no way to
     /// accept: approving means seeing the list, which needs a person, so it
@@ -995,6 +998,7 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
         SkillsCommand::Update { reference, all } => {
             let reports = run_update(store, reference.as_deref(), all)?;
             print_json(&reports, json);
+            update_outcome(&reports)?;
         }
         SkillsCommand::Check {
             reference,
@@ -1936,6 +1940,21 @@ fn dirs_home() -> anyhow::Result<PathBuf> {
 
 // ── update / check ────────────────────────────────────────────────────────
 
+/// The reports go to stdout either way; a failure among them makes the command
+/// fail too (stderr envelope, exit 1), as the manage-skills contract promises.
+/// The other skills' updates stay applied. A held-back update is not a failure.
+fn update_outcome(reports: &[UpdateReport]) -> anyhow::Result<()> {
+    let failed = reports.iter().filter(|r| r.error.is_some()).count();
+    if failed > 0 {
+        bail!(
+            "{failed} of {} skill update(s) failed; each report's `error` says why, \
+             and the rest were applied",
+            reports.len()
+        );
+    }
+    Ok(())
+}
+
 fn run_update(
     store: &SkillStore,
     reference: Option<&str>,
@@ -1955,6 +1974,7 @@ fn run_update(
                         source_type: skill.source_type.clone(),
                         refreshed: r.content_changed,
                         error: None,
+                        skipped: false,
                         held_back_removals: r
                             .pending_removals
                             .iter()
@@ -1967,6 +1987,7 @@ fn run_update(
                         source_type: skill.source_type.clone(),
                         refreshed: false,
                         error: Some(e.message.clone()),
+                        skipped: false,
                         held_back_removals: Vec::new(),
                     },
                 }
@@ -1978,6 +1999,7 @@ fn run_update(
                     source_type: skill.source_type.clone(),
                     refreshed: r.pending_removals.is_empty(),
                     error: None,
+                    skipped: false,
                     held_back_removals: r
                         .pending_removals
                         .iter()
@@ -1990,6 +2012,7 @@ fn run_update(
                     source_type: skill.source_type.clone(),
                     refreshed: false,
                     error: Some(e.message.clone()),
+                    skipped: false,
                     held_back_removals: Vec::new(),
                 },
             },
@@ -1998,7 +2021,10 @@ fn run_update(
                 name: skill.name.clone(),
                 source_type: skill.source_type.clone(),
                 refreshed: false,
-                error: Some(format!("source type '{other}' cannot be refreshed")),
+                // Naming the skill asks for this one; `--all` asks for every
+                // skill that can be refreshed, which this is not.
+                error: (!all).then(|| format!("source type '{other}' cannot be refreshed")),
+                skipped: all,
                 held_back_removals: Vec::new(),
             },
         };
@@ -2100,6 +2126,11 @@ fn run_remove(
         }
     }
 
+    // Before the dry run returns: a preview must fail exactly where the real
+    // run would.
+    if !failed.is_empty() {
+        bail!("could not resolve every skill: {}", failed.join("; "));
+    }
     if dry_run {
         return Ok(RemoveReport {
             ok: true,
@@ -2107,9 +2138,6 @@ fn run_remove(
             failed,
             dry_run: true,
         });
-    }
-    if !failed.is_empty() {
-        bail!("could not resolve every skill: {}", failed.join("; "));
     }
     if !yes {
         bail!("refusing to delete {} skill(s) without --yes", ids.len());
@@ -2413,6 +2441,15 @@ fn run_adopt(
         }
     }
 
+    // Checked before the dry run returns, so a preview never promises an
+    // adoption the real run would refuse.
+    if git_url.is_some() && candidates.len() != 1 {
+        bail!(
+            "--git-url requires exactly one adoptable skill, found {}",
+            candidates.len()
+        );
+    }
+
     if dry_run {
         return Ok(AdoptReport {
             ok: true,
@@ -2421,13 +2458,6 @@ fn run_adopt(
             candidates,
             skipped,
         });
-    }
-
-    if git_url.is_some() && candidates.len() != 1 {
-        bail!(
-            "--git-url requires exactly one adoptable skill, found {}",
-            candidates.len()
-        );
     }
 
     let mut adopted = Vec::new();
@@ -4403,6 +4433,100 @@ mod tests {
         assert_eq!(audit.len(), audit_count + 1);
         assert_eq!(audit[0].action, "deploy");
         assert_eq!(audit[0].skill_id.as_deref(), Some("skill-demo"));
+    }
+
+    /// `skills update` promised a non-zero exit on failure but always exited 0,
+    /// and `--all` "failed" on every website skill it could never refresh.
+    #[test]
+    fn update_failures_fail_the_command_and_all_skips_what_cannot_refresh() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        store
+            .insert_skill(&SkillRecord {
+                id: "site".to_string(),
+                name: "site".to_string(),
+                description: None,
+                source_type: "well-known".to_string(),
+                source_ref: Some("https://example.com".to_string()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: tmp.path().join("central/site").to_string_lossy().to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: 1,
+                updated_at: 1,
+                status: "ok".to_string(),
+                update_status: "unknown".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+
+        // Asked for by name: it cannot be refreshed, and the exit code says so.
+        let named = run_update(&store, Some("site"), false).unwrap();
+        assert!(named[0].error.is_some());
+        assert!(!named[0].skipped);
+        assert!(update_outcome(&named).is_err());
+
+        // `--all` means every skill that can be refreshed: passed over, no failure.
+        let all = run_update(&store, None, true).unwrap();
+        assert!(all[0].error.is_none());
+        assert!(all[0].skipped);
+        assert!(update_outcome(&all).is_ok());
+
+        // Through the command's own dispatch, so dropping the check there fails
+        // this test too.
+        let dispatch = |args: &[&str]| {
+            let cli = Cli::try_parse_from(
+                std::iter::once("skills-manager-cli").chain(args.iter().copied()),
+            )
+            .unwrap();
+            let Commands::Skills(args) = cli.command else {
+                unreachable!()
+            };
+            run_skills(args, &store, true)
+        };
+        assert!(dispatch(&["skills", "update", "site"]).is_err());
+        assert!(dispatch(&["skills", "update", "--all"]).is_ok());
+
+        // A held-back update is reported, not failed.
+        let held_back = UpdateReport {
+            skill_id: "x".to_string(),
+            name: "x".to_string(),
+            source_type: "git".to_string(),
+            refreshed: false,
+            error: None,
+            skipped: false,
+            held_back_removals: vec!["library: notes.md".to_string()],
+        };
+        assert!(update_outcome(&[held_back]).is_ok());
+    }
+
+    /// A dry run has to fail where the real run fails; it used to preview a
+    /// success for refs it could not resolve, and for an adopt `--git-url`
+    /// the real run refuses.
+    #[test]
+    fn dry_runs_refuse_what_the_real_run_refuses() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("skills.db")).unwrap();
+        let missing = vec!["no-such-skill".to_string()];
+        assert!(run_remove(&store, &missing, false, true).is_err());
+
+        let scan = tmp.path().join("agent-skills");
+        write_skill(&scan.join("one"), "one");
+        write_skill(&scan.join("two"), "two");
+        let err = run_adopt(
+            &store,
+            &[scan],
+            Some("https://github.com/owner/repo/tree/main/one"),
+            None,
+            true,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("exactly one adoptable skill"));
     }
 
     /// `skills check` on a local skill used to answer `skipped: true` with
