@@ -98,17 +98,29 @@ Internally, presets are still stored as scenarios for backward-compatible Git Ba
 # From skills.sh marketplace
 "$SM" skills install vercel-labs/agent-skills@react-best-practices
 
-# Any git URL (use /tree/branch/subpath form when the skill lives in a sub-directory)
-"$SM" skills install https://github.com/anthropics/skills.git
-"$SM" skills install https://github.com/foo/bar/tree/main/skills/baz
+# Any git URL. A repository whose root is the skill installs as is;
+# point at the skill's folder with the /tree/branch/subpath form otherwise
+"$SM" skills install https://github.com/foo/single-skill.git
+"$SM" skills install https://github.com/anthropics/skills/tree/main/skills/pdf
 
-# Local folder
+# Local folder (the skill itself, or a folder holding exactly one skill)
 "$SM" skills install ./my-skill
 
 # Force a source type when the ref is ambiguous
 "$SM" skills install foo/bar --skillssh
 "$SM" skills install ./looks-like/owner-repo --local
 ```
+
+`skills install` takes exactly one skill. It looks where the app's installer
+looks: the folder a tree URL or local path points at, otherwise the
+repository root, else its `skills/` folder. When that place holds several
+skills — a repository that groups them under `skills/`, a folder of skills —
+it is refused with `code: "MULTIPLE_SKILLS_FOUND"`, and nothing is installed.
+`details.candidates` lists each one as `{path, name}`, `path` relative to the
+repository root (or the given folder). Show the user the names, then install the
+chosen ones one at a time: on GitHub, `<repo>/tree/<branch>/<path>`; locally,
+`<folder>/<path>`. A source with no `SKILL.md` anywhere is refused with
+`code: "SKILL_NOT_FOUND"`.
 
 **Default is library-only** — the skill enters the DB but doesn't appear in any agent yet. Prefer an explicit follow-up deployment so scope is unambiguous:
 

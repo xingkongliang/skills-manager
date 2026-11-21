@@ -8,7 +8,7 @@ use app_lib::commands::{
 };
 use app_lib::core::{
     app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
-    installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
+    installer, merge, path_guard, repo_lock::RepoLock, scenario_service, skill_metadata,
     skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
     well_known,
 };
@@ -1669,15 +1669,94 @@ fn run_install(
     })
 }
 
+/// A source with no skill, or several, where `skills install` takes exactly
+/// one. It has its own envelope codes so an agent can tell "pick one of these"
+/// from a failed command, and the candidates ride along in `details`.
+#[derive(Debug)]
+struct SkillSelectionError {
+    code: &'static str,
+    message: String,
+    candidates: Vec<SkillCandidate>,
+}
+
+#[derive(Debug, Serialize)]
+struct SkillCandidate {
+    /// The skill's folder relative to the repository root (or the given
+    /// folder), with `/` separators; `.` when that root is the skill.
+    path: String,
+    name: String,
+}
+
+impl std::fmt::Display for SkillSelectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SkillSelectionError {}
+
+/// The one skill folder at `dir`: `dir` itself when it holds a SKILL.md,
+/// otherwise its single nested skill. Installing anything else would copy a
+/// container of skills into the library as one broken skill. `root` bounds the
+/// search and is what reported paths are relative to.
+fn single_skill_dir(root: &Path, dir: &Path) -> anyhow::Result<PathBuf> {
+    let mut found: Vec<PathBuf> = cmd::collect_git_skill_dirs(dir)
+        .into_iter()
+        // The scan follows directory links; one that leaves the source is not
+        // part of it.
+        .filter(|candidate| path_guard::is_path_safe(root, candidate))
+        .collect();
+    if found.len() == 1 {
+        return Ok(found.remove(0));
+    }
+    if found.is_empty() {
+        return Err(SkillSelectionError {
+            code: "SKILL_NOT_FOUND",
+            message: "no skill found: the source has no folder containing a SKILL.md".to_string(),
+            candidates: Vec::new(),
+        }
+        .into());
+    }
+    let candidates: Vec<SkillCandidate> = found
+        .iter()
+        .map(|path| SkillCandidate {
+            path: git_fetcher::relative_subpath(root, path)
+                .map(|p| p.replace('\\', "/"))
+                .unwrap_or_else(|| ".".to_string()),
+            name: skill_metadata::parse_skill_md(path).name.unwrap_or_else(|| {
+                path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            }),
+        })
+        .collect();
+    let listed: Vec<&str> = candidates.iter().map(|c| c.path.as_str()).collect();
+    Err(SkillSelectionError {
+        code: "MULTIPLE_SKILLS_FOUND",
+        message: format!(
+            "the source holds {} skills; install one at a time by pointing at its folder \
+             (on GitHub: https://github.com/<owner>/<repo>/tree/<branch>/<path>): {}",
+            candidates.len(),
+            listed.join(", ")
+        ),
+        candidates,
+    }
+    .into())
+}
+
 fn install_local_action(
     store: &SkillStore,
     reference: &str,
     name: Option<&str>,
     active_scenario: Option<&str>,
 ) -> anyhow::Result<(String, String, String, String)> {
-    let path = expand_path(reference)?;
+    let mut path = expand_path(reference)?;
     if !path.exists() {
         bail!("local path does not exist: {}", path.display());
+    }
+    // Archives keep the installer's own handling; a folder must be one skill.
+    if path.is_dir() {
+        path = single_skill_dir(&path, &path)?;
     }
 
     let _lock = RepoLock::acquire_foreground("cli install local")?;
@@ -1719,8 +1798,9 @@ fn install_git_action(
     )?;
     let result = (|| -> anyhow::Result<(String, String, String)> {
         let _lock = RepoLock::acquire_foreground("cli install git")?;
-        let skill_dir = cmd::resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)
+        let resolved = cmd::resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)
             .map_err(map_app_err)?;
+        let skill_dir = single_skill_dir(&temp_dir, &resolved)?;
         let revision = git_fetcher::get_head_revision(&temp_dir)?;
         let install_result = installer::install_from_git_dir(&skill_dir, name)?;
         let metadata = cmd::InstallSourceMetadata {
@@ -3710,6 +3790,18 @@ fn run_git(
 /// an agent can say which directory is blocking and offer the way out (#363).
 fn error_envelope(err: &anyhow::Error) -> serde_json::Value {
     let message = format!("{err:#}");
+    if let Some(selection) = err.downcast_ref::<SkillSelectionError>() {
+        let mut value = serde_json::json!({
+            "ok": false,
+            "code": selection.code,
+            "message": message.clone(),
+            "error": message,
+        });
+        if !selection.candidates.is_empty() {
+            value["details"] = serde_json::json!({ "candidates": selection.candidates });
+        }
+        return value;
+    }
     match err.downcast_ref::<AppError>() {
         Some(app_err) if app_err.details.is_some() => {
             let mut value = serde_json::to_value(app_err).unwrap();
@@ -3780,6 +3872,83 @@ mod tests {
         assert_eq!(envelope["code"], "COMMAND_FAILED");
         assert_eq!(envelope["message"], "no agent key provided");
         assert!(envelope.get("details").is_none());
+    }
+
+    fn write_skill(dir: &Path, name: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("SKILL.md"), format!("---\nname: {name}\n---\n")).unwrap();
+    }
+
+    /// `skills install <repo>` on a repository that groups its skills under
+    /// `skills/` used to copy that whole folder in as one skill and report
+    /// success. It must refuse and name the skills to choose from instead.
+    #[test]
+    fn a_source_with_several_skills_is_refused_with_its_candidates() {
+        let tmp = tempdir().unwrap();
+        let repo = tmp.path();
+        write_skill(&repo.join("skills/alpha"), "alpha");
+        write_skill(&repo.join("skills/beta"), "beta-name");
+
+        let err = single_skill_dir(repo, &repo.join("skills")).unwrap_err();
+        let envelope = error_envelope(&err);
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(envelope["code"], "MULTIPLE_SKILLS_FOUND");
+        let candidates = envelope["details"]["candidates"].as_array().unwrap();
+        assert_eq!(candidates.len(), 2);
+        // Relative to the repository root, so the path can go straight into a
+        // `…/tree/<branch>/<path>` URL.
+        assert_eq!(candidates[0]["path"], "skills/alpha");
+        assert_eq!(candidates[0]["name"], "alpha");
+        assert_eq!(candidates[1]["path"], "skills/beta");
+        assert_eq!(candidates[1]["name"], "beta-name");
+    }
+
+    #[test]
+    fn a_source_with_no_skill_is_refused() {
+        let tmp = tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("docs")).unwrap();
+
+        let err = single_skill_dir(tmp.path(), tmp.path()).unwrap_err();
+        let envelope = error_envelope(&err);
+        assert_eq!(envelope["code"], "SKILL_NOT_FOUND");
+        assert!(envelope.get("details").is_none());
+    }
+
+    #[test]
+    fn a_source_with_one_skill_resolves_to_it() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        write_skill(root, "root-skill");
+        assert_eq!(single_skill_dir(root, root).unwrap(), root);
+
+        let nested = tempdir().unwrap();
+        write_skill(&nested.path().join("skills/only"), "only");
+        assert_eq!(
+            single_skill_dir(nested.path(), nested.path()).unwrap(),
+            nested.path().join("skills/only")
+        );
+    }
+
+    /// The scan follows directory links, so a link to a skill elsewhere on
+    /// disk must not count as one of the source's skills.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_skill_outside_the_source_is_not_a_candidate() {
+        let outside = tempdir().unwrap();
+        write_skill(&outside.path().join("elsewhere"), "elsewhere");
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        write_skill(&root.join("skills/inside"), "inside");
+        std::os::unix::fs::symlink(
+            outside.path().join("elsewhere"),
+            root.join("skills/linked"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            single_skill_dir(root, &root.join("skills")).unwrap(),
+            root.join("skills/inside")
+        );
     }
 
     use super::*;
