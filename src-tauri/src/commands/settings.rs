@@ -4,7 +4,8 @@ use std::sync::Arc;
 use tauri::{Manager, State};
 
 use crate::core::{
-    central_repo, error::AppError, file_manager, log_sanitize, skill_store::SkillStore, skillssh_api,
+    central_repo, error::AppError, file_manager, log_sanitize, scenario_service,
+    skill_store::SkillStore, skillssh_api,
 };
 
 #[derive(serde::Serialize)]
@@ -59,9 +60,18 @@ pub async fn set_settings(
     let key_for_store = key.clone();
     let value_for_store = value.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let previous = store.get_setting(&key_for_store).map_err(AppError::db)?;
         store
             .set_setting(&key_for_store, &value_for_store)
             .map_err(AppError::db)?;
+        // Deployments made in the old mode stay what they are on disk until
+        // something rewrites them, so changing the mode converts them now
+        // (#654). The setting stays saved if a conversion fails: the error
+        // names what is still on the old mode.
+        if key_for_store == "sync_mode" && previous.as_deref() != Some(value_for_store.as_str()) {
+            let converted = scenario_service::resync_targets_to_sync_mode(&store)?;
+            log::info!("sync_mode set to {value_for_store}: converted {converted} deployment(s)");
+        }
         if key_for_store == "show_tray_icon" {
             let tray_enabled = matches!(
                 value_for_store.trim().to_ascii_lowercase().as_str(),
