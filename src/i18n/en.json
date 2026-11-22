@@ -344,10 +344,13 @@
         "modified": "Modified"
       },
       "execBit": "Permission {{before}} → {{after}}",
+      "collapsedHint": "{{count}} files changed. Click a file to see its changes.",
+      "truncated": "Showing the first {{count}} changed files; more files changed. Updating applies every change.",
       "summary": {
         "binary": "Binary file changed",
         "too_large": "File changed but is too large to preview",
-        "permission_only": "Only file permissions changed"
+        "permission_only": "Only file permissions changed",
+        "omitted": "File changed; too many changes to load its content here"
       }
     },
     "localSource": "Local library",
@@ -843,6 +846,7 @@
     "loadFailed": "Failed to load {{item}}",
     "dataOutOfDate": "Some data could not be refreshed",
     "documentMissing": "No document file was found",
+    "diffTooLarge": "Too many lines to compare here",
     "presets": "presets",
     "agents": "agent status",
     "skills": "skill list",
