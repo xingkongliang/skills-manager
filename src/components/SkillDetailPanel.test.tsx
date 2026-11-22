@@ -22,6 +22,9 @@ vi.mock("../lib/tauri", () => ({
   readSkillFile: vi.fn(() => new Promise(() => {})),
   revealSkillFolder: vi.fn(() => Promise.resolve()),
 }));
+// AgentIcon reads custom-agent icons from the app context; loading the real
+// module would also start i18n, which reads settings through the tauri mock.
+vi.mock("../context/AppContext", () => ({ useOptionalApp: () => null }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 vi.mock("./SkillSourceDiffViewer", () => ({

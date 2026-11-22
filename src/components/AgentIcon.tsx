@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Globe } from "lucide-react";
 import { cn } from "../utils";
 import { getAgentIconSrc, agentIconNeedsDarkInvert } from "../lib/agentIcons";
-import { useApp } from "../context/AppContext";
+import { useOptionalApp } from "../context/AppContext";
 
 interface AgentIconProps {
   agentKey: string;
@@ -27,9 +27,9 @@ export function AgentIcon({
   imageClassName,
   fallback,
 }: AgentIconProps) {
-  const { tools } = useApp();
+  const tools = useOptionalApp()?.tools;
   const resolvedOverride =
-    iconOverride ?? tools.find((tool) => tool.key === agentKey)?.icon ?? null;
+    iconOverride ?? tools?.find((tool) => tool.key === agentKey)?.icon ?? null;
   const iconKey = resolvedOverride || agentKey;
   const src = getAgentIconSrc(iconKey);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);

@@ -1,6 +1,6 @@
 import { Globe } from "lucide-react";
 import { cn } from "../utils";
-import { getAgentIconSrc, listAgentIconKeys } from "../lib/agentIcons";
+import { agentIconNeedsDarkInvert, getAgentIconSrc, listAgentIconKeys } from "../lib/agentIcons";
 
 interface AgentIconPickerProps {
   value: string | null;
@@ -52,7 +52,14 @@ export function AgentIconPicker({
                   : "border-border-subtle hover:border-border"
               )}
             >
-              {src && <img src={src} alt="" draggable={false} className="h-full w-full object-contain" />}
+              {src && (
+                <img
+                  src={src}
+                  alt=""
+                  draggable={false}
+                  className={cn("h-full w-full object-contain", agentIconNeedsDarkInvert(key) && "dark:invert")}
+                />
+              )}
             </button>
           );
         })}

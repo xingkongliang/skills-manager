@@ -4261,6 +4261,7 @@ mod tests {
                 skills_dir: target_root.to_string_lossy().to_string(),
                 project_relative_skills_dir: None,
                 category: ToolCategory::Coding,
+                icon: None,
             }],
         )
         .unwrap();
@@ -4768,6 +4769,7 @@ mod project_tests {
                 skills_dir: tmp.path().join("agent-skills").to_string_lossy().to_string(),
                 project_relative_skills_dir: Some(".test/skills".to_string()),
                 category: ToolCategory::Coding,
+                icon: None,
             }],
         )
         .unwrap();
