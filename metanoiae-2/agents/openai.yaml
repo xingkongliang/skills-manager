@@ -1,0 +1,12 @@
+interface:
+  display_name: METANOIAE
+  short_description: "Rehidrata y gobierna flujos METANO_IA \xD7 A\u2013E"
+  default_prompt: "Usa $metanoiae para rehidratar este paquete, fijar la c\xE9lula\
+    \ responsable y devolver un handoff gobernado para D."
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

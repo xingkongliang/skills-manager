@@ -1,0 +1,165 @@
+{
+  "schema_version": "1.0.0",
+  "package_version": "3.0.0-rc.2",
+  "lines": [
+    {
+      "line_id": "LINE-LITERATURE",
+      "display_name": "Literatura",
+      "line_version": "1.0",
+      "lifecycle_state": "LOAD_PARCIAL",
+      "authored_entries_present": true,
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "artifact_path": "05_lines/current/CUADERNILLO_LITERATURA_v1.0.md",
+      "entry_count": 20,
+      "structure": "Apertura 1-4; Exploración 5-16; Síntesis 17-18; Cierre 19-20",
+      "content_pattern": "PROVISIONAL: odd content; even reflection",
+      "accent_color": "#CC9C50",
+      "decision_required": "Approve odd/even normalization (C-004); provide missing entries 9-16 (S2 Exploración) before promoting to CURRENT_CANDIDATE",
+      "present_entries": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        17,
+        18,
+        19,
+        20
+      ],
+      "missing_entries": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "present_count": 12,
+      "missing_count": 8,
+      "section_state": {
+        "S1_apertura": "COMPLETE",
+        "S2_exploracion": "MISSING",
+        "S3_sintesis": "COMPLETE",
+        "S4_cierre": "COMPLETE"
+      },
+      "audit_note": "RC1 overclaimed 20/20; RC2 corrects to 12/20 present. CUADERNILLO_LITERATURA_v1.0.md not modified."
+    },
+    {
+      "line_id": "LINE-CLINICAL",
+      "display_name": "Clínica",
+      "line_version": "1.0",
+      "lifecycle_state": "CURRENT_CANDIDATE",
+      "authored_entries_present": true,
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "artifact_path": "05_lines/current/CUADERNILLO_CLINICA_v1.0.md",
+      "entry_count": 20,
+      "structure": "Apertura 1-4; Exploración 5-16; Síntesis 17-18; Cierre 19-20",
+      "content_pattern": "PROVISIONAL: odd content; even reflection",
+      "accent_color": "#7B9EA6",
+      "decision_required": "Approve v2 blue-grey due C-005"
+    },
+    {
+      "line_id": "LINE-SPIRITUAL",
+      "display_name": "Espiritual",
+      "line_version": "1.0",
+      "lifecycle_state": "CURRENT_CANDIDATE",
+      "authored_entries_present": true,
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "artifact_path": "05_lines/current/CUADERNILLO_ESPIRITUAL_v1.0.md",
+      "entry_count": 20,
+      "structure": "Apertura 1-4; Exploración 5-16; Síntesis 17-18; Cierre 19-20",
+      "content_pattern": "PROVISIONAL: odd content; even reflection",
+      "accent_color": "#1E7D63",
+      "decision_required": "Approve odd/even normalization due C-004"
+    },
+    {
+      "line_id": "LINE-SELF-CARE-JOURNEY",
+      "display_name": "Self-Care / Journey",
+      "line_version": "4.0.0-draft",
+      "lifecycle_state": "IN_REVIEW",
+      "authored_entries_present": false,
+      "source_ids": [],
+      "artifact_path": "05_lines/candidates/SELF_CARE_JOURNEY_V4_SPEC.md",
+      "entry_count": null,
+      "structure": null,
+      "content_pattern": null,
+      "accent_color": null,
+      "decision_required": "Provide authored brief and approve line contract"
+    },
+    {
+      "line_id": "LINE-ARTISTIC",
+      "display_name": "Artística",
+      "line_version": "UNASSIGNED",
+      "lifecycle_state": "PROPOSED_UNMATERIALIZED",
+      "authored_entries_present": false,
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "artifact_path": null,
+      "entry_count": null,
+      "structure": null,
+      "content_pattern": null,
+      "accent_color": null,
+      "decision_required": "Line brief and source content"
+    },
+    {
+      "line_id": "LINE-PROFESSIONAL",
+      "display_name": "Profesional",
+      "line_version": "UNASSIGNED",
+      "lifecycle_state": "PROPOSED_UNMATERIALIZED",
+      "authored_entries_present": false,
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "artifact_path": null,
+      "entry_count": null,
+      "structure": null,
+      "content_pattern": null,
+      "accent_color": null,
+      "decision_required": "Line brief and source content"
+    },
+    {
+      "line_id": "LINE-FORMATIVE",
+      "display_name": "Formativa",
+      "line_version": "UNASSIGNED",
+      "lifecycle_state": "PROPOSED_UNMATERIALIZED",
+      "authored_entries_present": false,
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "artifact_path": null,
+      "entry_count": null,
+      "structure": null,
+      "content_pattern": null,
+      "accent_color": null,
+      "decision_required": "Line brief and source content"
+    },
+    {
+      "line_id": "LINE-SCIENTIFIC",
+      "display_name": "Científica",
+      "line_version": "UNASSIGNED",
+      "lifecycle_state": "DISCOVERED_PROPOSAL_ONLY",
+      "authored_entries_present": false,
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "artifact_path": null,
+      "entry_count": null,
+      "structure": null,
+      "content_pattern": null,
+      "accent_color": null,
+      "decision_required": "Confirm whether A2-only proposal remains in scope"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "53ef6439-90a2-47a4-9bb5-3df9634a48ab",
+  "path": "astryx",
+  "path_key": "astryx",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "git",
+    "ref": "https://github.com/iridiscenterinc/meta_astryx/tree/main/plugins/astryx/skills/astryx",
+    "subpath": "plugins/astryx/skills/astryx",
+    "branch": "main"
+  }
+}

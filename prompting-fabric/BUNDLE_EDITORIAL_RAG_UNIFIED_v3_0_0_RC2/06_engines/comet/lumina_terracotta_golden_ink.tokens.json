@@ -1,0 +1,15 @@
+{
+  "brand": "LUMINA",
+  "metasystem": ["BOS", "AEQUITAS", "LUMINA", "OPAL", "IRIDISCENTER"],
+  "style_name": "LUMINA_TERRACOTTA_GOLDEN_INK",
+  "concept_preserved": "Mission Control + KOP package viewer",
+  "wb_rule": "workbook remains printable, non-negotiable",
+  "themes": {
+    "light": "milky / cream / warm paper / soft taupe",
+    "dark": "espresso / umber / bronze ink / mineral shadow"
+  },
+  "accents": ["champagne gold", "rose clay", "oxidized bronze"],
+  "textures": ["alcohol ink", "mineral veins", "powder dust", "paper grain"],
+  "composition": ["white space first", "text as form", "controlled asymmetry"],
+  "avoid": ["generic SaaS dashboard", "icons", "illustrations", "neon", "decorative overload"]
+}

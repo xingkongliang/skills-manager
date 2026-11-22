@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "5393d30a-6060-4ec7-9949-e5f1ea9ad060",
+  "path": "metanoiae-2",
+  "path_key": "metanoiae-2",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

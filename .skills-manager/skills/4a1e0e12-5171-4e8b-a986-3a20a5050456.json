@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "4a1e0e12-5171-4e8b-a986-3a20a5050456",
+  "path": "discernment-nudge",
+  "path_key": "discernment-nudge",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

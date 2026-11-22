@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lumina:editorial-rag-metadata:1.0.0",
+  "title": "Editorial RAG Record",
+  "type": "object",
+  "required": [
+    "record_id",
+    "source_id",
+    "title",
+    "domain",
+    "kind",
+    "status",
+    "authority",
+    "confidence",
+    "content_path",
+    "retrieval_policy"
+  ],
+  "properties": {
+    "record_id": {
+      "type": "string",
+      "pattern": "^REC-[A-Z0-9-]+$"
+    },
+    "source_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "domain": {
+      "enum": [
+        "contract",
+        "registry",
+        "rag",
+        "module",
+        "skill",
+        "line",
+        "engine",
+        "protocol",
+        "evidence"
+      ]
+    },
+    "kind": {
+      "type": "string"
+    },
+    "package_version": {
+      "type": "string"
+    },
+    "line_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "enum": [
+        "EVIDENCE",
+        "VALIDATED_RECORD",
+        "PROVISIONAL",
+        "DRAFT_FOR_APPROVAL",
+        "ACTIVE_CONTROLLED",
+        "CANON",
+        "UNKNOWN",
+        "BLOCKED"
+      ]
+    },
+    "authority": {
+      "enum": [
+        "SOURCE",
+        "DERIVED",
+        "HISTORICAL_REFERENCE",
+        "DISCOVERY_ONLY"
+      ]
+    },
+    "confidence": {
+      "enum": [
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+        "UNKNOWN"
+      ]
+    },
+    "content_path": {
+      "type": "string"
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "source_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "retrieval_policy": {
+      "type": "object",
+      "required": [
+        "retrieval_eligible",
+        "generation_eligible",
+        "requires_human_approval"
+      ],
+      "properties": {
+        "retrieval_eligible": {
+          "type": "boolean"
+        },
+        "generation_eligible": {
+          "type": "boolean"
+        },
+        "requires_human_approval": {
+          "type": "boolean"
+        },
+        "chunk_profile": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

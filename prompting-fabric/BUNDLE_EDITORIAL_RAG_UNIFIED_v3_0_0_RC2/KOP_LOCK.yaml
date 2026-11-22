@@ -1,0 +1,25 @@
+lock_id: BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1_KOP_LOCK
+package_id: BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1
+package_version: 3.0.0-rc.1
+generated_at: '2026-07-22T21:00:35-06:00'
+status: DRAFT_FOR_APPROVAL
+truth_boundary:
+  canon_declared: false
+  source_modules_mutated: false
+  remote_commit_completed: false
+  production_deploy_completed: false
+  runtime_sync_verified: false
+  rag_vector_store_built: false
+  commercial_print_ready: false
+locks:
+  source_binding_required: true
+  raw_logs_generation_direct: false
+  dmie_master_reconstruction_forbidden: true
+  comet_runtime_candidate_only: true
+  new_line_content_generation_forbidden_without_source: true
+  director_approval_required: true
+next_gate: D · QA / MERGE / RELEASE HANDOFF
+allowed_decisions:
+- ACCEPT
+- PATCH
+- REJECT

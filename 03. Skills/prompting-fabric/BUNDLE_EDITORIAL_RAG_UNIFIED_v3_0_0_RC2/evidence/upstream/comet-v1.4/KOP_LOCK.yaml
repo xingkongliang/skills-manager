@@ -1,0 +1,8 @@
+package_id: KOP_WB_COMET_STRIKER_CREATIVE_JOURNEY_RELEASE_v1_4_EIC_NOTES_PROTOCOL
+inherits_from: KOP_WB_COMET_STRIKER_CREATIVE_JOURNEY_RELEASE_v1_3_LUMINA_UNIFIED
+status: QC_PASS_COMMIT_CANDIDATE
+truth_scope: execution_adapter_not_canonical_authority
+wb_printability: locked
+eic_notes_protocol: integrated
+format: half_letter_5_5x8_5in
+next_step: local_terminal_install_and_review

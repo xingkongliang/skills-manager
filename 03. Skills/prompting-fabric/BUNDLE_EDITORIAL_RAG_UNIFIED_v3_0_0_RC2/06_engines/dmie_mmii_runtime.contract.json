@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "DMIE_MMII",
+  "engine_version": "0.3.2",
+  "state": "BLOCKED_MISSING_MASTER_RUNTIME",
+  "expected_master": {
+    "filename": "DMIE_MMII_INTERACTIVE_WORKBOOK_v0_3_2_COMET_DRAME_PRINTFIX_PAGINATION.html",
+    "bytes": 69849,
+    "sha256": "f84484ac9e6e546c8b44f46f64d506458437d07fe9aaf0baebe45166d17c999f",
+    "mounted": false
+  },
+  "input_contract": {
+    "required": [
+      "line_id",
+      "line_version",
+      "20 authored entries",
+      "tokens",
+      "source_ids"
+    ],
+    "provisional_pattern": "odd_content_even_reflection",
+    "pattern_conflict_id": "C-004"
+  },
+  "output_contract": {
+    "required": [
+      "interactive_html",
+      "print_mode",
+      "local_export_json",
+      "qa_report"
+    ],
+    "status": "CANDIDATE_UNTIL_QA"
+  },
+  "forbidden_inputs": [
+    "patch fragments as master",
+    "unverified homonymous files",
+    "generated replacement HTML"
+  ]
+}

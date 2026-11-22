@@ -1,0 +1,44 @@
+{
+  "package_id": "METANOIA-DIVIDE-DE-MANO-STAGING-PATCH-V0-1",
+  "status": "READY_FOR_D_REVIEW",
+  "decision_id": "D-IRIDISCENTER-HIERARCHY-PATCH-2026-07-28-01",
+  "patch_type": "ARCHITECTURE_METADATA_ONLY",
+  "overlay_id": "IRIDISCENTER_HIERARCHY_NORMALIZATION_v0_1",
+  "source_package": {
+    "name": "METANOIA_DIVIDE_DE_MANO_INGESTION_v1_DRY_RUN.zip",
+    "sha256": "cf6cfc503f8ca548a1c801ed9d2a4d1b0041bb02fe1d0513e15f0511c7b99310",
+    "preservation": "BYTE_FOR_BYTE"
+  },
+  "files": [
+    {
+      "name": "METANOIA_DIVIDE_DE_MANO_INGESTION_v1_DRY_RUN.zip",
+      "role": "preserved_source_ingestion_package"
+    },
+    {
+      "name": "ARCHITECTURE_STAGING_OVERLAY.yaml",
+      "role": "applied_staging_metadata"
+    },
+    {
+      "name": "D_LEDGER_RETURN.yaml",
+      "role": "commit_ready_return_to_D"
+    },
+    {
+      "name": "PHYSICAL_REVALIDATION.json",
+      "role": "runtime_validation_receipt"
+    },
+    {
+      "name": "STAGING_DIFF.md",
+      "role": "human_readable_diff"
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "role": "bundle_integrity_manifest"
+    }
+  ],
+  "candidate_target_rows": 20,
+  "source_records_changed": false,
+  "production_writes": 0,
+  "market_or_supplier_rerun": false,
+  "canon_declared": false,
+  "next_gate": "D_ACCEPT_PATCHED_STAGING"
+}

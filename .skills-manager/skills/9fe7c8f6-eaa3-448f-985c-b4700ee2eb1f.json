@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "9fe7c8f6-eaa3-448f-985c-b4700ee2eb1f",
+  "path": "writing-for-agents",
+  "path_key": "writing-for-agents",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "mattpocock/skills/writing-for-agents",
+    "subpath": "skills/productivity/writing-for-agents",
+    "branch": null
+  }
+}

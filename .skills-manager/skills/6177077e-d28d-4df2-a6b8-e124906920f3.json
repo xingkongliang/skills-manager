@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "6177077e-d28d-4df2-a6b8-e124906920f3",
+  "path": "agent-creator",
+  "path_key": "agent-creator",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

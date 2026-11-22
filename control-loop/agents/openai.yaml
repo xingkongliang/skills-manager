@@ -1,0 +1,5 @@
+# 자동 생성 — scripts/build-targets.py (packaging/targets.json skillInterface).
+# 손으로 고치지 말 것: SKILL.md frontmatter 를 고치고 --write 로 재생성한다.
+interface:
+  display_name: "control-loop"
+  short_description: "Multi-session control discipline for delegating work to worker sessions — investigate, decide, dispatch, verify, and merge."

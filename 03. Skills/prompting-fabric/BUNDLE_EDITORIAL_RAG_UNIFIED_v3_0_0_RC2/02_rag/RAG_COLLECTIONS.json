@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1",
+  "rag_runtime_state": "NOT_BUILT",
+  "embedding_model": null,
+  "vector_store": null,
+  "collections": [
+    {
+      "collection_id": "sources_evidence",
+      "authority": "SOURCE",
+      "generation_direct": false
+    },
+    {
+      "collection_id": "validated_records",
+      "authority": "DERIVED_WITH_SOURCE_BINDING",
+      "generation_direct": true,
+      "approval_required": true
+    },
+    {
+      "collection_id": "line_specs",
+      "authority": "MIXED",
+      "generation_direct": true,
+      "approval_required": true
+    },
+    {
+      "collection_id": "module_specs",
+      "authority": "DERIVED",
+      "generation_direct": true
+    },
+    {
+      "collection_id": "skill_specs",
+      "authority": "DERIVED",
+      "generation_direct": true
+    },
+    {
+      "collection_id": "artifact_templates",
+      "authority": "UPSTREAM_OR_DERIVED",
+      "generation_direct": true,
+      "approval_required": true
+    },
+    {
+      "collection_id": "qa_decisions",
+      "authority": "GATE",
+      "generation_direct": false
+    },
+    {
+      "collection_id": "handoff_deltas",
+      "authority": "SESSION_STATE",
+      "generation_direct": false
+    }
+  ],
+  "mandatory_filters": [
+    "status",
+    "authority",
+    "domain",
+    "package_version"
+  ],
+  "conditional_filters": [
+    "line_version",
+    "source_id",
+    "conflict_id"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "98adcc7b-d15c-4ba7-8777-35278a7ce2e3",
+  "path": "domain-glossary",
+  "path_key": "domain-glossary",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

@@ -38,3 +38,12 @@ CLAUDE.md
 AGENTS.md
 .loop-log
 
+Thumbs.db
+*.tmp
+.skills-manager.lock
+__pycache__/
+*.pyc
+
+# skills-manager: oversized skills excluded from backup (auto-managed)
+/metanoiae/
+# skills-manager: end oversized skills

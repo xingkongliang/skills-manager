@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "73919c41-d240-4ed1-8859-b15a23581f62",
+  "path": "prompt-master",
+  "path_key": "prompt-master",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "cfadde86-4ed9-4bd7-a61b-9f0c89d8a962",
+  "path": "cross-engine-review",
+  "path_key": "cross-engine-review",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

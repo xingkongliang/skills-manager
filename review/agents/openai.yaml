@@ -1,0 +1,5 @@
+# 자동 생성 — scripts/build-targets.py (packaging/targets.json skillInterface).
+# 손으로 고치지 말 것: SKILL.md frontmatter 를 고치고 --write 로 재생성한다.
+interface:
+  display_name: "review"
+  short_description: "Review current changes or specified files - ruff lint for Python files, an adversarial review-code pass, and a security scan only when security-sensitive files changed."

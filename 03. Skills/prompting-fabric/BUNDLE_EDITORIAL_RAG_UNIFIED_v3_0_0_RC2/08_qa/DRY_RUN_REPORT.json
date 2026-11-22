@@ -1,0 +1,188 @@
+{
+  "schema_version": "1.0.0",
+  "operation_id": "OP-BE-RAG-20260722-001",
+  "generated_at": "2026-07-22T21:00:35-06:00",
+  "mode": "DRY_RUN",
+  "target": {
+    "package_id": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1",
+    "version": "3.0.0-rc.1",
+    "state": "DRAFT_FOR_APPROVAL",
+    "canon_declared": false,
+    "runtime_deployed": false,
+    "rag_runtime_built": false
+  },
+  "objective": "Unificar el Bundle Editorial BOS v2, Comet Striker Creative Journey v1.4 y los contratos disponibles de DMIE/MMII bajo una arquitectura documental RAG, modular, trazable y reversible.",
+  "source_decision": {
+    "google_drive": {
+      "result": "NO_RELEVANT_PROJECT_MATCHES",
+      "authority_used": false
+    },
+    "library_and_attached_files": {
+      "result": "VERIFIED_SOURCES_AVAILABLE",
+      "authority_used": true
+    },
+    "raw_conversation_exports": {
+      "result": "PROVENANCE_ONLY",
+      "generation_direct": false
+    }
+  },
+  "verified_inputs": [
+    {
+      "source_id": "SRC-COMET-1.4",
+      "name": "KOP_WB_COMET_STRIKER_CREATIVE_JOURNEY_RELEASE_v1_4_EIC_NOTES_PROTOCOL",
+      "sha256": "1126db4be2b483461523152c2803a05a5c49fd805379b06ab3d20a366d42ad31",
+      "role": "COMET_RELEASE_CANDIDATE"
+    },
+    {
+      "source_id": "SRC-BOS-V2",
+      "name": "BOS Editorial Bundle v2.zip",
+      "sha256": "e3ef5eb4db41fa98cb7c9dcc2e23d1dd28c6abc51c06d7ba46a3e24f0ea3a34e",
+      "role": "EDITORIAL_LINE_SOURCE"
+    },
+    {
+      "source_id": "SRC-RAG-CONFIG",
+      "name": "ChatGPT-Rama! Configuración RAG Master (1).json",
+      "sha256": "8e32a69e87753085ff6dde83cf29f06204c0b917581790e3dbb388e98b09e5c9",
+      "role": "RAG_GOVERNANCE_REFERENCE"
+    },
+    {
+      "source_id": "SRC-IRIDISCENTER-V3",
+      "name": "Bundle_Iridiscenter_V3_20260402_final.zip",
+      "sha256": "ddb1811479405818e8718615dc1ed47e92e2849cf03719fdca5f0415de49730e",
+      "role": "V3_BOUNDARY_REFERENCE"
+    },
+    {
+      "source_id": "SRC-DMIE-REGISTRY",
+      "name": "KOP_SOURCE_REGISTRY.json",
+      "sha256": "f7fa7a3d5cad3539386c9de41346312e47490e9ce0aef63231b8beab56ad6bd9",
+      "role": "DMIE_MMII_PROVENANCE"
+    },
+    {
+      "source_id": "SRC-PROMETHEUS-HIST",
+      "name": "PROMETHEUS_MASTER_PLAN_v1.0.md.docx",
+      "sha256": "9573ed49674a43aaae1e7753ded99d158263ddd6cc30682465a39239fcf8cd2d",
+      "role": "HISTORICAL_ORCHESTRATION_REFERENCE"
+    },
+    {
+      "source_id": "SRC-SELAH-HIST",
+      "name": "Núcleo SELAH v2",
+      "sha256": "da8357d169dad6a2a9469768a644057885cc28bb4d39d5380738b03f89026bcf",
+      "role": "HISTORICAL_GOVERNANCE_REFERENCE"
+    },
+    {
+      "source_id": "SRC-KOP-AUX-CONTRACT",
+      "name": "GPT Auxiliar para KOP Core Neutral",
+      "sha256": "30adac95ca68dde1f284183bf759151a3d59985ed17c8760dcc4c3e459958b9d",
+      "role": "HANDOFF_CONTRACT_REFERENCE"
+    }
+  ],
+  "planned_layers": [
+    "L0 core contract and status",
+    "L1 source and conflict registry",
+    "L2 RAG governance and ingest contracts",
+    "L3 module and skill registries",
+    "L4 editorial line registry and source content",
+    "L5 DMIE/MMII and Comet adapters",
+    "L6 METANO_IA, Prometheus one-shot and SELAH gates",
+    "L7 QA, ÆQUITAS, handoff and release evidence"
+  ],
+  "blocking_conflicts": [
+    {
+      "id": "C-001",
+      "severity": "BLOCKER",
+      "fact": "The DMIE/MMII master HTML bytes are not mounted.",
+      "handling": "Ship a strict adapter contract and source identity only; do not reconstruct the HTML."
+    },
+    {
+      "id": "C-002",
+      "severity": "BLOCKER",
+      "fact": "Comet v1.4 inherits runtime and final deployment blocks from v1.3.",
+      "handling": "Keep the included HTML as a review candidate; no deployment claim."
+    },
+    {
+      "id": "C-003",
+      "severity": "HIGH",
+      "fact": "The Comet v1.4 checksum list contains two self-referential checksum mismatches.",
+      "handling": "Generate a new non-self-referential manifest and disclose the inherited mismatch."
+    },
+    {
+      "id": "C-004",
+      "severity": "HIGH",
+      "fact": "BOS v2 pipeline wording conflicts with the physical odd/even entry pattern.",
+      "handling": "Record physical pattern as PROVISIONAL and require Director approval."
+    },
+    {
+      "id": "C-005",
+      "severity": "HIGH",
+      "fact": "BOS clinical color drifts between historical fuchsia and v2 blue-grey.",
+      "handling": "Use v2 blue-grey in the candidate and preserve the drift in the conflict register."
+    },
+    {
+      "id": "C-006",
+      "severity": "MEDIUM",
+      "fact": "Bundle v3 and editorial line v4 use independent version namespaces.",
+      "handling": "Separate package_version from line_version in every schema."
+    },
+    {
+      "id": "C-007",
+      "severity": "MEDIUM",
+      "fact": "RAG v3 is a governance source from a separate project boundary.",
+      "handling": "Reuse governance rules only; do not merge its unrelated content."
+    },
+    {
+      "id": "C-008",
+      "severity": "MEDIUM",
+      "fact": "Prometheus and SELAH documents contain historical or unexecuted claims.",
+      "handling": "Use only orchestration/gate patterns; mark all runtime claims non-authoritative."
+    },
+    {
+      "id": "C-009",
+      "severity": "MEDIUM",
+      "fact": "Self-Care/Journey v4 authored content is not available.",
+      "handling": "Create a spec-only candidate; do not fabricate entries."
+    },
+    {
+      "id": "C-010",
+      "severity": "LOW",
+      "fact": "Google Drive returned no relevant project evidence.",
+      "handling": "Keep Drive as a negative search result, not a source."
+    }
+  ],
+  "planned_operations": {
+    "create": [
+      "Versioned package directory",
+      "RAG architecture and collection contracts",
+      "Module and skill registries",
+      "Editorial line registry",
+      "Comet and DMIE/MMII adapters",
+      "METANO_IA, Prometheus one-shot and SELAH gate protocols",
+      "QA, ÆQUITAS, handoff and release manifests"
+    ],
+    "copy_without_mutation": [
+      "Three BOS v2 line workbooks",
+      "BOS v2 template and selected specifications",
+      "Comet v1.4 HTML candidate",
+      "Comet EIC schema, example, generator and print template",
+      "Selected upstream manifests and QA evidence"
+    ],
+    "modify_sources": [],
+    "deploy": [],
+    "publish": []
+  },
+  "validation_plan": [
+    "Parse every JSON file",
+    "Parse every YAML file",
+    "Validate line and metadata examples against JSON Schema",
+    "Check all internal Markdown links",
+    "Check required module and skill IDs",
+    "Verify copied source hashes",
+    "Generate non-self-referential SHA256SUMS",
+    "Reopen ZIP and compare every entry hash"
+  ],
+  "rollback": {
+    "scope": "Only the new RC1 package directory and its ZIP.",
+    "source_mutation": false,
+    "strategy": "Remove or archive the candidate; all inputs remain byte-identical."
+  },
+  "decision": "GO_FOR_CANDIDATE_BUILD_WITH_BLOCKS_PRESERVED"
+}

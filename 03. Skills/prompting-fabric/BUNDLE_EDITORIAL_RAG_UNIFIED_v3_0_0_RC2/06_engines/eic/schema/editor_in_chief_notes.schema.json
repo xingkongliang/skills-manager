@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iridiscenter.local/schemas/editor_in_chief_notes.v1.4.schema.json",
+  "title": "Editor in Chief Notes",
+  "description": "Schema rehydrated from Protocolo y Maquetación de Notas de Dirección Editorial for EIC-Notes print-ready workflow.",
+  "type": "object",
+  "required": ["record_id", "meta", "audit_scoring", "editor_notes", "qc_checklist_override", "approval_seal"],
+  "properties": {
+    "record_id": {"type": "string", "pattern": "^BOS-EIC-NOTES-"},
+    "meta": {
+      "type": "object",
+      "required": ["brand", "version", "layer", "status", "format"],
+      "properties": {
+        "brand": {"type": "string"},
+        "version": {"type": "string"},
+        "layer": {"type": "string"},
+        "status": {"type": "string", "enum": ["draft", "in_review", "approved", "blocked", "archived"]},
+        "format": {"type": "string", "enum": ["half_letter", "letter", "a5", "digital"]},
+        "metasystem": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "audit_scoring": {
+      "type": "object",
+      "required": ["fidelity", "coherence", "necessity", "precision", "elegance", "global_score"],
+      "properties": {
+        "fidelity": {"type": "number", "minimum": 0, "maximum": 10},
+        "coherence": {"type": "number", "minimum": 0, "maximum": 10},
+        "necessity": {"type": "number", "minimum": 0, "maximum": 10},
+        "precision": {"type": "number", "minimum": 0, "maximum": 10},
+        "elegance": {"type": "number", "minimum": 0, "maximum": 10},
+        "global_score": {"type": "number", "minimum": 0, "maximum": 10}
+      }
+    },
+    "editor_notes": {
+      "type": "object",
+      "required": ["theological_consistency", "lexicographical_verification", "visual_alignment", "chief_instructions"],
+      "properties": {
+        "theological_consistency": {"type": "string"},
+        "lexicographical_verification": {
+          "type": "object",
+          "required": ["strong_id", "bdb_page_confirmed", "tension_notes"],
+          "properties": {
+            "strong_id": {"type": "string"},
+            "bdb_page": {"type": ["string", "number", "null"]},
+            "bdb_page_confirmed": {"type": "boolean"},
+            "tension_notes": {"type": "string"}
+          }
+        },
+        "visual_alignment": {
+          "type": "object",
+          "required": ["gem_hex", "asset_variants_ready"],
+          "properties": {
+            "gem_hex": {"type": "string"},
+            "asset_variants_ready": {"type": "integer", "minimum": 0},
+            "visual_system": {"type": "string"}
+          }
+        },
+        "chief_instructions": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "qc_checklist_override": {
+      "type": "object",
+      "required": ["QC01_respaldo_textual", "QC03_tensiones_documentadas", "QC10_dictamen_aequitas"],
+      "properties": {
+        "QC01_respaldo_textual": {"type": "boolean"},
+        "QC03_tensiones_documentadas": {"type": "boolean"},
+        "QC10_dictamen_aequitas": {"type": "boolean"}
+      }
+    },
+    "approval_seal": {
+      "type": "object",
+      "required": ["raquel_barron_sign", "aequitas_status", "date"],
+      "properties": {
+        "raquel_barron_sign": {"type": "string"},
+        "aequitas_status": {"type": "string", "enum": ["VALID", "TENSION", "BLOCKED", "APPROVED"]},
+        "date": {"type": "string"}
+      }
+    }
+  }
+}

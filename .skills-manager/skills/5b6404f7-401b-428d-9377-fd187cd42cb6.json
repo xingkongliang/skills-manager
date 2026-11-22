@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "5b6404f7-401b-428d-9377-fd187cd42cb6",
+  "path": "mapa-de-voz",
+  "path_key": "mapa-de-voz",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

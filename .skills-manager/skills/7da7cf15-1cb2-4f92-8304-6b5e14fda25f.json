@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "7da7cf15-1cb2-4f92-8304-6b5e14fda25f",
+  "path": "product-marketing-context",
+  "path_key": "product-marketing-context",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

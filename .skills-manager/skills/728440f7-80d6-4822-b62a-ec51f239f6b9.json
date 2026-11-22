@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "728440f7-80d6-4822-b62a-ec51f239f6b9",
+  "path": "multi-perspective-review",
+  "path_key": "multi-perspective-review",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

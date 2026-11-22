@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "c4512cb6-b1f0-4be7-9368-81ad04579504",
+  "path": "craft-anything",
+  "path_key": "craft-anything",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "import",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

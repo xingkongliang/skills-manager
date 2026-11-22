@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "a6c8922b-4a9e-4cef-ae8a-5a0c58d0068a",
+  "path": "story-map-builder",
+  "path_key": "story-map-builder",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

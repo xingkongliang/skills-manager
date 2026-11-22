@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "be298c66-8156-4dff-a317-0249b1a4ab36",
+  "path": "old-photo-restore",
+  "path_key": "old-photo-restore",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

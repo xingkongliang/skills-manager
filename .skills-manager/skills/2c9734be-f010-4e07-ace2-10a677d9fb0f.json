@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "2c9734be-f010-4e07-ace2-10a677d9fb0f",
+  "path": "content-research-writer",
+  "path_key": "content-research-writer",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

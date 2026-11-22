@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>METANO_IA · Master Control</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Space+Mono:wght@400;700&display=swap');
+
+:root {
+  --bg: #080c14;
+  --bg2: #0d1520;
+  --bg3: #111d2e;
+  --gold: #c9a84c;
+  --gold2: #e8c96a;
+  --silver: #8a9ab5;
+  --border: #1e2d42;
+  --text: #d4dde8;
+  --dim: #4a5a6e;
+  --green: #2e7d52;
+  --amber: #b5762a;
+  --red: #7d2e2e;
+  --blue: #2e4a7d;
+
+  /* Gem palette */
+  --gem-jose: #1a4a8a;
+  --gem-juda: #8b2020;
+  --gem-levi: #2a6a4a;
+  --gem-ruben: #c45c5c;
+  --gem-simeon: #5c4a8a;
+  --gem-zabulon: #2a6a7a;
+  --gem-dan: #d4823a;
+  --gem-neftali: #3a7a5c;
+  --gem-gad: #7a5c2a;
+  --gem-aser: #7a2a5c;
+  --gem-issacar: #5c7a2a;
+  --gem-benjamin: #2a4a7a;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── HEADER ── */
+.header {
+  border-bottom: 1px solid var(--border);
+  padding: 20px 32px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  background: linear-gradient(180deg, #0a1020 0%, var(--bg) 100%);
+}
+
+.header-title { line-height: 1; }
+.system-name {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 28px;
+  font-weight: 300;
+  letter-spacing: 0.2em;
+  color: var(--gold);
+}
+.system-sub {
+  font-size: 9px;
+  color: var(--dim);
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+.header-meta {
+  text-align: right;
+  font-size: 9px;
+  color: var(--dim);
+  line-height: 1.8;
+}
+.header-meta span { color: var(--silver); }
+
+/* ── ALERT BAR ── */
+.alert-bar {
+  background: #1a0f00;
+  border-bottom: 1px solid #3a2200;
+  padding: 8px 32px;
+  font-size: 9px;
+  color: #c9844c;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  letter-spacing: 0.08em;
+}
+.alert-dot { width: 6px; height: 6px; border-radius: 50%; background: #c9844c; animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* ── LAYOUT ── */
+.main { display: grid; grid-template-columns: 1fr 340px; gap: 0; min-height: calc(100vh - 90px); }
+.left { border-right: 1px solid var(--border); padding: 24px 32px; }
+.right { padding: 24px; }
+
+/* ── SECTION LABELS ── */
+.section-label {
+  font-size: 8px;
+  color: var(--dim);
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── PROJECT GRID ── */
+.project-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 28px; }
+
+.project-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  position: relative;
+}
+.project-card:hover { border-color: var(--gold); background: #0f1a28; }
+.project-card.active { border-color: var(--gold); background: #0f1a28; }
+.project-card.expanded { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+
+.gem-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+.project-info { min-width: 0; }
+.project-name {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-desc { font-size: 9px; color: var(--dim); margin-top: 2px; }
+
+.status-badge {
+  font-size: 8px;
+  padding: 2px 7px;
+  border-radius: 2px;
+  white-space: nowrap;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.status-blocked { background: #1a0000; color: #c87a7a; border: 1px solid #3a1010; }
+.status-active { background: #0a1f10; color: #6aaa8a; border: 1px solid #1a3a2a; }
+.status-pending { background: #1a1500; color: #c9a84c; border: 1px solid #3a2a00; }
+.status-partial { background: #0a1020; color: #5a8aaa; border: 1px solid #1a2a3a; }
+.status-arch { background: #0f0f0f; color: #4a5a6e; border: 1px solid #1e2d42; }
+
+/* ── EXPANDED DETAIL ── */
+.project-detail {
+  background: #0a1222;
+  border: 1px solid var(--gold);
+  border-top: none;
+  border-radius: 0 0 3px 3px;
+  padding: 14px;
+  display: none;
+  margin-bottom: 2px;
+}
+.project-detail.show { display: block; }
+
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.detail-item { }
+.detail-label { font-size: 8px; color: var(--dim); letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 3px; }
+.detail-value { font-size: 10px; color: var(--text); line-height: 1.5; }
+.detail-value.gold { color: var(--gold); }
+.detail-value.warn { color: #c9844c; }
+.detail-value.ok { color: #6aaa8a; }
+
+.next-action {
+  background: #0f1a0a;
+  border: 1px solid #1a3a1a;
+  border-radius: 2px;
+  padding: 8px 10px;
+  font-size: 9px;
+  color: #6aaa8a;
+  line-height: 1.6;
+}
+.next-action::before { content: "▶ PRÓXIMA ACCIÓN: "; color: var(--dim); }
+
+/* ── CONFLICTS (BOS) ── */
+.conflict-list { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.conflict-item {
+  background: #1a0a0a;
+  border: 1px solid #3a1a1a;
+  border-radius: 2px;
+  padding: 6px 10px;
+  font-size: 9px;
+  line-height: 1.6;
+}
+.conflict-id { color: #c87a7a; font-weight: 700; }
+.conflict-desc { color: var(--dim); margin-top: 2px; }
+.conflict-fix { color: #c9a84c; margin-top: 2px; }
+.conflict-fix::before { content: "→ "; }
+
+/* ── BOS PROGRESS ── */
+.bos-progress { margin-top: 10px; }
+.tribe-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.tribe-cell {
+  aspect-ratio: 1;
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 7px;
+  text-align: center;
+  border: 1px solid transparent;
+  padding: 4px 2px;
+  line-height: 1.3;
+}
+.tribe-cell.done { border-color: var(--gold); }
+.tribe-cell.active-inv { border-color: #3a6a3a; }
+.tribe-cell.blocked { border-color: #3a1a1a; }
+.tribe-cell.pending { border-color: var(--border); opacity: 0.5; }
+.tribe-name { color: var(--silver); font-weight: 700; }
+.tribe-gem { color: var(--dim); font-size: 6px; margin-top: 2px; }
+
+/* ── RIGHT PANEL ── */
+.panel-block { margin-bottom: 24px; }
+
+/* ── STATUS SUMMARY ── */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.stat-cell {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 10px;
+  text-align: center;
+}
+.stat-num {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 24px;
+  font-weight: 300;
+  color: var(--gold);
+  line-height: 1;
+}
+.stat-label { font-size: 8px; color: var(--dim); letter-spacing: 0.1em; margin-top: 3px; }
+
+/* ── WORKING PROTOCOL ── */
+.protocol-list { display: flex; flex-direction: column; gap: 8px; }
+.protocol-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.protocol-num {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 18px;
+  font-weight: 300;
+  color: var(--gold);
+  line-height: 1;
+  flex-shrink: 0;
+  width: 16px;
+}
+.protocol-text { font-size: 9px; color: var(--silver); line-height: 1.6; }
+.protocol-text strong { color: var(--text); }
+
+/* ── INJECT BOX ── */
+.inject-box {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 12px;
+  font-size: 9px;
+  color: var(--dim);
+  line-height: 1.7;
+}
+.inject-box code {
+  display: block;
+  background: #060a10;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 8px;
+  color: var(--gold);
+  margin-top: 8px;
+  font-size: 8px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── FOOTER ── */
+.footer {
+  border-top: 1px solid var(--border);
+  padding: 10px 32px;
+  font-size: 8px;
+  color: var(--dim);
+  display: flex;
+  justify-content: space-between;
+  letter-spacing: 0.1em;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-title">
+    <div class="system-name">METANO_IA</div>
+    <div class="system-sub">Master Control Center · v1.0 · Raquel Alejandra</div>
+  </div>
+  <div class="header-meta">
+    <div>Tampico, TAMPS, México</div>
+    <div>2026-04-29 · <span>9 proyectos activos</span></div>
+    <div>Orquestador: Claude Sonnet 4.6</div>
+  </div>
+</div>
+
+<div class="alert-bar">
+  <div class="alert-dot"></div>
+  <span>BLOQUEADOS: DEC-005 + DEC-010 (ÆQUITAS pendiente) — resolviendo desbloquea BOS Annex A → P1</span>
+</div>
+
+<div class="main">
+<div class="left">
+
+  <div class="section-label">Ecosistema de Proyectos</div>
+
+  <div class="project-grid">
+
+    <!-- BOS / Gemstones — MOST DEVELOPED -->
+    <div class="project-card" onclick="toggle('bos')">
+      <div class="gem-dot" style="background:#8b4020"></div>
+      <div class="project-info">
+        <div class="project-name">BOS Critical Apparatus · Iridiscenter</div>
+        <div class="project-desc">Exégesis bíblica · 12 tribus → gemas · Sistema ÆQUITAS · Nivel posdoctoral</div>
+      </div>
+      <div class="status-badge status-blocked">BLOQUEADO</div>
+    </div>
+    <div class="project-detail" id="detail-bos">
+      <div class="detail-grid">
+        <div class="detail-item">
+          <div class="detail-label">Investigaciones</div>
+          <div class="detail-value"><span class="gold">2</span> / 12 completas</div>
+        </div>
+        <div class="detail-item">
+          <div class="detail-label">ÆQUITAS</div>
+          <div class="detail-value warn">DEC-005, DEC-008, DEC-010 bloqueadas</div>
+        </div>
+        <div class="detail-item">
+          <div class="detail-label">Léxico Strong</div>
+          <div class="detail-value">48 validados · 62 pendientes · <span class="warn">5 en tensión</span></div>
+        </div>
+        <div class="detail-item">
+          <div class="detail-label">Dry-run</div>
+          <div class="detail-value warn">v2.1 · ready_for_persist: false</div>
+        </div>
+      </div>
+
+      <div class="bos-progress">
+        <div class="detail-label" style="margin-bottom:8px">Pectoral — Estado por tribu</div>
+        <div class="tribe-grid">
+          <div class="tribe-cell done" style="background:#0f0a06"><div class="tribe-name">JUDÁ</div><div class="tribe-gem">Garnet · INV-0006</div></div>
+          <div class="tribe-cell done" style="background:#060a15"><div class="tribe-name">JOSÉ</div><div class="tribe-gem">Alexandrite · INV-0005</div></div>
+          <div class="tribe-cell blocked" style="background:#100606"><div class="tribe-name">RUBÉN</div><div class="tribe-gem">Garnet R · conflicto H124</div></div>
+          <div class="tribe-cell blocked" style="background:#0f0a0f"><div class="tribe-name">DAN</div><div class="tribe-gem">Opal · H3958 incierto</div></div>
+          <div class="tribe-cell pending" style="background:#0a0a10"><div class="tribe-name">SIMEÓN</div><div class="tribe-gem">pendiente</div></div>
+          <div class="tribe-cell pending" style="background:#050d10"><div class="tribe-name">ZABULÓN</div><div class="tribe-gem">pendiente</div></div>
+          <div class="tribe-cell pending" style="background:#080d06"><div class="tribe-name">NEFTALÍ</div><div class="tribe-gem">pendiente</div></div>
+          <div class="tribe-cell blocked" style="background:#0f0c06"><div class="tribe-name">GAD</div><div class="tribe-gem">H306 compartido</div></div>
+          <div class="tribe-cell pending" style="background:#100608"><div class="tribe-name">ASER</div><div class="tribe-gem">H306 compartido</div></div>
+          <div class="tribe-cell pending" style="background:#080a0d"><div class="tribe-name">ISACAR</div><div class="tribe-gem">pendiente</div></div>
+          <div class="tribe-cell pending" style="background:#06080f"><div class="tribe-name">BENJAMÍN</div><div class="tribe-gem">pendiente</div></div>
+          <div class="tribe-cell pending" style="background:#060e0a"><div class="tribe-name">LEVÍ</div><div class="tribe-gem">pendiente</div></div>
+        </div>
+      </div>
+
+      <div class="conflict-list">
+        <div class="conflict-item">
+          <div><span class="conflict-id">DEC-005</span> — José/Alexandrite: H8658 (taršîš) página exacta BDB sin verificar</div>
+          <div class="conflict-fix">Verificar BDB H8658 → completar DEC-005 → Annexo A desbloqueado parcialmente</div>
+        </div>
+        <div class="conflict-item">
+          <div><span class="conflict-id">DEC-010</span> — Judá/Garnet: H5306 (nōfeḵ) dictamen ÆQUITAS pendiente</div>
+          <div class="conflict-fix">Completar registro BDB p. exacta → solicitar dictamen → certificar GEM-04</div>
+        </div>
+        <div class="conflict-item">
+          <div><span class="conflict-id">DEC-008</span> — Dan/Opal Pink: H3958 (lešem) sin consenso académico</div>
+          <div class="conflict-fix">Marcar draft → completar INV-Dan con análisis BDB + HALOT específico</div>
+        </div>
+      </div>
+
+      <div class="next-action" style="margin-top:10px">
+        Resolver DEC-005 + DEC-010 → producir Annex A del Codex GEMA → solicitar dictamen ÆQUITAS → desbloquear P1
+      </div>
+    </div>
+
+    <!-- METANO_IA Core -->
+    <div class="project-card" onclick="toggle('core')">
+      <div class="gem-dot" style="background:#2a4a8a"></div>
+      <div class="project-info">
+        <div class="project-name">METANO_IA Core</div>
+        <div class="project-desc">Pipeline RLHF · PPO-lite · FAISS · FastAPI · Multi-agente</div>
+      </div>
+      <div class="status-badge status-arch">ARQUITECTURA</div>
+    </div>
+    <div class="project-detail" id="detail-core">
+      <div class="detail-grid">
+        <div class="detail-item"><div class="detail-label">Diseño</div><div class="detail-value ok">Production-grade ✓</div></div>
+        <div class="detail-item"><div class="detail-label">Runtime</div><div class="detail-value warn">NO desplegado</div></div>
+        <div class="detail-item"><div class="detail-label">Skeleton</div><div class="detail-value ok">Estructuralmente válido ✓</div></div>
+        <div class="detail-item"><div class="detail-label">Merge</div><div class="detail-value warn">5 etapas pendientes</div></div>
+      </div>
+      <div class="next-action">MVP runtime core → LLM injection real → reward model → PPO activation → distributed</div>
+    </div>
+
+    <!-- Proyecto P -->
+    <div class="project-card" onclick="toggle('pp')">
+      <div class="gem-dot" style="background:#5c3a8a"></div>
+      <div class="project-info">
+        <div class="project-name">Proyecto P</div>
+        <div class="project-desc">Arquitectura editorial · 45° y 90° desarrollados</div>
+      </div>
+      <div class="status-badge status-partial">PARCIAL</div>
+    </div>
+    <div class="project-detail" id="detail-pp">
+      <div class="detail-grid">
+        <div class="detail-item"><div class="detail-label">Avance</div><div class="detail-value warn">Arquitectura en desarrollo</div></div>
+        <div class="detail-item"><div class="detail-label">Fases</div><div class="detail-value">45° y 90° documentadas</div></div>
+      </div>
+      <div class="next-action">Sesión dedicada para consolidar arquitectura completa → definir entregable P1</div>
+    </div>
+
+    <!-- Ninoe -->
+    <div class="project-card" onclick="toggle('ninoe')">
+      <div class="gem-dot" style="background:#3a8a5c"></div>
+      <div class="project-info">
+        <div class="project-name">Pipeline Ninoe</div>
+        <div class="project-desc">Generador de contenido · Pipeline activo</div>
+      </div>
+      <div class="status-badge status-partial">PARCIAL</div>
+    </div>
+    <div class="project-detail" id="detail-ninoe">
+      <div class="detail-grid">
+        <div class="detail-item"><div class="detail-label">Estado</div><div class="detail-value warn">Ejecución y drafts narrativos generados</div></div>
+        <div class="detail-item"><div class="detail-label">Pendiente</div><div class="detail-value">Consolidar corpus generado</div></div>
+      </div>
+      <div class="next-action">Recuperar drafts de sesiones anteriores → consolidar en corpus unificado → continuar generación</div>
+    </div>
+
+    <!-- VERITAS -->
+    <div class="project-card" onclick="toggle('veritas')">
+      <div class="gem-dot" style="background:#8a6a2a"></div>
+      <div class="project-info">
+        <div class="project-name">VERITAS Pipeline</div>
+        <div class="project-desc">Pipeline de verificación · Ejecución parcial</div>
+      </div>
+      <div class="status-badge status-partial">PARCIAL</div>
+    </div>
+    <div class="project-detail" id="detail-veritas">
+      <div class="next-action">Recuperar estado de ejecución → determinar punto de continuación → completar pipeline</div>
+    </div>
+
+    <!-- Artisans -->
+    <div class="project-card" onclick="toggle('artisans')">
+      <div class="gem-dot" style="background:#2a7a8a"></div>
+      <div class="project-info">
+        <div class="project-name">Artisans Foundation · Life in a Breath</div>
+        <div class="project-desc">Identidad web · Desarrollo activo</div>
+      </div>
+      <div class="status-badge status-active">ACTIVO</div>
+    </div>
+    <div class="project-detail" id="detail-artisans">
+      <div class="next-action">Sesión dedicada → definir entregable web inmediato → ejecutar</div>
+    </div>
+
+    <!-- LUMINA -->
+    <div class="project-card" onclick="toggle('lumina')">
+      <div class="gem-dot" style="background:#8a7a2a"></div>
+      <div class="project-info">
+        <div class="project-name">LUMINA Branding</div>
+        <div class="project-desc">Identidad de marca · Optimización activa</div>
+      </div>
+      <div class="status-badge status-active">ACTIVO</div>
+    </div>
+    <div class="project-detail" id="detail-lumina">
+      <div class="next-action">Recuperar brief de marca → generar manual de identidad completo</div>
+    </div>
+
+    <!-- Ester -->
+    <div class="project-card" onclick="toggle('ester')">
+      <div class="gem-dot" style="background:#6a2a8a"></div>
+      <div class="project-info">
+        <div class="project-name">Ester's Website</div>
+        <div class="project-desc">Proyecto web · En desarrollo</div>
+      </div>
+      <div class="status-badge status-pending">PENDIENTE</div>
+    </div>
+    <div class="project-detail" id="detail-ester">
+      <div class="next-action">Definir scope → ejecutar diseño y desarrollo completo en una sesión</div>
+    </div>
+
+    <!-- Metanoia Editorial -->
+    <div class="project-card" onclick="toggle('meta-edit')">
+      <div class="gem-dot" style="background:#4a8a2a"></div>
+      <div class="project-info">
+        <div class="project-name">Metanoia Editorial</div>
+        <div class="project-desc">Publicación psicológica · Periódico de la Psicología</div>
+      </div>
+      <div class="status-badge status-pending">PENDIENTE</div>
+    </div>
+    <div class="project-detail" id="detail-meta-edit">
+      <div class="detail-grid">
+        <div class="detail-item"><div class="detail-label">Marco</div><div class="detail-value">Rogers · Frankl · Yalom</div></div>
+        <div class="detail-item"><div class="detail-label">Concepto</div><div class="detail-value">Metanoia = reconsolidación de memoria emocional</div></div>
+      </div>
+      <div class="next-action">Expandir artículo existente → formato académico completo → envío</div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- RIGHT PANEL -->
+<div class="right">
+
+  <div class="panel-block">
+    <div class="section-label">Estado Global</div>
+    <div class="stats-grid">
+      <div class="stat-cell">
+        <div class="stat-num">9</div>
+        <div class="stat-label">Proyectos activos</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-num">2</div>
+        <div class="stat-label">Críticos bloqueados</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-num" style="color:#6aaa8a">2</div>
+        <div class="stat-label">Listos para avanzar</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-num" style="color:#c9844c">3</div>
+        <div class="stat-label">Requieren sesión</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-block">
+    <div class="section-label">Protocolo de Trabajo</div>
+    <div class="protocol-list">
+      <div class="protocol-item">
+        <div class="protocol-num">1</div>
+        <div class="protocol-text"><strong>Nombra el proyecto.</strong> Solo el nombre es suficiente. El contexto ya está cargado.</div>
+      </div>
+      <div class="protocol-item">
+        <div class="protocol-num">2</div>
+        <div class="protocol-text"><strong>Describe qué quieres lograr hoy,</strong> no cómo. Yo determino el cómo.</div>
+      </div>
+      <div class="protocol-item">
+        <div class="protocol-num">3</div>
+        <div class="protocol-text"><strong>Pega materiales largos</strong> sin disculpa. Los proceso completos.</div>
+      </div>
+      <div class="protocol-item">
+        <div class="protocol-num">4</div>
+        <div class="protocol-text"><strong>Al cerrar sesión,</strong> pide el bloque YAML. Te lo genero para la próxima.</div>
+      </div>
+      <div class="protocol-item">
+        <div class="protocol-num">5</div>
+        <div class="protocol-text"><strong>Si algo no funciona,</strong> dilo directo. No necesitas justificar ni disculparte.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-block">
+    <div class="section-label">Inyección Rápida — Próxima Sesión</div>
+    <div class="inject-box">
+      Para recuperar contexto en cualquier AI, pega esto:
+      <code>Sistema: METANO_IA · Raquel Alejandra · Tampico, MX
+Rol tuyo: ingeniero técnico 100% a cargo de ejecución
+Proyecto activo: [NOMBRA UNO]
+Estado del sistema: ver METANOIA_MasterControl.html
+Reglas: R1 división roles · R2 seguridad · R3 no destrucción · R4 ciclo iterativo · R5 memoria regenerativa</code>
+    </div>
+  </div>
+
+  <div class="panel-block">
+    <div class="section-label">División de Roles — Permanente</div>
+    <div class="inject-box" style="line-height:1.8">
+      <span style="color:var(--gold)">TÚ →</span> concepto · contenido · criterio · decisión final<br>
+      <span style="color:var(--silver)">YO →</span> código · estructura · arquitectura · ejecución · validación
+    </div>
+  </div>
+
+</div>
+</div>
+
+<div class="footer">
+  <span>METANO_IA Master Control · v1.0 · 2026-04-29</span>
+  <span>Haz clic en cualquier proyecto para ver detalle y próxima acción</span>
+</div>
+
+<script>
+function toggle(id) {
+  const detail = document.getElementById('detail-' + id);
+  const isOpen = detail.classList.contains('show');
+
+  // close all
+  document.querySelectorAll('.project-detail').forEach(d => d.classList.remove('show'));
+  document.querySelectorAll('.project-card').forEach(c => c.classList.remove('active', 'expanded'));
+
+  if (!isOpen) {
+    detail.classList.add('show');
+    // find parent card
+    const card = detail.previousElementSibling;
+    if (card) { card.classList.add('active', 'expanded'); }
+  }
+}
+
+// Auto-open BOS on load (it's the priority)
+window.onload = () => toggle('bos');
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "640b1197-f8e6-4c94-acec-0dca654faec7",
+  "path": "brand-identity-studio",
+  "path_key": "brand-identity-studio",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

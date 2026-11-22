@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "61598522-fe8d-4bf3-946e-3e43f9064ba1",
+  "path": "unslop",
+  "path_key": "unslop",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

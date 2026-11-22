@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "8e903835-61a6-4e89-9e32-b7e603283491",
+  "path": "design-motion-principles",
+  "path_key": "design-motion-principles",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

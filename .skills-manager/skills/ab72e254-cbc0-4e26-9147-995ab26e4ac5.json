@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "ab72e254-cbc0-4e26-9147-995ab26e4ac5",
+  "path": "extract-design-system",
+  "path_key": "extract-design-system",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

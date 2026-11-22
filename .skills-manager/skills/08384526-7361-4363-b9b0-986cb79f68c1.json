@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "08384526-7361-4363-b9b0-986cb79f68c1",
+  "path": "flow-prompt-helper",
+  "path_key": "flow-prompt-helper",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

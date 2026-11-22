@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0.0",
+  "audit_id": "AEQUITAS-BE-RAG-RC1",
+  "package_id": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1",
+  "generated_at": "2026-07-22T21:00:35-06:00",
+  "verdict": "REVIEW",
+  "criteria": {
+    "AQ1_Fidelity": {
+      "result": "PASS",
+      "reason": "Scope follows the requested BOS/LUMINA editorial system and preserves source boundaries."
+    },
+    "AQ2_Coherence": {
+      "result": "REVIEW",
+      "reason": "Clinical token and odd/even pattern remain provisional conflicts."
+    },
+    "AQ3_Necessity": {
+      "result": "PASS",
+      "reason": "Only sources and derived contracts needed for the unified architecture are packaged."
+    },
+    "AQ4_Precision": {
+      "result": "PASS",
+      "reason": "Exact filenames, hashes, states, modules and gates are recorded."
+    },
+    "AQ5_Elegance": {
+      "result": "PASS",
+      "reason": "Layering separates evidence, contracts, engines, QA and handoff."
+    }
+  },
+  "blocking_reasons": [
+    "DMIE/MMII master runtime is not mounted.",
+    "Comet full browser/print/runtime QA is pending."
+  ],
+  "release_effect": "Technical package may be accepted as RC1; editorial runtime and canon cannot be released.",
+  "package_version": "3.0.0-rc.2",
+  "patch": "factual_registry_patch_rc2",
+  "literatura_audit": {
+    "rc1_claim": "20/20 CURRENT_CANDIDATE",
+    "rc2_corrected": "12/20 LOAD_PARCIAL",
+    "present_entries": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      17,
+      18,
+      19,
+      20
+    ],
+    "missing_entries": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "cuadernillo_file_modified": false
+  },
+  "c001_rc2": "SOURCE_IDENTIFIED_NOT_MATERIALIZED_IN_RC1",
+  "c002_rc2": "HTML_COMPLETE_RUNTIME_QA_PENDING"
+}

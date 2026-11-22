@@ -1,0 +1,54 @@
+{
+  "package_id": "METANOIA-DIVIDE-DE-MANO-INGESTION-V1-DRY-RUN",
+  "run_id": "RUN-DEMANO-DIVIDE-V1-20260728T030459-0600",
+  "status": "READY_FOR_REVIEW",
+  "dry_run": true,
+  "production_writes": 0,
+  "files": [
+    {
+      "name": "divide_ingestion_v1.json",
+      "role": "canonical_ingestion_packet"
+    },
+    {
+      "name": "MI_AUDIENCE_SIGNAL.csv",
+      "role": "target_table",
+      "row_count": 2
+    },
+    {
+      "name": "MI_SUPPLIER.csv",
+      "role": "target_table",
+      "row_count": 4
+    },
+    {
+      "name": "MI_EVIDENCE.csv",
+      "role": "target_table",
+      "row_count": 12
+    },
+    {
+      "name": "MI_OPPORTUNITY_BRIDGE.csv",
+      "role": "target_table",
+      "row_count": 1
+    },
+    {
+      "name": "MI_RUN_LOG.csv",
+      "role": "target_table",
+      "row_count": 1
+    },
+    {
+      "name": "DRY_RUN_REPORT.md",
+      "role": "director_report"
+    },
+    {
+      "name": "VALIDATION.txt",
+      "role": "validation_receipt"
+    }
+  ],
+  "planned_operations": {
+    "create": 20,
+    "update": 0,
+    "omit": 0,
+    "conflict": 2,
+    "reject": 0
+  },
+  "next_gate": "REVIEW_AND_AUTHORIZE_STAGING"
+}

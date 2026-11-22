@@ -1,0 +1,70 @@
+{
+  "meta": {
+    "ts": "2026-06-26T21:40:00Z",
+    "mode": "audit",
+    "v": "1.4"
+  },
+  "summary": {
+    "created": 12,
+    "updated": 6,
+    "conflicts": 2
+  },
+  "conflicts": [
+    {
+      "id": "TENSION-01",
+      "status": "resolved",
+      "detail": "Source says Media Carta 5.5x8.5 but bash used papersize=letter. Resolved with half-letter geometry."
+    },
+    {
+      "id": "TENSION-02",
+      "status": "documented",
+      "detail": "Protocol names Arial/Times New Roman; container sample uses Arimo/Tinos equivalents. Mac/local script can be adjusted to exact fonts."
+    }
+  ],
+  "actions": [
+    "Preserved source DOCX.",
+    "Extracted protocol text into markdown.",
+    "Created EIC Notes JSON schema and example record.",
+    "Created half-letter markdown template and LaTeX preamble.",
+    "Created Python generator and shell compile helper.",
+    "Generated sample Markdown and PDF.",
+    "Rendered PDF proof images for QA.",
+    "Updated Mission Control and PackageManifest."
+  ],
+  "artifact_paths": [
+    "source/editorial_protocols/eic_notes/source_docx/Protocolo_y_Maquetacion_de_Notas_de_Direccion_Editorial.docx",
+    "source/editorial_protocols/eic_notes/schema/editor_in_chief_notes.schema.json",
+    "source/editorial_protocols/eic_notes/editor_in_chief_notes.example.json",
+    "templates/eic_notes/print_notes_layout.md",
+    "templates/eic_notes/preamble.tex",
+    "scripts/eic_notes/generate_eic_notes.py",
+    "scripts/eic_notes/compile_eic_notes.sh",
+    "work/eic_notes/EIC_Notes_LUMINA.md",
+    "print/eic_notes/EIC_Notes_LUMINA_Print.pdf",
+    "dist/eic_notes/EIC_NOTES_PROTOCOL_INDEX.html",
+    "qa/eic_notes/EIC_Notes_LUMINA_pdfinfo.txt",
+    "qa/eic_notes/render/page-01.png",
+    "qa/eic_notes/render/page-02.png"
+  ],
+  "assumptions": [
+    "v1.3 LUMINA Unified QC Full is the correct stable base.",
+    "EIC Notes should be additive and not overwrite workbook print artifacts.",
+    "Half Letter is the operative physical format."
+  ],
+  "rollback": [
+    "Delete the v1.4 folder and return to v1.3 QC Full zip.",
+    "No source outside v1.4 was modified."
+  ],
+  "qc_gates": {
+    "QC-01": "PASS: JSON schema validates example record.",
+    "QC-02": "PASS: No duplicate batch rows introduced.",
+    "QC-03": "PASS: BOS/AEQUITAS/LUMINA/OPAL/IRIDISCENTER mappings documented.",
+    "QC-04": "PASS: Media Carta vs letter and font dependencies listed.",
+    "QC-05": "PASS: Changelog generated.",
+    "QC-06": "PASS: Artifact paths returned.",
+    "QC-07": "PASS: Batch plan explicit in rehydration report.",
+    "QC-08": "PASS: Print descriptors exist before render; no premature image generation.",
+    "QC-09": "PASS: jsonschema validation and Pandoc render test completed.",
+    "QC-10": "PASS: Rollback path defined."
+  }
+}

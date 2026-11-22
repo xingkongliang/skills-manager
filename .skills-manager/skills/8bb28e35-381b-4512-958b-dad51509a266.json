@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "8bb28e35-381b-4512-958b-dad51509a266",
+  "path": "break-ui",
+  "path_key": "break-ui",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

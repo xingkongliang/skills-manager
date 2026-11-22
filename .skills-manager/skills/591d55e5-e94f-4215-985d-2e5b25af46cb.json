@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "591d55e5-e94f-4215-985d-2e5b25af46cb",
+  "path": "material-3",
+  "path_key": "material-3",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

@@ -1,0 +1,25 @@
+:root {
+  --beige-base:#D9CBB7;
+  --arena-calida:#CBB89F;
+  --crema-claro:#F5F1EC;
+  --marron-lineal:#3B2F2A;
+  --oro-sutil:#BFA06A;
+  --espresso:#1E1714;
+  --umber:#4A352D;
+  --rose-clay:#A97963;
+  --oxidized-bronze:#8C6A43;
+  --champagne-gold:#D7BC83;
+  --font-display: Georgia, "Times New Roman", serif;
+  --font-body: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
+}
+html[data-theme='light']{--bg:var(--crema-claro);--surface:#FFFDF8;--text:var(--marron-lineal);--muted:#7D6E62;--line:rgba(59,47,42,.18);--accent:var(--oro-sutil)}
+html[data-theme='dark']{--bg:var(--espresso);--surface:#2A201B;--text:var(--crema-claro);--muted:var(--beige-base);--line:rgba(191,160,106,.22);--accent:var(--champagne-gold)}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-body)}
+.lumina-surface{background:
+ radial-gradient(circle at 18% 12%, rgba(215,188,131,.20), transparent 28%),
+ radial-gradient(circle at 82% 30%, rgba(169,121,99,.16), transparent 32%),
+ linear-gradient(135deg, var(--bg), var(--surface));}
+.lumina-panel{background:color-mix(in srgb, var(--surface) 84%, transparent);border:1px solid var(--line);border-radius:24px}
+.lumina-label{font-size:10px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.lumina-heading{font-family:var(--font-display);letter-spacing:.08em;text-transform:uppercase}
+@media print{.no-print{display:none!important}body{background:#fff!important;color:#3B2F2A!important}.lumina-panel{background:#fff!important;border:1px solid rgba(59,47,42,.18)!important;box-shadow:none!important;break-inside:avoid}}

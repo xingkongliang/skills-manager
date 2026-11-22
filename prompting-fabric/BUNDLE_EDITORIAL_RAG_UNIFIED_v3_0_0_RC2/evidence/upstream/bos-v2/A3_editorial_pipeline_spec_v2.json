@@ -1,0 +1,187 @@
+{
+  "meta": {
+    "id": "BOS-EDITORIAL-SPEC",
+    "version": "2.0",
+    "sistema": "Metasistema BOS · Iridiscenter",
+    "rama": "LUMINA/editorial",
+    "fecha": "2026-04-04",
+    "estado": "canónico · operativo",
+    "documentos_fuente": [
+      "Carta_Magna_Del_Sistema_Bos.docx",
+      "Atlas_Epistemologico_Del_Metasistema_Bos.docx",
+      "framework_metaanalitico_artistico_multidisciplinario.md",
+      "Manual_Direccion_Creativa_y_Artistica_Digital_con_AI.docx"
+    ]
+  },
+
+  "dominio_bos": {
+    "nucleo": "BOS",
+    "rama_editorial": "LUMINA",
+    "auditoria": "ÆQUITAS",
+    "simbolica": "OPAL",
+    "descripcion": "El pilar editorial es la instancia de LUMINA que produce materiales impresos y digitales derivados del metasistema BOS"
+  },
+
+  "voz_editorial": {
+    "registro": "Contemplativo · Riguroso · Invitacional",
+    "tono": "Unitario — igual en todas las líneas",
+    "prohibido": [
+      "Lenguaje prescriptivo (debes, tienes que)",
+      "Tono condescendiente",
+      "Abstracción sin anclaje",
+      "Urgencia comercial",
+      "Saturación de texto"
+    ],
+    "patrones": {
+      "pregunta_abierta": "¿Qué permanece cuando todo lo demás cambia?",
+      "instruccion_suave": "Escribe sin filtro. Borra si quieres.",
+      "puente_simbolico": "El árbol no fuerza su crecimiento."
+    }
+  },
+
+  "paleta_canonica": {
+    "base": {
+      "primary": "#2C1810",
+      "bg": "#F5F0EC",
+      "accent": "#8A8680",
+      "bridge": "#D7DEE8"
+    },
+    "lineas": {
+      "LITERATURA": {
+        "hex": "#CC9C50",
+        "evocacion": "Pergamino, manuscrito, oro antiguo",
+        "dominio_bos": "OPAL"
+      },
+      "CLINICA": {
+        "hex": "#7B9EA6",
+        "evocacion": "Agua quieta, claridad, contención",
+        "dominio_bos": "BOS",
+        "nota": "v2: reemplaza #E31A7E (fucsia) por alineación con LUMINA"
+      },
+      "ESPIRITUAL": {
+        "hex": "#1E7D63",
+        "evocacion": "Naturaleza, umbral, lo sagrado encarnado",
+        "dominio_bos": "OPAL + ÆQUITAS"
+      }
+    }
+  },
+
+  "tipografia": {
+    "titular_principal": { "familia": "Playfair Display", "peso": 700, "pt": "22-24" },
+    "subtitulo_seccion": { "familia": "Playfair Display", "peso": "400 italic", "pt": "16-18" },
+    "encabezado_entry": { "familia": "Playfair Display", "peso": 600, "pt": 14 },
+    "cuerpo": { "familia": "Montserrat", "peso": 400, "pt": 11 },
+    "citas": { "familia": "Georgia", "peso": "400 italic", "pt": 10 },
+    "footer": { "familia": "Montserrat", "peso": 300, "pt": 8 },
+    "prompts": { "familia": "Montserrat", "peso": "500 italic", "pt": 11 }
+  },
+
+  "formato_impresion": {
+    "final": { "nombre": "Media carta horizontal", "mm": "148 × 210", "in": "5.8 × 8.3" },
+    "trabajo": { "nombre": "A4 horizontal", "mm": "210 × 297" },
+    "margenes_mm": { "superior": 12, "inferior": 12, "izquierdo": 10, "derecho": 10 },
+    "papel": { "gramaje": "120 g/m²", "color": "#F5F0EC (marfil preferente)" },
+    "impresion": { "orientacion": "landscape", "doble_cara": true, "volteo": "eje corto" },
+    "encuadernacion": ["Abrochador metálico", "Costura francesa"]
+  },
+
+  "estructura_cuadernillo": {
+    "total_entries": 20,
+    "secciones": [
+      { "id": "S1", "nombre": "Apertura", "entries": "1-4", "proposito": "Establecer intención, crear espacio" },
+      { "id": "S2", "nombre": "Exploración", "entries": "5-16", "proposito": "Inmersión en contenido, ciclos de 2" },
+      { "id": "S3", "nombre": "Síntesis", "entries": "17-18", "proposito": "Integración del viaje" },
+      { "id": "S4", "nombre": "Cierre", "entries": "19-20", "proposito": "Compromiso e integración" }
+    ],
+    "patron_ciclo_s2": "Entry par: contenido + referencia + pregunta estructurada | Entry impar: reflexión abierta + escritura libre",
+    "espacios_escritura": { "min_lineas": 6, "max_lineas": 12 }
+  },
+
+  "lineas": {
+    "LITERATURA": {
+      "id": "CRL-001",
+      "titulo": "Cuadernillo Reflexivo — Literatura",
+      "enfoque": "Contemplación textual, reflexión existencial, lecturas sagradas",
+      "audiencia": "Devotos, formandos espirituales, buscadores",
+      "dominio_bos_fuente": "OPAL (textos sagrados, hermenéutica)",
+      "interactividad": ["escritura", "visual_secundario"],
+      "elementos_especiales": ["Verso canónico EN/ES + transliteración", "Contexto hermenéutico breve"],
+      "wreck_it_journal": true
+    },
+    "CLINICA": {
+      "id": "CRC-001",
+      "titulo": "Cuadernillo Reflexivo — Clínica",
+      "enfoque": "Procesos emocionales, patrones internos, integración somática",
+      "audiencia": "Personas en proceso terapéutico, autoconocimiento",
+      "dominio_bos_fuente": "BOS (integración, procesos internos)",
+      "interactividad": ["escritura"],
+      "elementos_especiales": ["Anclaje corporal", "Mapa emocional", "Procesamiento de patrones"],
+      "wreck_it_journal": true
+    },
+    "ESPIRITUAL": {
+      "id": "CRE-001",
+      "titulo": "Cuadernillo Reflexivo — Espiritual",
+      "enfoque": "Arquetipos, discernimiento vocacional, transformación interior",
+      "audiencia": "Personas en búsqueda vocacional, integración espiritual",
+      "dominio_bos_fuente": "OPAL + ÆQUITAS (arquetipos, vocación, ética)",
+      "interactividad": ["escritura", "visual_primario", "wreck_it_intenso"],
+      "elementos_especiales": ["Arquetipos sagrados", "Zonas de color/dibujo", "Meditación visual"],
+      "wreck_it_journal": true
+    }
+  },
+
+  "pipeline_produccion": {
+    "pasos": [
+      { "id": "P1", "nombre": "Corpus fuente", "accion": "Leer documentos BOS fundacionales", "rama": "BOS" },
+      { "id": "P2", "nombre": "Estilo", "accion": "Aplicar A1_editorial_style_bos.md", "rama": "LUMINA" },
+      { "id": "P3", "nombre": "Template", "accion": "Usar CUADERNILLO_REFLEXIVO_TEMPLATE_MAESTRO.md", "rama": "LUMINA" },
+      { "id": "P4", "nombre": "Instanciar", "accion": "Generar las 3 líneas con contenido específico", "rama": "LUMINA" },
+      { "id": "P5", "nombre": "Convertir", "accion": "MD → DOCX → PDF (usando spec)", "rama": "LUMINA" },
+      { "id": "P6", "nombre": "Auditar", "accion": "Aplicar scorecard ÆQUITAS (5 criterios)", "rama": "ÆQUITAS" },
+      { "id": "P7", "nombre": "Empaquetar", "accion": "Bundle ZIP: MD + DOCX + HTML + JSON + TXT", "rama": "LUMINA" }
+    ]
+  },
+
+  "auditoria_aequitas": {
+    "criterios": [
+      { "id": "AQ1", "nombre": "Fidelity", "pregunta": "¿El tono es fiel a la voz LUMINA?" },
+      { "id": "AQ2", "nombre": "Coherence", "pregunta": "¿Paleta, tipo y estructura son consistentes?" },
+      { "id": "AQ3", "nombre": "Necessity", "pregunta": "¿Cada elemento tiene función?" },
+      { "id": "AQ4", "nombre": "Precision", "pregunta": "¿Las preguntas son abiertas pero específicas?" },
+      { "id": "AQ5", "nombre": "Elegance", "pregunta": "¿La página respira? ¿Hay saturación?" }
+    ],
+    "resultados_posibles": ["PASS", "REVISIÓN", "FAIL"]
+  },
+
+  "outputs_bundle": {
+    "markdown": "Editable, versionable en git",
+    "docx": "Imprimible profesional con estilos aplicados",
+    "pdf": "Archival, distribución",
+    "html": "Versión web interactiva",
+    "json": "Metadata estructurada para sistemas",
+    "txt": "Backup completo"
+  },
+
+  "escalabilidad": {
+    "nuevas_lineas_posibles": [
+      { "nombre": "Artística", "dominio": "LUMINA + OPAL", "acento": "#8B6B4A" },
+      { "nombre": "Profesional", "dominio": "BOS + ÆQUITAS", "acento": "#4A6B8A" },
+      { "nombre": "Formativa", "dominio": "BOS + OPAL", "acento": "#6B8A4A" }
+    ],
+    "instruccion": "Para crear nueva línea: copiar template maestro, asignar ID, definir dominio BOS fuente, elegir acento cromático, generar 20 entries con voz unitaria"
+  },
+
+  "integracion_casos_aplicados": {
+    "Creacion_Devocional": {
+      "estado": "DIFERIDO — post-validación sistema genérico",
+      "rama": "LUMINA/editorial + OPAL",
+      "nota": "Proyecto específico que puede instanciar la Línea Espiritual una vez consolidado el sistema base"
+    }
+  },
+
+  "notas_operativas": {
+    "idempotencia": "Cada cuadernillo puede imprimirse múltiples veces sin variación",
+    "token_efficiency": "Este JSON es la fuente única de verdad para todos los outputs del bundle",
+    "version_control": "Incrementar version en meta al hacer cambios estructurales"
+  }
+}

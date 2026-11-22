@@ -1,0 +1,32 @@
+{
+  "meta": {"ts": "2026-06-25T00:00:00Z", "mode": "dry-run", "v": "1.3"},
+  "summary": {"created": 7, "updated": 1, "conflicts": 3},
+  "conflicts": [
+    "Current Mission Control HTML is not yet fully refactored away from external-runtime prototype lineage.",
+    "Skill ZIP payloads were preserved as opaque inputs and not yet normalized into parsed markdown.",
+    "Final deployment commit remains blocked until QC-01..QC-10 full pass."
+  ],
+  "actions": [
+    "Copied v1.2 package forward into v1.3 unified release base.",
+    "Merged Style Ops documentation and router lock into package.",
+    "Created LUMINA brand tokens, visual CSS layer, module registry, and source-of-truth registry.",
+    "Prepared governance and decision-log layer for next HTML refactor step."
+  ],
+  "artifact_paths": [
+    "source/brand/lumina_terracotta_golden_ink.tokens.json",
+    "source/visual_layers/lumina.visual.css",
+    "source/modules/MODULE_REGISTRY.md",
+    "registry/SOURCE_OF_TRUTH_REGISTRY.md",
+    "docs/DECISION_LOG_v1_3.md",
+    "qa/PREFLIGHT_REPORT.json"
+  ],
+  "assumptions": [
+    "v1.2 print package is the most stable execution base.",
+    "STYLE OPS pack applies as cross-system governance layer under BOS/AEQUITAS/OPAL/IRIDISCENTER.",
+    "Visual-layer-first sequencing is preferred over immediate full code refactor."
+  ],
+  "rollback": [
+    "Delete KOP_WB_COMET_STRIKER_CREATIVE_JOURNEY_RELEASE_v1_3_LUMINA_UNIFIED and revert to v1.2 base.",
+    "No source files outside the new v1.3 folder were modified."
+  ]
+}

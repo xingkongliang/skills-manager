@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "9906d5df-ae73-428d-85aa-7d13b9e1c5a2",
+  "path": "ui-state-expander",
+  "path_key": "ui-state-expander",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

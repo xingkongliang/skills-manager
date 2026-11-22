@@ -1,0 +1,47 @@
+{
+  "validation_id": "DIVIDE-V1-PHYSICAL-REVALIDATION-2026-07-28-01",
+  "validated_at": "2026-07-28T11:10:37-06:00",
+  "runtime_timezone": "America/Monterrey",
+  "classification": {
+    "package_presence": "OBSERVED",
+    "sha256": "CALCULATED",
+    "record_counts": "CALCULATED",
+    "schema_result": "OBSERVED"
+  },
+  "source_package": {
+    "name": "METANOIA_DIVIDE_DE_MANO_INGESTION_v1_DRY_RUN.zip",
+    "size_bytes": 13892,
+    "sha256": "cf6cfc503f8ca548a1c801ed9d2a4d1b0041bb02fe1d0513e15f0511c7b99310",
+    "archive_integrity": "PASS",
+    "archive_directory_byte_match": "PASS"
+  },
+  "divide_validation": {
+    "schema_version": "metanoia-divide/1.0",
+    "validator_result": "PASS",
+    "demand_signals": 2,
+    "vendors": 4,
+    "evidence": 12,
+    "opportunities": 1,
+    "run_logs": 1,
+    "candidate_target_rows_total": 20
+  },
+  "content_hashes": {
+    "divide_ingestion_v1.json": "f25fb68a7ad4ae4ff9542da14378f3503332c186d4226276d9f57409a3257620",
+    "MI_AUDIENCE_SIGNAL.csv": "bec68388648777f848bfc675608d264e9b470c4312eaaf721d8dac5abb4a3264",
+    "MI_SUPPLIER.csv": "731084497389f86b720a41954b3b5b6fbfabc95be8d8a3886744896c2d22ff11",
+    "MI_EVIDENCE.csv": "87977ad3e499bcdccba41d5de0bf74b50c4549c1b5a9f6ad9aee9122c626bf83",
+    "MI_OPPORTUNITY_BRIDGE.csv": "282e3b1571515dbc682dcb9b08525e8e5d17f68f9dceca5805d220724348d71a",
+    "MI_RUN_LOG.csv": "3dee4facaa1c279d2736090465e33a33af1ab58784acbde9a801cc3b7bfa9130",
+    "package_manifest.json": "7c9ccfbeef835a0ff8a037229763f1d654a0d0b33503e847a2aaaf5fb8f9058f",
+    "DRY_RUN_REPORT.md": "fc76e47a34fa18a0adbdcc93322020595b0275997609882fcc672eff00d2f692",
+    "VALIDATION.txt": "9bee01b6653800536c7c1723349b878ffc3c86d1885da68360ecd197cc41d7e6"
+  },
+  "mutations": {
+    "source_package_changed": false,
+    "source_records_changed": false,
+    "production_writes": 0,
+    "market_or_supplier_rerun": false,
+    "canon_declared": false
+  }
+}
+

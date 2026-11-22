@@ -1,0 +1,247 @@
+{
+  "bundle": {
+    "nombre": "Cuadernillo Reflexivo — Pilar Editorial",
+    "version": "1.0",
+    "fecha_generacion": "2026-04-03",
+    "sistema": "Iridiscenter · LUMINA",
+    "tipo": "Bundle Editorial · Wreck It Journal Style"
+  },
+
+  "lineas": {
+    "LITERATURA": {
+      "id": "CRL-001",
+      "titulo": "Cuadernillo Reflexivo — LITERATURA",
+      "enfoque": "Contemplación textual, reflexión existencial, lecturas bíblicas",
+      "audiencia": "Devotos, formandos espirituales, personas en búsqueda",
+      "duracion": "20 entries (4-5 semanas recomendadas)",
+      "estructura": {
+        "seccion_1_apertura": "4 entries — establecer intención",
+        "seccion_2_exploracion": "12 entries — inmersión textual en ciclos de 2",
+        "seccion_3_sintesis": "2 entries — reconocimiento del viaje",
+        "seccion_4_cierre": "2 entries — integración y apertura"
+      },
+      "prompts_principales": [
+        "Verso canónico (EN/ES + transliteración)",
+        "Contexto hermenéutico breve",
+        "Pregunta reflexiva abierta",
+        "Espacio de escritura"
+      ],
+      "paleta_visual": {
+        "color_principal": "#2C1810",
+        "color_fondo": "#F5F0EC",
+        "color_acento": "#8A8680",
+        "tipografia_body": "Montserrat, 11pt",
+        "tipografia_heading": "Playfair Display, 18-22pt"
+      }
+    },
+
+    "CLINICA": {
+      "id": "CRC-001",
+      "titulo": "Cuadernillo Reflexivo — CLÍNICA",
+      "enfoque": "Procesos emocionales, patrones internos, integración somática",
+      "audiencia": "Personas en proceso terapéutico, exploración emocional, autoconocimiento",
+      "duracion": "20 entries (autoguiado o 4-5 semanas)",
+      "estructura": {
+        "seccion_1_apertura": "4 entries — entrada al espacio clínico",
+        "seccion_2_exploracion": "12 entries — procesamiento de eventos y patrones",
+        "seccion_3_sintesis": "2 entries — integración emocional",
+        "seccion_4_cierre": "2 entries — autocuidado y continuidad"
+      },
+      "prompts_principales": [
+        "Anclaje corporal (dónde sientes las emociones)",
+        "Procesamiento de eventos recientes",
+        "Exploración de patrones repetidos",
+        "Mapa emocional y espacios de reflexión libre"
+      ],
+      "paleta_visual": {
+        "color_principal": "#2C1810",
+        "color_fondo": "#F5F0EC",
+        "color_acento": "#8A8680",
+        "tipografia_body": "Montserrat, 11pt",
+        "tipografia_heading": "Playfair Display, 18-22pt"
+      }
+    },
+
+    "ESPIRITUAL": {
+      "id": "CRE-001",
+      "titulo": "Cuadernillo Reflexivo — ESPIRITUAL",
+      "enfoque": "Arquetipos, discernimiento vocacional, transformación interior",
+      "audiencia": "Personas en búsqueda de vocación, integración espiritual, crecimiento transformacional",
+      "duracion": "20 entries (4-5 semanas recomendadas) + actividades visuales",
+      "estructura": {
+        "seccion_1_apertura": "4 entries — reconocimiento de la llamada",
+        "seccion_2_exploracion": "12 entries — historias sagradas y arquetipos",
+        "seccion_3_sintesis": "2 entries — integración de la vocación",
+        "seccion_4_cierre": "2 entries — consagración e integración espiritual"
+      },
+      "prompts_principales": [
+        "Arquetipos sagrados (La Sanadora, La Testiga, La Creadora, etc.)",
+        "Reflexión vocacional abierta",
+        "Integración de historias bíblicas/arquetípicas",
+        "Espacios para color, ilustración, meditación visual"
+      ],
+      "elemento_especial": "Integración de actividades visuales (coloreo, dibujo, símbolos) como herramienta contemplativa",
+      "paleta_visual": {
+        "color_principal": "#2C1810",
+        "color_fondo": "#F5F0EC",
+        "color_acento": "#8A8680",
+        "tipografia_body": "Montserrat, 11pt",
+        "tipografia_heading": "Playfair Display, 18-22pt"
+      }
+    }
+  },
+
+  "especificaciones_impresion": {
+    "formato_final": {
+      "tamaño": "Media carta horizontal (A5 apaisado)",
+      "dimensiones_mm": "148 × 210",
+      "dimensiones_in": "5.8 × 8.3"
+    },
+    "documento_trabajo": {
+      "tamaño": "A4 horizontal (landscape)",
+      "dimensiones_mm": "210 × 297",
+      "dimensiones_in": "8.3 × 11.7"
+    },
+    "margenes": {
+      "superior": "12 mm",
+      "inferior": "12 mm",
+      "lateral_izquierdo": "10 mm",
+      "lateral_derecho": "10 mm"
+    },
+    "papel": {
+      "gramaje_recomendado": "120 g/m²",
+      "color": "Blanco o Marfil (#F5F0EC preferente)",
+      "textura": "Suave (no rugoso)"
+    },
+    "impresion": {
+      "orientacion": "Landscape (horizontal)",
+      "escala": "100% (sin ajustes)",
+      "doble_cara": true,
+      "volteo": "Eje corto (como libreta)"
+    },
+    "encuadernacion_sugerida": {
+      "opcion_1": "Abrochador metálico (enfierrador)",
+      "opcion_2": "Costura francesa (artesanal)",
+      "posicion": "Lomo izquierdo (cuando está en landscape)"
+    }
+  },
+
+  "instrucciones_docx": {
+    "cada_archivo_docx": {
+      "template": "Basado en estructura Markdown proporcionada",
+      "fuentes": "Playfair Display (títulos), Montserrat (cuerpo), Georgia (citas)",
+      "espaciado": "Párrafo a párrafo: 1.2em | Sección a sección: 2.5em",
+      "estilos": [
+        "Título principal (Playfair, 22pt, color #2C1810)",
+        "Subtítulos (Playfair, 18pt, color #2C1810)",
+        "Cuerpo (Montserrat, 11pt, color #2C1810)",
+        "Citas (Georgia, 10pt italic, color #8A8680)",
+        "Bloques de reflexión (Montserrat, 10pt, fondo #F5F0EC)"
+      ],
+      "notas_de_aplicacion": "Los espacios para escribir aparecen como cajas con líneas. El diseño debe mantener minimalismo LUMINA (sin adornos, sin imágenes decorativas, solo estructura)."
+    }
+  },
+
+  "componentes_del_bundle": {
+    "archivos_markdown": [
+      "CUADERNILLO_LITERATURA_v1.0.md",
+      "CUADERNILLO_CLINICA_v1.0.md",
+      "CUADERNILLO_ESPIRITUAL_v1.0.md",
+      "CUADERNILLO_REFLEXIVO_TEMPLATE_MAESTRO.md"
+    ],
+    "archivos_json": [
+      "cuadernillos_spec.json (este archivo)",
+      "cuadernillos_tokens.json",
+      "cuadernillos_metadata.json"
+    ],
+    "archivos_html": [
+      "CUADERNILLOS_INTERACTIVO_v1.0.html"
+    ],
+    "archivos_documentacion": [
+      "GUIA_DE_USO_CUADERNILLOS.md",
+      "INSTRUCCIONES_IMPRESION.txt"
+    ],
+    "archivo_backup": [
+      "BUNDLE_BACKUP_COMPLETO.txt (contiene todos los archivos en formato texto para respaldo)"
+    ]
+  },
+
+  "voz_editorial": {
+    "registro": "Contemplativo + riguroso",
+    "tonalidad": "Unitaria (no diferenciada por línea)",
+    "características": [
+      "Accesible sin ser simplista",
+      "Poético sin ser abstracto",
+      "Estructurado sin ser rígido",
+      "Invitacional (preguntas, no órdenes)"
+    ],
+    "patrones_recurrentes": {
+      "apertura_suave": "Contextualización + pregunta fundacional",
+      "ciclos_2": "Una entrada con contenido + una entrada libre de reflexión",
+      "cierre_integrador": "Reconocimiento + nuevo compromiso",
+      "espacios_abiertos": "Líneas para escribir + zonas para dibujar"
+    }
+  },
+
+  "tokens_visuales": {
+    "paleta_compartida": {
+      "color_primario_lumina": "#2C1810",
+      "color_fondo": "#F5F0EC",
+      "color_acento": "#8A8680",
+      "color_puente_gema": "#D7DEE8",
+      "tipografia_principal": "Montserrat (body), Playfair Display (títulos)"
+    },
+    "iconografia_minima": {
+      "inicio_seccion": "▪ (cuadrado pequeño)",
+      "separador": "~ (línea ondulante)",
+      "indicador_entrada": "› (triángulo pequeño)",
+      "cierre_reflexion": "⊙ (círculo)"
+    }
+  },
+
+  "casos_uso": {
+    "uso_individual": "Persona llena el cuadernillo en su propio ritmo (4-5 semanas o autoguiado)",
+    "uso_grupal": "Facilitador guía sesiones (1 semanal × 5 semanas) + reflexión grupal",
+    "uso_terapeutico": "Profesional de salud mental lo utiliza como herramienta de apoyo en proceso",
+    "uso_formativo": "Institución educativa lo integra en cursos de autoconocimiento, orientación, integración"
+  },
+
+  "exportaciones_disponibles": {
+    "markdown": "Editable, versionable en git, wiki-friendly",
+    "docx": "Imprimible profesional, formatos aplicados",
+    "pdf": "Archival, lista para descarga y distribución",
+    "html": "Versión interactiva web, lectura + navegación",
+    "json": "Metadata estructurada para sistemas, BD, APIs",
+    "txt": "Backup completo, accesible en cualquier editor"
+  },
+
+  "notas_operativas": {
+    "idempotencia": "Cada cuadernillo puede imprimirse múltiples veces sin variación",
+    "escalabilidad": "Template maestro permite crear nuevas líneas (ej. Línea Artística, Línea Profesional, etc.)",
+    "replicabilidad": "Estructura y voz pueden replicarse para otros ciclos de 20 entries",
+    "personalizacion": "Espacios en blanco permiten usuarios personalizar sin alterar estructura base"
+  },
+
+  "integracion_sistema_iridiscenter": {
+    "alineacion": "LUMINA (núcleo canonical)",
+    "dominio": "Pilar Editorial",
+    "derivacion": "Cuadernillos son instanciación de directrices LUMINA",
+    "audit_aequitas": "Cada línea puede auditarse contra scorecard: fidelity, coherence, necessity, precision, elegance",
+    "trazabilidad": "Archivos JSON registran metadata de auditoría, versión, estado"
+  },
+
+  "proximos_pasos": {
+    "conversion_a_docx": "Usar template DOCX creado a partir de especificaciones de este JSON",
+    "generacion_pdf": "Exportar DOCX a PDF (escala 100%, sin compresión)",
+    "empaquetado_zip": "Incluir: 3 × MD, 3 × DOCX, 3 × PDF, JSON specs, HTML, TXT backup, guía de uso",
+    "distribucion": "Bundle ZIP listo para descargar / imprimir / usar"
+  },
+
+  "meta": {
+    "creador": "Claude AI · Pilar de Creatividad",
+    "sistema_origen": "Iridiscenter · BOS · LUMINA",
+    "fecha_version": "2026-04-03",
+    "estado": "v1.0 producción",
+    "revisiones_pendientes": []
+  }
+}

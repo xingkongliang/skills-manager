@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "f97d2b03-66db-4811-adb6-cd2c84a69793",
+  "path": "director-tecnico-web",
+  "path_key": "director-tecnico-web",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

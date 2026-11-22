@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1",
+  "skills": [
+    {
+      "skill_id": "SK-NORMALIZE",
+      "name": "normalize-rebuild-handoff",
+      "activation": "rehydrate, rebuild, consolidate, audit or handoff",
+      "mode": "READ_ONLY_RECONSTRUCTION",
+      "active_in_build": true,
+      "skill_source_sha256": "250737161c2eaafd8dab6f124cd8266e5359399ee8210115ddf172c1f0b78d83",
+      "pin_status": "PHYSICAL_SKILL_INSPECTED"
+    },
+    {
+      "skill_id": "SK-METANO",
+      "name": "metanoia-ia",
+      "activation": "continuity, memory, orchestration or METANO_IA",
+      "mode": "PORTABLE_CONTEXT_AND_DELTA",
+      "active_in_build": true,
+      "skill_source_sha256": "8cb82e96a26ca8058b569a8630338add7dda78f9c59f17cfed7d4b2d4ee61b4c",
+      "pin_status": "PHYSICAL_SKILL_INSPECTED"
+    },
+    {
+      "skill_id": "SK-OPAL",
+      "name": "opal-bos-skill",
+      "activation": "BOS/LUMINA/Iridiscenter route and governance",
+      "mode": "ROUTER_AND_GATES",
+      "active_in_build": true,
+      "skill_source_sha256": "3f76c90a0d46ff13464f05f409be4b5e8e6982946b9d27246455c6e66d622380",
+      "pin_status": "PHYSICAL_SKILL_INSPECTED"
+    },
+    {
+      "skill_id": "SK-CRAFTER",
+      "name": "crafter-for-editorial-artefacts",
+      "activation": "editorial artifact, BOS, LUMINA or ÆQUITAS",
+      "mode": "DRY_RUN_DRAME_AEQUITAS",
+      "active_in_build": true,
+      "skill_source_sha256": "3dba67402e231d399ffeb09935e9e5e0e358e0f939c05decd7aa56a970fbfacd",
+      "pin_status": "PHYSICAL_SKILL_INSPECTED"
+    },
+    {
+      "skill_id": "SK-CODEX-STYLE",
+      "name": "codex-automation-engineer-style",
+      "activation": "explicit style request only",
+      "mode": "BATCH_DELTA_IDEMPOTENT_QA",
+      "active_in_build": true,
+      "skill_source_sha256": "0c6d32fcc46f73e6dac8f7a392ed87fe0a6dc1f286344d3316a2b70ef1009d54",
+      "pin_status": "PHYSICAL_SKILL_INSPECTED"
+    },
+    {
+      "skill_id": "SK-BRAND",
+      "name": "brand-identity-studio",
+      "activation": "brand token derivation",
+      "mode": "OPTIONAL_NOT_RUN",
+      "active_in_build": false,
+      "skill_source_sha256": null,
+      "pin_status": "ROUTE_ONLY"
+    },
+    {
+      "skill_id": "SK-FRONTEND",
+      "name": "frontend-design",
+      "activation": "runtime UI implementation",
+      "mode": "OPTIONAL_NOT_RUN",
+      "active_in_build": false,
+      "skill_source_sha256": null,
+      "pin_status": "ROUTE_ONLY"
+    }
+  ],
+  "rule": "Activate the smallest skill set. Style skills require explicit user request."
+}

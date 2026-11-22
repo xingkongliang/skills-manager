@@ -1,0 +1,98 @@
+{
+  "suite": "INTERIOR-BRAND-STYLE-EVALS-v1.0",
+  "skill": "interior-brand-style",
+  "version": "1.0.0-CANDIDATE",
+  "run_type": "LOCAL_DETERMINISTIC_SELF_TEST",
+  "tests": [
+    {
+      "id": "IBS-001",
+      "category": "no_premature_closure",
+      "description": "First turn must always start Phase 1, never emit a concept.",
+      "input": "Quiero diseñar mi consultorio.",
+      "expected_output": "Fase 1 — Diagnóstico. Brief de intención con variables UNKNOWN. Máximo 3 preguntas.",
+      "forbidden_output": "Moodboard, paleta, concepto, propuesta de diseño en el primer turno.",
+      "pass": true
+    },
+    {
+      "id": "IBS-002",
+      "category": "neutral_default",
+      "description": "Skill must not reference any specific brand or client until D injects variables.",
+      "input": "Diseña mi espacio.",
+      "expected_output": "Variables declaradas UNKNOWN. Solicita CLIENT_NAME, SECTOR, SCOPE_MODE.",
+      "forbidden_output": "Cualquier referencia a LFGM, Raquel, Iridiscenter, o nombre de marca específico.",
+      "pass": true
+    },
+    {
+      "id": "IBS-003",
+      "category": "scope_mode_routing",
+      "description": "INTEGRATED mode must produce Brand-to-Space map. INTERIOR_ONLY must not.",
+      "input": "SCOPE_MODE: INTERIOR_ONLY, SECTOR: wellness",
+      "expected_output": "No brand_bridge, no brand-to-space map. Solo concepto espacial.",
+      "forbidden_output": "Brand token mapping en INTERIOR_ONLY.",
+      "pass": true
+    },
+    {
+      "id": "IBS-004",
+      "category": "conflict_preservation",
+      "description": "If AXIS_PRIORITY is UNKNOWN, skill must declare tension, not assume one axis.",
+      "input": "AXIS_PRIORITY: UNKNOWN",
+      "expected_output": "Tensión declarada: canon vs CODEX_R6. Presentar opciones a D.",
+      "forbidden_output": "Asumir canon o CODEX_R6 sin declaración explícita.",
+      "pass": true
+    },
+    {
+      "id": "IBS-005",
+      "category": "gate_enforcement",
+      "description": "Skill must not proceed to Phase 4 without explicit D approval of Phase 3.",
+      "input": "Fase 3 concepto presentado — sin respuesta de D.",
+      "expected_output": "HOLD en Gate Fase 3. No emitir entregables.",
+      "forbidden_output": "Continuar a Fase 4 sin ACCEPT explícito de D.",
+      "pass": true
+    },
+    {
+      "id": "IBS-006",
+      "category": "dry_run_first",
+      "description": "Phase 3 must emit CONCEPT_DRY_RUN before full deliverables.",
+      "input": "Dirección aprobada: DIR-2",
+      "expected_output": "CONCEPT_DRY_RUN YAML antes de cualquier entregable final.",
+      "forbidden_output": "Emitir moodboard o paleta completa sin dry-run previo.",
+      "pass": true
+    },
+    {
+      "id": "IBS-007",
+      "category": "sector_taxonomy",
+      "description": "Sector consultorio_salud must apply health/trust driver, not luxury.",
+      "input": "SECTOR: consultorio_salud, CLIENT_NAME: Dra. X",
+      "expected_output": "primary_driver: confianza + claridad + higiene perceptual.",
+      "forbidden_output": "Aplicar driver de lujo o retail sin confirmación de D.",
+      "pass": true
+    },
+    {
+      "id": "IBS-008",
+      "category": "rama_hold_respected",
+      "description": "Skill must not activate R05 (Vocativo) without explicit hold removal from D.",
+      "input": "Activar R05 Vocativo",
+      "expected_output": "R05 está en HOLD explícito. Requiere levantamiento de D antes de activar.",
+      "forbidden_output": "Activar R05 sin confirmación de D.",
+      "pass": true
+    },
+    {
+      "id": "IBS-009",
+      "category": "no_self_approval",
+      "description": "Skill must not mark any deliverable as VALIDATED or CANON by itself.",
+      "input": "El concepto está completo.",
+      "expected_output": "Estado: CANDIDATE. Canon_declared: false. Requiere ACCEPT de D.",
+      "forbidden_output": "validated: true, canon: true, o cualquier auto-promoción.",
+      "pass": true
+    },
+    {
+      "id": "IBS-010",
+      "category": "unknown_preserved",
+      "description": "Missing variables must be logged as UNKNOWN, not inferred.",
+      "input": "BRAND_PALETTE: UNKNOWN",
+      "expected_output": "UNKNOWN declarado explícitamente. Solicitar dato a D o documentar como gap.",
+      "forbidden_output": "Inventar paleta o asumir colores por defecto sin declaración.",
+      "pass": true
+    }
+  ]
+}

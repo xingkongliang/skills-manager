@@ -1,0 +1,503 @@
+{
+  "schema_version": "metanoia-divide/1.0",
+  "run": {
+    "run_id": "RUN-DEMANO-DIVIDE-V1-20260728T030459-0600",
+    "project_id": "R06_R07_DE_MANO",
+    "mode": "prepare-ingestion",
+    "region": "MX",
+    "currency": "MXN",
+    "started_at": "2026-07-28T03:04:59-06:00",
+    "completed_at": "2026-07-28T03:06:53-06:00",
+    "adapter_version": "1.0-candidate",
+    "dry_run": true,
+    "write_authority": "NONE",
+    "production_writes": 0,
+    "source_spreadsheet": {
+      "spreadsheet_id": "1Y5Xp4_2C2MuD41Kl42O_iKE1SGo1Fq-gWgaVlOi9Eqk",
+      "title": "R06_R07_DE_MANO_Pilot_Control_v0_2_UNIFICADO",
+      "url": "https://docs.google.com/spreadsheets/d/1Y5Xp4_2C2MuD41Kl42O_iKE1SGo1Fq-gWgaVlOi9Eqk/edit",
+      "observed_sheet_count": 30,
+      "target_tabs_present": false
+    },
+    "target_tables": [
+      "MI_AUDIENCE_SIGNAL",
+      "MI_SUPPLIER",
+      "MI_EVIDENCE",
+      "MI_OPPORTUNITY_BRIDGE",
+      "MI_RUN_LOG"
+    ],
+    "dry_run_write_summary": {
+      "create": 20,
+      "update": 0,
+      "omit": 0,
+      "conflict": 2,
+      "reject": 0
+    }
+  },
+  "demand_signals": [
+    {
+      "signal_id": "DI-DM-AMZ-SHOONLO-5ML-20260728",
+      "project_id": "R06_R07_DE_MANO",
+      "audience": "Compradores en México de atomizadores de perfume recargables y portátiles",
+      "occasion": "Portabilidad cotidiana y viaje",
+      "problem_language": "Mini atomizador recargable de 5 ml; portátil; para viaje",
+      "intent": "TRANSACTIONAL",
+      "signal_type": "ECOMMERCE_PURCHASE_SIGNAL",
+      "value": 50,
+      "unit": "PURCHASES_LAST_MONTH_LOWER_BOUND",
+      "region": "MX",
+      "observed_at": "2026-07-28",
+      "metrics": {
+        "rating_out_of_5": 4.3,
+        "rating_count": 2364,
+        "purchases_last_month_lower_bound": 50
+      },
+      "evidence_refs": [
+        "EV-DM-AMZ-SHOONLO-5ML-20260728"
+      ],
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "implication": "Existe una señal transaccional reciente a favor del formato portátil de 5 ml; no equivale a demanda propia de DE MANO."
+    },
+    {
+      "signal_id": "DI-DM-AMZ-ANNIEMOOM-5ML-20260728",
+      "project_id": "R06_R07_DE_MANO",
+      "audience": "Compradores en México de atomizadores de perfume recargables y portátiles",
+      "occasion": "Almacenamiento móvil, viaje, cita y fiesta",
+      "problem_language": "Atomizador de perfume de 5 ml; almacenamiento móvil; bolso o bolsillo",
+      "intent": "TRANSACTIONAL",
+      "signal_type": "ECOMMERCE_PURCHASE_SIGNAL",
+      "value": 50,
+      "unit": "PURCHASES_LAST_MONTH_LOWER_BOUND",
+      "region": "MX",
+      "observed_at": "2026-07-28",
+      "metrics": {
+        "rating_out_of_5": 4.5,
+        "rating_count": 334,
+        "purchases_last_month_lower_bound": 50
+      },
+      "evidence_refs": [
+        "EV-DM-AMZ-ANNIEMOOM-5ML-20260728"
+      ],
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "implication": "La portabilidad de 5 ml aparece asociada con ocasiones más amplias que viaje; requiere validación con audiencia propia."
+    }
+  ],
+  "vendors": [
+    {
+      "vendor_id": "VI-DM-XENA-5ML-20260728",
+      "project_id": "R06_R07_DE_MANO",
+      "vendor_name": "Xena Envases y Promocionales",
+      "vendor_location": "CDMX, MX",
+      "offer_name": "Mini Botella Vidrio con Atomizador Transparente",
+      "category": "ATOMIZADOR_PERFUME",
+      "unit": "PIEZA_5_ML",
+      "sku": "VID-BOT-5ML-ATOM-NAT",
+      "moq": null,
+      "minimum_order_value": 500,
+      "price": 6.42,
+      "currency": "MXN",
+      "tax_included": true,
+      "shipping": null,
+      "sample_available": null,
+      "lead_time_days": null,
+      "lead_time_note": "Envío foráneo publicado: 5–10 días hábiles después del procesamiento.",
+      "compatibility": "NOT_TESTED",
+      "compliance": null,
+      "availability": "IN_STOCK_OBSERVED",
+      "risks": [
+        "Compatibilidad con perfume alcohólico no probada físicamente",
+        "Hermeticidad y fuga no probadas",
+        "Costo de envío desconocido",
+        "Precio sujeto a cambio"
+      ],
+      "evidence_refs": [
+        "EV-DM-XENA-PRODUCT-20260728",
+        "EV-DM-XENA-SHIPPING-20260728"
+      ],
+      "claim_type": "OBSERVED",
+      "verification_state": "CROSS_CHECKED",
+      "valid_until": null,
+      "divide_state": "TEST_NEXT"
+    },
+    {
+      "vendor_id": "VI-DM-TEGSA-5ML-20260728",
+      "project_id": "R06_R07_DE_MANO",
+      "vendor_name": "TEGSA · Tapas y Envases Guadalajara",
+      "vendor_location": null,
+      "offer_name": "Frasco atomizador mini de vidrio ámbar",
+      "category": "ATOMIZADOR_PERFUME",
+      "unit": "PIEZA_5_ML",
+      "sku": "103190",
+      "moq": null,
+      "case_pack_qty": 1000,
+      "price": null,
+      "currency": null,
+      "tax_included": null,
+      "shipping": null,
+      "sample_available": null,
+      "lead_time_days": null,
+      "compatibility": "NOT_TESTED",
+      "compliance": null,
+      "availability": null,
+      "risks": [
+        "Empaque publicado de 1000 piezas; falta confirmar si también es MOQ",
+        "Precio y muestra no publicados",
+        "Compatibilidad y fuga no probadas"
+      ],
+      "evidence_refs": [
+        "EV-DM-TEGSA-MINI-ATOMIZER-20260728"
+      ],
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "divide_state": "HOLD"
+    },
+    {
+      "vendor_id": "VI-DM-EMPAX-5ML-20260728",
+      "project_id": "R06_R07_DE_MANO",
+      "vendor_name": "EMPAX",
+      "vendor_location": "Monterrey y Escobedo, Nuevo León, MX",
+      "offer_name": "Perfumero (Botella y Atomizador)",
+      "category": "ATOMIZADOR_PERFUME",
+      "unit": "PIEZA_5_ML",
+      "sku": null,
+      "moq": null,
+      "price": null,
+      "currency": null,
+      "tax_included": null,
+      "shipping": null,
+      "sample_available": null,
+      "lead_time_days": null,
+      "compatibility": "NOT_TESTED",
+      "compliance": null,
+      "availability": "QUOTE_REQUIRED",
+      "risks": [
+        "Precio, MOQ y lead time requieren cotización",
+        "Disponibilidad de muestra no confirmada",
+        "Compatibilidad y fuga no probadas"
+      ],
+      "evidence_refs": [
+        "EV-DM-EMPAX-PERFUMERO-20260728"
+      ],
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "divide_state": "TEST_NEXT"
+    },
+    {
+      "vendor_id": "VI-DM-ENVAPLASTIX-5ML-20260728",
+      "project_id": "R06_R07_DE_MANO",
+      "vendor_name": "Envaplastix Internacional Envases Cosméticos",
+      "vendor_location": null,
+      "offer_name": "Botella de vidrio ámbar con atomizador",
+      "category": "ATOMIZADOR_PERFUME",
+      "unit": "PIEZA_5_ML",
+      "sku": "VID-AT-AMB-05",
+      "moq": null,
+      "price": null,
+      "currency": null,
+      "tax_included": null,
+      "shipping": null,
+      "sample_available": null,
+      "lead_time_days": null,
+      "compatibility": "NOT_TESTED",
+      "compliance": null,
+      "availability": null,
+      "risks": [
+        "Precio, MOQ, muestra y lead time no publicados",
+        "Compatibilidad y fuga no probadas"
+      ],
+      "evidence_refs": [
+        "EV-DM-ENVAPLASTIX-AMBER-ATOMIZER-20260728"
+      ],
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "divide_state": "TEST_NEXT"
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "EV-DM-SHEET-CONTROL-20260728",
+      "source_type": "GOOGLE_SHEET",
+      "source_ref": "https://docs.google.com/spreadsheets/d/1Y5Xp4_2C2MuD41Kl42O_iKE1SGo1Fq-gWgaVlOi9Eqk/edit",
+      "locator": "00_CONTROL!A5:L13",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "Regla protegida PROPOSAL_ELIGIBLE ≠ SALE_APPROVED; venta NO_APROBADA; siguiente gate COST_AND_CONTAINER_PILOT."
+    },
+    {
+      "evidence_id": "EV-DM-SHEET-VENDOR-PLACEHOLDERS-20260728",
+      "source_type": "GOOGLE_SHEET",
+      "source_ref": "https://docs.google.com/spreadsheets/d/1Y5Xp4_2C2MuD41Kl42O_iKE1SGo1Fq-gWgaVlOi9Eqk/edit",
+      "locator": "META_ENVASE_PROVEEDOR!A5:K8",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "PLACEHOLDER",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "ENV-PROV-A/B/C son placeholders operativos y no proveedores validados."
+    },
+    {
+      "evidence_id": "EV-DM-SHEET-COSTS-20260728",
+      "source_type": "GOOGLE_SHEET",
+      "source_ref": "https://docs.google.com/spreadsheets/d/1Y5Xp4_2C2MuD41Kl42O_iKE1SGo1Fq-gWgaVlOi9Eqk/edit",
+      "locator": "META_ENVASE_COSTO!A5:J32",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "27/27 cotizaciones permanecen PENDIENTE y sin costo o fuente."
+    },
+    {
+      "evidence_id": "EV-DM-SHEET-RPR-20260728",
+      "source_type": "GOOGLE_SHEET",
+      "source_ref": "https://docs.google.com/spreadsheets/d/1Y5Xp4_2C2MuD41Kl42O_iKE1SGo1Fq-gWgaVlOi9Eqk/edit",
+      "locator": "RPR_CENTRAL!A5:AD14",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "Nueve RPR figuran como PROPOSAL_ELIGIBLE con Venta_Aprobada=NO; costo, compatibilidad, regulación y QA siguen pendientes."
+    },
+    {
+      "evidence_id": "EV-DM-SHEET-PILOT-20260728",
+      "source_type": "GOOGLE_SHEET",
+      "source_ref": "https://docs.google.com/spreadsheets/d/1Y5Xp4_2C2MuD41Kl42O_iKE1SGo1Fq-gWgaVlOi9Eqk/edit",
+      "locator": "PILOTO_3x3x3!A5:M32",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "27 candidatos mantienen costo y QA pendientes, aceptación vacía, regulación pendiente y Gate_Venta=BLOCKED."
+    },
+    {
+      "evidence_id": "EV-DM-AMZ-SHOONLO-5ML-20260728",
+      "source_type": "WEB_ECOMMERCE_LISTING",
+      "source_ref": "https://www.amazon.com.mx/Atomizador-Recargable-Aluminio-Dispensador-Perfumero/dp/B0B77BVRBJ",
+      "locator": "Resumen de producto y señal de compras del último mes",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "5 ml; 4.3/5; 2,364 valoraciones; 50+ compras el mes pasado. Señal de listado, no tamaño de mercado."
+    },
+    {
+      "evidence_id": "EV-DM-AMZ-ANNIEMOOM-5ML-20260728",
+      "source_type": "WEB_ECOMMERCE_LISTING",
+      "source_ref": "https://www.amazon.com.mx/Mini-Atomizador-Perfume-Recargable-Dispensador/dp/B0C65KJGHZ",
+      "locator": "Detalles, usos y señal de compras del último mes",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "5 ml; 4.5/5; 334 valoraciones; 50+ compras el mes pasado; usos declarados: almacenamiento móvil, viaje, cita y fiesta."
+    },
+    {
+      "evidence_id": "EV-DM-XENA-PRODUCT-20260728",
+      "source_type": "VENDOR_WEB_PAGE",
+      "source_ref": "https://www.xena.mx/products/mini-botella-vidrio-con-atomizador-transparente",
+      "locator": "Producto, SKU, precio, capacidad y existencia",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "SKU VID-BOT-5ML-ATOM-NAT; 5/10 ml; en stock; desde $6.42 MXN; incluye tapa."
+    },
+    {
+      "evidence_id": "EV-DM-XENA-SHIPPING-20260728",
+      "source_type": "VENDOR_POLICY_PAGE",
+      "source_ref": "https://www.xena.mx/policies/shipping-policy",
+      "locator": "Compra mínima, impuestos y envíos foráneos",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "Compra mínima $500 MXN; precios publicados incluyen IVA; envío foráneo 5–10 días hábiles."
+    },
+    {
+      "evidence_id": "EV-DM-TEGSA-MINI-ATOMIZER-20260728",
+      "source_type": "VENDOR_WEB_PAGE",
+      "source_ref": "https://tegsa.mx/mini-botellas-vidrio",
+      "locator": "ENVASES ATOMIZADORES MINI",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "Frasco ámbar con atomizador: códigos 2 ml 103189, 5 ml 103190, 10 ml 103191; empaque publicado de 1000 piezas. No se interpreta como MOQ sin confirmación."
+    },
+    {
+      "evidence_id": "EV-DM-EMPAX-PERFUMERO-20260728",
+      "source_type": "VENDOR_WEB_PAGE",
+      "source_ref": "https://empax.mx/producto/perfumero-botella-y-atomizador/",
+      "locator": "Producto, capacidades y flujo de cotización",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "Perfumero de 5/10/15 ml; requiere cotización; presencia observada en Monterrey y Escobedo, Nuevo León."
+    },
+    {
+      "evidence_id": "EV-DM-ENVAPLASTIX-AMBER-ATOMIZER-20260728",
+      "source_type": "VENDOR_WEB_PAGE",
+      "source_ref": "https://www.envases-cosmeticos.com.mx/vidrio/envases-cosm%C3%A9ticos-de-vidrio/",
+      "locator": "Botella de vidrio ámbar con atomizador",
+      "captured_at": "2026-07-28T03:04:59-06:00",
+      "last_checked_at": "2026-07-28T03:04:59-06:00",
+      "region": "MX",
+      "claim_type": "OBSERVED",
+      "verification_state": "SOURCE_VERIFIED",
+      "valid_until": null,
+      "notes": "Códigos observados: 2 ml VID-AT-AMB-01, 5 ml VID-AT-AMB-05, 10 ml VID-AT-AMB-10."
+    }
+  ],
+  "opportunities": [
+    {
+      "opportunity_id": "DE-DM-HERO-PERFUME-5ML-V1",
+      "project_id": "R06_R07_DE_MANO",
+      "title": "Perfume DE MANO 5 ml",
+      "demand_signal_refs": [
+        "DI-DM-AMZ-SHOONLO-5ML-20260728",
+        "DI-DM-AMZ-ANNIEMOOM-5ML-20260728"
+      ],
+      "vendor_refs": [
+        "VI-DM-XENA-5ML-20260728",
+        "VI-DM-TEGSA-5ML-20260728",
+        "VI-DM-EMPAX-5ML-20260728",
+        "VI-DM-ENVAPLASTIX-5ML-20260728"
+      ],
+      "evidence_refs": [
+        "EV-DM-SHEET-CONTROL-20260728",
+        "EV-DM-SHEET-VENDOR-PLACEHOLDERS-20260728",
+        "EV-DM-SHEET-COSTS-20260728",
+        "EV-DM-SHEET-RPR-20260728",
+        "EV-DM-SHEET-PILOT-20260728",
+        "EV-DM-AMZ-SHOONLO-5ML-20260728",
+        "EV-DM-AMZ-ANNIEMOOM-5ML-20260728",
+        "EV-DM-XENA-PRODUCT-20260728",
+        "EV-DM-XENA-SHIPPING-20260728",
+        "EV-DM-TEGSA-MINI-ATOMIZER-20260728",
+        "EV-DM-EMPAX-PERFUMERO-20260728",
+        "EV-DM-ENVAPLASTIX-AMBER-ATOMIZER-20260728"
+      ],
+      "target_refs": {
+        "product_id": "PIR-0001",
+        "rpr_id": "RPR-MM-05",
+        "format_id": "FMT-PERF-05",
+        "pilot_candidate_ids": [
+          "CAND-004",
+          "CAND-005",
+          "CAND-006"
+        ]
+      },
+      "assumptions": [
+        "Las señales de marketplaces son proxies externos y no sustituyen investigación con audiencia propia.",
+        "El formato 5 ml es una hipótesis hero para el piloto, no identidad única ni venta aprobada.",
+        "Los proveedores candidatos podrían aceptar una compra o muestra de escala piloto."
+      ],
+      "risks": [
+        "Compatibilidad envase–perfume alcohólico desconocida",
+        "Fuga y desempeño del atomizador desconocidos",
+        "Costo puesto en destino incompleto",
+        "MOQ o empaque pueden exceder la escala piloto",
+        "Aplicabilidad regulatoria pendiente",
+        "Aceptación de usuarias no medida"
+      ],
+      "decision_state": "TEST_NEXT",
+      "next_action": "Cotizar o comprar muestras de 5 ml; confirmar MOQ y lead time; ejecutar prueba de fuga de 72 horas y 20 atomizaciones; recopilar aceptación de al menos 5 usuarias.",
+      "human_gate": "Dirección del proyecto debe aprobar compra de muestras, interpretación regulatoria y cualquier escritura en la hoja viva.",
+      "sale_approved": false
+    }
+  ],
+  "conflicts": [
+    {
+      "conflict_id": "CF-DM-001",
+      "severity": "MATERIAL",
+      "type": "STATE_SEMANTICS",
+      "source": "RPR_CENTRAL",
+      "description": "RPR-MM-05 figura como PROPOSAL_ELIGIBLE aunque costo, compatibilidad, regulación y QA siguen pendientes.",
+      "resolution_rule": "Conservar RPR.Propuesta_Elegible; registrar DIVIDE.Decision_State=TEST_NEXT en una capa independiente.",
+      "blocks_ingestion": false,
+      "blocks_sale": true
+    },
+    {
+      "conflict_id": "CF-DM-002",
+      "severity": "MATERIAL",
+      "type": "PLACEHOLDER_MAPPING",
+      "source": "META_ENVASE_PROVEEDOR",
+      "description": "ENV-PROV-A/B/C son placeholders y no existe una regla aprobada para mapearlos a proveedores reales.",
+      "resolution_rule": "Crear proveedores DIVIDE como candidatos en MI_SUPPLIER; no sobrescribir ENV-PROV-A/B/C ni sus 27 relaciones.",
+      "blocks_ingestion": false,
+      "blocks_sale": true
+    }
+  ],
+  "next_actions": [
+    {
+      "action_id": "ACT-DM-001",
+      "priority": 1,
+      "owner": "DIRECCION_PROYECTO",
+      "action": "Autorizar o rechazar compra/cotización de muestras de 5 ml.",
+      "gate": "SAMPLE_AUTHORIZATION",
+      "status": "PENDING"
+    },
+    {
+      "action_id": "ACT-DM-002",
+      "priority": 2,
+      "owner": "COMPRAS",
+      "action": "Solicitar a Xena, EMPAX y Envaplastix precio, MOQ, muestra, envío y lead time; confirmar con TEGSA si 1000 piezas es empaque o MOQ.",
+      "gate": "VENDOR_QUOTE",
+      "status": "PENDING"
+    },
+    {
+      "action_id": "ACT-DM-003",
+      "priority": 3,
+      "owner": "QA",
+      "action": "Ejecutar fuga 72 h, 20 atomizaciones, compatibilidad, llenado y transporte para cada muestra.",
+      "gate": "PHYSICAL_QA",
+      "status": "BLOCKED_BY_SAMPLE"
+    },
+    {
+      "action_id": "ACT-DM-004",
+      "priority": 4,
+      "owner": "RESEARCH",
+      "action": "Realizar microprueba de aceptación con al menos 5 usuarias y registrar ocasión, lenguaje y objeciones.",
+      "gate": "AUDIENCE_VALIDATION",
+      "status": "PENDING"
+    },
+    {
+      "action_id": "ACT-DM-005",
+      "priority": 5,
+      "owner": "REGULATORY",
+      "action": "Confirmar aplicabilidad de etiquetado, buenas prácticas y venta de reenvasados antes de catálogo.",
+      "gate": "REGULATORY_APPLICABILITY",
+      "status": "PENDING"
+    }
+  ]
+}

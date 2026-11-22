@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "6fe71b7f-12e3-49b0-a3d2-e748789c8a56",
+  "path": "firecrawl",
+  "path_key": "firecrawl",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

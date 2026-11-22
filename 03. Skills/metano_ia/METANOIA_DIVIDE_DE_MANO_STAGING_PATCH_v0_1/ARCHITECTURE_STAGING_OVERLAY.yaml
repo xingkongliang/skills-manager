@@ -1,0 +1,74 @@
+ARCHITECTURE_STAGING_OVERLAY:
+  overlay_id: "IRIDISCENTER_HIERARCHY_NORMALIZATION_v0_1"
+  application_status: "APPLIED_TO_STAGING_METADATA"
+  source_authorization:
+    decision_id: "D-IRIDISCENTER-HIERARCHY-PATCH-2026-07-28-01"
+    decision: "PATCH"
+    canon_declared: false
+    production_mutation_authorized: false
+    source_mutation_authorized: false
+
+  system_root: "BOS"
+  governance_host: "AEQUITAS"
+
+  transversal_agents:
+    PROMETHEUS:
+      host: "AEQUITAS"
+      hierarchy_role: "TRANSVERSAL_AGENT"
+    METANO_IA:
+      host: "AEQUITAS"
+      hierarchy_role: "TRANSVERSAL_AGENT"
+
+  active_execution:
+    agent: "METANO_IA"
+    capability: "METANOIA_DIVIDE"
+
+  ecosystem:
+    id: "IRIDISCENTER"
+    branch_count: 7
+    branch_model: "R01-R07_SIBLING_BRANCHES"
+
+  target:
+    id: "DE_MANO"
+    type: "INTERBRANCH_MINI_BRIDGE"
+    parent_branch: null
+    connects:
+      - "R06"
+      - "R07"
+
+  business_roles:
+    R06: "STORE"
+    R07: "PERFUMERY"
+
+  reinvestigation:
+    architecture_metadata_patch: false
+    market_or_supplier_research: "NOT_REQUIRED_FOR_THIS_PATCH"
+    future_operational_validation: "NOT_WAIVED"
+
+  GEMA:
+    above_BOS: false
+    exact_placement: "UNKNOWN"
+    delete_from_system: false
+
+  VI_M_AND:
+    exact_placement: "UNKNOWN"
+    authority_in_current_patch: "NONE"
+
+  unresolved:
+    - "GEMA_EXACT_PLACEMENT"
+    - "VI_M_AND_EXACT_PLACEMENT"
+    - "R01_R05_DEFINITIONS"
+
+  preserve:
+    - "candidate records"
+    - "DI signals"
+    - "VI provider evidence"
+    - "DE opportunities"
+    - "raw source records"
+
+  prohibited:
+    - "production writes"
+    - "source rewriting"
+    - "market rerun"
+    - "canon declaration"
+

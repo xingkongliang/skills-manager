@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "c20d27a6-3a66-4aae-81f3-b56d87914f4c",
+  "path": "tailwind-design-system",
+  "path_key": "tailwind-design-system",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

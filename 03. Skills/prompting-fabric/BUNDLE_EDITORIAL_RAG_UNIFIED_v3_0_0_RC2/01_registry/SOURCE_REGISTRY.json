@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1",
+  "generated_at": "2026-07-22T21:00:35-06:00",
+  "authority_order": [
+    "Physically inspected source bytes and embedded manifests",
+    "Validated source registry records with hashes",
+    "Current user instruction for scope",
+    "Historical protocol references",
+    "Raw conversation exports for discovery only",
+    "Filename or inferred chronology never establishes authority"
+  ],
+  "sources": [
+    {
+      "source_id": "SRC-COMET-1.4",
+      "title": "KOP WB COMET STRIKER Creative Journey Release v1.4",
+      "location": "Library/attached ZIP",
+      "local_path": "/workspace/scratch/4b672bc97729/upload/KOP_WB_COMET_STRIKER_CREATIVE_JOURNEY_RELEASE_v1_4_EIC_NOTES_PROTOCOL(1).zip",
+      "sha256": "1126db4be2b483461523152c2803a05a5c49fd805379b06ab3d20a366d42ad31",
+      "authority": "UPSTREAM_RELEASE_CANDIDATE",
+      "status": "QC_PASS_COMMIT_CANDIDATE_WITH_INHERITED_BLOCKS",
+      "use": "Runtime candidate, EIC protocol, tokens, QA evidence",
+      "does_not_prove": "Full runtime QA, deployment, publication, or canon"
+    },
+    {
+      "source_id": "SRC-BOS-V2",
+      "title": "BOS Editorial Bundle v2",
+      "location": "Library",
+      "local_path": "/workspace/scratch/4b672bc97729/sources/library/BOS Editorial Bundle v2.zip",
+      "sha256": "e3ef5eb4db41fa98cb7c9dcc2e23d1dd28c6abc51c06d7ba46a3e24f0ea3a34e",
+      "authority": "UPSTREAM_EDITORIAL_SOURCE",
+      "status": "PHYSICAL_SOURCE_INSPECTED",
+      "use": "Three authored lines, template, style and pipeline specifications",
+      "does_not_prove": "Resolution of internal odd/even or palette drift"
+    },
+    {
+      "source_id": "SRC-RAG-CONFIG",
+      "title": "Configuración RAG Master",
+      "location": "Library",
+      "local_path": "/workspace/scratch/4b672bc97729/sources/library/ChatGPT-Rama! Configuración RAG Master (1).json",
+      "sha256": "8e32a69e87753085ff6dde83cf29f06204c0b917581790e3dbb388e98b09e5c9",
+      "authority": "GOVERNANCE_REFERENCE",
+      "status": "RAW_EXPORT_INSPECTED",
+      "use": "Source binding, confidence, package boundaries and publication gates",
+      "does_not_prove": "Canon for this bundle or a deployed RAG runtime"
+    },
+    {
+      "source_id": "SRC-IRIDISCENTER-V3",
+      "title": "Bundle Iridiscenter V3 20260402 final",
+      "location": "Library",
+      "local_path": "/workspace/scratch/4b672bc97729/sources/library/Bundle_Iridiscenter_V3_20260402_final.zip",
+      "sha256": "ddb1811479405818e8718615dc1ed47e92e2849cf03719fdca5f0415de49730e",
+      "authority": "BOUNDARY_REFERENCE",
+      "status": "PHYSICAL_ARCHIVE_INSPECTED",
+      "use": "Reference for v3 separation, validation and freeze boundaries",
+      "does_not_prove": "That unrelated V3 content belongs in this bundle"
+    },
+    {
+      "source_id": "SRC-DMIE-REGISTRY",
+      "title": "KOP Source Registry — DMIE/MMII",
+      "location": "Library",
+      "local_path": "/workspace/scratch/4b672bc97729/sources/library/KOP_SOURCE_REGISTRY.json",
+      "sha256": "f7fa7a3d5cad3539386c9de41346312e47490e9ce0aef63231b8beab56ad6bd9",
+      "authority": "PROVENANCE_REGISTRY",
+      "status": "INSPECTED_RUNTIME_BYTES_NOT_MOUNTED",
+      "use": "Exact primary target identity, source hashes and promotion rules",
+      "does_not_prove": "Availability or runtime validity of the DMIE/MMII master HTML"
+    },
+    {
+      "source_id": "SRC-CLAUDE-EXPORT",
+      "title": "Claude AI export",
+      "location": "Library",
+      "local_path": "/workspace/scratch/4b672bc97729/sources/library/Claude AI.zip",
+      "sha256": "e0c3ef5029bda8a9c88ab1647ce6210fb2bd4582f8421d4654c37fa1591b10fe",
+      "authority": "DISCOVERY_EVIDENCE",
+      "status": "RAW_EXPORT_INSPECTED",
+      "use": "Locate project names, role boundaries and earlier source references",
+      "does_not_prove": "Current canon, current status, or completed runtime work"
+    },
+    {
+      "source_id": "SRC-PROMETHEUS-HIST",
+      "title": "PROMETHEUS Master Plan v1.0",
+      "location": "Library",
+      "local_path": "/workspace/scratch/4b672bc97729/sources/protocols/XI. Metasystem's Core/PROMETHEUS_MASTER_PLAN_v1.0.md.docx",
+      "sha256": "9573ed49674a43aaae1e7753ded99d158263ddd6cc30682465a39239fcf8cd2d",
+      "authority": "HISTORICAL_PROTOCOL_REFERENCE",
+      "status": "INSPECTED_WITH_STALE_CLAIMS",
+      "use": "One-shot phase ordering, source freeze, QA and handoff pattern",
+      "does_not_prove": "Its historical content states, palette or deployment claims"
+    },
+    {
+      "source_id": "SRC-SELAH-HIST",
+      "title": "Núcleo SELAH v2",
+      "location": "Library",
+      "local_path": "/workspace/scratch/4b672bc97729/sources/protocols/XI. Metasystem's Core/Núcleo SELAH v2_ Sistema de Eventos y Gobernanza Integrada.docx",
+      "sha256": "da8357d169dad6a2a9469768a644057885cc28bb4d39d5380738b03f89026bcf",
+      "authority": "HISTORICAL_PROTOCOL_REFERENCE",
+      "status": "INSPECTED_WITH_UNEXECUTED_RUNTIME_CLAIMS",
+      "use": "Policy interceptor, integrity gate, replay and event vocabulary",
+      "does_not_prove": "A running kernel, Docker release, vector memory or commit"
+    },
+    {
+      "source_id": "SRC-KOP-AUX-CONTRACT",
+      "title": "GPT Auxiliar para KOP Core Neutral",
+      "location": "Library",
+      "local_path": "/workspace/scratch/4b672bc97729/sources/protocols/XI. Metasystem's Core/GPT Auxiliar para KOP Core Neutral for Adapting as purposes given • Contract N2:Selah Protocol's prompt contract simplified.docx",
+      "sha256": "30adac95ca68dde1f284183bf759151a3d59985ed17c8760dcc4c3e459958b9d",
+      "authority": "HANDOFF_CONTRACT_REFERENCE",
+      "status": "INSPECTED",
+      "use": "Satellite role, node taxonomy, traceability and injectable handoff",
+      "does_not_prove": "Core authority transfer or permission to auto-merge"
+    },
+    {
+      "source_id": "SRC-DRAME-CONTRACT",
+      "title": "Mapa de Voz consolidated Markdown",
+      "location": "Attached file",
+      "local_path": "/workspace/scratch/4b672bc97729/upload/Markdown(3).md pegado",
+      "sha256": "7601097ff62624d98fe1a83947b1dec079e8d66626b9fca7b4040ac86d6fe918",
+      "authority": "EDITORIAL_ROUTE_REFERENCE",
+      "status": "INSPECTED",
+      "use": "N0/N1/N2 and DRAME definitions",
+      "does_not_prove": "That Mapa de Voz content belongs to this bundle"
+    },
+    {
+      "source_id": "KOP_SRC_006",
+      "display_name": "DMIE/MMII Interactive Workbook v0.3.2",
+      "filename": "DMIE_MMII_INTERACTIVE_WORKBOOK_v0_3_2_COMET_DRAME_PRINTFIX_PAGINATION.html",
+      "frozen_copy_path": "raw/06__DMIE_MMII_INTERACTIVE_WORKBOOK_v0_3_2_COMET_DRAME_PRINTFIX_PAGINATION.html",
+      "bytes": 69849,
+      "sha256": "f84484ac9e6e546c8b44f46f64d506458437d07fe9aaf0baebe45166d17c999f",
+      "status": "SOURCE_IDENTIFIED_NOT_MATERIALIZED_IN_RC1",
+      "materialization_status": "RELEASE_CANDIDATE__USER_APPROVAL_REQUIRED",
+      "conflict_ref": "C-001",
+      "rc2_note": "Pointer registered in RC2. HTML not created or reconstructed. Requires Director approval and physical file delivery before materialization."
+    }
+  ],
+  "negative_search_results": [
+    {
+      "source_id": "SRC-GDRIVE-SEARCH",
+      "system": "Google Drive",
+      "result": "NO_RELEVANT_PROJECT_MATCHES",
+      "used_as_authority": false
+    }
+  ],
+  "package_version": "3.0.0-rc.2"
+}

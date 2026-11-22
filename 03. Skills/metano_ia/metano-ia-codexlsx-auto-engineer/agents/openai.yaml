@@ -1,0 +1,12 @@
+interface:
+  display_name: "METANO_IA \xB7 CodexLSX Auto Engineer"
+  short_description: Engineer safe, custom spreadsheet automation
+  default_prompt: Use $metano-ia-codexlsx-auto-engineer to audit this workbook as
+    one system and generate a safe, personalized Apps Script project.
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

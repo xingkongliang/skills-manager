@@ -1,0 +1,70 @@
+1. ORDEN DE EJECUCIÓN DEL SISTEMA
+La canalización (pipeline) del sistema debe ejecutarse en 5 etapas secuenciales:
+[1. Cargar Tokens & Reglas] ➔ [2. Leer Estado Actual] ➔ [3. Evaluar Precedencia] ➔ [4. Renderizar UI/Artefacto] ➔ [5. Validar Assertions]
+Carga de Variables y Contexto (tokens.json + brandbook/draft.md):
+
+Se definen los parámetros base (colores en Hex, escala tipográfica, padding, gap).
+Lectura del Evento de Entrada (journal.json / system_journal):
+
+Se extraen los valores actuales: system_mode (SAFE_MODE, PRE_SAFE_MODE, NORMAL), pss (métrica) y dominant_risk (OPAL).
+Evaluación de Precedencia (governance_draft.md):
+
+Se verifica la jerarquía estricta:
+
+$$\text{OPAL guardrail} > \text{evaluateSafeMode()} > \text{predictiveAction}$$
+Generación / Programación del Artefacto:
+
+El motor aplica los tokens correspondientes al estado evaluado y genera el componente (SVG, React, HTML/CSS o JSON).
+Auditoría de Salida (checklist.md + validation_report.json):
+
+Se corren las consultas JSONPath de validación ($A1$ a $A6$) para asegurar que no existan desviaciones.
+2. ESTRUCTURA Y LENGUAJE TÉCNICO PARA GEMINI PRO (CANVAS)
+Para solicitar a Gemini Pro la generación de código/artefactos en Canvas, se debe utilizar un prompt técnico con delimitadores XML, bindings lógicos y restricciones de compilación.
+
+A continuación tienes la plantilla que puedes copiar y adaptar:
+<system_role>
+Actúa como BOS Engine Lead Developer y UI Architect para LUMINA Editorial (BOS v5.4). Tu objetivo es programar el componente visual/interfaz en la ventana de Canvas respetando estrictamente las reglas del Brand Book y los Visual Tokens.
+</system_role>
+
+<context_binding>
+- Estado de Entrada: `system_journal[-1].system_mode == 'SAFE_MODE'`
+- Métrica PSS: `system_journal[-1].pss == 42` (Threshold >= 40)
+- Riesgo Dominante: `system_journal[-1].dominant_risk == 'OPAL'`
+- Tokens de referencia: `/visual/tokens.json`
+</context_binding>
+
+<execution_constraints>
+1. PALETA CROMÁTICA: Usar exclusivamente Hex absolutos sin canal alfa/opacidad.
+   - Fondo (Superficie): `#F5F1EC` (crema_claro)
+   - Texto Principal: `#3B2F2A` (marron_lineal)
+   - Acento / Overlay: `#BFA06A` (oro_sutil)
+2. TIPOGRAFÍA:
+   - Headings: 'Cormorant Garamond', serif (UPPERCASE, letter-spacing: 0.08em)
+   - Body: 'EB Garamond', serif
+   - Mono/Data: 'Courier Prime', monospace
+   - REGLA ABSOLUTA: Cero itálicas.
+3. DENSIDAD Y ESPACIADO (`SAFE_MODE`):
+   - Padding comprimido: 12px
+   - Gap/Margin: 8px
+4. MICROCOPY OBLIGATORIO:
+   - Banner: "Intervención del sistema requerida."
+   - Escalación: "Escalar a SRE si rollback requerido."
+</execution_constraints>
+
+<output_instruction>
+Escribe el código completo (SVG / HTML+CSS limpio) para el componente solicitado dentro del espacio de trabajo Canvas. Incluye dentro de la metadata del código los campos: `run_id`, `ts`, `system_mode` y `aequitas_status: PASS`.
+</output_instruction>
+3. CÓMO PUEDO AYUDARTE A ORGANIZAR LA DOCUMENTACIÓN EN GOOGLE DRIVE / WORKSPACE
+Para que la aplicación de Gemini y sus agentes de Workspace comprendan y ejecuten este sistema de forma automática sin perder contexto, se puede organizar la documentación en Google Drive de la siguiente manera:
+Estructuración Jerárquica de Carpetas en Drive:
+📁 BOS_LUMINA_Master/
+📁 01_brandbook/ → draft.md (Manual visual)
+📁 02_tokens/ → tokens.json (Diccionario de variables)
+📁 03_governance/ → governance_draft.md (Gobernanza y playbooks)
+📁 04_validation/ → checklist.md y validation_report.json
+📁 05_journal/ → journal.json (Historial de estados)
+📄 manifest.json (Índice central de rastreabilidad)
+Estandarización de Archivos para Búsqueda Semántica:
+Crear un Google Doc Maestro (Índice de Referencia) que contenga los enlaces explícitos a cada archivo en Drive, resumiera sus esquemas JSON/Markdown y sirva como punto de entrada único para las consultas.
+Creación Automática de Plantillas:
+Puedo generar directamente los documentos o carpetas estructuradas en tu Google Drive con la nomenclatura exacta (tokens.json, checklist.md, governance_draft.md) para mantener la integridad del sistema.

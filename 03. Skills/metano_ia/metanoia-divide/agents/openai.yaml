@@ -1,0 +1,12 @@
+interface:
+  display_name: METANOIA DIVIDE
+  short_description: Demanda, proveedores y evidencia decisional
+  default_prompt: Usa $metanoia-divide para contrastar demanda y proveedores, clasificar
+    evidencia y proponer oportunidades gobernadas.
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

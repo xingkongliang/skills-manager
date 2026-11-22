@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "5c543732-3c74-46d7-8309-dd02c691fc5c",
+  "path": "humanizer",
+  "path_key": "humanizer",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "skill_name": "metanoia-divide",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Usa METANOIA DIVIDE para proponer un dúo scanner de audience insights y proveedores para R06 × R07 DE MANO. La hoja ya tiene placeholders y no quiero que el scanner apruebe venta ni modifique PIR/RPR directamente. Dame arquitectura, records candidatos, gates y siguiente acción.",
+      "expected_output": "Separa DI, VI y DE; usa el adaptador DE MANO; conserva PROPOSAL_ELIGIBLE distinto de SALE_APPROVED; propone registros candidatos, evidencia y un siguiente paso sin escribir en la hoja.",
+      "files": [],
+      "assertions": [
+        "Distingue Demand Intelligence, Vendor Intelligence y Decision Evidence.",
+        "Clasifica evidencia y preserva estados candidatos.",
+        "No aprueba ventas ni modifica objetos productivos.",
+        "Propone un mapeo o contrato de integración auditable."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Estoy considerando una línea de kits de experimentos para docentes en México. Contrasta señales de demanda de escuelas y profesores con proveedores de consumibles; todavía no tengo adapter ni scoring. No inventes pesos y prepara el esquema neutral para una hoja.",
+      "expected_output": "Aplica el núcleo neutral fuera de DE MANO, diseña un adaptador candidato, mantiene valores desconocidos como null y evita una puntuación compuesta sin criterios aprobados.",
+      "files": [],
+      "assertions": [
+        "No arrastra vocabulario rígido de DE MANO.",
+        "Separa núcleo, adaptador, evidencia, automatización y superficie.",
+        "No inventa scoring ni convierte faltantes en cero.",
+        "Propone tablas neutrales DIV_DI_SIGNAL, DIV_VI_VENDOR, DIV_EVIDENCE, DIV_DE_OPPORTUNITY y DIV_RUN_LOG."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Audita este paquete DIVIDE: dos proveedores tienen precios de 2025, uno no informa moneda y una oportunidad cita un vendor_id inexistente. Quiero saber qué queda vigente, qué entra en HOLD y qué hay que verificar antes de ingerirlo.",
+      "expected_output": "Usa audit-evidence, marca datos caducos o conflictivos, detecta referencias rotas, bloquea ingestión materialmente inválida y devuelve verificaciones concretas.",
+      "files": [],
+      "assertions": [
+        "Distingue STALE, CONFLICTED y datos faltantes.",
+        "Detecta la referencia de proveedor inexistente.",
+        "Mantiene en HOLD las oportunidades con fallos críticos.",
+        "Recomienda validar el paquete antes de ingestión."
+      ]
+    }
+  ]
+}

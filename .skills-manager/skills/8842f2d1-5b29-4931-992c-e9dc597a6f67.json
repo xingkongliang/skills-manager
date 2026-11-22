@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "8842f2d1-5b29-4931-992c-e9dc597a6f67",
+  "path": "aeq-memory-intake-handoff",
+  "path_key": "aeq-memory-intake-handoff",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

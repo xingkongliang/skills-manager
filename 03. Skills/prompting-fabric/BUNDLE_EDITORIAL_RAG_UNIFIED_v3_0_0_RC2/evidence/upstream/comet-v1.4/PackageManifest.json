@@ -1,0 +1,44 @@
+{
+  "package_id": "KOP_WB_COMET_STRIKER_CREATIVE_JOURNEY_RELEASE_v1_4_EIC_NOTES_PROTOCOL",
+  "inherits_from": "KOP_WB_COMET_STRIKER_CREATIVE_JOURNEY_RELEASE_v1_3_LUMINA_UNIFIED",
+  "metasystem": [
+    "BOS",
+    "AEQUITAS",
+    "LUMINA",
+    "OPAL",
+    "IRIDISCENTER"
+  ],
+  "status": "QC_PASS_COMMIT_CANDIDATE",
+  "primary_goal": "Rehydrate EIC Notes print-ready editorial direction protocol into the LUMINA-aligned Mission Control release.",
+  "visual_system": "LUMINA_TERRACOTTA_GOLDEN_INK",
+  "print_rule": "Workbook remains printable, non-negotiable",
+  "languages_target": [
+    "en",
+    "es",
+    "pt-BR"
+  ],
+  "artifacts": {
+    "base_html": "dist/WB_COMET-STRIKER_CREATIVE-JOURNEY.html",
+    "letter_pdf": "print/WB_COMET-STRIKER_CREATIVE-JOURNEY_LETTER_FULL.pdf",
+    "half_letter_pdf": "print/WB_COMET-STRIKER_CREATIVE-JOURNEY_HALF_LETTER_2UP.pdf",
+    "avery_pdf": "print/WB_COMET-STRIKER_CREATIVE-JOURNEY_AVERY_8387_4UP.pdf",
+    "style_ops_dir": "style_ops/",
+    "skills_dir": "skills/",
+    "eic_notes_protocol_index": "dist/eic_notes/EIC_NOTES_PROTOCOL_INDEX.html"
+  },
+  "version": "v1.4",
+  "mission_control": "dist/KOP_MISSION_CONTROL_LUMINA_UNIFIED.html",
+  "qc_report": "qa/QC_FULL_REPORT_v1_3.json",
+  "updated_at": "2026-06-26T21:40:00Z",
+  "eic_notes_protocol": {
+    "source_docx": "source/editorial_protocols/eic_notes/source_docx/Protocolo_y_Maquetacion_de_Notas_de_Direccion_Editorial.docx",
+    "schema": "source/editorial_protocols/eic_notes/schema/editor_in_chief_notes.schema.json",
+    "example": "source/editorial_protocols/eic_notes/editor_in_chief_notes.example.json",
+    "template": "templates/eic_notes/print_notes_layout.md",
+    "generator": "scripts/eic_notes/generate_eic_notes.py",
+    "compile_script": "scripts/eic_notes/compile_eic_notes.sh",
+    "sample_markdown": "work/eic_notes/EIC_Notes_LUMINA.md",
+    "sample_pdf": "print/eic_notes/EIC_Notes_LUMINA_Print.pdf",
+    "format": "half_letter_5.5x8.5in"
+  }
+}

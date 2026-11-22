@@ -1,0 +1,25 @@
+{
+  "name": "onewave-skills",
+  "description": "Claude Code plugins from OneWave AI's open-source skills library",
+  "owner": {
+    "name": "OneWave AI",
+    "url": "https://www.onewave-ai.com"
+  },
+  "plugins": [
+    {
+      "name": "agent-army",
+      "source": "./plugins/agent-army",
+      "description": "Deploy a 2-layer parallel agent hierarchy for large, parallelizable work: big refactors, multi-file migrations, codebase-wide audits, and bulk generation. Pick an army size and power level; includes git checkpoints, a pre-deploy gate, phantom-completion checks, and multi-wave follow-up."
+    },
+    {
+      "name": "scout",
+      "source": "./plugins/scout",
+      "description": "Not sure which skill or subagent fits the task? Scout reads the conversation and recommends the best skills and subagents, explains why, and lays out how to chain them."
+    },
+    {
+      "name": "scout-pro",
+      "source": "./plugins/scout-pro",
+      "description": "A deeper skill navigator: maps the whole conversation, verifies which skills you actually have installed, designs multi-skill chains, and keeps a local log of which recommendations worked so it gets better over time."
+    }
+  ]
+}

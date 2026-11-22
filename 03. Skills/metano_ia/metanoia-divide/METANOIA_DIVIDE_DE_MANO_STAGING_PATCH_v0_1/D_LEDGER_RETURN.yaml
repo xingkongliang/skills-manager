@@ -1,0 +1,80 @@
+D_LEDGER_RETURN:
+  id: "D-IRIDISCENTER-HIERARCHY-PATCH-2026-07-28-01"
+  return_status: "READY_FOR_D_REVIEW"
+  decision_applied: "PATCH"
+  accepted_architecture_preserved: true
+  staging_metadata_patch: "APPLIED"
+  source_records_changed: false
+  production_writes: 0
+  canon: false
+
+  checkpoint:
+    prior: "DIVIDE_V1_DRY_RUN_READY_AS_REPORTED"
+    current: "DIVIDE_V1_DRY_RUN_READY_PHYSICALLY_REVALIDATED"
+
+  physical_DIVIDE_package_validation:
+    prior: "PENDING"
+    current: "PHYSICALLY_REVALIDATED_IN_CURRENT_RUNTIME"
+    package: "METANOIA_DIVIDE_DE_MANO_INGESTION_v1_DRY_RUN.zip"
+    sha256: "cf6cfc503f8ca548a1c801ed9d2a4d1b0041bb02fe1d0513e15f0511c7b99310"
+    archive_integrity: "PASS"
+    divide_schema_validation: "PASS"
+    candidate_target_rows:
+      MI_AUDIENCE_SIGNAL: 2
+      MI_SUPPLIER: 4
+      MI_EVIDENCE: 12
+      MI_OPPORTUNITY_BRIDGE: 1
+      MI_RUN_LOG: 1
+      total: 20
+
+  normalized_claims:
+    system_root: "BOS"
+    governance_host: "AEQUITAS"
+    transversal_agents:
+      - "PROMETHEUS"
+      - "METANO_IA"
+    ecosystem: "IRIDISCENTER"
+    branch_model: "R01-R07_SIBLING_BRANCHES"
+    R06_role: "STORE"
+    R07_role: "PERFUMERY"
+    DE_MANO_type: "INTERBRANCH_MINI_BRIDGE"
+    active_capability: "METANOIA_DIVIDE"
+
+  revoked:
+    - "PROMETHEUS_METANOIA_PRE_GENESIS_ROOT"
+    - "GEMA_PARENT_OF_BOS"
+    - "VI_M_AND_AS_MACRO_SUPERIOR"
+    - "R06_R07_AS_PARENT_CONTAINER_OF_DE_MANO"
+
+  preserved:
+    - "PROMETHEUS_TRANSVERSAL_FUNCTION"
+    - "METANO_IA_TRANSVERSAL_FUNCTION"
+    - "METANOIA_DIVIDE_CAPABILITY"
+    - "R06_R07_SIBLING_BRANCHES"
+    - "DE_MANO_MINI_BRIDGE"
+    - "20_DIVIDE_CANDIDATE_TARGET_ROWS"
+
+  reinvestigation:
+    architecture_metadata_patch: false
+    market_or_supplier_research: "NOT_REQUIRED_FOR_THIS_PATCH"
+    future_operational_validation: "NOT_WAIVED"
+
+  completion_conditions:
+    remove_PHYSICALLY_VERIFIED_unless_mounted_and_hashed: "SATISFIED"
+    preserve_20_candidate_records: "SATISFIED_AND_REVALIDATED"
+    apply_architecture_metadata_only: "SATISFIED"
+    return_staging_diff_to_D: "SATISFIED"
+
+  unresolved:
+    GEMA:
+      above_BOS: false
+      exact_placement: "UNKNOWN"
+      delete_from_system: false
+    VI_M_AND:
+      exact_placement: "UNKNOWN"
+      authority_in_current_patch: "NONE"
+    R01_R05_DEFINITIONS: "UNKNOWN"
+
+  next_gate: "D_ACCEPT_PATCHED_STAGING"
+  next_owner: "D · QA / MERGE / RELEASE HANDOFF"
+

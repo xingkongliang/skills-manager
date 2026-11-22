@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "510818da-d8f1-4995-a521-b64998ab061c",
+  "path": "codex-automation-engineer-style",
+  "path_key": "codex-automation-engineer-style",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

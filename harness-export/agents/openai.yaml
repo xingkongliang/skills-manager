@@ -1,0 +1,7 @@
+# 자동 생성 — scripts/build-targets.py (packaging/targets.json skillInterface).
+# 손으로 고치지 말 것: SKILL.md frontmatter 를 고치고 --write 로 재생성한다.
+interface:
+  display_name: "harness-export"
+  short_description: "Export the kit's host-neutral rules to every harness entrypoint file (AGENTS.md, GEMINI.md) so non-Claude-Code harnesses (Codex, OpenCode, Copilot, Gemini CLI, Pi, Hermes) follow the same discipline."
+policy:
+  allow_implicit_invocation: false

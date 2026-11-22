@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "65172a6f-89e9-41a9-90fb-80f1df301535",
+  "path": "editorial-line-system",
+  "path_key": "editorial-line-system",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

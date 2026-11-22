@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "daabccdd-97dd-44f5-8c45-e80c3e566130",
+  "path": "pipeline-blueprint",
+  "path_key": "pipeline-blueprint",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

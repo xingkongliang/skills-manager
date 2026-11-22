@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "eeca997a-d0ca-4ef7-9ff1-fbe42f989b05",
+  "path": "superfuture-design-review",
+  "path_key": "superfuture-design-review",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

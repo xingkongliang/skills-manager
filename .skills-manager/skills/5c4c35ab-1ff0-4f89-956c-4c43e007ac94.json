@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "5c4c35ab-1ff0-4f89-956c-4c43e007ac94",
+  "path": "interior-brand-style",
+  "path_key": "interior-brand-style",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

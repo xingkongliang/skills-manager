@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "218621eb-3d69-4fa2-9176-6b0da1c0a486",
+  "path": "rag-system-design",
+  "path_key": "rag-system-design",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

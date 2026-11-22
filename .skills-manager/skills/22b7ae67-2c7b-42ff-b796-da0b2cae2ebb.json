@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "22b7ae67-2c7b-42ff-b796-da0b2cae2ebb",
+  "path": "child-session",
+  "path_key": "child-session",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

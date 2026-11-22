@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "3911d0a7-78a0-4c2c-8f54-9554553e8b00",
+  "path": "scroll-craft",
+  "path_key": "scroll-craft",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

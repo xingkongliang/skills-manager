@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "eabf4eb5-5d84-453c-9988-23b3afecb513",
+  "path": "prompting-fabric",
+  "path_key": "prompting-fabric",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

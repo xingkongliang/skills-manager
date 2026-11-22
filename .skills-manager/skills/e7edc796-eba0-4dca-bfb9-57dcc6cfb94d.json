@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "e7edc796-eba0-4dca-bfb9-57dcc6cfb94d",
+  "path": "normalize-rebuild-handoff",
+  "path_key": "normalize-rebuild-handoff",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

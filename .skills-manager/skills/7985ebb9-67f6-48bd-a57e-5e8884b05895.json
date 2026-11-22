@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "7985ebb9-67f6-48bd-a57e-5e8884b05895",
+  "path": "timeline-builder",
+  "path_key": "timeline-builder",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

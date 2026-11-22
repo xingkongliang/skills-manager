@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "302b1ae8-85a3-4d2d-b249-f3ce5f40a0ba",
+  "path": "plan-task",
+  "path_key": "plan-task",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

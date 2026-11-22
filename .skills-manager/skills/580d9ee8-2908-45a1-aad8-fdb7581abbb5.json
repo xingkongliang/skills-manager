@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "580d9ee8-2908-45a1-aad8-fdb7581abbb5",
+  "path": "painting-studio",
+  "path_key": "painting-studio",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "383cb032-910c-4461-8eb4-68aaa7b800eb",
+  "path": "sql-insight",
+  "path_key": "sql-insight",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

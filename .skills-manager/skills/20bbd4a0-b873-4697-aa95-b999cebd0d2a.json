@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "20bbd4a0-b873-4697-aa95-b999cebd0d2a",
+  "path": "design-an-interface",
+  "path_key": "design-an-interface",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

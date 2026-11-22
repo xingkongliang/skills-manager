@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>La Brújula de tu Voz</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=DM+Mono:wght@300;400&family=Lora:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1209;
+    --paper: #f5f0e8;
+    --cream: #ede7d5;
+    --rust: #b84b2a;
+    --gold: #c9952a;
+    --sage: #5a7a5e;
+    --muted: #7a7060;
+    --line: rgba(26,18,9,0.12);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Lora', Georgia, serif;
+    min-height: 100vh;
+  }
+  .masthead {
+    border-bottom: 3px double var(--ink);
+    padding: 2rem 2rem 1.2rem;
+    display: flex; flex-direction: column; align-items: center; text-align: center;
+    background: var(--cream);
+  }
+  .masthead::before {
+    content: '✦ TALLER DE VOZ ✦';
+    font-family: 'DM Mono', monospace; font-size: 0.65rem; letter-spacing: 0.35em;
+    color: var(--muted); margin-bottom: 0.5rem;
+  }
+  .masthead h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(2rem, 6vw, 3.2rem); font-weight: 700; line-height: 1.1;
+  }
+  .masthead h1 em { color: var(--rust); font-style: italic; }
+  .masthead p {
+    font-family: 'DM Mono', monospace; font-size: 0.75rem; color: var(--muted);
+    margin-top: 0.5rem; letter-spacing: 0.1em;
+  }
+  .nav-bar {
+    display: flex; border-bottom: 1px solid var(--line); background: var(--cream);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .nav-bar::-webkit-scrollbar { display: none; }
+  .tab-btn {
+    flex-shrink: 0; font-family: 'DM Mono', monospace; font-size: 0.7rem;
+    letter-spacing: 0.12em; text-transform: uppercase; padding: 0.9rem 1.4rem;
+    background: none; border: none; border-bottom: 2px solid transparent;
+    cursor: pointer; color: var(--muted); transition: all 0.2s;
+  }
+  .tab-btn:hover { color: var(--ink); }
+  .tab-btn.active { color: var(--rust); border-bottom-color: var(--rust); }
+  .content { padding: 1.5rem 2rem 3rem; max-width: 800px; margin: 0 auto; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .sec-title { font-family: 'Playfair Display', serif; font-size: 1.6rem; margin-bottom: 0.3rem; font-weight: 400; }
+  .sec-title span { color: var(--rust); font-style: italic; }
+  .sec-sub {
+    font-family: 'DM Mono', monospace; font-size: 0.72rem; color: var(--muted);
+    letter-spacing: 0.08em; margin-bottom: 1.8rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .pillars { display: grid; gap: 1rem; }
+  .pillar {
+    border: 1px solid var(--line); border-left: 3px solid var(--rust);
+    padding: 1.1rem 1.3rem; background: white; border-radius: 0 4px 4px 0;
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .pillar:hover { transform: translateX(3px); box-shadow: -3px 3px 12px rgba(0,0,0,0.06); }
+  .pillar-num { font-family: 'DM Mono', monospace; font-size: 0.65rem; color: var(--rust); letter-spacing: 0.2em; margin-bottom: 0.3rem; }
+  .pillar h3 { font-family: 'Playfair Display', serif; font-size: 1.05rem; font-weight: 700; margin-bottom: 0.4rem; }
+  .pillar p { font-size: 0.88rem; color: var(--muted); line-height: 1.6; }
+  .pillar .diagnose {
+    margin-top: 0.8rem; font-family: 'DM Mono', monospace; font-size: 0.7rem;
+    background: var(--cream); padding: 0.5rem 0.8rem; border-radius: 3px;
+    color: var(--ink); font-style: italic;
+  }
+  .format-selector { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
+  .fmt-btn {
+    font-family: 'DM Mono', monospace; font-size: 0.68rem; letter-spacing: 0.08em;
+    padding: 0.45rem 0.9rem; border: 1px solid var(--ink); background: none;
+    cursor: pointer; border-radius: 2px; color: var(--ink); transition: all 0.15s;
+  }
+  .fmt-btn:hover, .fmt-btn.active { background: var(--ink); color: var(--paper); }
+  .exercise-box { border: 1px solid var(--line); background: white; border-radius: 4px; overflow: hidden; }
+  .ex-header {
+    background: var(--ink); color: var(--paper); padding: 0.8rem 1.2rem;
+    font-family: 'DM Mono', monospace; font-size: 0.7rem; letter-spacing: 0.15em;
+    display: flex; align-items: center; gap: 0.6rem;
+  }
+  .ex-header .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--rust); }
+  .exercise-list { padding: 1.2rem; }
+  .exercise-item { display: flex; gap: 1rem; padding: 0.9rem 0; border-bottom: 1px dashed var(--line); }
+  .exercise-item:last-child { border-bottom: none; }
+  .ex-num { font-family: 'DM Mono', monospace; font-size: 0.75rem; color: var(--rust); flex-shrink: 0; width: 1.5rem; padding-top: 2px; }
+  .ex-body h4 { font-family: 'Playfair Display', serif; font-size: 0.95rem; font-style: italic; margin-bottom: 0.2rem; }
+  .ex-body p { font-size: 0.83rem; line-height: 1.6; color: var(--muted); }
+  .ex-body .time-tag {
+    display: inline-block; font-family: 'DM Mono', monospace; font-size: 0.62rem;
+    background: var(--cream); color: var(--gold); padding: 0.15rem 0.5rem;
+    border-radius: 2px; margin-top: 0.4rem;
+  }
+  .checklist { display: grid; gap: 0.7rem; }
+  .check-item {
+    display: flex; align-items: flex-start; gap: 0.9rem; padding: 0.9rem 1rem;
+    background: white; border: 1px solid var(--line); border-radius: 4px;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .check-item:hover { background: var(--cream); }
+  .check-item.checked { background: #f0f7f0; border-color: var(--sage); }
+  .check-box {
+    width: 18px; height: 18px; border: 1.5px solid var(--ink); border-radius: 2px;
+    flex-shrink: 0; margin-top: 1px; display: flex; align-items: center;
+    justify-content: center; font-size: 11px; transition: all 0.15s;
+  }
+  .check-item.checked .check-box { background: var(--sage); border-color: var(--sage); color: white; }
+  .check-label { font-size: 0.87rem; line-height: 1.5; }
+  .check-label strong { font-family: 'Playfair Display', serif; display: block; font-size: 0.92rem; }
+  .check-label span { color: var(--muted); font-size: 0.8rem; }
+  .progress-bar-wrap { background: var(--line); border-radius: 100px; height: 4px; margin-bottom: 1.5rem; overflow: hidden; }
+  .progress-bar-fill { height: 100%; background: var(--sage); border-radius: 100px; transition: width 0.4s ease; width: 0%; }
+  .progress-label { font-family: 'DM Mono', monospace; font-size: 0.68rem; color: var(--muted); margin-bottom: 0.4rem; display: flex; justify-content: space-between; }
+  .manifiesto-prompt {
+    background: var(--ink); color: var(--paper); padding: 1.5rem 1.8rem;
+    border-radius: 4px; margin-bottom: 1.5rem; font-family: 'Playfair Display', serif;
+    font-style: italic; font-size: 1.05rem; line-height: 1.7; position: relative;
+  }
+  .manifiesto-prompt::before {
+    content: '"'; font-size: 4rem; position: absolute; top: -0.5rem; left: 1rem;
+    color: var(--rust); line-height: 1; font-style: normal;
+  }
+  .manifiesto-prompt p { padding-left: 1.5rem; }
+  .prompt-questions { display: grid; gap: 0.8rem; margin-bottom: 1.5rem; }
+  .prompt-q { border-left: 2px solid var(--gold); padding: 0.8rem 1rem; background: white; font-size: 0.88rem; line-height: 1.6; color: var(--ink); }
+  .prompt-q strong { font-family: 'DM Mono', monospace; font-size: 0.68rem; color: var(--gold); letter-spacing: 0.1em; display: block; margin-bottom: 0.2rem; }
+  textarea.manifiesto-input {
+    width: 100%; min-height: 160px; border: 1px solid var(--line); background: white;
+    padding: 1rem; font-family: 'Lora', serif; font-size: 0.9rem; line-height: 1.7;
+    resize: vertical; color: var(--ink); border-radius: 4px; outline: none;
+  }
+  textarea.manifiesto-input:focus { border-color: var(--rust); }
+  .save-btn {
+    margin-top: 0.7rem; font-family: 'DM Mono', monospace; font-size: 0.7rem;
+    letter-spacing: 0.12em; background: var(--rust); color: white; border: none;
+    padding: 0.6rem 1.4rem; cursor: pointer; border-radius: 2px; transition: opacity 0.15s;
+  }
+  .save-btn:hover { opacity: 0.85; }
+  .saved-note { font-family: 'DM Mono', monospace; font-size: 0.68rem; color: var(--sage); margin-left: 0.8rem; display: none; }
+  .transmedia-note {
+    background: var(--cream); border: 1px dashed var(--gold); padding: 1rem 1.2rem;
+    border-radius: 4px; margin: 0 1.2rem 1.2rem; font-size: 0.83rem; line-height: 1.7; color: var(--ink);
+  }
+  .transmedia-note strong { color: var(--rust); font-family: 'Playfair Display', serif; }
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <h1>La Brújula de tu <em>Voz</em></h1>
+  <p>Guía para escritores que ya escriben — y quieren que suene a ellos</p>
+</div>
+
+<div class="nav-bar">
+  <button class="tab-btn active" onclick="switchTab('pilares', this)">Los 5 Pilares</button>
+  <button class="tab-btn" onclick="switchTab('ejercicios', this)">Ejercicios</button>
+  <button class="tab-btn" onclick="switchTab('checklist', this)">Autoevaluación</button>
+  <button class="tab-btn" onclick="switchTab('manifiesto', this)">Tu Manifiesto</button>
+</div>
+
+<div class="content">
+
+  <!-- PILARES -->
+  <div class="panel active" id="pilares">
+    <div class="sec-title">Los 5 <span>pilares</span> de una voz propia</div>
+    <div class="sec-sub">La voz no es estilo — es el conjunto de decisiones que solo tú tomarías</div>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="pillar-num">PILAR 01</div>
+        <h3>Tu Postura Ante el Mundo</h3>
+        <p>¿Observas con ironía, con ternura, con asombro, con rabia? Todo escritor tiene un ángulo emocional dominante desde el que mira la realidad. No es el tema, es la actitud.</p>
+        <div class="diagnose">¿Cómo suenas cuando le cuentas algo increíble a un amigo? Eso es tu postura.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-num">PILAR 02</div>
+        <h3>Tu Ritmo Natural</h3>
+        <p>Hay escritores de frases largas y sinuosas. Otros disparan oraciones cortas. Tu ritmo viene de cómo piensas, de tu música favorita, de tu región, de tus lecturas. Es casi tan personal como tu firma.</p>
+        <div class="diagnose">Lee en voz alta lo que escribes. ¿Dónde respiras? Esos son tus puntos.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-num">PILAR 03</div>
+        <h3>Tus Obsesiones Temáticas</h3>
+        <p>Todo escritor vuelve siempre a los mismos temas sin proponérselo: la familia, el tiempo, la identidad, la traición, la pertenencia. Esas obsesiones son una mina de oro, no una trampa.</p>
+        <div class="diagnose">¿Sobre qué podrías escribir por horas sin cansarte? Anótalo.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-num">PILAR 04</div>
+        <h3>Tu Léxico Personal</h3>
+        <p>Las palabras que eliges revelan tu historia, tu origen, tu época. No corrijas la manera en que hablas al escribir — depúrala. El tampiqueño que escribe como europeo pierde lo más valioso que tiene.</p>
+        <div class="diagnose">¿Qué palabras usas en voz alta que nunca aparecen en tus textos?</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-num">PILAR 05</div>
+        <h3>Tu Relación con el Lector</h3>
+        <p>¿Le hablas de frente, de lado, desde arriba, como cómplice? La distancia narrativa que estableces con quien lee define el tono de todo lo que escribes, sin importar el formato.</p>
+        <div class="diagnose">¿A quién imaginas leyéndote cuando escribes? Sé específico.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EJERCICIOS -->
+  <div class="panel" id="ejercicios">
+    <div class="sec-title"><span>Ejercicios</span> de descubrimiento</div>
+    <div class="sec-sub">Selecciona el formato que quieras trabajar hoy</div>
+    <div class="format-selector">
+      <button class="fmt-btn active" onclick="showEx('ficcion', this)">Ficción</button>
+      <button class="fmt-btn" onclick="showEx('ensayo', this)">Ensayo</button>
+      <button class="fmt-btn" onclick="showEx('poesia', this)">Poesía</button>
+      <button class="fmt-btn" onclick="showEx('blogs', this)">Blogs / Redes</button>
+      <button class="fmt-btn" onclick="showEx('guion', this)">Guión / Teatro</button>
+      <button class="fmt-btn" onclick="showEx('transmedia', this)">Transmedia</button>
+    </div>
+
+    <div id="ex-ficcion" class="exercise-box">
+      <div class="ex-header"><div class="dot"></div>FICCIÓN / CUENTOS</div>
+      <div class="exercise-list">
+        <div class="exercise-item"><div class="ex-num">01</div><div class="ex-body"><h4>La misma escena, tres versiones</h4><p>Escribe la misma escena (alguien recibe una noticia) desde tres tonos: melancólico, irónico, neutro. Luego decide cuál suena más a ti. Ese es tu tono natural.</p><div class="time-tag">⏱ 25 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">02</div><div class="ex-body"><h4>Imita para luego romper</h4><p>Elige un escritor que ames. Escribe un párrafo imitando su estilo conscientemente. Luego reescríbelo con tu vocabulario, tu ritmo. Lo que cambiaste = tu voz.</p><div class="time-tag">⏱ 30 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">03</div><div class="ex-body"><h4>El detalle que nadie más notaría</h4><p>Describe un lugar que conozcas bien, pero solo menciona los detalles que tú —y probablemente nadie más— notarías. Ahí vive tu perspectiva única.</p><div class="time-tag">⏱ 15 min</div></div></div>
+      </div>
+    </div>
+
+    <div id="ex-ensayo" class="exercise-box" style="display:none">
+      <div class="ex-header"><div class="dot"></div>ENSAYO / NO FICCIÓN</div>
+      <div class="exercise-list">
+        <div class="exercise-item"><div class="ex-num">01</div><div class="ex-body"><h4>La tesis incómoda</h4><p>Escribe un párrafo de arranque defendiendo algo que realmente crees pero que sabes que incomodará a alguien. Sin suavizarlo. La incomodidad de escribirlo es la medida de tu autenticidad.</p><div class="time-tag">⏱ 20 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">02</div><div class="ex-body"><h4>El ensayo como conversación</h4><p>Escribe sobre un tema complejo como si le explicaras a una persona específica (un amigo curioso, tu abuela, un extranjero). El destinatario cambia tu tono completamente.</p><div class="time-tag">⏱ 30 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">03</div><div class="ex-body"><h4>El "yo" en el ensayo</h4><p>Toma un texto en voz impersonal y reescríbelo en primera persona. ¿Dónde aparece el miedo? ¿Qué se vuelve más honesto? Esa honestidad es tu voz ensayística.</p><div class="time-tag">⏱ 20 min</div></div></div>
+      </div>
+    </div>
+
+    <div id="ex-poesia" class="exercise-box" style="display:none">
+      <div class="ex-header"><div class="dot"></div>POESÍA</div>
+      <div class="exercise-list">
+        <div class="exercise-item"><div class="ex-num">01</div><div class="ex-body"><h4>El poema sin adjetivos</h4><p>Escribe un poema corto sobre algo que te importe. Luego elimina todos los adjetivos. ¿Qué queda? Los sustantivos y verbos que eliges son el esqueleto de tu voz.</p><div class="time-tag">⏱ 20 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">02</div><div class="ex-body"><h4>Diccionario personal</h4><p>Haz una lista de 20 palabras que te parezcan hermosas, raras o tuyas. Escribe un poema usando solo esas palabras. Este vocabulario es un mapa de tu sensibilidad.</p><div class="time-tag">⏱ 25 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">03</div><div class="ex-body"><h4>Habla como hablas</h4><p>Grábate contando en voz alta algo que te pasó recientemente. Transcribe. Edita lo menos posible. Ese texto tiene más ritmo auténtico que cualquier cosa que "escribas".</p><div class="time-tag">⏱ 15 min</div></div></div>
+      </div>
+    </div>
+
+    <div id="ex-blogs" class="exercise-box" style="display:none">
+      <div class="ex-header"><div class="dot"></div>BLOGS / REDES SOCIALES</div>
+      <div class="exercise-list">
+        <div class="exercise-item"><div class="ex-num">01</div><div class="ex-body"><h4>El post sin pulir</h4><p>Escribe un post en 5 minutos sin revisarlo. Ese borrador suele ser más auténtico que tres horas de edición. Nota qué corriges obsesivamente: ahí está el miedo.</p><div class="time-tag">⏱ 5 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">02</div><div class="ex-body"><h4>La opinión sin diplomacia</h4><p>Escribe tu opinión sobre algo de tu campo sin suavizarla. Luego decide cuánto suavizar —conscientemente. La versión sin filtro revela tu voz real.</p><div class="time-tag">⏱ 15 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">03</div><div class="ex-body"><h4>Tu firma invisible</h4><p>Relee tus últimos 10 posts o entradas. ¿Qué frases o estructuras se repiten? ¿Qué temas vuelven? Haz una lista. Eso es tu marca actual — decide si la quieres o la cambias.</p><div class="time-tag">⏱ 20 min</div></div></div>
+      </div>
+    </div>
+
+    <div id="ex-guion" class="exercise-box" style="display:none">
+      <div class="ex-header"><div class="dot"></div>GUIÓN / TEATRO</div>
+      <div class="exercise-list">
+        <div class="exercise-item"><div class="ex-num">01</div><div class="ex-body"><h4>El diálogo sin acotaciones</h4><p>Escribe una escena de dos personajes hablando sin ninguna acotación. Solo palabras. Si no puedes distinguir quién habla sin nombres, reescribe hasta que cada voz sea inconfundible.</p><div class="time-tag">⏱ 30 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">02</div><div class="ex-body"><h4>Tu personaje recurrente</h4><p>Los mejores escritores dramáticos tienen arquetipos que vuelven disfrazados en cada obra. ¿Quién es el personaje que siempre terminas escribiendo? Nómbralo. Entiéndelo. Esa figura habla de ti.</p><div class="time-tag">⏱ 20 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">03</div><div class="ex-body"><h4>El conflicto que te obsesiona</h4><p>Escribe en una línea el conflicto central de tus últimos tres proyectos. ¿Se parecen? El conflicto al que vuelves define tu visión dramática del mundo.</p><div class="time-tag">⏱ 10 min</div></div></div>
+      </div>
+    </div>
+
+    <div id="ex-transmedia" class="exercise-box" style="display:none">
+      <div class="ex-header"><div class="dot"></div>NARRATIVA TRANSMEDIA</div>
+      <div class="exercise-list">
+        <div class="exercise-item"><div class="ex-num">01</div><div class="ex-body"><h4>La misma historia, cinco medios</h4><p>Toma una historia mínima (3 frases). Adáptala a: un post de Instagram, un monólogo teatral, un poema, una escena de cuento, un guión de 30 segundos. ¿Qué permanece en todas? Eso es el núcleo de tu voz.</p><div class="time-tag">⏱ 45 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">02</div><div class="ex-body"><h4>El mundo que te pertenece</h4><p>Define un universo (lugar, época, tono) que puedas desarrollar en múltiples formatos. Escribe su "biblia" en una página. La coherencia de ese mundo a través de medios es la expresión más compleja de tu voz.</p><div class="time-tag">⏱ 40 min</div></div></div>
+        <div class="exercise-item"><div class="ex-num">03</div><div class="ex-body"><h4>El personaje multiplataforma</h4><p>Crea un personaje y escribe cómo se comunicaría en Twitter, en una carta manuscrita y en un monólogo. La coherencia de su voz a través de medios = la coherencia de tu escritura transmedia.</p><div class="time-tag">⏱ 35 min</div></div></div>
+      </div>
+      <div class="transmedia-note">
+        <strong>Nota sobre Narrativa Transmedia:</strong> En este formato, tu voz no solo es estilística — es arquitectónica. Debes decidir qué cuenta cada medio mejor que los demás. La voz transmedia es la coherencia entre piezas que se complementan sin repetirse.
+      </div>
+    </div>
+  </div>
+
+  <!-- CHECKLIST -->
+  <div class="panel" id="checklist">
+    <div class="sec-title">Lista de <span>autoevaluación</span></div>
+    <div class="sec-sub">Marca lo que ya haces — lo que falta es tu siguiente paso</div>
+    <div class="progress-label">
+      <span>Tu progreso</span>
+      <span id="progress-count">0 / 12</span>
+    </div>
+    <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progress-fill"></div></div>
+    <div class="checklist">
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>Conozco mi postura emocional dominante</strong><span>Sé si observo con ironía, ternura, asombro o distancia crítica.</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>Escribo y leo en voz alta regularmente</strong><span>Escucho el ritmo de mis frases, no solo su significado.</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>Tengo identificadas mis obsesiones temáticas</strong><span>Sé a qué temas vuelvo aunque no me lo proponga.</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>No corrijo mi habla al escribir</strong><span>Mi vocabulario cotidiano aparece en mis textos de alguna forma.</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>Sé quién es mi lector imaginado</strong><span>Tengo una persona concreta en mente cuando escribo.</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>Leo críticamente a mis autores favoritos</strong><span>No solo disfruto — analizo cómo construyen sus efectos.</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>Tengo un archivo de primeros borradores sin censura</strong><span>Guardo textos antes de "mejorarlos".</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>He identificado cuándo imito y cuándo soy yo</strong><span>Reconozco la diferencia en mis propios textos.</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>Escribo en al menos dos formatos distintos regularmente</strong><span>La tensión entre formatos revela qué es esencial en tu voz.</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>Comparto mi trabajo y escucho el feedback</strong><span>La reacción del lector es información sobre tu voz, no un juicio.</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>Tengo una práctica de escritura libre o diario</strong><span>Al menos 10-15 min sin objetivo, para escucharme.</span></div></div>
+      <div class="check-item" onclick="toggleCheck(this)"><div class="check-box"></div><div class="check-label"><strong>He definido qué escritores NO quiero parecerme</strong><span>Saber qué rechazas define tu voz tanto como lo que admiras.</span></div></div>
+    </div>
+  </div>
+
+  <!-- MANIFIESTO -->
+  <div class="panel" id="manifiesto">
+    <div class="sec-title">Tu <span>Manifiesto</span> de Voz</div>
+    <div class="sec-sub">Un documento vivo — respóndelo ahora y vuelve a él en 3 meses</div>
+    <div class="manifiesto-prompt">
+      <p>Escribir sin voz propia es como hablar con la boca de otro. Ya tienes las palabras. Lo que buscas es el permiso de usarlas a tu manera.</p>
+    </div>
+    <div class="prompt-questions">
+      <div class="prompt-q"><strong>PREGUNTA 1 — TU POSTURA</strong>¿Qué emoción domina cuando describes algo que te importa? ¿Ironía, asombro, melancolía, rabia, ternura? ¿Cómo quieres que se sienta el lector al terminar cualquier texto tuyo?</div>
+      <div class="prompt-q"><strong>PREGUNTA 2 — TUS OBSESIONES</strong>¿Sobre qué podrías escribir por horas sin cansarte? Anota 3 temas que siempre reaparecen en tu escritura, aunque sean distintos en superficie.</div>
+      <div class="prompt-q"><strong>PREGUNTA 3 — TU RECHAZO</strong>¿Qué tipo de escritura te resulta falsa, vacía o pretenciosa? Definir lo que rechazas delimita el territorio de tu voz.</div>
+      <div class="prompt-q"><strong>PREGUNTA 4 — TU PROMESA</strong>Completa: "Cuando alguien lee algo mío, quiero que sienta / piense / haga..."</div>
+    </div>
+    <textarea class="manifiesto-input" id="manifesto-text" placeholder="Empieza a escribir aquí tu manifiesto... No tiene que ser perfecto. Tiene que ser tuyo."></textarea>
+    <div>
+      <button class="save-btn" onclick="saveManifesto()">GUARDAR EN ESTA SESIÓN</button>
+      <span class="saved-note" id="saved-note">✓ Guardado</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  function switchTab(id, btn) {
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    btn.classList.add('active');
+  }
+  function showEx(format, btn) {
+    document.querySelectorAll('[id^="ex-"]').forEach(e => e.style.display = 'none');
+    document.querySelectorAll('.fmt-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('ex-' + format).style.display = 'block';
+    btn.classList.add('active');
+  }
+  function toggleCheck(el) {
+    el.classList.toggle('checked');
+    el.querySelector('.check-box').textContent = el.classList.contains('checked') ? '✓' : '';
+    const total = document.querySelectorAll('.check-item').length;
+    const done = document.querySelectorAll('.check-item.checked').length;
+    document.getElementById('progress-count').textContent = done + ' / ' + total;
+    document.getElementById('progress-fill').style.width = (done / total * 100) + '%';
+  }
+  function saveManifesto() {
+    const text = document.getElementById('manifesto-text').value;
+    if (text.trim()) {
+      sessionStorage.setItem('manifesto', text);
+      const note = document.getElementById('saved-note');
+      note.style.display = 'inline';
+      setTimeout(() => note.style.display = 'none', 3000);
+    }
+  }
+  window.onload = () => {
+    const saved = sessionStorage.getItem('manifesto');
+    if (saved) document.getElementById('manifesto-text').value = saved;
+  };
+</script>
+</body>
+</html>

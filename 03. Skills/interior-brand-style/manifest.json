@@ -1,0 +1,51 @@
+{
+  "package": "interior-brand-style",
+  "version": "1.0.0-CANDIDATE",
+  "status": "DESIGN-SOUND",
+  "authority": "Human D / Aleja",
+  "date": "2026-10-13",
+  "producer": "CLD_04",
+  "files": [
+    "SKILL.md",
+    "evals.json",
+    "grading.json",
+    "manifest.json",
+    "CHANGELOG.md"
+  ],
+  "lineage": [
+    "prompting-fabric-v1.0",
+    "portable-prompt-skills-factory-v2.2-NEUTRAL-UNIFIED",
+    "skill-creator-fabric-v0.1",
+    "ui-ux-pro-max-brand-v1.0.0",
+    "honest-brand-strategist-style"
+  ],
+  "metasystem": {
+    "ramas_covered": ["R01", "R02", "R03", "R04", "R06", "R07"],
+    "ramas_on_hold": ["R05"],
+    "pillars": ["OPAL", "LUMINA", "BOS", "ÆQUITAS"],
+    "axis": ["canon", "CODEX_R6"]
+  },
+  "scope_modes": ["INTERIOR_ONLY", "BRAND_ONLY", "INTEGRATED"],
+  "sectors_supported": [
+    "residencial",
+    "comercial_retail",
+    "wellness_spa",
+    "consultorio_salud",
+    "educativo",
+    "hospitalidad",
+    "oficina_corporativa",
+    "estudio_creativo"
+  ],
+  "self_test": {
+    "suite": "INTERIOR-BRAND-STYLE-EVALS-v1.0",
+    "total_cases": 10,
+    "run_type": "LOCAL_DETERMINISTIC_SELF_TEST",
+    "baseline_run": "NOT_PERFORMED",
+    "note": "Local self-test only. Independent peer audit required before installation."
+  },
+  "installation_ready": false,
+  "runtime_proven": false,
+  "canon_declared": false,
+  "deployment_authorized": false,
+  "mutation_performed": false
+}

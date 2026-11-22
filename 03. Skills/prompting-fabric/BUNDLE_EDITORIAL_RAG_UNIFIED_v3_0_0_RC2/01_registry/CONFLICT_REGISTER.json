@@ -1,0 +1,140 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1",
+  "generated_at": "2026-07-22T21:00:35-06:00",
+  "conflicts": [
+    {
+      "conflict_id": "C-001",
+      "severity": "BLOCKER",
+      "category": "missing_runtime",
+      "claim_a": "KOP registry identifies the DMIE/MMII primary target and hash.",
+      "claim_b": "The target HTML bytes are not available in the mounted sources.",
+      "source_ids": [
+        "SRC-DMIE-REGISTRY"
+      ],
+      "decision": "Do not reconstruct; ship contract plus missing-artifact gate.",
+      "owner": "D · QA / MERGE / RELEASE HANDOFF",
+      "status": "OPEN"
+    },
+    {
+      "conflict_id": "C-002",
+      "severity": "BLOCKER",
+      "category": "runtime_qa",
+      "claim_a": "Comet v1.4 EIC module QA reports PASS.",
+      "claim_b": "Inherited preflight keeps full runtime/deployment blocked pending QC-01..QC-10.",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "decision": "Include HTML as review candidate only.",
+      "owner": "D · QA / MERGE / RELEASE HANDOFF",
+      "status": "OPEN"
+    },
+    {
+      "conflict_id": "C-003",
+      "severity": "HIGH",
+      "category": "integrity_manifest",
+      "claim_a": "Most upstream Comet checksums validate.",
+      "claim_b": "The two checksum-list files are self-referential mismatches.",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "decision": "Generate a non-self-referential package manifest.",
+      "owner": "M11_RELEASE_HANDOFF",
+      "status": "MITIGATED_IN_RC1"
+    },
+    {
+      "conflict_id": "C-004",
+      "severity": "HIGH",
+      "category": "editorial_pattern",
+      "claim_a": "A3 wording says even entries contain content and odd entries reflection.",
+      "claim_b": "Physical workbooks use odd entries for content and even entries for reflection.",
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "decision": "Physical pattern is PROVISIONAL_RUNTIME_NORMALIZATION; Director must approve.",
+      "owner": "D · QA / MERGE / RELEASE HANDOFF",
+      "status": "OPEN"
+    },
+    {
+      "conflict_id": "C-005",
+      "severity": "HIGH",
+      "category": "brand_token_drift",
+      "claim_a": "Historical BOS references use clinical fuchsia #E31A7E.",
+      "claim_b": "BOS v2 A1/A3 use clinical blue-grey #7B9EA6.",
+      "source_ids": [
+        "SRC-BOS-V2",
+        "SRC-PROMETHEUS-HIST"
+      ],
+      "decision": "Use #7B9EA6 in this candidate; retain conflict until Director approval.",
+      "owner": "D · QA / MERGE / RELEASE HANDOFF",
+      "status": "PROVISIONAL"
+    },
+    {
+      "conflict_id": "C-006",
+      "severity": "MEDIUM",
+      "category": "version_namespace",
+      "claim_a": "The package uses RAG architecture version 3.",
+      "claim_b": "Self-Care/Journey is referenced as editorial line version 4.",
+      "source_ids": [
+        "SRC-RAG-CONFIG"
+      ],
+      "decision": "Separate package_version and line_version fields.",
+      "owner": "M00_CORE_CONTRACT",
+      "status": "MITIGATED_IN_RC1"
+    },
+    {
+      "conflict_id": "C-007",
+      "severity": "MEDIUM",
+      "category": "project_boundary",
+      "claim_a": "RAG v3 supplies useful governance rules.",
+      "claim_b": "Its unrelated project content must remain separate from LUMINA/editorial content.",
+      "source_ids": [
+        "SRC-RAG-CONFIG",
+        "SRC-IRIDISCENTER-V3"
+      ],
+      "decision": "Reuse governance only; no cross-project content merge.",
+      "owner": "M02_RAG_GOVERNANCE",
+      "status": "MITIGATED_IN_RC1"
+    },
+    {
+      "conflict_id": "C-008",
+      "severity": "MEDIUM",
+      "category": "historical_overclaim",
+      "claim_a": "Prometheus/SELAH documents describe commit-ready or production-ready states.",
+      "claim_b": "The documents also expose stubs or state that real execution did not occur.",
+      "source_ids": [
+        "SRC-PROMETHEUS-HIST",
+        "SRC-SELAH-HIST"
+      ],
+      "decision": "Reuse protocol patterns only; runtime claims are non-authoritative.",
+      "owner": "M10_QA_AEQUITAS",
+      "status": "MITIGATED_IN_RC1"
+    },
+    {
+      "conflict_id": "C-009",
+      "severity": "MEDIUM",
+      "category": "missing_content",
+      "claim_a": "Self-Care/Journey is the next editorial line candidate.",
+      "claim_b": "No authored 20-entry content source is mounted.",
+      "source_ids": [],
+      "decision": "Ship a spec-only placeholder; generate no entries.",
+      "owner": "D · QA / MERGE / RELEASE HANDOFF",
+      "status": "OPEN"
+    },
+    {
+      "conflict_id": "C-010",
+      "severity": "LOW",
+      "category": "source_discovery",
+      "claim_a": "Google Drive was explicitly authorized for retrieval.",
+      "claim_b": "Searches returned no relevant project evidence.",
+      "source_ids": [
+        "SRC-GDRIVE-SEARCH"
+      ],
+      "decision": "Do not infer absence or invent a Drive source.",
+      "owner": "M01_SOURCE_REGISTRY",
+      "status": "CLOSED_AS_NEGATIVE_RESULT"
+    }
+  ],
+  "package_version": "3.0.0-rc.2",
+  "patch": "factual_registry_patch_rc2"
+}

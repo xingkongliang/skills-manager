@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "99191d3c-d1b0-404b-b78b-35d241977d09",
+  "path": "copywriting",
+  "path_key": "copywriting",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

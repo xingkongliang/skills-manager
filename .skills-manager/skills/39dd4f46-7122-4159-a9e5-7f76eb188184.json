@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "39dd4f46-7122-4159-a9e5-7f76eb188184",
+  "path": "sprint-plan-builder",
+  "path_key": "sprint-plan-builder",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

@@ -1,0 +1,12 @@
+interface:
+  display_name: "Normalize \xB7 Rebuild \xB7 Handoff"
+  short_description: Reconstruye estado y handoff trazable
+  default_prompt: Usa $normalize-rebuild-handoff para reconstruir este estado y devolver
+    un CMP listo para D.
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

@@ -1,0 +1,1332 @@
+<!DOCTYPE html>
+<html lang="es">
+<!-- BUILD: WB_COMET-STRIKER_CREATIVE-JOURNEY | version=v1.2.0-printmodes | commit=4c0676907fd6 | generated=2026-06-25T01:48:14.883909 -->
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WB_COMET-STRIKER_CREATIVE-JOURNEY · Print Modes + Digital Fill</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=Raleway:wght@100;200;300;400;500;600;700&family=Caveat:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --milk:#FDFCFA;--linen:#F8F4EE;--champ:#E8CEAA;--honey:#EFE4CC;
+  --gold:#CC9C50;--rose:#C48B7A;--moon:#D7DEE8;--lav:#C4B8D4;--sage:#9AAF9A;
+  --carbon:#2C2A28;--warm:#635F5A;--muted:#A09C95;--faint:#D4D0C8;
+  --border:rgba(44,42,40,0.10);--border2:rgba(44,42,40,0.20);
+  --stabilo-yellow:#FEE135;--stabilo-pink:#FF91AF;--stabilo-green:#B5E48C;
+  --stabilo-orange:#FFBB5C;--stabilo-blue:#A8D8EA;--stabilo-lav:#C9B8E8;
+}
+
+/* ═════ REGLAS DE IMPRESIÓN (TAMAÑO CARTA) ═════ */
+@media print {
+  @page {
+    size: letter;
+    margin: 0.5cm; /* Margen seguro para la impresora */
+  }
+  body {
+    background: white !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .journal-wrap {
+    padding: 0 !important;
+    gap: 0 !important;
+  }
+  .page {
+    page-break-after: always;
+    box-shadow: none !important;
+    border: none !important;
+    min-height: auto !important; /* Permite que la impresora controle el alto */
+    height: 100vh !important;
+    background: white !important; /* Quita la textura en papel real */
+  }
+  nav, footer {
+    display: none !important;
+  }
+  /* Evitar cortes a la mitad de un elemento */
+  .prompt, .qbox, .write-zone, .wreck, .divider, .emo-grid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+html{scroll-behavior:smooth;}
+body{
+  font-family:'Raleway',sans-serif;
+  background:var(--linen);
+  color:var(--carbon);
+  font-size:14px;
+  line-height:1.75;
+}
+
+/* NAV DIGITAL */
+nav{
+  position:sticky;top:0;z-index:100;
+  background:rgba(253,252,250,.92);backdrop-filter:blur(20px);
+  border-bottom:0.5px solid var(--border2);
+  padding:0 32px;height:60px;
+  display:flex;align-items:center;gap:12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+nav::-webkit-scrollbar { display: none; }
+.nav-brand{font-family:'Playfair Display',serif;font-size:16px;font-style:italic;color:var(--gold);margin-right:auto; white-space: nowrap;}
+.nav-pill{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-decoration:none;padding:6px 14px;border-radius:20px;border:0.5px solid var(--border2);transition:all .2s; white-space: nowrap;}
+.nav-pill:hover{background:var(--champ);color:var(--carbon);border-color:var(--gold);}
+.print-btn{background:var(--carbon);color:#fff;border:none;cursor:pointer;font-family:'Raleway',sans-serif;font-size:11px;font-weight:600;text-transform: uppercase; letter-spacing: 0.05em; padding:8px 18px;border-radius:20px; transition: all 0.2s;}
+.print-btn:hover{background:var(--gold); box-shadow: 0 4px 12px rgba(204,156,80,0.3);}
+
+/* WRAPPER */
+.journal-wrap{
+  max-width:850px;margin:0 auto;
+  padding:40px 20px 80px;
+  display:flex;flex-direction:column;gap:40px;
+}
+
+/* PAGE BASE CON TEXTURA DE PAPEL DIGITAL */
+.page{
+  background:var(--milk);
+  /* Sutil textura de papel por medio de SVG en base64 (solo visible en pantalla) */
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.04'/%3E%3C/svg%3E");
+  border-radius:8px;
+  box-shadow:0 10px 30px rgba(44,42,40,.05), 0 1px 3px rgba(44,42,40,.08);
+  position:relative;overflow:hidden;
+  min-height:1050px; /* Proporción más cercana al tamaño carta */
+  display: flex;
+  flex-direction: column;
+}
+
+/* COVER PAGE */
+.cover{
+  min-height:1050px;
+  display:flex;flex-direction:column;
+  justify-content:space-between;
+  padding:0;
+}
+.cover-top{
+  background:var(--carbon);
+  padding:80px 60px 50px;
+  position:relative;overflow:hidden;
+}
+.cover-hex{
+  position:absolute;clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+  opacity:.08;background:var(--gold);
+}
+.ch1{width:340px;height:340px;top:-100px;right:-80px;}
+.ch2{width:180px;height:180px;bottom:20px;left:30px;}
+.cover-eyebrow{font-size:11px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:rgba(253,252,250,.5);margin-bottom:16px;position:relative;z-index:1;}
+.cover-title{font-family:'Playfair Display',serif;font-size:64px;font-weight:900;color:#fff;line-height:1.05;position:relative;z-index:1;margin-bottom:8px; letter-spacing: -0.02em;}
+.cover-subtitle{font-family:'Playfair Display',serif;font-size:28px;font-weight:400;font-style:italic;color:var(--champ);position:relative;z-index:1;margin-bottom:24px;}
+.cover-strip{display:flex;gap:0;margin-top:40px;position:relative;z-index:1;}
+.stabilo-strip{height:10px;flex:1;}
+
+.cover-body{padding:50px 60px;flex:1;display:flex;flex-direction:column;justify-content:space-between;}
+.cover-quote{
+  font-family:'Playfair Display',serif;font-size:20px;font-style:italic;
+  color:var(--warm);line-height:1.6;max-width:550px;
+  padding-left:24px;border-left:4px solid var(--gold);
+  margin-bottom:40px;
+}
+.cover-fields{display:grid;grid-template-columns:1fr 1fr;gap:32px 24px;}
+.cfield{border-bottom:1.5px solid var(--faint);padding-bottom:8px;}
+.cfield-label{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;}
+.cover-footer{font-size:11px;color:var(--muted);letter-spacing:.05em; font-weight: 500; text-transform: uppercase;}
+
+/* PAGE HEADER */
+.page-header{
+  padding:30px 46px 0;
+  display:flex;align-items:flex-end;justify-content:space-between;
+  border-bottom:1px solid var(--border);padding-bottom:16px;margin-bottom:0;
+}
+.pg-vol{font-size:10px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted); margin-bottom: 4px;}
+.pg-title{font-family:'Playfair Display',serif;font-size:18px;font-weight:400;font-style:italic;color:var(--gold);}
+.pg-num{font-family:'Playfair Display',serif;font-size:24px;color:var(--faint); font-weight: 900; line-height: 1;}
+
+/* CONTENT AREAS */
+.page-content{padding:30px 46px 40px; flex: 1;}
+
+/* PROMPT BOX */
+.prompt{
+  background:var(--linen);border-radius:12px;
+  padding:24px 28px;margin-bottom:24px;
+  border:0.5px solid var(--border);
+  position:relative;
+  box-shadow: 0 4px 12px rgba(44,42,40,.03);
+}
+.prompt-tag{
+  position:absolute;top:-12px;left:24px;
+  font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  padding:4px 12px;border-radius:12px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+}
+.prompt-text{
+  font-family:'Playfair Display',serif;font-size:18px;font-style:italic;
+  color:var(--carbon);line-height:1.6;margin-top:4px;
+}
+
+/* STABILO HIGHLIGHT (Efecto tinta real multiplicada) */
+.hl{display:inline;padding:2px 4px; border-radius: 3px; mix-blend-mode: multiply; background:linear-gradient(transparent 40%, rgba(254,225,53,0.8) 40%, rgba(254,225,53,0.8) 90%, transparent 90%);}
+.hl-pink{display:inline;padding:2px 4px; border-radius: 3px; mix-blend-mode: multiply; background:linear-gradient(transparent 40%, rgba(255,145,175,0.7) 40%, rgba(255,145,175,0.7) 90%, transparent 90%);}
+.hl-green{display:inline;padding:2px 4px; border-radius: 3px; mix-blend-mode: multiply; background:linear-gradient(transparent 40%, rgba(181,228,140,0.8) 40%, rgba(181,228,140,0.8) 90%, transparent 90%);}
+
+/* WRITE ZONES */
+.write-zone{
+  border-bottom:1px solid var(--faint);
+  min-height:40px;margin-bottom:0;
+  position:relative;
+}
+.lines{display:flex;flex-direction:column;gap:0; margin: 16px 0;}
+.line{
+  border-bottom:1px solid rgba(196,184,212,.35);
+  height:40px; /* Ligeramente más alto para escribir a mano cómodamente */
+  position:relative;
+}
+.line::before{
+  content:'';position:absolute;left:0;top:50%;
+  width:4px;height:4px;border-radius:50%;
+  background:rgba(204,156,80,.25);
+}
+.dot-grid{
+  background-image:radial-gradient(circle, rgba(160,156,149,.3) 1px, transparent 1px);
+  background-size:24px 24px;
+  min-height:220px;border-radius:6px;
+  border:0.5px solid var(--border);
+  margin: 20px 0;
+}
+.big-write{
+  border:1.5px solid var(--faint);border-radius:10px;
+  min-height:180px;padding:16px 20px;
+  background:rgba(248,244,238,.5);
+}
+.big-write-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;}
+
+/* CHECKBOX */
+.check-list{list-style:none;padding:0;}
+.check-item{display:flex;align-items:flex-start;gap:14px;padding:10px 0;border-bottom:0.5px dotted var(--border2);}
+.check-item:last-child{border-bottom:none;}
+.check-box{width:18px;height:18px;border:1.5px solid var(--faint);border-radius:4px;flex-shrink:0;margin-top:3px;}
+.check-text{font-size:14px;color:var(--warm);line-height:1.6;}
+
+/* EMOTION WHEEL */
+.emo-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:20px 0;}
+.emo{border:1px solid var(--border2);border-radius:10px;padding:12px 8px;text-align:center;cursor:pointer; background: #fff;}
+.emo-label{font-size:12px;color:var(--carbon);font-weight:500;}
+.emo-dot{width:14px;height:14px;border-radius:50%;margin:0 auto 6px;}
+
+/* QUOTE BOX */
+.qbox{
+  border-left:4px solid var(--gold);padding:18px 24px;
+  background:rgba(248,244,238,.8);border-radius:0 12px 12px 0;
+  border-top:0.5px solid var(--border);border-right:0.5px solid var(--border);border-bottom:0.5px solid var(--border);
+  margin:24px 0;
+}
+.qbox-source{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--rose);margin-bottom:8px;}
+.qbox-text{font-family:'Playfair Display',serif;font-size:16px;font-style:italic;color:var(--carbon);line-height:1.6;}
+
+/* WRECK-IT ZONE */
+.wreck{
+  border:2.5px dashed var(--muted);border-radius:16px;
+  min-height:220px;padding:30px;
+  text-align:center;position:relative;
+  background: repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(44,42,40,0.02) 10px, rgba(44,42,40,0.02) 20px);
+}
+.wreck-label{font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--warm);margin-bottom:12px;}
+.wreck-instruction{font-family:'Caveat',cursive;font-size:20px;color:var(--carbon);}
+
+/* SECTION DIVIDER */
+.divider{display:flex;align-items:center;gap:16px;margin:28px 0;}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--faint);}
+.divider-text{font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);}
+
+/* HAND NOTE */
+.hand{font-family:'Caveat',cursive;font-size:18px;color:var(--rose);line-height:1.4;margin:12px 0;}
+
+/* TWO COL */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:16px 0;}
+
+/* PAGE ACCENT BARS */
+.page-accent-bar{height:6px;display:flex;gap:0;}
+.pab{flex:1;}
+
+/* SMALL GRID WRITE */
+.small-grid{display:grid;grid-template-columns:1fr 1fr;gap:0;}
+.sg-cell{border:1px solid var(--border2);padding:14px 16px;min-height:100px; background: rgba(255,255,255,0.4);}
+.sg-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;}
+
+/* SPARK CARDS (NEW) */
+.spark-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+.spark-card { border: 1px dashed var(--gold); border-radius: 8px; padding: 16px; min-height: 120px; position: relative; background: #fff;}
+.spark-icon { position: absolute; top: -10px; left: 16px; font-size: 16px; background: var(--milk); padding: 0 4px; }
+
+/* FOOTER NOTE */
+.page-footer-note{padding:16px 46px;border-top:1px solid var(--border);font-size:10px;font-weight:600;letter-spacing:0.05em;color:var(--muted);display:flex;justify-content:space-between; text-transform: uppercase;}
+
+
+/* ═════ SOURCE-OF-TRUTH HYDRATION PATCH · WB_COMET-STRIKER_CREATIVE-JOURNEY ═════ */
+.hl-lav{display:inline;padding:2px 4px;border-radius:3px;mix-blend-mode:multiply;background:linear-gradient(transparent 40%, rgba(201,184,232,0.75) 40%, rgba(201,184,232,0.75) 90%, transparent 90%);}
+.truth-kicker{font-size:10px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);margin-bottom:10px;}
+.truth-ledger{border:1px solid var(--border2);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.55);margin:18px 0 24px;}
+.truth-ledger-row{display:grid;grid-template-columns:1.1fr .85fr .85fr .85fr .9fr;min-height:64px;border-bottom:1px solid var(--border);}
+.truth-ledger-row:last-child{border-bottom:none;}
+.truth-ledger-head{background:rgba(44,42,40,.045);min-height:auto;}
+.truth-ledger-cell{padding:10px 12px;border-right:1px solid var(--border);}
+.truth-ledger-cell:last-child{border-right:none;}
+.truth-ledger-label{font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);}
+.truth-chipline{display:flex;flex-wrap:wrap;gap:7px;margin:14px 0;}
+.truth-chip{border:1px solid var(--border2);border-radius:999px;padding:5px 10px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--warm);background:#fff;}
+.hydration-chain{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:22px 0 26px;}
+.hydration-step{border:1px solid var(--border);border-radius:12px;padding:14px 12px;min-height:118px;background:rgba(248,244,238,.65);position:relative;}
+.hydration-step::after{content:'→';position:absolute;right:-10px;top:42%;font-family:'Playfair Display',serif;font-size:20px;color:var(--faint);}
+.hydration-step:last-child::after{display:none;}
+.hydration-num{width:22px;height:22px;border-radius:50%;background:var(--carbon);color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;margin-bottom:8px;}
+.hydration-title{font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--gold);line-height:1.3;margin-bottom:6px;}
+.hydration-copy{font-size:11px;line-height:1.45;color:var(--warm);}
+.commit-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0;}
+.commit-card{border-left:4px solid var(--gold);border-radius:0 10px 10px 0;background:rgba(248,244,238,.75);padding:14px 16px;min-height:120px;border-top:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border);}
+.commit-card:nth-child(2){border-left-color:var(--rose);}
+.commit-card:nth-child(3){border-left-color:var(--sage);}
+.commit-card:nth-child(4){border-left-color:var(--lav);}
+.commit-label{font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;}
+.source-note{font-family:'Caveat',cursive;font-size:19px;line-height:1.35;color:var(--rose);margin:12px 0 18px;}
+.preflight-list{list-style:none;padding:0;margin:14px 0;}
+.preflight-list li{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px dotted var(--border2);font-size:12px;color:var(--warm);}
+.preflight-list li::before{content:'□';color:var(--gold);font-weight:800;}
+
+/* ═════ KOP-FIX001 · RESPONSIVE NAVIGATION BAR PATCH ═════
+   Purpose: prevent nav.no-print overflow on mobile viewports by allowing wrapping,
+   removing the fixed 60px height constraint, and making the brand line responsive.
+   Persistence: injected from generator css_patch, not by editing dist manually.
+*/
+@media screen and (max-width: 720px){
+  nav.no-print,
+  nav{
+    display:flex !important;
+    flex-wrap:wrap !important;
+    height:auto !important;
+    min-height:60px !important;
+    padding:10px 16px !important;
+    gap:8px !important;
+    justify-content:center !important;
+    align-items:center !important;
+    overflow-x:visible !important;
+  }
+  nav.no-print .nav-brand,
+  nav .nav-brand{
+    flex:1 0 100% !important;
+    margin-right:0 !important;
+    margin-bottom:4px !important;
+    text-align:center !important;
+    white-space:normal !important;
+    line-height:1.25 !important;
+  }
+  nav.no-print .nav-pill,
+  nav .nav-pill{
+    flex:0 1 auto !important;
+    font-size:10px !important;
+    line-height:1.2 !important;
+    padding:7px 10px !important;
+    white-space:normal !important;
+    text-align:center !important;
+  }
+  nav.no-print .print-btn,
+  nav .print-btn{
+    flex:0 1 auto !important;
+    padding:8px 14px !important;
+    white-space:normal !important;
+  }
+  .journal-wrap{padding-top:20px !important;}
+}
+@media screen and (max-width:420px){
+  nav.no-print,
+  nav{padding:9px 10px !important;gap:6px !important;}
+  nav.no-print .nav-brand,
+  nav .nav-brand{font-size:15px !important;}
+  nav.no-print .nav-pill,
+  nav .nav-pill{font-size:9.5px !important;padding:6px 8px !important;}
+  nav.no-print .print-btn,
+  nav .print-btn{font-size:10px !important;padding:7px 12px !important;}
+}
+
+@media print{
+  .page{width:100% !important;min-height:10in !important;height:10in !important;page-break-after:always;break-after:page;}
+  .hydration-chain{gap:6px;}
+  .hydration-step{padding:10px 8px;min-height:104px;}
+  .truth-ledger-row{min-height:58px;}
+}
+
+
+
+/* ═════ KOP-FIX002 · PRINT MODES + DIGITAL FILL PATCH ═════ */
+.print-mode-panel{
+  position:sticky;top:60px;z-index:90;
+  background:rgba(253,252,250,.92);backdrop-filter:blur(18px);
+  border-bottom:0.5px solid var(--border2);
+  padding:8px 18px;display:flex;align-items:center;gap:8px;justify-content:center;flex-wrap:wrap;
+}
+.print-mode-label{font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-right:4px;}
+.mode-btn{border:0.5px solid var(--border2);background:#fff;color:var(--warm);border-radius:999px;padding:6px 11px;font-family:'Raleway',sans-serif;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;transition:all .2s;}
+.mode-btn:hover,.mode-btn.is-active{background:var(--carbon);color:#fff;border-color:var(--carbon);}
+.fill-tools{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+body.digital-fill-enabled .line,
+body.digital-fill-enabled .big-write,
+body.digital-fill-enabled .dot-grid,
+body.digital-fill-enabled .wreck,
+body.digital-fill-enabled .sg-cell,
+body.digital-fill-enabled .spark-card,
+body.digital-fill-enabled .truth-ledger-cell,
+body.digital-fill-enabled .commit-card{
+  cursor:text;outline:1px dashed rgba(204,156,80,.30);outline-offset:2px;
+}
+body.digital-fill-enabled .line:focus,
+body.digital-fill-enabled .big-write:focus,
+body.digital-fill-enabled .dot-grid:focus,
+body.digital-fill-enabled .wreck:focus,
+body.digital-fill-enabled .sg-cell:focus,
+body.digital-fill-enabled .spark-card:focus,
+body.digital-fill-enabled .truth-ledger-cell:focus,
+body.digital-fill-enabled .commit-card:focus{
+  outline:2px solid rgba(204,156,80,.58);background:rgba(254,225,53,.06);
+}
+.editable-placeholder{color:rgba(99,95,90,.42);font-family:'Caveat',cursive;font-size:16px;}
+.print-guides-note{display:none;}
+@media screen and (max-width:720px){.print-mode-panel{top:auto;position:relative;padding:8px 10px}.mode-btn{font-size:9.5px;padding:6px 8px}}
+
+/* Browser print hints. For exact 2-up/4-up, use generated PDFs in print/. */
+body[data-print-mode="letter-full"] .page{transform:none;}
+body[data-print-mode="digital-fill"] .page{transform:none;}
+@media print{
+  .print-mode-panel{display:none!important;}
+  body{background:#fff!important;}
+  body[data-print-mode="letter-full"] .page,
+  body[data-print-mode="digital-fill"] .page{
+    width:8.5in!important;height:11in!important;min-height:11in!important;margin:0!important;border-radius:0!important;box-shadow:none!important;overflow:hidden!important;
+  }
+  body[data-print-mode="draft-compact"] .page{
+    width:8.5in!important;height:auto!important;min-height:10.2in!important;margin:0!important;border-radius:0!important;box-shadow:none!important;overflow:visible!important;
+  }
+  body[data-print-mode="half-letter"] .page,
+  body[data-print-mode="quarter-letter"] .page{
+    width:8.5in!important;height:11in!important;min-height:11in!important;margin:0!important;border-radius:0!important;box-shadow:none!important;overflow:hidden!important;
+  }
+}
+
+</style>
+</head>
+<body>
+
+<nav class="no-print">
+  <div class="nav-brand">WB Comet Striker · Creative Journey</div>
+  <a href="#portada" class="nav-pill">Portada</a>
+  <a href="#pg-source-pause" class="nav-pill">Pausa 0</a>
+  <a href="#pg-bloqueo" class="nav-pill">I. Bloqueo</a>
+  <a href="#pg-identidad" class="nav-pill">II. Identidad</a>
+  <a href="#pg-expansion" class="nav-pill">III. Expansión</a>
+  <a href="#pg-reflexion" class="nav-pill">IV. Reflexión</a>
+  <a href="#pg-wreck" class="nav-pill">V. Wreck it</a>
+  <a href="#pg-emocionario" class="nav-pill">VI. Emociones</a>
+  <a href="#pg-rastro" class="nav-pill">VII. El Rastro</a>
+  <a href="#pg-integracion" class="nav-pill">VIII. Integración</a>
+  <div style="flex: 1;"></div>
+  <button class="print-btn" onclick="window.print()">Print / Render Letter</button>
+</nav>
+
+<div class="print-mode-panel no-print" role="toolbar" aria-label="Print and digital fill modes">
+  <span class="print-mode-label">Modo</span>
+  <button class="mode-btn is-active" data-mode="letter-full" onclick="WBPrint.setMode('letter-full')">Letter full</button>
+  <button class="mode-btn" data-mode="half-letter" onclick="WBPrint.setMode('half-letter')">Half-letter / 2-up</button>
+  <button class="mode-btn" data-mode="quarter-letter" onclick="WBPrint.setMode('quarter-letter')">Avery 8387 / 4-up</button>
+  <button class="mode-btn" data-mode="digital-fill" onclick="WBPrint.toggleDigitalFill()">Digital fill</button>
+  <button class="mode-btn" onclick="WBPrint.save()">Guardar</button>
+  <button class="mode-btn" onclick="WBPrint.clear()">Limpiar</button>
+  <button class="mode-btn" onclick="window.print()">Imprimir</button>
+</div>
+
+<div class="journal-wrap">
+
+<!-- ══════════ PORTADA ══════════ -->
+<div class="page cover" id="portada">
+  <div class="cover-top">
+    <div class="cover-hex ch1"></div>
+    <div class="cover-hex ch2"></div>
+    <div class="cover-eyebrow">Workbook Generator Bundle · BOS · LUMINA · AEQUITAS · Source-of-Truth</div>
+    <div class="cover-title">Comet<br>Striker</div>
+    <div class="cover-subtitle">Vol. I — Creative Journey / Source Truth Edition</div>
+    <div class="cover-strip">
+      <div class="stabilo-strip" style="background:#FEE135;"></div>
+      <div class="stabilo-strip" style="background:#FF91AF;"></div>
+      <div class="stabilo-strip" style="background:#B5E48C;"></div>
+      <div class="stabilo-strip" style="background:#FFBB5C;"></div>
+      <div class="stabilo-strip" style="background:#A8D8EA;"></div>
+      <div class="stabilo-strip" style="background:#C9B8E8;"></div>
+    </div>
+  </div>
+  <div class="cover-body">
+    <div class="cover-quote">
+      "Coleccionar instantes específicos no es sinónimo de hacer buen uso del tiempo.<br>
+      La clave es anidar experiencias que nos sirvan como referencia para creer, pensar, sentir y hacer."
+      <div style="font-size:13px;font-weight:600;color:var(--muted);margin-top:12px;font-style:normal;font-family:'Raleway',sans-serif;letter-spacing:.05em;">— R. B., Tiempo al tiempo</div>
+    </div>
+    <div class="cover-fields">
+      <div class="cfield">
+        <div class="cfield-label">Nombre / Portadora de este journal</div>
+        <div class="line" style="margin-top:8px;"></div>
+      </div>
+      <div class="cfield">
+        <div class="cfield-label">Fecha de inicio</div>
+        <div class="line" style="margin-top:8px;"></div>
+      </div>
+      <div class="cfield">
+        <div class="cfield-label" style="grid-column: span 2;">Intención declarada para este volumen</div>
+        <div class="line" style="margin-top:8px;"></div>
+        <div class="line"></div>
+      </div>
+      <div class="cfield">
+        <div class="cfield-label">Una palabra que describe este momento</div>
+        <div class="line" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="cover-footer" style="margin-top:20px;">WB_COMET-STRIKER_CREATIVE-JOURNEY · generator bundle · final print commit · 2026</div>
+  </div>
+</div>
+
+<!-- ══════════ PG 01 · INSTRUCCIONES ══════════ -->
+<div class="page" id="pg-instrucciones">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#FEE135;"></div>
+    <div class="pab" style="background:#FF91AF;"></div>
+    <div class="pab" style="background:#B5E48C;"></div>
+    <div class="pab" style="background:#FFBB5C;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Comet Striker · Vol. I</div>
+      <div class="pg-title">Cómo usar este journal</div>
+    </div>
+    <div class="pg-num">00</div>
+  </div>
+  <div class="page-content">
+    <div class="hand" style="font-size:24px;margin-bottom:16px;">"No hay manera incorrecta de usar esto."</div>
+    <p style="font-size:15px;color:var(--warm);line-height:1.75;margin-bottom:24px;">Este journal no tiene reglas de escritura perfecta, caligrafía prolija ni respuestas correctas. Es un espacio de <span class="hl">contención a pluma</span> — lo que significa que lo que escribas aquí no sale de aquí si tú no decides que salga.</p>
+
+    <div class="qbox">
+      <div class="qbox-source">Principio rector · BOS-LUMINA</div>
+      <div class="qbox-text">Hacerse consciente de un bloqueo no es el momento del juicio — es el momento de la observación. Lo que se nombra, se puede transformar. Lo que se ignora, se repite.</div>
+    </div>
+
+    <div style="margin:32px 0;">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:16px;">Elementos que encontrarás en cada sección</div>
+      <ul class="check-list">
+        <li class="check-item">
+          <div class="check-box" style="background:rgba(254,225,53,.4);border-color:#FEE135;"></div>
+          <div class="check-text"><strong style="font-weight:700; color:var(--carbon);">Prompts de apertura</strong> — preguntas detonantes en tipografía itálica. No tienes que responderlas todas. Elige la que más incomodidad o curiosidad te genere.</div>
+        </li>
+        <li class="check-item">
+          <div class="check-box" style="background:rgba(255,145,175,.3);border-color:#FF91AF;"></div>
+          <div class="check-text"><strong style="font-weight:700; color:var(--carbon);">Zonas de escritura libre</strong> — líneas o cuadrícula de puntos. Sin formato requerido. Letra cursiva, imprenta, flecha, diagrama — lo que nazca de tu pluma.</div>
+        </li>
+        <li class="check-item">
+          <div class="check-box" style="background:rgba(181,228,140,.4);border-color:#B5E48C;"></div>
+          <div class="check-text"><strong style="font-weight:700; color:var(--carbon);">Zonas Wreck-it</strong> — espacios explícitamente para romper, tachar, garabatear, pegar, rasgar. La página no es sagrada. Úsala como herramienta de descarga.</div>
+        </li>
+        <li class="check-item">
+          <div class="check-box" style="background:rgba(201,184,232,.4);border-color:#C9B8E8;"></div>
+          <div class="check-text"><strong style="font-weight:700; color:var(--carbon);">Citas de anclaje</strong> — frases para salir de la página con algo concreto. No están ahí para consolarte, sino para orientarte.</div>
+        </li>
+        <li class="check-item">
+          <div class="check-box" style="background:rgba(168,216,234,.4);border-color:#A8D8EA;"></div>
+          <div class="check-text"><strong style="font-weight:700; color:var(--carbon);">Destacadores Stabilo</strong> — cuando leas algo que te parezca importante en tus propias palabras, márcalo. Saca tu Stabilo Boss físico y subráyalo.</div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="hand" style="color:var(--muted);font-size:16px; margin-top: 24px;">→ Este formato está diseñado para imprimirse en tamaño carta (US Letter). Imprímelo, tócalo, mánchalo.</div>
+  </div>
+  <div class="page-footer-note">
+    <span>Comet Striker · Instrucciones de uso</span>
+    <span>Vol. I · 2026</span>
+  </div>
+</div>
+
+
+
+<!-- ══════════ SOURCE OF TRUTH · HYDRATION PAUSE ══════════ -->
+<div class="page" id="pg-source-pause">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+    <div class="pab" style="background:#C9B8E8;height:8px;"></div>
+    <div class="pab" style="background:#CC9C50;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Pausa 0 · Handoff / Source of Truth</div>
+      <div class="pg-title">Antes de interpretar, ordeno la evidencia</div>
+    </div>
+    <div class="pg-num">P00</div>
+  </div>
+  <div class="page-content">
+    <div class="truth-kicker">Source-of-truth covenant</div>
+    <div class="prompt" style="border-color:rgba(204,156,80,.45);background:rgba(204,156,80,.07);">
+      <span class="prompt-tag" style="background:#CC9C50;color:#fff;">Pausa de integración</span>
+      <div class="prompt-text">"No voy a corregir el origen antes de escucharlo. No voy a pulir la evidencia antes de preservarla. Primero registro; después discierno."</div>
+    </div>
+
+    <p style="font-size:15px;color:var(--warm);line-height:1.75;margin-bottom:18px;">Esta pausa convierte el raw log en un inventario útil: conserva el fragmento crudo, lo ubica por fuente y contexto, lo clasifica sin juicio y lo prepara para integración. El objetivo no es producir una narrativa perfecta, sino una base trazable para que el journey propio pueda avanzar con verdad, gracia, responsabilidad y forma.</p>
+
+    <div class="qbox">
+      <div class="qbox-source">Regla editorial · commit-ready</div>
+      <div class="qbox-text">El raw log es evidencia primaria. La interpretación es capa secundaria. La integración es commit parcial. La impresión final sólo ocurre después de distinguir hecho, emoción, narrativa, pregunta y decisión.</div>
+    </div>
+
+    <div class="hydration-chain">
+      <div class="hydration-step"><div class="hydration-num">1</div><div class="hydration-title">Preservar</div><div class="hydration-copy">Copiar el fragmento crudo sin embellecerlo ni corregirlo.</div></div>
+      <div class="hydration-step"><div class="hydration-num">2</div><div class="hydration-title">Clasificar</div><div class="hydration-copy">Asignar fuente, fecha, eje de vida y estado de evidencia.</div></div>
+      <div class="hydration-step"><div class="hydration-num">3</div><div class="hydration-title">Pull / Merge</div><div class="hydration-copy">Agrupar repeticiones, tensiones, deseos y señales persistentes.</div></div>
+      <div class="hydration-step"><div class="hydration-num">4</div><div class="hydration-title">Discernir</div><div class="hydration-copy">Separar hecho, emoción, narrativa, verdad, gracia y acción.</div></div>
+      <div class="hydration-step"><div class="hydration-num">5</div><div class="hydration-title">Commit</div><div class="hydration-copy">Declarar lo que se conserva, se suelta, queda en cuarentena o pasa a siguiente paso.</div></div>
+    </div>
+
+    <div class="source-note">→ Hidratar no es inventar. Hidratar es permitir que lo disperso recupere contexto, cuerpo, dirección y respiración.</div>
+  </div>
+  <div class="page-footer-note"><span>Source-of-truth pause · raw log before interpretation</span><span>P00</span></div>
+</div>
+
+<!-- ══════════ P01 · RAW LOG LEDGER ══════════ -->
+<div class="page" id="pg-raw-log-ledger">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Pausa 0.1 · Inventory Ledger</div>
+      <div class="pg-title">Raw log como evidencia primaria</div>
+    </div>
+    <div class="pg-num">P01</div>
+  </div>
+  <div class="page-content">
+    <div class="prompt" style="border-color:rgba(168,216,234,.65);background:rgba(168,216,234,.08);">
+      <span class="prompt-tag" style="background:#A8D8EA;color:#2B5A6A;">Inventario</span>
+      <div class="prompt-text">"¿Qué fue dicho, escrito, sentido o registrado antes de que yo intentara explicarlo?"</div>
+    </div>
+
+    <div class="truth-chipline">
+      <span class="truth-chip">Hecho documentado</span>
+      <span class="truth-chip">Emoción / sensación</span>
+      <span class="truth-chip">Interpretación</span>
+      <span class="truth-chip">Pregunta abierta</span>
+      <span class="truth-chip">Decisión</span>
+      <span class="truth-chip">Cuarentena</span>
+    </div>
+
+    <div class="truth-ledger">
+      <div class="truth-ledger-row truth-ledger-head">
+        <div class="truth-ledger-cell"><div class="truth-ledger-label">Fragmento crudo</div></div>
+        <div class="truth-ledger-cell"><div class="truth-ledger-label">Fecha / contexto</div></div>
+        <div class="truth-ledger-cell"><div class="truth-ledger-label">Fuente</div></div>
+        <div class="truth-ledger-cell"><div class="truth-ledger-label">Eje</div></div>
+        <div class="truth-ledger-cell"><div class="truth-ledger-label">Estado</div></div>
+      </div>
+      <div class="truth-ledger-row"><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div></div>
+      <div class="truth-ledger-row"><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div></div>
+      <div class="truth-ledger-row"><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div></div>
+      <div class="truth-ledger-row"><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div></div>
+      <div class="truth-ledger-row"><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div></div>
+    </div>
+
+    <div class="hand" style="font-size:18px;color:var(--muted);">Tip: si dudas dónde poner algo, no lo fuerces. Márcalo como cuarentena y déjalo respirar.</div>
+  </div>
+  <div class="page-footer-note"><span>Inventory ledger · preserve first, interpret second</span><span>P01</span></div>
+</div>
+
+<!-- ══════════ P02 · PULL MERGE COMPILE ══════════ -->
+<div class="page" id="pg-pull-merge-compile">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#C9B8E8;height:8px;"></div>
+    <div class="pab" style="background:#FF91AF;height:8px;"></div>
+    <div class="pab" style="background:#CC9C50;height:8px;"></div>
+    <div class="pab" style="background:#B5E48C;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Pausa 0.2 · Pull / Merge / Compile</div>
+      <div class="pg-title">Del fragmento al array integrado</div>
+    </div>
+    <div class="pg-num">P02</div>
+  </div>
+  <div class="page-content">
+    <div class="prompt" style="border-color:rgba(201,184,232,.55);background:rgba(201,184,232,.08);">
+      <span class="prompt-tag" style="background:#C9B8E8;color:#5A3A7A;">Merge map</span>
+      <div class="prompt-text">"¿Qué patrones aparecen cuando dejo de leer fragmentos sueltos y empiezo a mirar el conjunto?"</div>
+    </div>
+
+    <div class="small-grid" style="margin-bottom:22px;">
+      <div class="sg-cell"><div class="sg-label">1 · Lo recuperado</div><div class="lines"><div class="line"></div><div class="line"></div><div class="line"></div></div></div>
+      <div class="sg-cell"><div class="sg-label">2 · Lo que se repite</div><div class="lines"><div class="line"></div><div class="line"></div><div class="line"></div></div></div>
+      <div class="sg-cell"><div class="sg-label">3 · Lo que se integra</div><div class="lines"><div class="line"></div><div class="line"></div><div class="line"></div></div></div>
+      <div class="sg-cell"><div class="sg-label">4 · Lo que queda en cuarentena</div><div class="lines"><div class="line"></div><div class="line"></div><div class="line"></div></div></div>
+    </div>
+
+    <div class="divider"><div class="divider-text">Array integrado mínimo</div></div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Cada línea debe conservar esta estructura: tema + evidencia + significado provisional + siguiente paso.</p>
+    <div class="lines">
+      <div class="line"></div><div class="line"></div><div class="line"></div><div class="line"></div><div class="line"></div><div class="line"></div>
+    </div>
+
+    <div class="qbox" style="border-left-color:var(--lav);">
+      <div class="qbox-source">Criterio de merge</div>
+      <div class="qbox-text">No todo lo repetido es verdad, pero todo lo repetido merece atención. No todo lo intenso es central, pero todo lo intenso pide cuidado.</div>
+    </div>
+  </div>
+  <div class="page-footer-note"><span>Pull / Merge / Compile · integration without forced coherence</span><span>P02</span></div>
+</div>
+
+<!-- ══════════ P03 · REFLECTIVE NOTES ARRAY ══════════ -->
+<div class="page" id="pg-reflective-notes-array">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#B5E48C;height:8px;"></div>
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+    <div class="pab" style="background:#FFBB5C;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Pausa 0.3 · Reflective Notes</div>
+      <div class="pg-title">Discernimiento: verdad, gracia y acción</div>
+    </div>
+    <div class="pg-num">P03</div>
+  </div>
+  <div class="page-content">
+    <div class="prompt" style="border-color:rgba(181,228,140,.65);background:rgba(181,228,140,.08);">
+      <span class="prompt-tag" style="background:#B5E48C;color:#3A6A2A;">Notas reflexivas</span>
+      <div class="prompt-text">"¿Qué significado estoy asignando, y qué significado necesito rendir, revisar o redimir?"</div>
+    </div>
+
+    <div class="truth-ledger">
+      <div class="truth-ledger-row truth-ledger-head" style="grid-template-columns:1fr 1fr 1fr 1fr;">
+        <div class="truth-ledger-cell"><div class="truth-ledger-label">Hecho / evidencia</div></div>
+        <div class="truth-ledger-cell"><div class="truth-ledger-label">Narrativa / emoción</div></div>
+        <div class="truth-ledger-cell"><div class="truth-ledger-label">Verdad / gracia</div></div>
+        <div class="truth-ledger-cell"><div class="truth-ledger-label">Acción pequeña</div></div>
+      </div>
+      <div class="truth-ledger-row" style="grid-template-columns:1fr 1fr 1fr 1fr;"><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div></div>
+      <div class="truth-ledger-row" style="grid-template-columns:1fr 1fr 1fr 1fr;"><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div></div>
+      <div class="truth-ledger-row" style="grid-template-columns:1fr 1fr 1fr 1fr;"><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div><div class="truth-ledger-cell"><div class="line"></div><div class="line"></div></div></div>
+    </div>
+
+    <div class="divider"><div class="divider-text">Preguntas de transición</div></div>
+    <ul class="preflight-list">
+      <li>¿Qué parte de esta historia necesita validación, no solución?</li>
+      <li>¿Qué parte necesita límites, no más explicación?</li>
+      <li>¿Qué parte necesita arrepentimiento, reparación o reconciliación?</li>
+      <li>¿Qué parte necesita descanso antes de exigir productividad?</li>
+      <li>¿Qué parte revela propósito, aunque todavía no revele forma?</li>
+    </ul>
+  </div>
+  <div class="page-footer-note"><span>Discernment notes · fact, narrative, grace, action</span><span>P03</span></div>
+</div>
+
+<!-- ══════════ P04 · COMMIT GATE ══════════ -->
+<div class="page" id="pg-commit-gate">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#CC9C50;height:8px;"></div>
+    <div class="pab" style="background:#2C2A28;height:8px;"></div>
+    <div class="pab" style="background:#C48B7A;height:8px;"></div>
+    <div class="pab" style="background:#9AAF9A;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Pausa 0.4 · Commit Gate</div>
+      <div class="pg-title">Cierre de transición / deployment personal</div>
+    </div>
+    <div class="pg-num">P04</div>
+  </div>
+  <div class="page-content">
+    <div class="prompt" style="border-color:rgba(44,42,40,.25);background:rgba(44,42,40,.04);">
+      <span class="prompt-tag" style="background:#2C2A28;color:#fff;">Final commit</span>
+      <div class="prompt-text">"Después de ordenar la evidencia, ¿qué ya no puedo seguir ignorando?"</div>
+    </div>
+
+    <div class="commit-grid">
+      <div class="commit-card"><div class="commit-label">Conservar</div><div class="lines"><div class="line"></div><div class="line"></div><div class="line"></div></div></div>
+      <div class="commit-card"><div class="commit-label">Soltar</div><div class="lines"><div class="line"></div><div class="line"></div><div class="line"></div></div></div>
+      <div class="commit-card"><div class="commit-label">Investigar / cuarentena</div><div class="lines"><div class="line"></div><div class="line"></div><div class="line"></div></div></div>
+      <div class="commit-card"><div class="commit-label">Sembrar / siguiente paso</div><div class="lines"><div class="line"></div><div class="line"></div><div class="line"></div></div></div>
+    </div>
+
+    <div class="qbox" style="border-left-color:var(--carbon);">
+      <div class="qbox-source">Declaración integrada</div>
+      <div class="qbox-text">Mi historia no necesita ser reducida a una falla, una pausa, una expectativa ajena o una narrativa incompleta. Puedo ordenar evidencia, recibir gracia, nombrar verdad y caminar el siguiente paso con responsabilidad.</div>
+    </div>
+
+    <div class="divider"><div class="divider-text">Print / Deployment Preflight</div></div>
+    <ul class="preflight-list">
+      <li>El raw log quedó preservado sin edición destructiva.</li>
+      <li>Las interpretaciones quedaron separadas de los hechos.</li>
+      <li>Los elementos no resueltos fueron enviados a cuarentena, no forzados a cierre.</li>
+      <li>El siguiente paso es fiel, pequeño, observable y realizable.</li>
+      <li>El documento puede imprimirse como snapshot de transición, no como sentencia final.</li>
+    </ul>
+  </div>
+  <div class="page-footer-note"><span>Commit gate · doc-rendered final print</span><span>P04</span></div>
+</div>
+
+<!-- ══════════ PG 02 · BLOQUEO ══════════ -->
+<div class="page" id="pg-bloqueo">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+    <div class="pab" style="background:#FFBB5C;height:8px;"></div>
+    <div class="pab" style="background:#FFBB5C;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Sección I</div>
+      <div class="pg-title">El bloqueo tiene nombre</div>
+    </div>
+    <div class="pg-num">01</div>
+  </div>
+  <div class="page-content">
+    <div class="prompt">
+      <span class="prompt-tag" style="background:#FEE135;color:#7A6A10;">Detonante</span>
+      <div class="prompt-text">"¿Qué es exactamente lo que pasa cuando digo que no sé por dónde empezar? ¿Es que de verdad no sé, o es que sé perfectamente y eso me asusta?"</div>
+    </div>
+
+    <div class="lines">
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+    </div>
+
+    <div class="divider" style="margin:30px 0 20px;">
+      <div class="divider-text">Nombra el patrón</div>
+    </div>
+
+    <div class="two-col">
+      <div>
+        <div class="big-write-label" style="color:var(--rose);">Cuando me bloqueo, en realidad estoy intentando evitar...</div>
+        <div class="big-write" style="min-height:140px;border-color:rgba(196,139,122,.3);"></div>
+      </div>
+      <div>
+        <div class="big-write-label" style="color:var(--gold);">Lo que el bloqueo está protegiendo secretamente es...</div>
+        <div class="big-write" style="min-height:140px;border-color:rgba(204,156,80,.3);"></div>
+      </div>
+    </div>
+
+    <div class="prompt" style="margin-top:32px;border-color:rgba(255,187,92,.4);background:rgba(255,187,92,.06);">
+      <span class="prompt-tag" style="background:#FFBB5C;color:#7A4A10;">Profundiza</span>
+      <div class="prompt-text">"Eliú no le dijo a Job 'ya supéralo'. Le formuló las preguntas que Job no se había atrevido a hacerse solo. ¿Cuál es la pregunta que estás evitando formularte a ti misma?"</div>
+    </div>
+
+    <div class="lines">
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+      <div class="line"></div><div class="line"></div>
+    </div>
+  </div>
+  <div class="page-footer-note">
+    <span>El bloqueo no es el enemigo · es el mensajero</span>
+    <span>01</span>
+  </div>
+</div>
+
+<!-- ══════════ PG 03 · PERFECCIONISMO ══════════ -->
+<div class="page" id="pg-perfeccionismo">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#FF91AF;height:8px;"></div>
+    <div class="pab" style="background:#FF91AF;height:8px;"></div>
+    <div class="pab" style="background:#C9B8E8;height:8px;"></div>
+    <div class="pab" style="background:#C9B8E8;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Sección I · continuación</div>
+      <div class="pg-title">El perfeccionismo enmascarado</div>
+    </div>
+    <div class="pg-num">02</div>
+  </div>
+  <div class="page-content">
+    <div class="hand" style="font-size:24px;color:var(--rose);margin-bottom:16px;">"PROCRASTINACIÓN : INDECISIÓN :: SABOTAJE : PERFECCIONISMO"</div>
+    <p style="font-size:15px;color:var(--warm);line-height:1.7;margin-bottom:24px;">El perfeccionismo no siempre se ve como parálisis. A veces se disfraza de <span class="hl-pink">productividad creativa</span>, de entusiasmo genuino, de "primero necesito investigar más" o "solo voy a afinar este detalle". Nombrar el disfraz no invalida la creatividad — la libera de estar al servicio del miedo.</p>
+
+    <div class="prompt" style="border-color:rgba(255,145,175,.4);background:rgba(255,145,175,.06);">
+      <span class="prompt-tag" style="background:#FF91AF;color:#7A2A40;">Inventario</span>
+      <div class="prompt-text">"¿Cuándo fue la última vez que terminé algo sin considerarlo todavía incompleto o imperfecto? ¿Cómo se sintió eso en el cuerpo?"</div>
+    </div>
+
+    <div class="lines">
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+      <div class="line"></div><div class="line"></div>
+    </div>
+
+    <div class="divider" style="margin-top: 32px;"><div class="divider-text">Mapa del perfeccionismo</div></div>
+
+    <div class="small-grid" style="margin-bottom:24px;">
+      <div class="sg-cell" style="border-color:rgba(255,145,175,.4);">
+        <div class="sg-label" style="color:#D64068;">En mi práctica clínica se ve como...</div>
+      </div>
+      <div class="sg-cell" style="border-color:rgba(255,145,175,.4);">
+        <div class="sg-label" style="color:#D64068;">En mi marca personal se ve como...</div>
+      </div>
+      <div class="sg-cell" style="border-color:rgba(201,184,232,.5);">
+        <div class="sg-label" style="color:#8A6AAA;">En mis relaciones se ve como...</div>
+      </div>
+      <div class="sg-cell" style="border-color:rgba(201,184,232,.5);">
+        <div class="sg-label" style="color:#8A6AAA;">En mi cuerpo se siente como...</div>
+      </div>
+    </div>
+
+    <div class="qbox" style="border-left-color:var(--rose);">
+      <div class="qbox-source">Ancla · Donald Winnicott</div>
+      <div class="qbox-text">"El paciente que por primera vez organiza visualmente su caos interno y lo ve sostenido en un papel experimenta que la desorganización puede ser contenida."<br><br><span style="font-family:'Raleway',sans-serif;font-style:normal;font-size:13px;color:var(--muted);font-weight: 600;">Tú también eres paciente de este proceso.</span></div>
+    </div>
+  </div>
+  <div class="page-footer-note">
+    <span>Nombrar no es rendirse · es ganar claridad</span>
+    <span>02</span>
+  </div>
+</div>
+
+<!-- ══════════ PG 04 · IDENTIDAD ══════════ -->
+<div class="page" id="pg-identidad">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#B5E48C;height:8px;"></div>
+    <div class="pab" style="background:#B5E48C;height:8px;"></div>
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Sección II</div>
+      <div class="pg-title">Quién soy cuando soy yo</div>
+    </div>
+    <div class="pg-num">03</div>
+  </div>
+  <div class="page-content">
+    <div class="prompt" style="border-color:rgba(181,228,140,.6);background:rgba(181,228,140,.08);">
+      <span class="prompt-tag" style="background:#B5E48C;color:#3A6A2A;">Identidad real</span>
+      <div class="prompt-text">"Si absolutamente nadie me estuviera evaluando — ni el sistema académico, ni el mercado de la salud mental, ni Iridiscenter, ni mis pacientes, ni yo misma — ¿qué estaría construyendo ahora mismo?"</div>
+    </div>
+
+    <div class="lines">
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+      <div class="line"></div><div class="line"></div>
+    </div>
+
+    <div class="divider" style="margin-top: 32px;"><div class="divider-text">Los 3 pilares en mi experiencia vivida</div></div>
+
+    <div style="display:flex;flex-direction:column;gap:16px;margin-bottom:24px;">
+      <div style="border-left:4px solid var(--gold);padding:16px 20px;background:rgba(248,244,238,.8);border-radius:0 8px 8px 0;">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:8px;">Restaurar · en mi vida ahora mismo significa...</div>
+        <div class="line"></div><div class="line"></div><div class="line"></div>
+      </div>
+      <div style="border-left:4px solid var(--rose);padding:16px 20px;background:rgba(248,244,238,.8);border-radius:0 8px 8px 0;">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--rose);margin-bottom:8px;">Reconciliar · lo que todavía no he reconciliado es...</div>
+        <div class="line"></div><div class="line"></div><div class="line"></div>
+      </div>
+      <div style="border-left:4px solid var(--sage);padding:16px 20px;background:rgba(248,244,238,.8);border-radius:0 8px 8px 0;">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--sage);margin-bottom:8px;">Transformar · lo que ya está transformándose aunque no lo esté nombrando...</div>
+        <div class="line"></div><div class="line"></div><div class="line"></div>
+      </div>
+    </div>
+
+    <div class="hand" style="color:var(--muted);font-size:16px; text-align: right;">→ Los tres pilares que ofreces a tus pacientes te pertenecen a ti primero.</div>
+  </div>
+  <div class="page-footer-note">
+    <span>La identidad no se construye · se descubre</span>
+    <span>03</span>
+  </div>
+</div>
+
+<!-- ══════════ PG 05 · EXPANSIÓN ══════════ -->
+<div class="page" id="pg-expansion">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+    <div class="pab" style="background:#B5E48C;height:8px;"></div>
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+    <div class="pab" style="background:#C9B8E8;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Sección III</div>
+      <div class="pg-title">El derecho a expandirme</div>
+    </div>
+    <div class="pg-num">04</div>
+  </div>
+  <div class="page-content">
+    <div class="hand" style="font-size:22px;color:var(--gold);margin-bottom:16px;">"SÍ SIENTO QUE DEBERÍA PODERME EXPANDIR."</div>
+    <p style="font-size:15px;color:var(--warm);line-height:1.75;margin-bottom:24px;">Esa frase — que alguna vez escribiste en mayúsculas — no es un capricho de ego ni dispersión. Es un requerimiento orgánico del sistema que eres. La contención que necesitas no es <span class="hl-green">comprimirte para caber en la caja</span> — es encontrar la arquitectura robusta que le dé forma a la expansión sin que te desintegres en cada dirección al mismo tiempo.</p>
+
+    <div class="prompt" style="border-color:rgba(254,225,53,.4);background:rgba(254,225,53,.06);">
+      <span class="prompt-tag" style="background:#FEE135;color:#7A6A10;">La visión real</span>
+      <div class="prompt-text">"Si en 3 años la marca y la práctica de RB fueran exactamente lo que yo quiero que sean — no lo que el deber ser dicta, sino lo que de verdad QUIERO — ¿cómo se vería un martes ordinario de trabajo?"</div>
+    </div>
+
+    <div class="dot-grid" style="margin:20px 0;min-height:240px;"></div>
+
+    <div class="divider"><div class="divider-text">Lo que me da energía vs. lo que me drena</div></div>
+
+    <div class="two-col">
+      <div>
+        <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sage);margin-bottom:12px;text-align:center;">Flujo / Me da energía</div>
+        <div class="lines">
+          <div class="line" style="border-color:rgba(154,175,154,.4);"></div>
+          <div class="line" style="border-color:rgba(154,175,154,.4);"></div>
+          <div class="line" style="border-color:rgba(154,175,154,.4);"></div>
+          <div class="line" style="border-color:rgba(154,175,154,.4);"></div>
+          <div class="line" style="border-color:rgba(154,175,154,.4);"></div>
+          <div class="line" style="border-color:rgba(154,175,154,.4);"></div>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--rose);margin-bottom:12px;text-align:center;">Fricción / Me la quita</div>
+        <div class="lines">
+          <div class="line" style="border-color:rgba(196,139,122,.4);"></div>
+          <div class="line" style="border-color:rgba(196,139,122,.4);"></div>
+          <div class="line" style="border-color:rgba(196,139,122,.4);"></div>
+          <div class="line" style="border-color:rgba(196,139,122,.4);"></div>
+          <div class="line" style="border-color:rgba(196,139,122,.4);"></div>
+          <div class="line" style="border-color:rgba(196,139,122,.4);"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="page-footer-note">
+    <span>Expandirse con raíces · no a pesar de ellas</span>
+    <span>04</span>
+  </div>
+</div>
+
+<!-- ══════════ PG 06 · REFLEXIÓN ESPIRITUAL ══════════ -->
+<div class="page" id="pg-reflexion">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#C9B8E8;height:8px;"></div>
+    <div class="pab" style="background:#C9B8E8;height:8px;"></div>
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+    <div class="pab" style="background:#B5E48C;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Sección IV</div>
+      <div class="pg-title">Job, Eliú y yo</div>
+    </div>
+    <div class="pg-num">05</div>
+  </div>
+  <div class="page-content">
+    <div class="qbox" style="border-left-color:var(--lav);">
+      <div class="qbox-source">Referencia · Job 33 · Eliú</div>
+      <div class="qbox-text">"Habla, pues, y te responderé; o yo hablaré, y respóndeme tú."<br><br>Eliú no juzgó a Job ni lo consoló con lugares comunes terapéuticos. Le formuló las preguntas exactas que abrían el camino al encuentro genuino con la Verdad.</div>
+    </div>
+
+    <div class="prompt" style="border-color:rgba(201,184,232,.5);background:rgba(201,184,232,.08); margin-top: 32px;">
+      <span class="prompt-tag" style="background:#C9B8E8;color:#5A3A7A;">Dimensión espiritual</span>
+      <div class="prompt-text">"¿Qué pregunta profunda y quizás dolorosa llevas tiempo evitando hacerle a Dios? ¿Y qué intuición tienes de lo que te respondería?"</div>
+    </div>
+
+    <div class="lines">
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+      <div class="line"></div><div class="line"></div>
+    </div>
+
+    <div class="divider" style="margin-top:40px;"><div class="divider-text">Éxodo 38 · La unción del artesano</div></div>
+
+    <p style="font-size:14px;color:var(--warm);line-height:1.75;margin-bottom:20px;">La unción del perfumista y la del artesano en Éxodo 38 no son oficios menores o separados del sacerdocio — son vocaciones ungidas. Lo que construyes en Iridiscenter, lo que formulas en tus metodologías, lo que creas con tu intelecto tiene una dimensión sagrada que no requiere permiso externo para nombrarse así.</p>
+
+    <div class="big-write" style="min-height: 200px;">
+      <div class="big-write-label" style="color:#7A5A9A;font-size:11px;">¿Qué parte de mi trabajo profesional siento hoy que tiene esa dimensión de unción? ¿La estoy honrando con excelencia o la estoy minimizando por síndrome del impostor?</div>
+    </div>
+  </div>
+  <div class="page-footer-note">
+    <span>La dimensión espiritual no es adorno · es fundamento</span>
+    <span>05</span>
+  </div>
+</div>
+
+<!-- ══════════ PG 07 · WRECK IT ══════════ -->
+<div class="page" id="pg-wreck">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#FF91AF;height:8px;"></div>
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+    <div class="pab" style="background:#FFBB5C;height:8px;"></div>
+    <div class="pab" style="background:#B5E48C;height:8px;"></div>
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+    <div class="pab" style="background:#C9B8E8;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Sección V</div>
+      <div class="pg-title">Wreck it (Destrúyelo)</div>
+    </div>
+    <div class="pg-num">06</div>
+  </div>
+  <div class="page-content">
+    <div class="hand" style="font-size:26px;color:var(--rose);margin-bottom:8px;">"Esta página es tuya para destruirla."</div>
+    <p style="font-size:15px;color:var(--muted);margin-bottom:24px;">Garabatea. Tacha con furia. Escribe en diagonal. Pega algo encima. Rasga las esquinas. Dibuja lo que sientes aunque no tenga forma geométrica. La página aguanta todo — ese es precisamente el punto de la contención física.</p>
+
+    <div class="wreck">
+      <div class="wreck-label">ZONA DE CAOS CONTROLADO</div>
+      <div class="wreck-instruction" style="margin-top: 20px;">Escribe con la pluma más gruesa que tengas la narrativa que más te limita — y después táchala hasta que sea ilegible.</div>
+      <div style="margin-top:120px;border-top:2px dashed rgba(204,156,80,.4);padding-top:20px;">
+        <div class="wreck-instruction" style="font-size:18px; color: var(--gold);">Ahora escribe aquí debajo, con claridad, la nueva narrativa que la reemplaza.</div>
+      </div>
+    </div>
+
+    <div class="dot-grid" style="margin-top:32px;min-height:180px;"></div>
+  </div>
+  <div class="page-footer-note">
+    <span>El caos también es información estructurada</span>
+    <span>06</span>
+  </div>
+</div>
+
+<!-- ══════════ PG 08 · EMOCIONARIO ══════════ -->
+<div class="page" id="pg-emocionario">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#FFBB5C;height:8px;"></div>
+    <div class="pab" style="background:#FFBB5C;height:8px;"></div>
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Sección VI</div>
+      <div class="pg-title">Mapa emocional somático</div>
+    </div>
+    <div class="pg-num">07</div>
+  </div>
+  <div class="page-content">
+    <p style="font-size:14px;color:var(--muted);margin-bottom:16px;">Marca con una X, un círculo o tu Stabilo Boss las emociones que estén presentes hoy. No hay número correcto. Pueden ser todas o ninguna. Subraya las dominantes.</p>
+
+    <div class="emo-grid">
+      <div class="emo"><div class="emo-dot" style="background:#FEE135;"></div><div class="emo-label">Claridad</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#FF91AF;"></div><div class="emo-label">Ansiedad</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#B5E48C;"></div><div class="emo-label">Esperanza</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#FFBB5C;"></div><div class="emo-label">Frustración</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#A8D8EA;"></div><div class="emo-label">Calma</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#C9B8E8;"></div><div class="emo-label">Confusión</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#CC9C50;"></div><div class="emo-label">Orgullo / Logro</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#C48B7A;"></div><div class="emo-label">Tristeza honda</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#9AAF9A;"></div><div class="emo-label">Gratitud</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#D7DEE8;"></div><div class="emo-label">Fatiga mental</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#FEE135;"></div><div class="emo-label">Entusiasmo creativo</div></div>
+      <div class="emo"><div class="emo-dot" style="background:#FF91AF;"></div><div class="emo-label">Miedo al rechazo</div></div>
+    </div>
+
+    <div class="divider" style="margin-top: 40px;"><div class="divider-text">¿Dónde se aloja esto en el cuerpo?</div></div>
+
+    <div style="display:grid;grid-template-columns:180px 1fr;gap:32px;align-items:start; margin-top: 24px;">
+      <div style="border:2px solid var(--faint);border-radius:12px;min-height:280px;display:flex;align-items:center;justify-content:center;padding:16px; background: rgba(255,255,255,0.6);">
+        <div style="text-align:center;font-family:'Caveat',cursive;font-size:16px;color:var(--faint);">Silueta corporal<br>— dibuja o marca aquí —</div>
+      </div>
+      <div>
+        <div class="big-write-label">Notas clínicas sobre mis propias sensaciones</div>
+        <div class="lines">
+          <div class="line"></div><div class="line"></div><div class="line"></div>
+          <div class="line"></div><div class="line"></div><div class="line"></div>
+          <div class="line"></div><div class="line"></div><div class="line"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="page-footer-note">
+    <span>El cuerpo sabe la verdad antes que la mente la articule</span>
+    <span>07</span>
+  </div>
+</div>
+
+<!-- ══════════ PG 09 · EL RASTRO DEL COMETA (NUEVA) ══════════ -->
+<div class="page" id="pg-rastro">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+    <div class="pab" style="background:#C9B8E8;height:8px;"></div>
+    <div class="pab" style="background:#FF91AF;height:8px;"></div>
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Sección VII</div>
+      <div class="pg-title">El rastro del cometa</div>
+    </div>
+    <div class="pg-num">08</div>
+  </div>
+  <div class="page-content">
+    <div class="hand" style="font-size:24px;color:var(--carbon);margin-bottom:12px;">"Lo que brilla por un segundo merece ser registrado."</div>
+    <p style="font-size:15px;color:var(--warm);line-height:1.75;margin-bottom:24px;">Un cometa no es estático; se define por la luz y la estela que deja a su paso. Aquí documentas las chispas breves de genialidad, enojo, o revelación. Frases sueltas, ideas a las 3 AM, conceptos sin terminar. <span class="hl-lav">El archivo de lo efímero.</span></p>
+
+    <div class="spark-grid">
+      <div class="spark-card">
+        <div class="spark-icon">✨</div>
+        <div class="lines" style="margin-top: 10px;"><div class="line" style="height:24px;"></div><div class="line" style="height:24px;"></div><div class="line" style="height:24px;"></div></div>
+      </div>
+      <div class="spark-card">
+        <div class="spark-icon">💡</div>
+        <div class="lines" style="margin-top: 10px;"><div class="line" style="height:24px;"></div><div class="line" style="height:24px;"></div><div class="line" style="height:24px;"></div></div>
+      </div>
+      <div class="spark-card">
+        <div class="spark-icon">🔥</div>
+        <div class="lines" style="margin-top: 10px;"><div class="line" style="height:24px;"></div><div class="line" style="height:24px;"></div><div class="line" style="height:24px;"></div></div>
+      </div>
+      <div class="spark-card" style="border-color: var(--rose);">
+        <div class="spark-icon">⚠️</div>
+        <div class="lines" style="margin-top: 10px;"><div class="line" style="height:24px;"></div><div class="line" style="height:24px;"></div><div class="line" style="height:24px;"></div></div>
+      </div>
+    </div>
+
+    <div class="divider" style="margin-top:32px;"><div class="divider-text">Línea de Impacto</div></div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">Mapea visualmente los hitos o "golpes" de claridad mental de este periodo.</p>
+    
+    <div style="position: relative; height: 120px; border-bottom: 2px solid var(--faint); margin: 40px 0 20px;">
+      <!-- Timeline points (just decorative for printing) -->
+      <div style="position: absolute; bottom: -6px; left: 10%; width: 10px; height: 10px; border-radius: 50%; background: var(--gold);"></div>
+      <div style="position: absolute; bottom: 16px; left: 8%; font-size: 10px; color: var(--muted); font-weight: bold;">Punto 1</div>
+      
+      <div style="position: absolute; bottom: -6px; left: 40%; width: 10px; height: 10px; border-radius: 50%; background: var(--rose);"></div>
+      <div style="position: absolute; bottom: 16px; left: 38%; font-size: 10px; color: var(--muted); font-weight: bold;">Punto 2</div>
+      
+      <div style="position: absolute; bottom: -6px; left: 75%; width: 10px; height: 10px; border-radius: 50%; background: var(--sage);"></div>
+      <div style="position: absolute; bottom: 16px; left: 73%; font-size: 10px; color: var(--muted); font-weight: bold;">Punto 3</div>
+    </div>
+  </div>
+  <div class="page-footer-note">
+    <span>Ninguna chispa es demasiado pequeña para el archivo</span>
+    <span>08</span>
+  </div>
+</div>
+
+<!-- ══════════ PG 10 · INTEGRACIÓN ══════════ -->
+<div class="page" id="pg-integracion">
+  <div class="page-accent-bar">
+    <div class="pab" style="background:#FEE135;height:8px;"></div>
+    <div class="pab" style="background:#FF91AF;height:8px;"></div>
+    <div class="pab" style="background:#B5E48C;height:8px;"></div>
+    <div class="pab" style="background:#FFBB5C;height:8px;"></div>
+    <div class="pab" style="background:#A8D8EA;height:8px;"></div>
+    <div class="pab" style="background:#C9B8E8;height:8px;"></div>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="pg-vol">Sección VIII · Cierre</div>
+      <div class="pg-title">Lo que me llevo de aquí</div>
+    </div>
+    <div class="pg-num">09</div>
+  </div>
+  <div class="page-content">
+    <div class="prompt" style="border-color:rgba(204,156,80,.5);background:rgba(204,156,80,.08);">
+      <span class="prompt-tag" style="background:#CC9C50;color:#fff;">Integración Final</span>
+      <div class="prompt-text">"Después de llenar estas páginas... ¿Qué se movió internamente? No qué resolví definitivamente (las resoluciones toman tiempo) — sino qué se movió de lugar."</div>
+    </div>
+
+    <div class="lines">
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+      <div class="line"></div><div class="line"></div><div class="line"></div>
+    </div>
+
+    <div class="divider" style="margin:32px 0 24px;"><div class="divider-text">Tres compromisos de acción y contención</div></div>
+
+    <div style="display:flex;flex-direction:column;gap:16px;margin-bottom:32px;">
+      <div style="display:flex;gap:16px;align-items:flex-start;">
+        <div style="width:28px;height:28px;border-radius:50%;background:var(--gold);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0; margin-top: 4px;">1</div>
+        <div class="line" style="flex:1;border-color:rgba(204,156,80,.4);"></div>
+      </div>
+      <div style="display:flex;gap:16px;align-items:flex-start;">
+        <div style="width:28px;height:28px;border-radius:50%;background:var(--rose);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0; margin-top: 4px;">2</div>
+        <div class="line" style="flex:1;border-color:rgba(196,139,122,.4);"></div>
+      </div>
+      <div style="display:flex;gap:16px;align-items:flex-start;">
+        <div style="width:28px;height:28px;border-radius:50%;background:var(--sage);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0; margin-top: 4px;">3</div>
+        <div class="line" style="flex:1;border-color:rgba(154,175,154,.4);"></div>
+      </div>
+    </div>
+
+    <div class="qbox" style="margin-bottom: 32px;">
+      <div class="qbox-source">Ancla de cierre · R. B., Tiempo al tiempo</div>
+      <div class="qbox-text">"El buen uso de nuestro tiempo de vida tiene todo que ver con elegir la calidad de los instantes que vivimos; independientemente de las coordenadas espacio-temporales que las ubiquen."</div>
+    </div>
+
+    <div class="divider" style="margin:24px 0 16px;"><div class="divider-text">Para la próxima entrada</div></div>
+
+    <div class="big-write" style="min-height:100px;border-color:rgba(196,184,212,.4);">
+      <div class="big-write-label" style="color:#6A4A8A;">Una pregunta que quiero traer y explorar en la próxima sesión de este journal...</div>
+    </div>
+
+    <div class="hand" style="margin-top:40px;font-size:20px;color:var(--gold);text-align:center;">"Lo que se nombra, se puede transformar. Lo que se escribe, ya empezó."</div>
+  </div>
+  <div class="page-footer-note">
+    <span>Comet Striker · Vol. I completado</span>
+    <span>Raquel Barrón, Psicóloga · 2026</span>
+  </div>
+</div>
+
+</div><!-- /journal-wrap -->
+
+<script>
+// Scroll interaction for nav pills
+document.querySelectorAll('.nav-pill').forEach(a=>{
+  a.addEventListener('click',e=>{
+    document.querySelectorAll('.nav-pill').forEach(b=>b.style.background='');
+    a.style.background='rgba(204,156,80,.15)';
+  });
+});
+</script>
+
+<script>
+// KOP-FIX002 · lightweight digital fill layer.
+window.WBPrint = (() => {
+  const storageKey = 'WB_COMET_STRIKER_CREATIVE_JOURNEY_fill_v1';
+  const selector = '.line, .big-write, .dot-grid, .wreck, .sg-cell, .spark-card, .truth-ledger-cell, .commit-card';
+  function editableNodes(){ return Array.from(document.querySelectorAll(selector)).filter(el => !el.closest('nav') && !el.closest('.print-mode-panel')); }
+  function setMode(mode){
+    document.body.dataset.printMode = mode;
+    document.querySelectorAll('.mode-btn[data-mode]').forEach(btn => btn.classList.toggle('is-active', btn.dataset.mode === mode));
+    if(mode === 'digital-fill') enableDigitalFill();
+  }
+  function enableDigitalFill(){
+    document.body.classList.add('digital-fill-enabled');
+    editableNodes().forEach((el, i) => {
+      el.setAttribute('contenteditable', 'true');
+      el.setAttribute('data-fill-id', 'fill-' + String(i).padStart(4,'0'));
+      el.setAttribute('aria-label', 'Campo editable ' + (i + 1));
+    });
+    load();
+  }
+  function disableDigitalFill(){
+    document.body.classList.remove('digital-fill-enabled');
+    editableNodes().forEach(el => el.removeAttribute('contenteditable'));
+  }
+  function toggleDigitalFill(){
+    if(document.body.classList.contains('digital-fill-enabled')){ disableDigitalFill(); setMode('letter-full'); }
+    else { setMode('digital-fill'); enableDigitalFill(); }
+  }
+  function save(){
+    const data = {};
+    editableNodes().forEach((el, i) => { const id = el.dataset.fillId || ('fill-' + i); if(el.innerHTML.trim()) data[id] = el.innerHTML; });
+    localStorage.setItem(storageKey, JSON.stringify(data));
+    alert('Guardado local en este navegador. Para entregar/archivar, usa Imprimir > Guardar como PDF.');
+  }
+  function load(){
+    try{
+      const data = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      editableNodes().forEach((el, i) => { const id = el.dataset.fillId || ('fill-' + i); if(data[id]) el.innerHTML = data[id]; });
+    }catch(e){ console.warn('No fill data loaded', e); }
+  }
+  function clear(){
+    if(confirm('¿Limpiar todos los campos digitales guardados en este navegador?')){
+      localStorage.removeItem(storageKey);
+      editableNodes().forEach(el => { if(el.isContentEditable) el.innerHTML = ''; });
+    }
+  }
+  document.addEventListener('DOMContentLoaded', () => { document.body.dataset.printMode = 'letter-full'; });
+  return { setMode, toggleDigitalFill, save, load, clear };
+})();
+</script>
+
+</body>
+</html>

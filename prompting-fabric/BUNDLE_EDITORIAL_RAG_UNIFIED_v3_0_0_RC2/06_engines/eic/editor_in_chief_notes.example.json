@@ -1,0 +1,48 @@
+{
+  "record_id": "BOS-EIC-NOTES-LUMINA-v1.4",
+  "meta": {
+    "brand": "Editorial Emergente / LUMINA",
+    "version": "1.4.0",
+    "layer": "L1-D Documentation",
+    "status": "in_review",
+    "format": "half_letter",
+    "metasystem": ["BOS", "AEQUITAS", "LUMINA", "OPAL", "IRIDISCENTER"]
+  },
+  "audit_scoring": {
+    "fidelity": 8.5,
+    "coherence": 8.0,
+    "necessity": 7.5,
+    "precision": 8.0,
+    "elegance": 8.5,
+    "global_score": 8.1
+  },
+  "editor_notes": {
+    "theological_consistency": "Pendiente de validación por fuente primaria cuando aplique.",
+    "lexicographical_verification": {
+      "strong_id": "TBD",
+      "bdb_page": null,
+      "bdb_page_confirmed": false,
+      "tension_notes": "BDB/Strong se mantienen como SSoT externo cuando el bloque sea bíblico/lexicográfico."
+    },
+    "visual_alignment": {
+      "gem_hex": "#BFA06A",
+      "asset_variants_ready": 0,
+      "visual_system": "LUMINA_TERRACOTTA_GOLDEN_INK"
+    },
+    "chief_instructions": [
+      "Preservar margen respirable en media carta.",
+      "No convertir notas editoriales en dashboard.",
+      "Mantener dictamen ÆQUITAS visible antes del sello."
+    ]
+  },
+  "qc_checklist_override": {
+    "QC01_respaldo_textual": true,
+    "QC03_tensiones_documentadas": true,
+    "QC10_dictamen_aequitas": true
+  },
+  "approval_seal": {
+    "raquel_barron_sign": "PENDING",
+    "aequitas_status": "TENSION",
+    "date": "2026-06-26"
+  }
+}

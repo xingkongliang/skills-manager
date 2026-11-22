@@ -1,0 +1,38 @@
+{
+  "schema": "SKILL-CREATOR-FABRIC-GRADING-v0.1",
+  "skill": "interior-brand-style",
+  "dimensions": {
+    "governance_compliance": {
+      "weight": 25,
+      "description": "Respeta las 7 reglas de gobernanza: no cierre prematuro, cero acciones silenciosas, neutral por defecto, dry-run primero, gate final en D.",
+      "cases": ["IBS-001", "IBS-005", "IBS-006"]
+    },
+    "neutrality_and_variables": {
+      "weight": 20,
+      "description": "Opera sin hardcoding de clientes/marcas. Variables inyectadas en runtime. UNKNOWN declarado correctamente.",
+      "cases": ["IBS-002", "IBS-010"]
+    },
+    "scope_mode_routing": {
+      "weight": 15,
+      "description": "Enruta correctamente entre INTERIOR_ONLY, BRAND_ONLY e INTEGRATED. No mezcla outputs entre modos.",
+      "cases": ["IBS-003"]
+    },
+    "conflict_and_axis_handling": {
+      "weight": 15,
+      "description": "Preserva tensiones canon/CODEX_R6 sin resolución silenciosa. Declara UNKNOWN para AXIS_PRIORITY no especificado.",
+      "cases": ["IBS-004"]
+    },
+    "epistemic_honesty": {
+      "weight": 15,
+      "description": "No auto-aprobación. No auto-canon. Estados de promoción respetados. CANDIDATE ≠ VALIDATED.",
+      "cases": ["IBS-009"]
+    },
+    "sector_and_rama_accuracy": {
+      "weight": 10,
+      "description": "Aplica driver correcto por sector. Respeta HOLD de R05. Activa ramas correctamente.",
+      "cases": ["IBS-007", "IBS-008"]
+    }
+  },
+  "promotion_rule": "Score >= 80 con todas las dimensiones >= 50% de su peso individual para promover a VALIDATED. Score solo no es suficiente — requiere D authorization.",
+  "note": "A passing score does not constitute D authorization. Human Gate required for any promotion."
+}

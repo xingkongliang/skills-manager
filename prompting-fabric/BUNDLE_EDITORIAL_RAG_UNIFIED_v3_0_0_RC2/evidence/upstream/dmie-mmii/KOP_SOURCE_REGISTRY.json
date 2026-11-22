@@ -1,0 +1,185 @@
+{
+  "packet_id": "KOP_CONTAINER_RAWLOG_HYDRATION_PACKET_v0_1",
+  "created_utc": "2026-06-28T04:53:33Z",
+  "container_root": "/mnt/data",
+  "status": "FROZEN_FROM_ACTIVE_CONTAINER__QA_READY__NOT_FINAL_CANON",
+  "source_policy": {
+    "raw_logs": "SOURCE_EVIDENCE_NOT_FINAL_CANON",
+    "derived_artifacts": "CANDIDATE_UNTIL_QA",
+    "candidate_rules": "PROMOTE_ONLY_AFTER_QA",
+    "style_criteria": "ROUTE_TO_STYLE_REGISTRY_BEFORE_CORE_MERGE",
+    "unknowns": "MUST_BE_NAMED_NOT_INVENTED",
+    "final_release": "USER_APPROVAL_REQUIRED"
+  },
+  "counts": {
+    "physical_sources_registered": 12,
+    "reference_only_warnings": 2,
+    "primary_release_candidates": 1,
+    "patch_fragments": 3
+  },
+  "primary_target": "DMIE_MMII_INTERACTIVE_WORKBOOK_v0_3_2_COMET_DRAME_PRINTFIX_PAGINATION.html",
+  "next_safe_command": "@SOURCE_INDEX_AEQUITAS_AUDIT",
+  "sources": [
+    {
+      "source_id": "KOP_SRC_001",
+      "mounted_filename": "DMIE_MMII_HTML_BUILDER_v0_3_COMET_DRAME.html",
+      "frozen_copy": "raw/01__DMIE_MMII_HTML_BUILDER_v0_3_COMET_DRAME.html",
+      "bytes": 66127,
+      "sha256": "7af18b6fdd892041d331ef9b7b7c962c03de704af3115e46101d862d16831a07",
+      "modified_utc": "2026-06-28T04:52:32.397200Z",
+      "layer": "LAYER_B_DERIVED_ARTIFACT",
+      "role": "html_builder_candidate",
+      "promotion_status": "CANDIDATE_REFERENCE__NOT_RELEASE",
+      "notes": "Builder artifact preceding workbook release candidate."
+    },
+    {
+      "source_id": "KOP_SRC_002",
+      "mounted_filename": "DMIE_MMII_INTERACTIVE_WORKBOOK_v0_1.html",
+      "frozen_copy": "raw/02__DMIE_MMII_INTERACTIVE_WORKBOOK_v0_1.html",
+      "bytes": 40430,
+      "sha256": "e859381fe4531151be7907d65ce9aae40ce5e389f3943d82da5d7a7a7cf4ea89",
+      "modified_utc": "2026-06-28T04:52:32.492578Z",
+      "layer": "LAYER_B_DERIVED_ARTIFACT",
+      "role": "historical_html_candidate_v0_1",
+      "promotion_status": "HISTORICAL_REFERENCE",
+      "notes": "Early LUMINA workbook. Keep for lineage only."
+    },
+    {
+      "source_id": "KOP_SRC_003",
+      "mounted_filename": "DMIE_MMII_INTERACTIVE_WORKBOOK_v0_3_1_COMET_DRAME_PRINTFIX.html",
+      "frozen_copy": "raw/03__DMIE_MMII_INTERACTIVE_WORKBOOK_v0_3_1_COMET_DRAME_PRINTFIX.html",
+      "bytes": 71278,
+      "sha256": "d7c1553e27f7223b2c44fe6aba8c7307b086c2d2bdaf7277a88c08b108e3e8ed",
+      "modified_utc": "2026-06-28T04:52:32.744402Z",
+      "layer": "LAYER_B_DERIVED_ARTIFACT",
+      "role": "historical_html_candidate_previous_version",
+      "promotion_status": "SUPERSEDED_BY_v0_3_2",
+      "notes": "Prior PrintFix build. Keep for provenance and rollback."
+    },
+    {
+      "source_id": "KOP_SRC_004",
+      "mounted_filename": "dmie_mmii_interactive_workbook_v0_3_2_comet_drame_printfix_pagination (1).html",
+      "frozen_copy": "raw/04__dmie_mmii_interactive_workbook_v0_3_2_comet_drame_printfix_pagination (1).html",
+      "bytes": 1583,
+      "sha256": "52a27b66e7af68c0871b1502cdc8f35b9b3bf0d0bc62dba1223842c7b54e6e86",
+      "modified_utc": "2026-06-28T04:52:32.561622Z",
+      "layer": "LAYER_C_PATCH_FRAGMENT",
+      "role": "pagination_or_printfix_patch_fragment",
+      "promotion_status": "REFERENCE_ONLY__DO_NOT_USE_AS_MASTER",
+      "notes": "Partial/patch-only HTML. Useful for diff evidence, not master artifact."
+    },
+    {
+      "source_id": "KOP_SRC_005",
+      "mounted_filename": "dmie_mmii_interactive_workbook_v0_3_2_comet_drame_printfix_pagination (2).html",
+      "frozen_copy": "raw/05__dmie_mmii_interactive_workbook_v0_3_2_comet_drame_printfix_pagination (2).html",
+      "bytes": 1863,
+      "sha256": "d0e76eabe73ab45a65d8630724610ac0bf6394b06c587b9479d480f895cf17fe",
+      "modified_utc": "2026-06-28T04:52:32.661070Z",
+      "layer": "LAYER_C_PATCH_FRAGMENT",
+      "role": "pagination_or_printfix_patch_fragment",
+      "promotion_status": "REFERENCE_ONLY__DO_NOT_USE_AS_MASTER",
+      "notes": "Partial/patch-only HTML. Useful for diff evidence, not master artifact."
+    },
+    {
+      "source_id": "KOP_SRC_006",
+      "mounted_filename": "DMIE_MMII_INTERACTIVE_WORKBOOK_v0_3_2_COMET_DRAME_PRINTFIX_PAGINATION.html",
+      "frozen_copy": "raw/06__DMIE_MMII_INTERACTIVE_WORKBOOK_v0_3_2_COMET_DRAME_PRINTFIX_PAGINATION.html",
+      "bytes": 69849,
+      "sha256": "f84484ac9e6e546c8b44f46f64d506458437d07fe9aaf0baebe45166d17c999f",
+      "modified_utc": "2026-06-28T04:52:32.529337Z",
+      "layer": "LAYER_D_RELEASE_CANDIDATE",
+      "role": "primary_current_html_artifact_candidate",
+      "promotion_status": "RELEASE_CANDIDATE__USER_APPROVAL_REQUIRED",
+      "notes": "Full v0.3.2 workbook mounted; treat as current primary build candidate, not final canon."
+    },
+    {
+      "source_id": "KOP_SRC_007",
+      "mounted_filename": "dmie_mmii_interactive_workbook_v0_3_2_comet_drame_printfix_pagination.html",
+      "frozen_copy": "raw/07__dmie_mmii_interactive_workbook_v0_3_2_comet_drame_printfix_pagination.html",
+      "bytes": 8602,
+      "sha256": "726d1ef23b48256e1c27f268373a000ca067b089d74f45082bf7f47c8f429193",
+      "modified_utc": "2026-06-28T04:52:32.777456Z",
+      "layer": "LAYER_C_PATCH_FRAGMENT",
+      "role": "pagination_or_printfix_patch_fragment",
+      "promotion_status": "REFERENCE_ONLY__DO_NOT_USE_AS_MASTER",
+      "notes": "Partial/patch-only HTML. Useful for diff evidence, not master artifact."
+    },
+    {
+      "source_id": "KOP_SRC_008",
+      "mounted_filename": "Generación de Prompt Set.txt",
+      "frozen_copy": "raw/08__Generación de Prompt Set.txt",
+      "bytes": 974,
+      "sha256": "2552e5252f22accf6d9831dcaa1e234c15ea0ced0cdc50bd1751ecb00411b6b0",
+      "modified_utc": "2026-06-28T04:52:32.589603Z",
+      "layer": "LAYER_A_RAW_LOG_SOURCE",
+      "role": "prompt_set_generation_rawlog",
+      "promotion_status": "SOURCE_EVIDENCE__NOT_CANON",
+      "notes": "Raw log about prompt-set engineering. Candidate rules require QA."
+    },
+    {
+      "source_id": "KOP_SRC_009",
+      "mounted_filename": "Pasted text.txt",
+      "frozen_copy": "raw/09__Pasted text.txt",
+      "bytes": 37200,
+      "sha256": "8382df2b1845f845bdffdee0af632d303b73ecd7287175ae6a01cf4e40d58ca2",
+      "modified_utc": "2026-06-28T04:52:32.815094Z",
+      "layer": "LAYER_A_RAW_LOG_SOURCE",
+      "role": "text_rawlog_source",
+      "promotion_status": "SOURCE_EVIDENCE__NOT_CANON",
+      "notes": "Text file treated as raw source evidence."
+    },
+    {
+      "source_id": "KOP_SRC_010",
+      "mounted_filename": "Rama Rama ⌱ DIME.txt",
+      "frozen_copy": "raw/10__Rama Rama ⌱ DIME.txt",
+      "bytes": 2405,
+      "sha256": "7b4071f47193199726c9659222e58a08a387f5552b955d689ae04c64adb00f2b",
+      "modified_utc": "2026-06-28T04:52:32.600054Z",
+      "layer": "LAYER_A_RAW_LOG_SOURCE",
+      "role": "project_branch_rawlog_or_handoff_log",
+      "promotion_status": "SOURCE_EVIDENCE__NOT_CANON",
+      "notes": "Branch/DIME/KOP raw log. Preserve source boundary; do not collapse homonymous files."
+    },
+    {
+      "source_id": "KOP_SRC_011",
+      "mounted_filename": "Rama ⌱ DIME.txt",
+      "frozen_copy": "raw/11__Rama ⌱ DIME.txt",
+      "bytes": 8428,
+      "sha256": "dc33917952d93379ed97c097465e0d59e5474de810ed93a0399c473ff9e30c08",
+      "modified_utc": "2026-06-28T04:52:33.328854Z",
+      "layer": "LAYER_A_RAW_LOG_SOURCE",
+      "role": "project_branch_rawlog_or_handoff_log",
+      "promotion_status": "SOURCE_EVIDENCE__NOT_CANON",
+      "notes": "Branch/DIME/KOP raw log. Preserve source boundary; do not collapse homonymous files."
+    },
+    {
+      "source_id": "KOP_SRC_012",
+      "mounted_filename": "Release.txt",
+      "frozen_copy": "raw/12__Release.txt",
+      "bytes": 2926,
+      "sha256": "c60438350aa5f0729710109c32b3264bbb5c1e725a89cb7b2c785cb62f999b2b",
+      "modified_utc": "2026-06-28T04:52:32.627675Z",
+      "layer": "LAYER_A_RAW_LOG_SOURCE",
+      "role": "release_or_build_rawlog",
+      "promotion_status": "SOURCE_EVIDENCE__NOT_CANON",
+      "notes": "Raw log describing build/release attempt. Evidence only."
+    }
+  ],
+  "reference_only_warnings": [
+    {
+      "reference_id": "FILE_SEARCH_RAMA_DIME_MULTIPLE",
+      "status": "REFERENCE_ONLY_OR_OVERWRITTEN_IN_NATIVE_CONTAINER",
+      "reason": "Multiple uploads share the same display filename in file-search, but the active /mnt/data container exposes only one physical file per repeated name. Do not merge them as identical without native bytes."
+    },
+    {
+      "reference_id": "DMIE_v0_3_2_PATCH_FRAGMENTS",
+      "status": "PATCH_REFERENCE_ONLY",
+      "reason": "Files with lowercase names and (1)/(2) variants contain partial PrintFix/Pagination snippets; they are not master HTML files."
+    }
+  ],
+  "source_boundary": {
+    "confirmed": "Files copied into raw/ with sha256 hashes were physically mounted in /mnt/data at packet build time.",
+    "not_confirmed": "Earlier sandbox links and repeated file-search references may not exist as active files unless separately mounted.",
+    "do_not_do": "Do not declare final canon, deployment truth, or merge homonymous files by title alone."
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1",
+  "generated_at": "2026-07-22T21:00:35-06:00",
+  "status": "PASS",
+  "checks": {
+    "parse_counts": {
+      "json": 24,
+      "yaml": 5,
+      "markdown": 32,
+      "links": 1
+    },
+    "line_schema": "PASS",
+    "rag_metadata_schema": "PASS",
+    "eic_schema": "PASS",
+    "copied_source_hashes": "PASS",
+    "required_modules": "PASS",
+    "internal_markdown_links": "PASS",
+    "archive_reopen_and_hashes": "PASS"
+  },
+  "errors": [],
+  "editorial_runtime_gate": "BLOCKED",
+  "canon_gate": "PENDING",
+  "archive_verification_basis": {
+    "entry_count": 71,
+    "method": "CRC test, entry-set equality and per-entry SHA256 comparison"
+  },
+  "package_version": "3.0.0-rc.2",
+  "rc2_patch_applied": true,
+  "literatura_status_corrected": true,
+  "c001_semantics_refined": true,
+  "c002_semantics_refined": true
+}

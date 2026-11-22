@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "564a3285-e916-4300-a320-5e6cba5ba1aa",
+  "path": "ai-native-product-designer",
+  "path_key": "ai-native-product-designer",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

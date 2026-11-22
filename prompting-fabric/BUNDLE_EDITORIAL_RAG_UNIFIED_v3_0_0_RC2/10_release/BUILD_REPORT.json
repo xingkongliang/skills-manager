@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0.0",
+  "operation_id": "OP-BE-RAG-20260722-001",
+  "package_id": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC2",
+  "generated_at": "2026-07-22T21:00:35-06:00",
+  "mode": "BUILD_CANDIDATE",
+  "status": "BUILT_NOT_RELEASED",
+  "source_mutations": [],
+  "external_mutations": [],
+  "assumptions": [
+    "BOS physical entry pattern is recorded as provisional, not canon.",
+    "Comet v1.4 is a review candidate, not a deployed runtime.",
+    "DMIE/MMII is represented by a strict adapter because master bytes are unavailable."
+  ],
+  "rollback": "Remove or archive only this candidate directory and ZIP.",
+  "package_version": "3.0.0-rc.2",
+  "patch_type": "factual_registry_patch",
+  "built_at": "2026-07-23T00:00:00-06:00",
+  "from_base": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1",
+  "changes": [
+    "VERSION → 3.0.0-rc.2",
+    "CHANGELOG.md → RC2 entry prepended",
+    "00_contract/STATUS.yaml → RC2 fields",
+    "01_registry/CONFLICT_REGISTER.json → C-001/C-002 semantics refined",
+    "01_registry/CONFLICT_REGISTER.md → table updated",
+    "01_registry/SOURCE_REGISTRY.json → KOP_SRC_006 added",
+    "01_registry/SOURCE_INDEX.csv → KOP_SRC_006 row added",
+    "05_lines/LINE_REGISTRY.json → LINE-LITERATURE corrected to LOAD_PARCIAL 12/20",
+    "08_qa/QA_GATE_MATRIX.md → QC-14 added; QC-11/QC-12 refined",
+    "08_qa/AEQUITAS_REPORT.json → patch fields added",
+    "08_qa/VALIDATION_REPORT.json → patch fields added",
+    "09_handoff/CMP.yaml → RC2 state",
+    "09_handoff/HANDOFF.md → RC2 decisions",
+    "09_handoff/NEXT_COMMANDS.md → RC2 commands",
+    "10_release/BUILD_REPORT.json → this file",
+    "README.md → RC2 header",
+    "10_release/PackageManifest.json → recomputed",
+    "10_release/SHA256SUMS.txt → recomputed"
+  ],
+  "files_not_modified": [
+    "05_lines/current/CUADERNILLO_LITERATURA_v1.0.md",
+    "05_lines/current/CUADERNILLO_CLINICA_v1.0.md",
+    "05_lines/current/CUADERNILLO_ESPIRITUAL_v1.0.md",
+    "06_engines/comet/runtime_candidate/WB_COMET-STRIKER_CREATIVE-JOURNEY.html",
+    "All evidence/upstream/* files"
+  ],
+  "truth_boundary": {
+    "canon_declared": false,
+    "html_reconstructed": false,
+    "missing_entries_generated": false,
+    "runtime_deployed": false,
+    "vector_store_built": false
+  }
+}

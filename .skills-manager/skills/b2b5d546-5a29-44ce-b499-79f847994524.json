@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "b2b5d546-5a29-44ce-b499-79f847994524",
+  "path": "teardown",
+  "path_key": "teardown",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

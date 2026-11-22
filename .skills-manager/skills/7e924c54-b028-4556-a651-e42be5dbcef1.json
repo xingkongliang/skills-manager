@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "7e924c54-b028-4556-a651-e42be5dbcef1",
+  "path": "ask-matt",
+  "path_key": "ask-matt",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "mattpocock/skills/ask-matt",
+    "subpath": "skills/engineering/ask-matt",
+    "branch": null
+  }
+}

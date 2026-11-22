@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "29b221f9-34de-4822-85be-806239a8c8ca",
+  "path": "make-interfaces-feel-better",
+  "path_key": "make-interfaces-feel-better",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

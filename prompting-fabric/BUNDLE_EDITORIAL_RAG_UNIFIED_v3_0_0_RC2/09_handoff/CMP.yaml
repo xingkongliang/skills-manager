@@ -1,0 +1,58 @@
+# CMP — Context Memory Portable
+# Package: BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC2
+# Patch: factual_registry_patch
+
+package_id: BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC2
+package_version: 3.0.0-rc.2
+patch_type: factual_registry_patch
+generated_at: '2026-07-23T00:00:00-06:00'
+status: DRAFT_FOR_APPROVAL
+release_decision: REVIEW
+canon_status: NOT_FINAL_CANON
+runtime_status: BLOCKED
+deployment_status: BLOCKED
+
+current_lines:
+  - id: LINE-LITERATURE
+    status: LOAD_PARCIAL
+    present: [1,2,3,4,5,6,7,8,17,18,19,20]
+    missing: [9,10,11,12,13,14,15,16]
+    present_count: 12
+    missing_count: 8
+  - id: LINE-CLINICAL
+    status: CURRENT_CANDIDATE
+    entry_count: 20
+    accent: '#7B9EA6'
+  - id: LINE-SPIRITUAL
+    status: CURRENT_CANDIDATE
+    entry_count: 20
+    accent: '#1E7D63'
+
+candidate_runtime: Comet Striker Creative Journey v1.4 — HTML_COMPLETE_RUNTIME_QA_PENDING
+blocked_engine:
+  id: DMIE/MMII
+  status: SOURCE_IDENTIFIED_NOT_MATERIALIZED_IN_RC1
+  source_id: KOP_SRC_006
+  sha256: f84484ac9e6e546c8b44f46f64d506458437d07fe9aaf0baebe45166d17c999f
+  bytes: 69849
+
+open_conflicts: [C-001, C-002, C-004, C-005, C-009]
+canon_declared: false
+next_gate: D · QA / MERGE / RELEASE HANDOFF
+
+pending_decisions:
+  - id: C-004
+    topic: odd/even normalization pattern
+    action: DIRECTOR_APPROVE_OR_REDEFINE
+  - id: C-005
+    topic: token clínico '#7B9EA6'
+    action: DIRECTOR_CONFIRM_OR_SUBSTITUTE
+  - id: C-009
+    topic: Self-Care/Journey v4
+    action: PROVIDE_AUTHORED_BRIEF_OR_DISCARD
+  - id: C-001
+    topic: DMIE/MMII materialization
+    action: DELIVER_FILE_OR_CANCEL
+  - id: C-002
+    topic: Comet runtime QA
+    action: RUN_BROWSER_PRINT_EXPORT_QA

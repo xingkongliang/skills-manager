@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "fd84fc18-1000-4960-9fb5-88efdcca5102",
+  "path": "journalistic-portrait",
+  "path_key": "journalistic-portrait",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

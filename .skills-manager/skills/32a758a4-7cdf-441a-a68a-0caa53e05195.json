@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "32a758a4-7cdf-441a-a68a-0caa53e05195",
+  "path": "hallmark",
+  "path_key": "hallmark",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

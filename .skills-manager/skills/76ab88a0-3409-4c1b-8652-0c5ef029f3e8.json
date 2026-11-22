@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "76ab88a0-3409-4c1b-8652-0c5ef029f3e8",
+  "path": "design-workshop-facilitation",
+  "path_key": "design-workshop-facilitation",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

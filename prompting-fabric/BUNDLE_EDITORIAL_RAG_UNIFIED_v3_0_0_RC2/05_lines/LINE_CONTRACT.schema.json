@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lumina:editorial-line-contract:1.0.0",
+  "title": "Editorial Line Registry",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "package_version",
+    "lines"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "package_version": {
+      "type": "string"
+    },
+    "lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "line_id",
+          "display_name",
+          "line_version",
+          "lifecycle_state",
+          "authored_entries_present",
+          "source_ids",
+          "accent_color"
+        ],
+        "properties": {
+          "line_id": {
+            "type": "string",
+            "pattern": "^LINE-[A-Z0-9-]+$"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "line_version": {
+            "type": "string"
+          },
+          "lifecycle_state": {
+            "enum": [
+              "CURRENT_CANDIDATE",
+              "IN_REVIEW",
+              "PROPOSED_UNMATERIALIZED",
+              "DISCOVERED_PROPOSAL_ONLY"
+            ]
+          },
+          "authored_entries_present": {
+            "type": "boolean"
+          },
+          "source_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "artifact_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entry_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "structure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_pattern": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accent_color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^#[A-Fa-f0-9]{6}$"
+          },
+          "decision_required": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

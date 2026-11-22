@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "50353bf2-cc21-4243-9b2b-7dd52b2dc0e6",
+  "path": "geo-magazine-slides",
+  "path_key": "geo-magazine-slides",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

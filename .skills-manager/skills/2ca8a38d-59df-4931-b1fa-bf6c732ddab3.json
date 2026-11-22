@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "2ca8a38d-59df-4931-b1fa-bf6c732ddab3",
+  "path": "skill-forge",
+  "path_key": "skill-forge",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

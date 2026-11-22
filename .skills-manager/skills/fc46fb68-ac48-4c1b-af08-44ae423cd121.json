@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "fc46fb68-ac48-4c1b-af08-44ae423cd121",
+  "path": "headshot",
+  "path_key": "headshot",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

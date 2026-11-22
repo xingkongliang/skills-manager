@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "52c8c598-a858-4cd6-a194-d0f385962fe0",
+  "path": "review-loop",
+  "path_key": "review-loop",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

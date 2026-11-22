@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "cd6c613c-033e-4926-abc4-1e1cc427b718",
+  "path": "using-hiway-kit",
+  "path_key": "using-hiway-kit",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "17a77a29-8ce4-4037-b41b-ca7771cf6b0a",
+  "path": "ai-image-generation",
+  "path_key": "ai-image-generation",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "101-skills/superpowers/ai-image-generation",
+    "subpath": "tools/image/ai-image-generation",
+    "branch": null
+  }
+}

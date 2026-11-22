@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "c6dd8be0-c9e9-46ef-8970-a46b849c0a9a",
+  "path": "emil-design-eng",
+  "path_key": "emil-design-eng",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

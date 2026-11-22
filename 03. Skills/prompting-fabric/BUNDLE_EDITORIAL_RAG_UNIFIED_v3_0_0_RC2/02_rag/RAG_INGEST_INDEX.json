@@ -1,0 +1,1336 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1",
+  "generated_at": "2026-07-22T21:00:35-06:00",
+  "rag_runtime_state": "NOT_BUILT",
+  "record_count": 51,
+  "records": [
+    {
+      "record_id": "REC-0001",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "CORE CONTRACT",
+      "domain": "contract",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "00_contract/CORE_CONTRACT.md",
+      "content_sha256": "635eecbf40875c8113e24e21913e8da6bc959d310dd2808e351c7686656eb9a7",
+      "source_ids": [],
+      "tags": [
+        "contract",
+        "validated_records"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0002",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "STATUS",
+      "domain": "contract",
+      "kind": "yaml",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "00_contract/STATUS.yaml",
+      "content_sha256": "b23943b1f3847eed7a00d5f6cfa13903ab39e30761730a754e20ddfff09c7b0c",
+      "source_ids": [],
+      "tags": [
+        "contract",
+        "validated_records"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0003",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "CONFLICT REGISTER",
+      "domain": "registry",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "01_registry/CONFLICT_REGISTER.json",
+      "content_sha256": "35dc6dacf1ac6e1ad16d943e66c7b378d26fa4efd1a9a324e69dd054b12d0438",
+      "source_ids": [],
+      "tags": [
+        "registry",
+        "validated_records"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0004",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "CONFLICT REGISTER",
+      "domain": "registry",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "01_registry/CONFLICT_REGISTER.md",
+      "content_sha256": "57754c52d4e26644586c16572e89cce8ea7e31fbd71c7098467748db403fb241",
+      "source_ids": [],
+      "tags": [
+        "registry",
+        "validated_records"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0005",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "SOURCE INDEX",
+      "domain": "registry",
+      "kind": "csv",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "01_registry/SOURCE_INDEX.csv",
+      "content_sha256": "5ece8f02251fd1a1977200cc2e767d2ec9f172a7b8bb5b07e7ed9ba05cbd7d36",
+      "source_ids": [],
+      "tags": [
+        "registry",
+        "validated_records"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0006",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "SOURCE REGISTRY",
+      "domain": "registry",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "01_registry/SOURCE_REGISTRY.json",
+      "content_sha256": "d7c14b2a645c1ba0d4bb0be6614dbf5acc7c7e3f6438873aecaa6a0cf4b62653",
+      "source_ids": [],
+      "tags": [
+        "registry",
+        "validated_records"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0007",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "CHUNKING RETRIEVAL POLICY",
+      "domain": "rag",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "02_rag/CHUNKING_RETRIEVAL_POLICY.md",
+      "content_sha256": "09917ffc9f842858afb947093eccd612eae6f9b034c3df69ee9d617646d71ae8",
+      "source_ids": [],
+      "tags": [
+        "module_specs",
+        "rag"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0008",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "RAG ARCHITECTURE",
+      "domain": "rag",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "02_rag/RAG_ARCHITECTURE.md",
+      "content_sha256": "4422fe0b84070e0e543b5aa4e977f70543a099995d5ec53522e7170f6dea1cdc",
+      "source_ids": [],
+      "tags": [
+        "module_specs",
+        "rag"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0009",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "RAG COLLECTIONS",
+      "domain": "rag",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "02_rag/RAG_COLLECTIONS.json",
+      "content_sha256": "dfa5145d33d938371cf3f3030cff0a6a963640329f3396996ee31caf509af7fa",
+      "source_ids": [],
+      "tags": [
+        "module_specs",
+        "rag"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0010",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "editorial metadata.schema",
+      "domain": "rag",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "02_rag/editorial_metadata.schema.json",
+      "content_sha256": "63a397b1984d342b9d6e61a526676b080d13e01079dbc0416af997127c33084f",
+      "source_ids": [],
+      "tags": [
+        "module_specs",
+        "rag"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0011",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "EXECUTION GRAPH",
+      "domain": "module",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "03_modules/EXECUTION_GRAPH.md",
+      "content_sha256": "d5052678a4fffbb37f0cde6e356729388fa0288cee766661c685d58d211d169e",
+      "source_ids": [],
+      "tags": [
+        "module",
+        "module_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0012",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "MODULE REGISTRY",
+      "domain": "module",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "03_modules/MODULE_REGISTRY.json",
+      "content_sha256": "2dc42881800b4062a4fe1508a2185b5535d9e86801e0847819ca28b2b09ecf29",
+      "source_ids": [],
+      "tags": [
+        "module",
+        "module_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0013",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "SKILLS MANIFEST",
+      "domain": "skill",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "04_skills/SKILLS_MANIFEST.json",
+      "content_sha256": "d2a57dd17e4678fe20e13494961eaa261efe7c1f830c6e4eade1d88d4971b88a",
+      "source_ids": [],
+      "tags": [
+        "skill",
+        "skill_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0014",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "SKILL ROUTING",
+      "domain": "skill",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "04_skills/SKILL_ROUTING.md",
+      "content_sha256": "8c2eb40673d2ed21fa509fd8351a3c4880f423a50e1ac793cb0a5ce5a7bb816f",
+      "source_ids": [],
+      "tags": [
+        "skill",
+        "skill_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0015",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "LINE CONTRACT.schema",
+      "domain": "line",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "05_lines/LINE_CONTRACT.schema.json",
+      "content_sha256": "9ec0dbdcba034d69dbc04137f4e69978b6b09df4fba1ba954db5d1a612c6843b",
+      "source_ids": [],
+      "tags": [
+        "line",
+        "line_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0016",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "LINE REGISTRY",
+      "domain": "line",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "05_lines/LINE_REGISTRY.json",
+      "content_sha256": "00b36f4469970f896920222537301ce39c23472676948dae219b3dfa17201caa",
+      "source_ids": [],
+      "tags": [
+        "line",
+        "line_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0017",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "SELF CARE JOURNEY V4 SPEC",
+      "domain": "line",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "05_lines/candidates/SELF_CARE_JOURNEY_V4_SPEC.md",
+      "content_sha256": "56820372883b7d5cff5df4a8c3e1ddc057bdb7f4ecf731e5aa96e5cfb0262607",
+      "source_ids": [],
+      "tags": [
+        "line",
+        "line_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0018",
+      "source_id": "SRC-BOS-V2",
+      "title": "CUADERNILLO CLINICA v1.0",
+      "domain": "line",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": "1.0",
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "05_lines/current/CUADERNILLO_CLINICA_v1.0.md",
+      "content_sha256": "c932b6c5804ab55cfc0eaa09a3ef83a7837d538b9bed48ca4b72505b13e95be8",
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "tags": [
+        "line",
+        "line_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "editorial_entry"
+      }
+    },
+    {
+      "record_id": "REC-0019",
+      "source_id": "SRC-BOS-V2",
+      "title": "CUADERNILLO ESPIRITUAL v1.0",
+      "domain": "line",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": "1.0",
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "05_lines/current/CUADERNILLO_ESPIRITUAL_v1.0.md",
+      "content_sha256": "153b5c4ca4c5ceb96f12ee0207d1c7a8d3812612691a26f7f18af58025dc4920",
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "tags": [
+        "line",
+        "line_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "editorial_entry"
+      }
+    },
+    {
+      "record_id": "REC-0020",
+      "source_id": "SRC-BOS-V2",
+      "title": "CUADERNILLO LITERATURA v1.0",
+      "domain": "line",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": "1.0",
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "05_lines/current/CUADERNILLO_LITERATURA_v1.0.md",
+      "content_sha256": "01c743672f10cd04791d59691e983df0950711c37dd0b423b0a6522c107e850f",
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "tags": [
+        "line",
+        "line_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "editorial_entry"
+      }
+    },
+    {
+      "record_id": "REC-0021",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "NEW LINES REGISTER",
+      "domain": "line",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "05_lines/proposed/NEW_LINES_REGISTER.md",
+      "content_sha256": "7d8760b020dacbbe1a9718ce7a29340fb15e91b526c30a9ef411d247d88ba96d",
+      "source_ids": [],
+      "tags": [
+        "line",
+        "line_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0022",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "CUADERNILLO REFLEXIVO TEMPLATE MAESTRO",
+      "domain": "line",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "05_lines/templates/CUADERNILLO_REFLEXIVO_TEMPLATE_MAESTRO.md",
+      "content_sha256": "0e0648522e3ea24503ebc6688ef35ff48a6e712c9fdd18002e32c68015531a12",
+      "source_ids": [],
+      "tags": [
+        "line",
+        "line_specs"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0023",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "COMET STRIKER ADAPTER",
+      "domain": "engine",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "06_engines/COMET_STRIKER_ADAPTER.md",
+      "content_sha256": "3d8b44884cde8e6e250dcb9ec8d501f95ccaa3a6f8e919f511154e6884bacac0",
+      "source_ids": [],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0024",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "DMIE MMII ADAPTER",
+      "domain": "engine",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "06_engines/DMIE_MMII_ADAPTER.md",
+      "content_sha256": "44a8cf57276d822e8602216aa7d4ee5f056a2b9696c2b8e08c0018335d9ccc5d",
+      "source_ids": [],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0025",
+      "source_id": "SRC-COMET-1.4",
+      "title": "lumina.visual",
+      "domain": "engine",
+      "kind": "css",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "06_engines/comet/lumina.visual.css",
+      "content_sha256": "098bad23d041a4684a94ae799707b26bace212e7775f650ef5c37650f435e67e",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0026",
+      "source_id": "SRC-COMET-1.4",
+      "title": "lumina terracotta golden ink.tokens",
+      "domain": "engine",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "06_engines/comet/lumina_terracotta_golden_ink.tokens.json",
+      "content_sha256": "4c7b0934e3320a9ace2868ed82a4e21fd29e05c04fb0cf77cec97c7b9c2cef0c",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0027",
+      "source_id": "SRC-COMET-1.4",
+      "title": "WB COMET-STRIKER CREATIVE-JOURNEY",
+      "domain": "engine",
+      "kind": "html",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "06_engines/comet/runtime_candidate/WB_COMET-STRIKER_CREATIVE-JOURNEY.html",
+      "content_sha256": "704e29c94173a83261b49c62e86c521af5cc02aba5cd2eb4fdc991d2075af050",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0028",
+      "source_id": "SRC-DMIE-REGISTRY",
+      "title": "dmie mmii runtime.contract",
+      "domain": "engine",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "BLOCKED",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "06_engines/dmie_mmii_runtime.contract.json",
+      "content_sha256": "cc2b5d57f50e40c2af61a4cbaa30c00ca2d053e506400ac89dbd0357742919a8",
+      "source_ids": [
+        "SRC-DMIE-REGISTRY"
+      ],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0029",
+      "source_id": "SRC-COMET-1.4",
+      "title": "editor in chief notes.example",
+      "domain": "engine",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "06_engines/eic/editor_in_chief_notes.example.json",
+      "content_sha256": "6d237bd7d0340df88acf075dc52941fba0bb7267856148b061c62ec93746858a",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0030",
+      "source_id": "SRC-COMET-1.4",
+      "title": "generate eic notes",
+      "domain": "engine",
+      "kind": "py",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "06_engines/eic/generate_eic_notes.py",
+      "content_sha256": "2c810cc97a584386f1060f1cee2ec7c924154159ac244663a1ac037ea700e957",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0031",
+      "source_id": "SRC-COMET-1.4",
+      "title": "preamble",
+      "domain": "engine",
+      "kind": "tex",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "06_engines/eic/preamble.tex",
+      "content_sha256": "61839e6f719da82758fd8db8fa064bb7e177e93e8771c73d4202ac816a5e353a",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0032",
+      "source_id": "SRC-COMET-1.4",
+      "title": "print notes layout",
+      "domain": "engine",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "06_engines/eic/print_notes_layout.md",
+      "content_sha256": "cafd9a2a76709339cb41dff2daaa445867a39b7f4c43a6c6bd23b6b855a08b58",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "contract_atomic"
+      }
+    },
+    {
+      "record_id": "REC-0033",
+      "source_id": "SRC-COMET-1.4",
+      "title": "editor in chief notes.schema",
+      "domain": "engine",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "06_engines/eic/schema/editor_in_chief_notes.schema.json",
+      "content_sha256": "49a91829a167426022cd82e8ed2b9ffde8301822d8cfbe2b61fb5db4838af7c1",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "artifact_templates",
+        "engine"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0034",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "DRAME PRODUCTION CONTRACT",
+      "domain": "protocol",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "07_protocols/DRAME_PRODUCTION_CONTRACT.md",
+      "content_sha256": "fa5fa75f1a7b3e1d7e732079e5042d016a2bef5ca3c4339521d3921b5cfd5416",
+      "source_ids": [],
+      "tags": [
+        "module_specs",
+        "protocol"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "protocol_step"
+      }
+    },
+    {
+      "record_id": "REC-0035",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "METANO IA PROTOCOL",
+      "domain": "protocol",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "07_protocols/METANO_IA_PROTOCOL.md",
+      "content_sha256": "d84b1435a277ad896ebc7410c2de44b7d5470d2e958ca5292045db6b59dd6707",
+      "source_ids": [],
+      "tags": [
+        "module_specs",
+        "protocol"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "protocol_step"
+      }
+    },
+    {
+      "record_id": "REC-0036",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "PROMETHEUS ONE SHOT",
+      "domain": "protocol",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "07_protocols/PROMETHEUS_ONE_SHOT.md",
+      "content_sha256": "bd208652f9aff80ee108a30466731675bacf1bb0a16324d6c26b690ec5e5879a",
+      "source_ids": [],
+      "tags": [
+        "module_specs",
+        "protocol"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "protocol_step"
+      }
+    },
+    {
+      "record_id": "REC-0037",
+      "source_id": "SRC-RC1-DERIVED",
+      "title": "SELAH LOCKS",
+      "domain": "protocol",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "DRAFT_FOR_APPROVAL",
+      "authority": "DERIVED",
+      "confidence": "HIGH",
+      "content_path": "07_protocols/SELAH_LOCKS.md",
+      "content_sha256": "0ecc3accfe3bd685023d78303aa45a65d3c9846fcf4f26a9a02043a7362906c3",
+      "source_ids": [],
+      "tags": [
+        "module_specs",
+        "protocol"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": true,
+        "requires_human_approval": true,
+        "chunk_profile": "protocol_step"
+      }
+    },
+    {
+      "record_id": "REC-0038",
+      "source_id": "SRC-BOS-V2",
+      "title": "A1 editorial style bos",
+      "domain": "evidence",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/bos-v2/A1_editorial_style_bos.md",
+      "content_sha256": "7a4c441723ffdbf777a173c11b4a848a3a1c30dbfcad38fc50ad90e4b8eb3768",
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "evidence_window"
+      }
+    },
+    {
+      "record_id": "REC-0039",
+      "source_id": "SRC-BOS-V2",
+      "title": "A2 alignment map bos",
+      "domain": "evidence",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/bos-v2/A2_alignment_map_bos.md",
+      "content_sha256": "e739b47adeb0601b1bc4bc3b68181d2fe4134585af9b4b1efc9d709b3000a2a4",
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "evidence_window"
+      }
+    },
+    {
+      "record_id": "REC-0040",
+      "source_id": "SRC-BOS-V2",
+      "title": "A3 editorial pipeline spec v2",
+      "domain": "evidence",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/bos-v2/A3_editorial_pipeline_spec_v2.json",
+      "content_sha256": "7e20afaaea2d92303ebb1054b1c80ad5dab0cc603390ced9d0782d7657867abb",
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0041",
+      "source_id": "SRC-BOS-V2",
+      "title": "README v2",
+      "domain": "evidence",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/bos-v2/README_v2.md",
+      "content_sha256": "cfa0fd313420ae7243e2ab35a87d19bc96397980602c3e6e8c1d2710ba57208c",
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "evidence_window"
+      }
+    },
+    {
+      "record_id": "REC-0042",
+      "source_id": "SRC-BOS-V2",
+      "title": "cuadernillos spec",
+      "domain": "evidence",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/bos-v2/cuadernillos_spec.json",
+      "content_sha256": "e971ac42ea284fa73484088cc9428a5421f463dec994452a41a749469b9089ff",
+      "source_ids": [
+        "SRC-BOS-V2"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0043",
+      "source_id": "SRC-COMET-1.4",
+      "title": "EIC NOTES PROTOCOL REHYDRATION v1 4",
+      "domain": "evidence",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/comet-v1.4/EIC_NOTES_PROTOCOL_REHYDRATION_v1_4.md",
+      "content_sha256": "07e92ec44205d00a3d58c59099ec48627732deba9f41209364ab23988c3c1b76",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "evidence_window"
+      }
+    },
+    {
+      "record_id": "REC-0044",
+      "source_id": "SRC-COMET-1.4",
+      "title": "KOP LOCK",
+      "domain": "evidence",
+      "kind": "yaml",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/comet-v1.4/KOP_LOCK.yaml",
+      "content_sha256": "f53177fd0e84545aa26334f48b2b28ac3a40b2efcf173583e13a2a4917f66dde",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0045",
+      "source_id": "SRC-COMET-1.4",
+      "title": "MODULE REGISTRY",
+      "domain": "evidence",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/comet-v1.4/MODULE_REGISTRY.md",
+      "content_sha256": "24bdbdbce06838e56fa43c5db03027805ad0eadd20df2b9f5910d8c2efa360d9",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "evidence_window"
+      }
+    },
+    {
+      "record_id": "REC-0046",
+      "source_id": "SRC-COMET-1.4",
+      "title": "PREFLIGHT REPORT",
+      "domain": "evidence",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/comet-v1.4/PREFLIGHT_REPORT.json",
+      "content_sha256": "6b257dd5b1ca799884f1e2431abc8019197e0492249e3c1441a9b2f1e4c2ba7b",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0047",
+      "source_id": "SRC-COMET-1.4",
+      "title": "PackageManifest",
+      "domain": "evidence",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/comet-v1.4/PackageManifest.json",
+      "content_sha256": "0e4d8b61b556f14621af7453309f8a9426d105ed3fafc82051b115a131d846b6",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0048",
+      "source_id": "SRC-COMET-1.4",
+      "title": "QC EIC NOTES PROTOCOL v1 4",
+      "domain": "evidence",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/comet-v1.4/QC_EIC_NOTES_PROTOCOL_v1_4.json",
+      "content_sha256": "b8ffe188b8b0e6992ab86649d449859891abc76aa7c048aabcd0bcb29ccce2fc",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "schema_object"
+      }
+    },
+    {
+      "record_id": "REC-0049",
+      "source_id": "SRC-COMET-1.4",
+      "title": "SOURCE OF TRUTH REGISTRY",
+      "domain": "evidence",
+      "kind": "md",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/comet-v1.4/SOURCE_OF_TRUTH_REGISTRY.md",
+      "content_sha256": "d81d5d2794f031477f4ece4b3110a2e5bc67e3ec570cedf2a5ab0e15ba36e0f1",
+      "source_ids": [
+        "SRC-COMET-1.4"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "evidence_window"
+      }
+    },
+    {
+      "record_id": "REC-0050",
+      "source_id": "SRC-DMIE-REGISTRY",
+      "title": "KOP SOURCE INDEX",
+      "domain": "evidence",
+      "kind": "csv",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/dmie-mmii/KOP_SOURCE_INDEX.csv",
+      "content_sha256": "7090dc546d546f17d38625771240b499979dcff8947e7d74ccbdaac812557e97",
+      "source_ids": [
+        "SRC-DMIE-REGISTRY"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "evidence_window"
+      }
+    },
+    {
+      "record_id": "REC-0051",
+      "source_id": "SRC-DMIE-REGISTRY",
+      "title": "KOP SOURCE REGISTRY",
+      "domain": "evidence",
+      "kind": "json",
+      "package_version": "3.0.0-rc.1",
+      "line_version": null,
+      "status": "EVIDENCE",
+      "authority": "SOURCE",
+      "confidence": "HIGH",
+      "content_path": "evidence/upstream/dmie-mmii/KOP_SOURCE_REGISTRY.json",
+      "content_sha256": "f7fa7a3d5cad3539386c9de41346312e47490e9ce0aef63231b8beab56ad6bd9",
+      "source_ids": [
+        "SRC-DMIE-REGISTRY"
+      ],
+      "tags": [
+        "evidence",
+        "sources_evidence"
+      ],
+      "retrieval_policy": {
+        "retrieval_eligible": true,
+        "generation_eligible": false,
+        "requires_human_approval": false,
+        "chunk_profile": "schema_object"
+      }
+    }
+  ]
+}

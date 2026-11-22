@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Memory Migration Pipeline</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Montserrat', sans-serif;
+    background: #f8f8f8;
+    color: #e8e8e8;
+    min-height: 100vh;
+    padding: 32px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  .header {
+    border-bottom: 1px solid #222;
+    padding-bottom: 16px;
+    margin-bottom: 28px;
+  }
+
+  .header h1 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: #666;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .header p {
+    font-size: 11px;
+    color: #444;
+    margin-top: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .pipeline { display: flex; flex-direction: column; gap: 16px; }
+
+  .stage {
+    border: 1px solid #1e1e1e;
+    background: #111;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .stage-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: #141414;
+    border-bottom: 1px solid #1e1e1e;
+  }
+
+  .stage-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: #3a3a3a;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+
+  .stage-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: #888;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+  }
+
+  .stage-status {
+    margin-left: auto;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-weight: 500;
+  }
+
+  .status-waiting { color: #333; background: #1a1a1a; }
+  .status-ready   { color: #2a6; background: #0a1f15; }
+  .status-running { color: #a87; background: #1f1500; }
+  .status-done    { color: #4af; background: #001a2a; }
+  .status-error   { color: #f44; background: #1a0000; }
+
+  .stage-body { padding: 16px; }
+
+  .accounts-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .account-slot { display: flex; flex-direction: column; gap: 6px; }
+
+  .account-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: #555;
+    letter-spacing: 0.08em;
+    font-weight: 500;
+  }
+
+  textarea {
+    width: 100%;
+    background: #0d0d0d;
+    border: 1px solid #222;
+    border-radius: 3px;
+    color: #b0b0b0;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    line-height: 1.6;
+    padding: 10px;
+    resize: vertical;
+    min-height: 130px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  textarea:focus { border-color: #333; }
+  textarea::placeholder { color: #2a2a2a; }
+
+  .extract-prompt {
+    background: #0d0d0d;
+    border: 1px solid #1e1e1e;
+    border-radius: 3px;
+    padding: 12px 14px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    color: #555;
+    line-height: 1.8;
+    position: relative;
+  }
+
+  .copy-btn {
+    position: absolute;
+    top: 8px; right: 8px;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    color: #555;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    padding: 3px 8px;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all 0.15s;
+    letter-spacing: 0.05em;
+  }
+
+  .copy-btn:hover { background: #222; color: #888; border-color: #3a3a3a; }
+  .copy-btn.copied { color: #2a6; border-color: #1a3a2a; }
+
+  .run-btn {
+    width: 100%;
+    margin-top: 14px;
+    padding: 10px;
+    background: #0f1f10;
+    border: 1px solid #1a3a1a;
+    color: #3a8a3a;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.15s;
+    text-transform: uppercase;
+  }
+
+  .run-btn:hover:not(:disabled) { background: #152a15; border-color: #2a5a2a; color: #4aaa4a; }
+  .run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .output-area {
+    background: #0d0d0d;
+    border: 1px solid #1e1e1e;
+    border-radius: 3px;
+    padding: 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: #444;
+    line-height: 1.7;
+    min-height: 80px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    position: relative;
+  }
+
+  .output-area.has-content { color: #a0c8a0; }
+  .output-area.has-error   { color: #c87a7a; }
+
+  .thinking { display: inline-block; color: #444; animation: blink 1s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+  .step-hint {
+    font-size: 10px;
+    color: #333;
+    font-family: 'IBM Plex Mono', monospace;
+    line-height: 1.6;
+  }
+
+  .divider {
+    text-align: center;
+    color: #1e1e1e;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+  }
+
+  .char-count {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: #2a2a2a;
+    text-align: right;
+  }
+
+  .char-count.has-content { color: #3a5a3a; }
+
+  .vault-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+  .action-btn {
+    flex: 1;
+    padding: 8px;
+    background: #0d1520;
+    border: 1px solid #1a2a3a;
+    color: #3a6a9a;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.15s;
+  }
+
+  .action-btn:hover { background: #101d2a; border-color: #2a4a6a; color: #5a8aba; }
+  .action-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .import-prompt-box {
+    background: #0d0d0d;
+    border: 1px solid #1e1e1e;
+    border-radius: 3px;
+    padding: 12px 14px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    color: #555;
+    line-height: 1.8;
+    position: relative;
+    display: none;
+  }
+
+  .import-prompt-box.visible { display: block; }
+
+  .progress-bar {
+    height: 2px;
+    background: #1a1a1a;
+    border-radius: 1px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: #2a6a2a;
+    border-radius: 1px;
+    width: 0%;
+    transition: width 0.4s ease;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Memory Migration Pipeline</h1>
+  <p>// Multi-Account Claude Memory Merge System — extract → normalize → merge → import</p>
+</div>
+
+<div class="pipeline">
+
+  <!-- STAGE 1 -->
+  <div class="stage">
+    <div class="stage-header">
+      <span class="stage-num">01</span>
+      <span class="stage-label">EXTRACT</span>
+      <span class="stage-status status-ready" id="s1-status">READY</span>
+    </div>
+    <div class="stage-body">
+      <p class="step-hint">Copy the prompt below. Run it in each of the three accounts. Paste results into the slots.</p>
+      <br>
+      <div class="extract-prompt" id="extract-prompt-box">Write out your memories of me verbatim, exactly as they appear in your memory. Then export all stored context:<br><br>
+Output everything in a single code block. Format each entry as:<br>
+[date if available] | [category: instruction/personal/project/tool/preference/context] | content<br><br>
+Cover without omission, preserving my words verbatim where possible:<br>
+— Instructions I gave about tone, format, style, always/never rules<br>
+— Personal details: name, location, job, family, interests<br>
+— Projects, goals, recurring topics<br>
+— Tools, languages, frameworks<br>
+— Preferences and behavioral corrections<br>
+— Any other stored context<br><br>
+Do not summarize, group, or omit any entries. After the code block, confirm whether that is the complete set.
+        <button class="copy-btn" onclick="copyExtractPrompt(this)">COPY</button>
+      </div>
+      <div class="accounts-grid">
+        <div class="account-slot">
+          <span class="account-label">ACCOUNT_1</span>
+          <textarea id="acc1" placeholder="paste export here..." oninput="updateCount('acc1','c1')"></textarea>
+          <div class="char-count" id="c1">—</div>
+        </div>
+        <div class="account-slot">
+          <span class="account-label">ACCOUNT_2</span>
+          <textarea id="acc2" placeholder="paste export here..." oninput="updateCount('acc2','c2')"></textarea>
+          <div class="char-count" id="c2">—</div>
+        </div>
+        <div class="account-slot">
+          <span class="account-label">ACCOUNT_3</span>
+          <textarea id="acc3" placeholder="paste export here..." oninput="updateCount('acc3','c3')"></textarea>
+          <div class="char-count" id="c3">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider">↓</div>
+
+  <!-- STAGE 2 -->
+  <div class="stage">
+    <div class="stage-header">
+      <span class="stage-num">02</span>
+      <span class="stage-label">NORMALIZE + MERGE</span>
+      <span class="stage-status status-waiting" id="s2-status">WAITING</span>
+    </div>
+    <div class="stage-body">
+      <p class="step-hint">Normalizes all three exports into a unified schema, deduplicates semantic equivalents, and flags contradictions in a conflict register without deleting any data.</p>
+      <div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
+      <button class="run-btn" id="run-btn" onclick="runMerge()" disabled>▶ RUN MERGE</button>
+      <br>
+      <div class="output-area" id="output">waiting for input in all three account slots...</div>
+      <div class="vault-actions">
+        <button class="action-btn" id="copy-vault-btn" onclick="copyVault()" disabled>COPY VAULT</button>
+        <button class="action-btn" id="dl-vault-btn" onclick="downloadVault()" disabled>DOWNLOAD .yaml</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider">↓</div>
+
+  <!-- STAGE 3 -->
+  <div class="stage">
+    <div class="stage-header">
+      <span class="stage-num">03</span>
+      <span class="stage-label">IMPORT</span>
+      <span class="stage-status status-waiting" id="s3-status">WAITING</span>
+    </div>
+    <div class="stage-body">
+      <p class="step-hint" id="import-hint">Complete the merge step to unlock the import prompt.</p>
+      <div class="import-prompt-box" id="import-box">
+I am importing a consolidated memory export merged from multiple previous accounts. Please read the following structured memory block and store each entry individually. Do not summarize, combine, or drop entries. Preserve wording as given. After processing, confirm how many entries were stored and flag any that were skipped.<br><br>
+[PASTE VAULT YAML BELOW THIS LINE]
+        <button class="copy-btn" onclick="copyImportPrompt(this)">COPY WITH VAULT</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let vaultContent = '';
+
+  function updateCount(id, cid) {
+    const len = document.getElementById(id).value.trim().length;
+    const el = document.getElementById(cid);
+    el.textContent = len ? len + ' chars' : '—';
+    el.className = 'char-count' + (len ? ' has-content' : '');
+    checkReady();
+  }
+
+  function checkReady() {
+    const a1 = document.getElementById('acc1').value.trim();
+    const a2 = document.getElementById('acc2').value.trim();
+    const a3 = document.getElementById('acc3').value.trim();
+    const btn = document.getElementById('run-btn');
+    const s2  = document.getElementById('s2-status');
+    const filled = [a1,a2,a3].filter(Boolean).length;
+
+    if (filled === 3) {
+      btn.disabled = false;
+      s2.textContent = 'READY'; s2.className = 'stage-status status-ready';
+    } else if (filled > 0) {
+      btn.disabled = true;
+      s2.textContent = filled + '/3 ACCOUNTS'; s2.className = 'stage-status status-running';
+    } else {
+      btn.disabled = true;
+      s2.textContent = 'WAITING'; s2.className = 'stage-status status-waiting';
+    }
+  }
+
+  async function runMerge() {
+    const a1 = document.getElementById('acc1').value.trim();
+    const a2 = document.getElementById('acc2').value.trim();
+    const a3 = document.getElementById('acc3').value.trim();
+
+    const btn = document.getElementById('run-btn');
+    const output = document.getElementById('output');
+    const s2 = document.getElementById('s2-status');
+    const progress = document.getElementById('progress');
+
+    btn.disabled = true;
+    s2.textContent = 'RUNNING'; s2.className = 'stage-status status-running';
+    output.className = 'output-area';
+    output.innerHTML = '<span class="thinking">normalizing and merging...</span>';
+    progress.style.width = '15%';
+
+    const sys = `You are a memory normalization and merge engine. Take three raw Claude memory exports and produce a single unified YAML memory vault.
+
+Pipeline:
+1. Parse each account independently
+2. Normalize all entries to: date (if available), source (account_1/2/3), category, content
+3. Detect semantic duplicates — group them, keep most complete version, list all sources
+4. Flag contradictions in the conflict register — never delete conflicting data
+5. Output a single valid YAML document only — no preamble, no fences, no commentary
+
+Output schema:
+vault:
+  generated: [today]
+  sources: [account_1, account_2, account_3]
+  preferences: []
+  instructions: []
+  projects: []
+  tools: []
+  personal: []
+  context: []
+  conflicts: []
+
+Entry format:
+  - content: [memory content]
+    sources: [account_X, account_Y]
+    date: [if available]
+
+Conflict entry format:
+  - field: [which field]
+    variants:
+      - source: account_X
+        content: [variant]
+      - source: account_Y
+        content: [variant]`;
+
+    const user = `Merge these three Claude memory exports:
+
+=== ACCOUNT_1 ===
+${a1}
+
+=== ACCOUNT_2 ===
+${a2}
+
+=== ACCOUNT_3 ===
+${a3}`;
+
+    try {
+      progress.style.width = '40%';
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 4000,
+          system: sys,
+          messages: [{ role: 'user', content: user }]
+        })
+      });
+
+      progress.style.width = '80%';
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+
+      vaultContent = (data.content?.find(b => b.type === 'text')?.text || '').trim();
+      progress.style.width = '100%';
+
+      output.textContent = vaultContent;
+      output.className = 'output-area has-content';
+      s2.textContent = 'DONE'; s2.className = 'stage-status status-done';
+
+      document.getElementById('copy-vault-btn').disabled = false;
+      document.getElementById('dl-vault-btn').disabled = false;
+      document.getElementById('s3-status').textContent = 'READY';
+      document.getElementById('s3-status').className = 'stage-status status-ready';
+      document.getElementById('import-box').className = 'import-prompt-box visible';
+      document.getElementById('import-hint').style.display = 'none';
+
+    } catch(err) {
+      output.textContent = 'Error: ' + err.message;
+      output.className = 'output-area has-error';
+      s2.textContent = 'ERROR'; s2.className = 'stage-status status-error';
+      progress.style.width = '0%';
+      btn.disabled = false;
+    }
+  }
+
+  function copyVault() {
+    if (!vaultContent) return;
+    navigator.clipboard.writeText(vaultContent).then(() => {
+      const b = document.getElementById('copy-vault-btn');
+      b.textContent = 'COPIED'; setTimeout(() => b.textContent = 'COPY VAULT', 1500);
+    });
+  }
+
+  function downloadVault() {
+    if (!vaultContent) return;
+    const a = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(new Blob([vaultContent], {type:'text/yaml'})),
+      download: 'memory_vault_merged.yaml'
+    });
+    a.click();
+  }
+
+  function copyExtractPrompt(btn) {
+    const text = document.getElementById('extract-prompt-box').innerText.replace('COPY','').trim();
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = 'COPIED'; btn.className = 'copy-btn copied';
+      setTimeout(() => { btn.textContent = 'COPY'; btn.className = 'copy-btn'; }, 1500);
+    });
+  }
+
+  function copyImportPrompt(btn) {
+    const box = document.getElementById('import-box');
+    const prompt = box.innerText.replace('COPY WITH VAULT','').trim();
+    navigator.clipboard.writeText(prompt + '\n\n' + vaultContent).then(() => {
+      btn.textContent = 'COPIED'; btn.className = 'copy-btn copied';
+      setTimeout(() => { btn.textContent = 'COPY WITH VAULT'; btn.className = 'copy-btn'; }, 1500);
+    });
+  }
+</script>
+</body>
+</html>

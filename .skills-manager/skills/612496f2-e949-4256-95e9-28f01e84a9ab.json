@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "612496f2-e949-4256-95e9-28f01e84a9ab",
+  "path": "harness-export",
+  "path_key": "harness-export",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

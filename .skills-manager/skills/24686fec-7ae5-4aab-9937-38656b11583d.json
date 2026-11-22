@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "24686fec-7ae5-4aab-9937-38656b11583d",
+  "path": "email-template-generator",
+  "path_key": "email-template-generator",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

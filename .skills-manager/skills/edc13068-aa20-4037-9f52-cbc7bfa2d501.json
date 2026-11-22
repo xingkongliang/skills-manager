@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "edc13068-aa20-4037-9f52-cbc7bfa2d501",
+  "path": "agentation",
+  "path_key": "agentation",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

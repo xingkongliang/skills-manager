@@ -1,0 +1,23 @@
+METANOIA DIVIDE · DE MANO · INGESTION v1 · DRY_RUN
+Run: RUN-DEMANO-DIVIDE-V1-20260728T030459-0600
+
+PASS · JSON parses as UTF-8
+PASS · schema_version = metanoia-divide/1.0
+PASS · deterministic validator
+  demand_signals: 2
+  vendors: 4
+  evidence: 12
+  opportunities: 1
+PASS · stable prefixed IDs are unique
+PASS · all DI/VI/EV/DE references resolve
+PASS · no SALE_APPROVED state emitted
+PASS · five CSV tables have consistent column widths
+PASS · candidate records planned: 20
+PASS · production writes: 0
+
+Dry-run conflicts retained:
+  CF-DM-001 · RPR state semantics
+  CF-DM-002 · provider placeholder mapping
+
+Status: READY_FOR_REVIEW
+Next gate: REVIEW_AND_AUTHORIZE_STAGING

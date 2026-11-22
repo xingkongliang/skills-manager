@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "6274757c-f914-4eaf-b836-c74a32ac5d6e",
+  "path": "manage-skills",
+  "path_key": "manage-skills",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "git",
+    "ref": "https://github.com/iridiscenterinc/skills-manager-backup.git",
+    "subpath": "skills/manage-skills",
+    "branch": null
+  }
+}

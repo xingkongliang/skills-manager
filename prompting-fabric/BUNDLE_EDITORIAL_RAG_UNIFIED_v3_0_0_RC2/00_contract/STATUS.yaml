@@ -1,0 +1,36 @@
+package_id: BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC2
+package_version: 3.0.0-rc.2
+generated_at: '2026-07-23T00:00:00-06:00'
+state: DRAFT_FOR_APPROVAL
+checkpoint: RC2_FACTUAL_REGISTRY_PATCH
+objective: Factual registry patch over RC1; corrects Literatura load state and refines C-001/C-002 semantics
+patch_type: factual_registry_patch
+release_decision: REVIEW
+canon_status: NOT_FINAL_CANON
+csf:
+  - Literatura corrected to LOAD_PARCIAL 12/20; missing entries [9-16] registered not generated
+  - C-001 refined to SOURCE_IDENTIFIED_NOT_MATERIALIZED_IN_RC1 with structural pointer
+  - C-002 refined to HTML_COMPLETE_RUNTIME_QA_PENDING; completeness sanity resolved
+  - C-004, C-005, C-009 preserved open without change
+okr:
+  - objective: Apply minimal factual registry patch without editorial mutation
+    key_results:
+      - No content files modified
+      - No missing entries generated
+      - No HTML reconstructed
+      - All patched JSON/YAML parse
+      - SHA256SUMS and PackageManifest recomputed
+kpi:
+  open_blockers: 2
+  registered_conflicts: 10
+  current_authored_lines: 3
+  runtime_candidates: 1
+  missing_required_runtime_artifacts: 1
+  literatura_present_entries: 12
+  literatura_missing_entries: 8
+gates:
+  source_gate: PASS
+  architecture_gate: PASS
+  package_integrity_gate: PASS_PENDING_FINAL_VALIDATION
+  editorial_runtime_gate: BLOCKED
+  canon_gate: PENDING_DIRECTOR_DECISION

@@ -1,0 +1,230 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1",
+  "modules": [
+    {
+      "module_id": "M00_CORE_CONTRACT",
+      "layer": "N0",
+      "purpose": "Truth states, versions and invariants",
+      "inputs": [
+        "User scope",
+        "source boundaries"
+      ],
+      "outputs": [
+        "status",
+        "locks"
+      ],
+      "dependencies": [],
+      "owner": "Core AI / Director"
+    },
+    {
+      "module_id": "M01_SOURCE_REGISTRY",
+      "layer": "N0",
+      "purpose": "Source identities, hashes, authority and conflicts",
+      "inputs": [
+        "Physical bytes",
+        "verified registries"
+      ],
+      "outputs": [
+        "source records",
+        "conflict records"
+      ],
+      "dependencies": [
+        "M00_CORE_CONTRACT"
+      ],
+      "owner": "Codex Engineer"
+    },
+    {
+      "module_id": "M02_RAG_GOVERNANCE",
+      "layer": "N1",
+      "purpose": "Metadata, collections, chunking and retrieval filters",
+      "inputs": [
+        "source records"
+      ],
+      "outputs": [
+        "RAG ingest index",
+        "retrieval context"
+      ],
+      "dependencies": [
+        "M01_SOURCE_REGISTRY"
+      ],
+      "owner": "Codex Engineer"
+    },
+    {
+      "module_id": "M03_ROUTER",
+      "layer": "N1",
+      "purpose": "Route query to line, engine, protocol and skill",
+      "inputs": [
+        "intent",
+        "filtered retrieval context"
+      ],
+      "outputs": [
+        "execution contract"
+      ],
+      "dependencies": [
+        "M02_RAG_GOVERNANCE",
+        "M04_SKILL_ROUTER"
+      ],
+      "owner": "Core AI"
+    },
+    {
+      "module_id": "M04_SKILL_ROUTER",
+      "layer": "N1",
+      "purpose": "Activate minimal authorized skill set",
+      "inputs": [
+        "task",
+        "explicit style requests"
+      ],
+      "outputs": [
+        "skill plan"
+      ],
+      "dependencies": [
+        "M00_CORE_CONTRACT"
+      ],
+      "owner": "Core AI"
+    },
+    {
+      "module_id": "M05_LINE_REGISTRY",
+      "layer": "N1",
+      "purpose": "Separate current, candidate and proposed lines",
+      "inputs": [
+        "BOS line sources",
+        "Director decisions"
+      ],
+      "outputs": [
+        "line contract"
+      ],
+      "dependencies": [
+        "M01_SOURCE_REGISTRY"
+      ],
+      "owner": "Editorial Director"
+    },
+    {
+      "module_id": "M06_DMIE_MMII_ENGINE",
+      "layer": "N2",
+      "purpose": "Render approved line contracts through DMIE/MMII",
+      "inputs": [
+        "line contract",
+        "mounted master runtime"
+      ],
+      "outputs": [
+        "workbook artifact"
+      ],
+      "dependencies": [
+        "M05_LINE_REGISTRY"
+      ],
+      "owner": "Codex Engineer",
+      "state": "BLOCKED_MISSING_MASTER_RUNTIME"
+    },
+    {
+      "module_id": "M07_COMET_ADAPTER",
+      "layer": "N2",
+      "purpose": "Expose Comet v1.4 as a reviewable line/runtime candidate",
+      "inputs": [
+        "Comet source",
+        "line contract"
+      ],
+      "outputs": [
+        "candidate HTML",
+        "print handoff"
+      ],
+      "dependencies": [
+        "M05_LINE_REGISTRY"
+      ],
+      "owner": "Codex Engineer",
+      "state": "CANDIDATE"
+    },
+    {
+      "module_id": "M08_DRAME_COMPOSER",
+      "layer": "N1_N2",
+      "purpose": "Definition, Registry, Architecture, Making, Evaluation",
+      "inputs": [
+        "line contract",
+        "sources",
+        "tokens"
+      ],
+      "outputs": [
+        "brief",
+        "docspec",
+        "production plan",
+        "artifact package"
+      ],
+      "dependencies": [
+        "M03_ROUTER",
+        "M05_LINE_REGISTRY"
+      ],
+      "owner": "Editorial Director + Crafter"
+    },
+    {
+      "module_id": "M09_EIC_NOTES",
+      "layer": "N2",
+      "purpose": "Generate traceable editorial direction notes",
+      "inputs": [
+        "EIC JSON",
+        "schema",
+        "template"
+      ],
+      "outputs": [
+        "Markdown",
+        "optional PDF"
+      ],
+      "dependencies": [
+        "M08_DRAME_COMPOSER"
+      ],
+      "owner": "Editor in Chief"
+    },
+    {
+      "module_id": "M10_QA_AEQUITAS",
+      "layer": "GATE",
+      "purpose": "Fidelity, coherence, necessity, precision and elegance audit",
+      "inputs": [
+        "artifact",
+        "provenance",
+        "technical checks"
+      ],
+      "outputs": [
+        "PASS",
+        "REVIEW",
+        "FAIL"
+      ],
+      "dependencies": [
+        "M08_DRAME_COMPOSER",
+        "M09_EIC_NOTES"
+      ],
+      "owner": "ÆQUITAS / Director"
+    },
+    {
+      "module_id": "M11_RELEASE_HANDOFF",
+      "layer": "GATE",
+      "purpose": "Seal hashes, CMP, rollback and D decision",
+      "inputs": [
+        "QA report",
+        "delta"
+      ],
+      "outputs": [
+        "candidate bundle",
+        "ACCEPT/PATCH/REJECT request"
+      ],
+      "dependencies": [
+        "M10_QA_AEQUITAS"
+      ],
+      "owner": "D · QA / MERGE / RELEASE HANDOFF"
+    },
+    {
+      "module_id": "M12_METANO_MEMORY",
+      "layer": "CONTINUITY",
+      "purpose": "Portable memory snapshot and cross-session delta",
+      "inputs": [
+        "current-run facts"
+      ],
+      "outputs": [
+        "CMP",
+        "memory delta"
+      ],
+      "dependencies": [
+        "M11_RELEASE_HANDOFF"
+      ],
+      "owner": "METANO_IA"
+    }
+  ]
+}

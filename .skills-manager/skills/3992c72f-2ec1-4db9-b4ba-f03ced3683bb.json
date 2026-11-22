@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "3992c72f-2ec1-4db9-b4ba-f03ced3683bb",
+  "path": "animation-vocabulary",
+  "path_key": "animation-vocabulary",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

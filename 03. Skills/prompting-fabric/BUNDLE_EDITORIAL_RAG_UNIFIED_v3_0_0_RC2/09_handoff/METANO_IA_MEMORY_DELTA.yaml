@@ -1,0 +1,33 @@
+
+# METANO_IA — Memory Snapshot
+# Fecha: 2026-07-22
+# Sesión: Bundle Editorial RAG Unificado
+
+delta:
+  avances:
+    - proyecto: Bundle Editorial RAG Unificado
+      estado_anterior: fuentes dispersas y estados contradictorios
+      estado_actual: RC1 físico, documentado y validable
+      próximo_paso: decisión D y recuperación del master DMIE/MMII
+  decisiones_tomadas:
+    - conservar estado DRAFT_FOR_APPROVAL
+    - separar package_version de line_version
+    - no reconstruir runtime ausente
+    - tratar Prometheus/SELAH históricos como patrones, no runtime
+  conflictos_pendientes:
+    - C-001
+    - C-002
+    - C-004
+    - C-005
+    - C-009
+
+memoria_acumulada:
+  package_id: BUNDLE_EDITORIAL_RAG_UNIFIED_v3_0_0_RC1
+  package_version: 3.0.0-rc.1
+  status: DRAFT_FOR_APPROVAL
+  current_lines: [Literatura, Clínica, Espiritual]
+  candidate_runtime: Comet Striker Creative Journey v1.4
+  blocked_engine: DMIE/MMII master not mounted
+  candidate_line: Self-Care/Journey v4 spec-only
+  canon_declared: false
+  next_gate: D · QA / MERGE / RELEASE HANDOFF

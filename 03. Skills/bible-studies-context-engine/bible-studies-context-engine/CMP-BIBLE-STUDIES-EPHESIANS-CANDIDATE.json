@@ -1,0 +1,322 @@
+{
+  "metadata": {
+    "document_id": "CMP-BIBLE-EPHESIANS-CAND-001",
+    "skill_applied": "bible-studies-context-engine v0.1.0-draft",
+    "timestamp": "2026-08-11T09:06:48-06:00",
+    "status": "DRAFT_FOR_APPROVAL",
+    "target_gates": ["E · Capability Governance", "D · QA / MERGE / RELEASE"]
+  },
+
+  "section_1_comprension_reconstruida": {
+    "titulo": "Estudio de Efesios 1:1–14 con Mapeos GEMA",
+    "descripcion": "Reconstrucción de fragmentos dispersos en 3 chats + Notion doc hacia un estado canónico preliminar",
+    "scope": {
+      "libros_biblicos": ["Efesios 1:1–14"],
+      "mapeos_gema": "Versículos ↔ Tribus + Gemas + Colores LUMINA",
+      "entregables": "CMP estructurado + patch para Gate D"
+    },
+    "estado_actual": "3 mapeos identificados: 2 CANON, 1 PROVISIONAL, 1 conflicto detectado",
+    "objetivo": "Entregar candidato verificado a Gate D para merge a Main"
+  },
+
+  "section_2_estado_normalizado": {
+    "hechos_clasificados": [
+      {
+        "id": "FACT-001",
+        "versiculos": "Efesios 1:1",
+        "tribu_gema": "Judá / Diamante",
+        "color_lumina": "#FFFFFF (Diamante)",
+        "classification": "CANON",
+        "source_id": "SRC-001",
+        "timestamp": "2026-08-01T10:00:00Z",
+        "authority": "Gate E (verificado 2026-08-01)",
+        "notes": "Verificado en sesión de canonicidad oficial"
+      },
+      {
+        "id": "FACT-002",
+        "versiculos": "Efesios 1:3",
+        "tribu_gema": "Asher / Topacio",
+        "color_lumina": "#D4AF37 (Topacio)",
+        "classification": "PROVISIONAL",
+        "source_id": "SRC-002",
+        "timestamp": "2026-08-09T14:23:00Z",
+        "authority": "UNKNOWN (usuario propose; pendiente Gate E)",
+        "notes": "Draft propuesto post-baseline. Conflicto: SRC-004 sugiere Judá en lugar de Asher.",
+        "conflict_with": "FACT-004"
+      },
+      {
+        "id": "FACT-003",
+        "versiculos": "Efesios 1:14",
+        "tribu_gema": "Benjamin / Sardio",
+        "color_lumina": "#DC143C (Sardio)",
+        "classification": "UNKNOWN",
+        "source_id": "SRC-003",
+        "timestamp": "2026-08-10T08:45:00Z",
+        "authority": "No verificado",
+        "notes": "Necesita verificación exegética + validación LUMINA color hex",
+        "blocker": true
+      },
+      {
+        "id": "FACT-004",
+        "versiculos": "Efesios 1:3",
+        "tribu_gema": "Judá / Diamante",
+        "color_lumina": "#FFFFFF",
+        "classification": "PROVISIONAL",
+        "source_id": "SRC-004",
+        "timestamp": "2026-08-10T16:12:00Z",
+        "authority": "UNKNOWN",
+        "notes": "Contradice FACT-002. Ambas son válidas exegéticamente; requiere resolución de usuario.",
+        "conflict_with": "FACT-002"
+      }
+    ],
+    "timeline_decisiones": [
+      {
+        "fecha": "2026-08-01",
+        "evento": "Gate E aprob Efesios 1:1 ↔ Judá + Diamante (CANON)",
+        "source": "SRC-001"
+      },
+      {
+        "fecha": "2026-08-09",
+        "evento": "Usuario propone Efesios 1:3 ↔ Asher (PROVISIONAL, pendiente)",
+        "source": "SRC-002"
+      },
+      {
+        "fecha": "2026-08-10",
+        "evento": "Usuario detecta alternativa: Efesios 1:3 ↔ Judá también válido (conflicto creado)",
+        "source": "SRC-004"
+      },
+      {
+        "fecha": "2026-08-10",
+        "evento": "Mapeo de Efesios 1:14 ↔ Benjamin propuesto (requiere verificación)",
+        "source": "SRC-003"
+      }
+    ]
+  },
+
+  "section_3_source_evidence_boundaries": {
+    "sources": [
+      {
+        "source_id": "SRC-001",
+        "nombre": "Notion - Estudios Bíblicos Oficiales",
+        "tipo": "documento estructurado",
+        "disponibilidad": "ACCESSIBLE (lectura)",
+        "autoridad": "Gate E (Official Canon)",
+        "hash": "sha256:abc123def456...",
+        "notas": "Contiene baseline CANON de Eph 1:1–1:7"
+      },
+      {
+        "source_id": "SRC-002",
+        "nombre": "Chat Claude #3729 (2026-08-09)",
+        "tipo": "conversación",
+        "disponibilidad": "ACCESSIBLE (lectura)",
+        "autoridad": "Usuario (Ale)",
+        "notas": "Propuesta de Eph 1:3 ↔ Asher; sin autorización Gate E aún"
+      },
+      {
+        "source_id": "SRC-003",
+        "nombre": "Email (2026-08-10, incoming)",
+        "tipo": "email",
+        "disponibilidad": "ACCESSIBLE (lectura)",
+        "autoridad": "Usuario (Ale)",
+        "notas": "Mapeo de Eph 1:14 ↔ Benjamin; verificación pendiente"
+      },
+      {
+        "source_id": "SRC-004",
+        "nombre": "Chat Claude #3745 (2026-08-10)",
+        "tipo": "conversación",
+        "disponibilidad": "ACCESSIBLE (lectura)",
+        "autoridad": "Usuario (Ale)",
+        "notas": "Alternativa a SRC-002: Eph 1:3 ↔ Judá; crea conflicto"
+      },
+      {
+        "source_id": "SRC-UNAVAILABLE-001",
+        "nombre": "LUMINA Brand Kit (oficial)",
+        "tipo": "design system",
+        "disponibilidad": "INACCESSIBLE (cuarentena de datos)",
+        "autoridad": "name-brand-identity-studio-v2",
+        "notas": "Referencia para validar hex colors; acceso bloqueado (governance)"
+      }
+    ],
+    "authority_matrix": {
+      "CANON_declaration": "Gate E (Capability Governance)",
+      "PROVISIONAL_approval": "Gate E (recomendado pero no requerido)",
+      "Conflict_resolution": "Usuario + Gate E",
+      "UNKNOWN_verification": "Usuario o dominio exegético especializado",
+      "Merge_to_Main": "Gate D (QA / MERGE / RELEASE)"
+    }
+  },
+
+  "section_4_conflictos_y_unknown": {
+    "conflictos": [
+      {
+        "conflict_id": "CONF-001",
+        "hechos": ["FACT-002", "FACT-004"],
+        "tipo": "Mapeo dual: Eph 1:3 ↔ Asher vs. Judá",
+        "severidad": "MEDIUM",
+        "descripcion": "Usuario propuso Eph 1:3 ↔ Asher (SRC-002), pero luego también sugirió Judá (SRC-004). Ambas son exegéticamente defensibles.",
+        "resolution_required_by": "Usuario + Gate E",
+        "resolution_path": "Seleccionar una tribu, o documentar ambas como interpretaciones válidas"
+      }
+    ],
+    "unknown": [
+      {
+        "unknown_id": "UNK-001",
+        "hecho": "¿Eph 1:3 debe mapear a Asher o Judá?",
+        "razon": "Usuario propone ambas sin decisión clara",
+        "impacto": "Bloquea merge de FACT-002 y FACT-004",
+        "quien_resuelve": "Usuario + exegeta (si aplica) + Gate E"
+      },
+      {
+        "unknown_id": "UNK-002",
+        "hecho": "¿Color hex #DC143C es válido en LUMINA para Sardio?",
+        "razon": "LUMINA Brand Kit inaccesible (cuarentena de datos)",
+        "impacto": "FACT-003 no puede validarse completamente",
+        "quien_resuelve": "name-brand-identity-studio-v2 o Gate E"
+      },
+      {
+        "unknown_id": "UNK-003",
+        "hecho": "¿Eph 1:14 exegesis está verificada?",
+        "razon": "Usuario propone Benjamin, pero no hay revisión académica visible",
+        "impacto": "FACT-003 clasificada UNKNOWN",
+        "quien_resuelve": "Usuario o especialista en exégesis bíblica"
+      }
+    ],
+    "escalaciones_requeridas": [
+      "Resolver UNK-001 (Eph 1:3 tribu) antes de merge",
+      "Validar UNK-002 (color LUMINA) con brand governance",
+      "Verificar UNK-003 (Eph 1:14 exegesis) con usuario"
+    ]
+  },
+
+  "section_5_modulo_dueno": {
+    "owner_primario": {
+      "skill": "opal-bos-skill",
+      "dominio": "Bible Studies / GEMA Mappings",
+      "autoridad": "Governance, canon preservation, SELAH gating"
+    },
+    "dependencias_secundarias": [
+      {
+        "skill": "aeq-memory-intake-handoff-v01",
+        "funcion": "Continuidad de contexto entre sesiones"
+      },
+      {
+        "skill": "production-director-style",
+        "funcion": "Ejecución de artefactos si handoff se acepta"
+      },
+      {
+        "skill": "name-brand-identity-studio-v2",
+        "funcion": "Validación de colores LUMINA"
+      },
+      {
+        "skill": "normalize-rebuild-handoff",
+        "funcion": "Framework de normalización aplicado aquí"
+      }
+    ],
+    "no_mutations": [
+      "opal-bos-skill (leer solo)",
+      "Datos canónicos de Codex GEMA",
+      "LUMINA Brand Kit",
+      "Main rama"
+    ]
+  },
+
+  "section_6_siguiente_accion_segura": {
+    "bloqueadores_criticos": [
+      {
+        "bloqueador": "UNK-001 (Eph 1:3 tribu ambigua)",
+        "resolucion": "Usuario elige Asher o Judá, o aprueba mapeo dual",
+        "timeline": "Antes de Gate D merge",
+        "propietario": "Usuario (Ale)"
+      }
+    ],
+    "acciones_recomendadas": [
+      {
+        "accion": "1. Usuario resuelve UNK-001",
+        "quien": "Usuario",
+        "resultado": "Claridad en FACT-002 vs FACT-004"
+      },
+      {
+        "accion": "2. Gate E valida FACT-002 (Asher) o FACT-004 (Judá) seleccionado",
+        "quien": "Gate E (Capability Governance)",
+        "resultado": "Upgrade de PROVISIONAL a VALIDATED"
+      },
+      {
+        "accion": "3. name-brand-identity-studio-v2 verifica hex #DC143C (Sardio)",
+        "quien": "Brand Studio",
+        "resultado": "Upgrade FACT-003 de UNKNOWN a VALIDATED"
+      },
+      {
+        "accion": "4. Gate D ejecuta QC-01..10 + ÆQUITAS AQ1–AQ5",
+        "quien": "Gate D",
+        "resultado": "Aprobación o PATCH requerido"
+      },
+      {
+        "accion": "5. Mergear a Main si ACCEPT",
+        "quien": "Gate D",
+        "resultado": "Efesios 1:1–14 CANON en repo oficial"
+      }
+    ],
+    "responsable_siguiente_turno": "Usuario (resuelve UNK-001) → Gate E → Gate D"
+  },
+
+  "section_7_cmp_handoff_copy_paste": {
+    "compact_json": {
+      "project": "Ephesians 1:1-14 GEMA Mappings",
+      "status": "DRAFT_FOR_APPROVAL",
+      "version": "0.1.0-candidate",
+      "facts": {
+        "CANON": [
+          {"verse": "Eph 1:1", "tribe_gem": "Judah/Diamond", "color": "#FFFFFF", "authority": "Gate E", "source": "SRC-001"}
+        ],
+        "PROVISIONAL": [
+          {"verse": "Eph 1:3", "tribe_gem": "Asher/Topaz", "color": "#D4AF37", "authority": "UNKNOWN", "source": "SRC-002", "conflict": "vs Judah (SRC-004)"}
+        ],
+        "UNKNOWN": [
+          {"verse": "Eph 1:14", "tribe_gem": "Benjamin/Sardius", "color": "#DC143C", "authority": "unverified", "source": "SRC-003", "blockers": ["color validation", "exegesis review"]}
+        ]
+      },
+      "conflicts": ["Eph 1:3: Asher vs Judah (both exegetically valid, user decision needed)"],
+      "next_action": "User resolve UNK-001 → Gate E validate → Gate D merge",
+      "gates": ["E (governance)", "D (QA/merge)"],
+      "sha256": "PENDING_UPON_E_APPROVAL"
+    }
+  },
+
+  "section_8_delta_commit_ready": {
+    "baseline": "SRC-001 (2026-08-01, CANON: Eph 1:1 only)",
+    "changeset": [
+      {
+        "tipo": "NEW_FACT",
+        "fact_id": "FACT-002",
+        "cambio": "Agregado: Eph 1:3 ↔ Asher (PROVISIONAL)",
+        "source": "SRC-002",
+        "status": "pendiente Gate E approval",
+        "reviewable_by": "usuario + Gate E"
+      },
+      {
+        "tipo": "CONFLICT_DETECTED",
+        "fact_id": "FACT-004",
+        "cambio": "Alternativa: Eph 1:3 ↔ Judá (contradict FACT-002)",
+        "source": "SRC-004",
+        "status": "pendiente resolución",
+        "action_required": "usuario elige 1"
+      },
+      {
+        "tipo": "NEW_FACT",
+        "fact_id": "FACT-003",
+        "cambio": "Agregado: Eph 1:14 ↔ Benjamin (UNKNOWN)",
+        "source": "SRC-003",
+        "status": "pendiente verificación exegética + color LUMINA",
+        "blockers": ["UNK-002", "UNK-003"]
+      }
+    ],
+    "summary": "3 cambios agregados (1 CANON, 1 PROVISIONAL, 1 UNKNOWN). 1 conflicto crítico (Eph 1:3). 3 bloqueadores para Gate D merge.",
+    "decision_options": {
+      "ACCEPT": "Todos los cambios válidos; proceder a Gate D",
+      "PATCH": "Arreglar UNK-001, UNK-002, UNK-003; resubmit",
+      "REJECT": "Volver a SRC-001 baseline; no cambios"
+    },
+    "cmp_status": "DRAFT_FOR_APPROVAL",
+    "awaiting_response": "Gate E → Gate D"
+  }
+}

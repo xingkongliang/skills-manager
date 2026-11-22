@@ -1,0 +1,5 @@
+# 자동 생성 — scripts/build-targets.py (packaging/targets.json skillInterface).
+# 손으로 고치지 말 것: SKILL.md frontmatter 를 고치고 --write 로 재생성한다.
+interface:
+  display_name: "debug"
+  short_description: "Investigate a failure whose cause is not evident from the error itself - flaky or intermittent failures, failures that only happen in CI or one environment, or errors with several plausible causes across files - by reproducing, isolating, fixing and verifying."

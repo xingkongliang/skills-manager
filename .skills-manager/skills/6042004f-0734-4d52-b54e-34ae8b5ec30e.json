@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "6042004f-0734-4d52-b54e-34ae8b5ec30e",
+  "path": "frontend-design-principles",
+  "path_key": "frontend-design-principles",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}
