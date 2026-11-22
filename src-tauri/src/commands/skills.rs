@@ -890,6 +890,17 @@ pub fn delete_managed_skills_by_ids(
                 continue;
             };
 
+            // Checked before anything is removed, deployments included.
+            if let Err(error) = library_dir(&skill.central_path) {
+                store.log_audit(
+                    AuditDraft::new("remove")
+                        .skill(skill_id.clone(), skill.name.clone())
+                        .fail(error.to_string()),
+                );
+                failed.push(skill_id.clone());
+                continue;
+            }
+
             let targets = store.get_targets_for_skill(skill_id)?;
             for target in &targets {
                 sync_engine::remove_recorded_target_or_warn(
@@ -2041,7 +2052,7 @@ pub async fn relink_local_skill_source(
 
         let result = (|| -> Result<(Vec<PendingRemoval>, Option<String>), AppError> {
             let _lock = RepoLock::acquire_foreground("relink local skill").map_err(AppError::db)?;
-            let staged_path = staged_path_for(&skill.central_path);
+            let staged_path = staged_path_for(&skill.central_path)?;
             let install_result = installer::install_from_local_to_destination(
                 &path,
                 Some(&skill.name),
@@ -2299,7 +2310,7 @@ pub fn update_git_skill_internal(
         // installer's output, not the raw checkout — it drops `.git` and every
         // symlink — so comparing against the checkout would report a path as
         // surviving that the swap then removes.
-        let staged_path = staged_path_for(&skill.central_path);
+        let staged_path = staged_path_for(&skill.central_path)?;
         let install_result = if content_changed {
             Some(
                 installer::install_skill_dir_to_destination(&skill_dir, &skill.name, &staged_path)
@@ -2592,7 +2603,7 @@ pub fn set_git_source_internal(
         // copy exactly the set of files `content_hash` covers, so the rewrite
         // could alter files while still reporting `content_changed: false`.
         let description = if content_changed {
-            let staged_path = staged_path_for(&skill.central_path);
+            let staged_path = staged_path_for(&skill.central_path)?;
             let install_result =
                 installer::install_skill_dir_to_destination(&skill_dir, &skill.name, &staged_path)
                     .inspect_err(|_| {
@@ -2716,7 +2727,7 @@ pub fn reimport_local_skill_internal(
 
     let result = (|| -> Result<(Vec<PendingRemoval>, Option<String>), AppError> {
         let _lock = RepoLock::acquire_foreground("reimport local skill").map_err(AppError::db)?;
-        let staged_path = staged_path_for(&skill.central_path);
+        let staged_path = staged_path_for(&skill.central_path)?;
         let install_result =
             installer::install_from_local_to_destination(&path, Some(&skill.name), &staged_path)
                 .inspect_err(|_| {
@@ -3306,16 +3317,27 @@ fn resolve_install_target(
     source_ref: &str,
     skill_id: &str,
 ) -> Result<(String, PathBuf), AppError> {
+    if skill_id.trim().is_empty() {
+        return Err(AppError::invalid_input("Skill id is empty"));
+    }
+    // Judged as given: trimming first would rewrite `demo ` into `demo`.
+    let base_name = skill_id;
+    // The id comes from a skills.sh listing or a CLI argument and becomes a
+    // directory name under the library: anything but one plain path segment
+    // could land the install elsewhere (#422).
+    if !skill_metadata::is_portable_dir_name(base_name) {
+        return Err(AppError::invalid_input(format!(
+            "Invalid skill id: '{skill_id}'"
+        )));
+    }
+
     if let Some(existing) = store
         .get_skill_by_source_ref(source_type, source_ref)
         .map_err(AppError::db)?
     {
-        return Ok((existing.name, PathBuf::from(existing.central_path)));
-    }
-
-    let base_name = skill_id.trim();
-    if base_name.is_empty() {
-        return Err(AppError::invalid_input("Skill id is empty"));
+        // The installer replaces this directory wholesale.
+        let central_path = library_dir(&existing.central_path)?;
+        return Ok((existing.name, central_path));
     }
 
     let mut attempt = 1;
@@ -3341,13 +3363,42 @@ fn resolve_install_target(
     }
 }
 
-pub fn staged_path_for(central_path: &str) -> PathBuf {
+/// `path` lies below `root` (not equal to it) by plain components, so no
+/// `..` can walk it back out.
+fn is_strictly_inside(path: &Path, root: &Path) -> bool {
+    use std::path::Component;
+    match path.strip_prefix(root) {
+        Ok(rest) => {
+            rest.components().next().is_some()
+                && rest.components().all(|c| matches!(c, Component::Normal(_)))
+        }
+        Err(_) => false,
+    }
+}
+
+/// The library directory a record names, for an operation about to replace
+/// or delete it. A record that points outside the library (possible before
+/// skill ids were checked, #422) is refused, never followed.
+pub(crate) fn library_dir(central_path: &str) -> Result<PathBuf, AppError> {
     let path = PathBuf::from(central_path);
+    if is_strictly_inside(&path, &central_repo::skills_dir()) {
+        Ok(path)
+    } else {
+        Err(AppError::invalid_input(format!(
+            "This skill is recorded outside the library ({central_path}); Skills Manager will not modify that folder"
+        )))
+    }
+}
+
+/// Where a replacement is built before it is swapped in: next to the
+/// library directory being replaced, which must lie inside the library.
+pub fn staged_path_for(central_path: &str) -> Result<PathBuf, AppError> {
+    let path = library_dir(central_path)?;
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| "skill".to_string());
-    path.with_file_name(format!(".{file_name}.staged-{}", uuid::Uuid::new_v4()))
+    Ok(path.with_file_name(format!(".{file_name}.staged-{}", uuid::Uuid::new_v4())))
 }
 
 pub fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(), AppError> {
@@ -4935,6 +4986,139 @@ mod tests {
         assert_eq!(other_result.name, "lark-im-2");
         let original = repo.store.get_skill_by_id(&id).unwrap().unwrap();
         assert_eq!(original.source_ref.as_deref(), Some(feishu));
+    }
+
+    /// A skills.sh id becomes a directory name in the library, so only one
+    /// plain path segment is accepted (#422), checked before any record is
+    /// looked up; ordinary names still install under their own name.
+    #[test]
+    fn a_skillssh_id_must_be_one_path_segment() {
+        let repo = test_repo();
+        for bad in [
+            "../escape", "../../escape", "a/b", "a\\b", "..", ".", "/abs", "  ../x  ",
+            "C:x", "a:b", "a\u{1}b", "a|b", "a*b", "CON", "nul.txt", "trailing.",
+            "demo ", " demo", "demo\n", "\tdemo", "COM¹", "lpt³.txt",
+        ] {
+            let result = resolve_skillssh_install_target(&repo.store, &format!("o/r/{bad}"), bad);
+            assert!(result.is_err(), "{bad:?} must be rejected, got {result:?}");
+        }
+        // A record for the same source does not let a bad id through.
+        let inside = write_skill_dir("evil");
+        let mut record = sample_skill("s-evil", "evil", &inside);
+        record.source_type = "skillssh".to_string();
+        record.source_ref = Some("o/r/../evil".to_string());
+        repo.store.insert_skill(&record).unwrap();
+        assert!(resolve_skillssh_install_target(&repo.store, "o/r/../evil", "../evil").is_err());
+
+        for good in ["frontend-design", "my_skill", "v1.2", "技能", "a b", "x@y", "(beta)"] {
+            let (name, path) =
+                resolve_skillssh_install_target(&repo.store, &format!("o/r/{good}"), good).unwrap();
+            assert_eq!(name, good);
+            assert_eq!(path, central_repo::skills_dir().join(good));
+        }
+    }
+
+    /// A record written before ids were checked can point outside the library;
+    /// reinstalling it would replace that directory wholesale, so it is refused
+    /// and the directory is left alone (#422).
+    #[test]
+    fn a_reinstall_recorded_outside_the_library_is_refused() {
+        let repo = test_repo();
+        // The shape an unchecked id left behind: lexically under the library.
+        let outside = central_repo::skills_dir().join("../outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "mine").unwrap();
+        let mut record = sample_skill("s-out", "escape", &outside);
+        record.source_type = "skillssh".to_string();
+        record.source_ref = Some("o/r/escape".to_string());
+        repo.store.insert_skill(&record).unwrap();
+
+        let result = resolve_skillssh_install_target(&repo.store, "o/r/escape", "escape");
+        assert!(result.is_err(), "got {result:?}");
+        assert_eq!(fs::read_to_string(outside.join("keep.txt")).unwrap(), "mine");
+
+        let inside = write_skill_dir("fine");
+        let mut ok = sample_skill("s-in", "fine", &inside);
+        ok.source_type = "skillssh".to_string();
+        ok.source_ref = Some("o/r/fine".to_string());
+        repo.store.insert_skill(&ok).unwrap();
+        let (name, path) = resolve_skillssh_install_target(&repo.store, "o/r/fine", "fine").unwrap();
+        assert_eq!((name.as_str(), path), ("fine", inside));
+    }
+
+    /// Every replace-in-place (update, set-source, relink, reimport) stages
+    /// next to the directory it replaces through `staged_path_for`, which
+    /// refuses a directory outside the library (#422).
+    #[test]
+    fn staging_is_refused_outside_the_library() {
+        let repo = test_repo();
+        let outside = repo._tmp.path().join("outside");
+        assert!(staged_path_for(&outside.to_string_lossy()).is_err());
+        let lib = central_repo::skills_dir();
+        assert!(staged_path_for(&lib.join("../outside").to_string_lossy()).is_err());
+        assert!(staged_path_for(&lib.to_string_lossy()).is_err());
+        let staged = staged_path_for(&lib.join("cat/fine").to_string_lossy()).unwrap();
+        assert_eq!(staged.parent(), Some(lib.join("cat").as_path()));
+    }
+
+    /// A local reimport of a record that points outside the library fails
+    /// without creating anything next to, or touching, that directory.
+    #[test]
+    fn a_reimport_recorded_outside_the_library_leaves_it_alone() {
+        let repo = test_repo();
+        let outside = central_repo::skills_dir().join("../outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("SKILL.md"), "---\nname: escape\n---\nmine\n").unwrap();
+        let source = repo._tmp.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "---\nname: escape\n---\nnew\n").unwrap();
+        let mut record = sample_skill("s-out", "escape", &outside);
+        record.source_type = "local".to_string();
+        record.source_ref = Some(source.to_string_lossy().to_string());
+        repo.store.insert_skill(&record).unwrap();
+
+        assert!(reimport_local_skill_internal(&repo.store, "s-out", None).is_err());
+        assert!(fs::read_to_string(outside.join("SKILL.md")).unwrap().ends_with("mine\n"));
+        let parent = central_repo::skills_dir().parent().unwrap().to_path_buf();
+        let siblings: Vec<_> = fs::read_dir(parent).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert!(
+            siblings.iter().all(|n| !n.to_string_lossy().contains("staged")),
+            "staging created next to the outside directory: {siblings:?}"
+        );
+    }
+
+    /// Deleting a record that points outside the library fails and removes
+    /// nothing: not the directory, not its deployments, not the record.
+    #[test]
+    fn deleting_a_skill_recorded_outside_the_library_removes_nothing() {
+        let repo = test_repo();
+        let outside = central_repo::skills_dir().join("../outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "mine").unwrap();
+        repo.store.insert_skill(&sample_skill("s-out", "escape", &outside)).unwrap();
+        let deployed = repo._tmp.path().join("agent/escape");
+        fs::create_dir_all(&deployed).unwrap();
+        fs::write(deployed.join("SKILL.md"), "copy").unwrap();
+        repo.store
+            .insert_target(&SkillTargetRecord {
+                id: "t-out".to_string(),
+                skill_id: "s-out".to_string(),
+                tool: "cursor".to_string(),
+                target_path: deployed.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: None,
+            })
+            .unwrap();
+
+        let result = delete_managed_skills_by_ids(&repo.store, &["s-out".to_string()]).unwrap();
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.failed, vec!["s-out".to_string()]);
+        assert_eq!(fs::read_to_string(outside.join("keep.txt")).unwrap(), "mine");
+        assert!(deployed.join("SKILL.md").exists(), "its deployment is left alone too");
+        assert!(repo.store.get_skill_by_id("s-out").unwrap().is_some());
     }
 
     /// A folder already in the library that no record owns is not ours to

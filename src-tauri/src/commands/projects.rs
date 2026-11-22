@@ -1089,10 +1089,12 @@ pub fn import_project_skill_to_center_internal(
         .as_ref()
         .and_then(|id| all_managed.iter().find(|managed| &managed.id == id));
     if let Some(existing) = matched {
+        // Replaced wholesale, so it must lie inside the library (#422).
+        let central_path = crate::commands::skills::library_dir(&existing.central_path)?;
         let result = installer::install_from_local_to_destination(
             &source_path,
             Some(&existing.name),
-            Path::new(&existing.central_path),
+            &central_path,
         )
         .map_err(AppError::io)?;
         store
@@ -3307,6 +3309,52 @@ mod project_plan_tests {
             .expect_err("the plan must refuse what the run refuses");
         assert!(err.to_string().contains("Invalid skill name"), "{err}");
         assert!(fx.store.get_all_skills().unwrap().is_empty());
+    }
+
+    /// Updating a library skill from a project replaces its directory, so a
+    /// record that points outside the library is refused and that folder kept
+    /// (#422).
+    #[test]
+    fn import_over_a_record_outside_the_library_is_refused() {
+        let fx = fixture(&["claude_code"]);
+        let outside = central_repo::skills_dir().join("../outside");
+        write_skill(&outside, "demo", "# Old");
+        fs::write(outside.join("keep.txt"), "mine").unwrap();
+        let hash = content_hash::hash_entries(&content_hash::list_content_files(&outside));
+        fx.store
+            .insert_skill(&SkillRecord {
+                id: "s-demo".to_string(),
+                name: "demo".to_string(),
+                description: None,
+                source_type: "local".to_string(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: outside.to_string_lossy().to_string(),
+                content_hash: Some(hash),
+                enabled: true,
+                created_at: 0,
+                updated_at: 0,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+        write_skill(&fx.repo.join(".claude/skills/demo"), "demo", "# New");
+
+        let result = import_project_skill_to_center_internal(
+            &fx.store,
+            fx.project_id.clone(),
+            "demo".into(),
+            "claude_code".into(),
+            true,
+        );
+        assert!(result.is_err(), "got {result:?}");
+        assert_eq!(fs::read_to_string(outside.join("keep.txt")).unwrap(), "mine");
     }
 
     #[test]

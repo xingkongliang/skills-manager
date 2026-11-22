@@ -94,7 +94,25 @@ const WINDOWS_RESERVED: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'
 const WINDOWS_RESERVED_BASENAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³",
 ];
+
+/// Whether `name` can be used as is for a directory in the library on every
+/// platform: one path segment, no control or Windows-reserved character
+/// (which covers both separators and `:`), no device name, no `.`/`..`, no
+/// leading or trailing space and no trailing dot. Unlike
+/// [`sanitize_skill_name`] this only judges; a name from outside that fails is
+/// rejected rather than rewritten into some other name (#422).
+pub fn is_portable_dir_name(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." || name.trim() != name || name.ends_with('.') {
+        return false;
+    }
+    if name.chars().any(|c| c.is_control() || WINDOWS_RESERVED.contains(&c)) {
+        return false;
+    }
+    let base = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    !WINDOWS_RESERVED_BASENAMES.contains(&base.as_str())
+}
 
 /// Sanitize a skill name so it is safe to use as a single directory component
 /// on all major platforms (macOS, Linux, Windows).
