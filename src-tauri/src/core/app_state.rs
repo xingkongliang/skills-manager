@@ -198,6 +198,17 @@ fn initialize_store_inner(
             .map_err(|e| anyhow::anyhow!(e.to_string()))
             .context("Failed to initialize startup scenario")?;
         timings.apply_scenario_kind = "default_startup";
+        // Deployments recorded in a mode an agent no longer gets, such as
+        // Antigravity's Windows links from before #653, are converted here;
+        // a no-op when every record matches. Never fatal, and whatever failed
+        // is still off-mode at the next launch, so it is retried.
+        match scenario_service::resync_targets_to_sync_mode(&store) {
+            Ok(0) => {}
+            Ok(converted) => log::info!("startup: converted {converted} deployment(s) to their sync mode"),
+            Err(err) => central_repo::record_startup_error(format!(
+                "sync mode: some deployments could not be converted ({err})"
+            )),
+        }
     } else {
         scenario_service::ensure_cli_scenario_state(&store)
             .map_err(|e| anyhow::anyhow!(e.to_string()))

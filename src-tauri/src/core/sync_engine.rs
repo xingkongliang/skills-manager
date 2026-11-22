@@ -257,7 +257,7 @@ pub fn classify_target(target: &Path, source: Option<&Path>) -> Result<TargetSta
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncMode {
     Symlink,
     Copy,
@@ -272,13 +272,34 @@ impl SyncMode {
     }
 }
 
-pub fn sync_mode_for_tool(_tool_key: &str, configured_mode: Option<&str>) -> SyncMode {
+/// The mode the `sync_mode` setting asks for, before any agent's exception.
+pub fn configured_sync_mode(configured_mode: Option<&str>) -> SyncMode {
     match configured_mode {
         Some("copy") => SyncMode::Copy,
         Some("symlink") => SyncMode::Symlink,
         _ => SyncMode::Symlink,
     }
 }
+
+/// The mode for an agent's global skills directory.
+pub fn sync_mode_for_tool(tool_key: &str, configured_mode: Option<&str>) -> SyncMode {
+    sync_mode_for_tool_on(tool_key, configured_mode, cfg!(windows))
+}
+
+fn sync_mode_for_tool_on(tool_key: &str, configured_mode: Option<&str>, windows: bool) -> SyncMode {
+    // Without Developer Mode a Windows link falls back to a directory junction
+    // (see `sync_skill`), and Antigravity skips junctions, so it would see none
+    // of its skills (#653). It gets copies on Windows whatever the setting.
+    if windows && tool_key == ANTIGRAVITY {
+        return SyncMode::Copy;
+    }
+    configured_sync_mode(configured_mode)
+}
+
+/// Antigravity's agent key. Besides the Windows rule above, it does not load
+/// a project skill that links outside the workspace (#653), which the
+/// project deployment code accounts for.
+pub const ANTIGRAVITY: &str = "antigravity";
 
 pub fn target_dir_name(central_path: &Path, skill_name: &str) -> String {
     central_path
@@ -682,6 +703,19 @@ mod tests {
             sync_mode_for_tool("claude-code", Some("invalid")),
             SyncMode::Symlink
         ));
+    }
+
+    /// #653: Antigravity gets copies on Windows whatever the setting; other
+    /// agents, and Antigravity elsewhere, follow the setting.
+    #[test]
+    fn antigravity_gets_copies_on_windows_only() {
+        for configured in [None, Some("symlink"), Some("copy")] {
+            assert_eq!(sync_mode_for_tool_on("antigravity", configured, true), SyncMode::Copy);
+        }
+        assert_eq!(sync_mode_for_tool_on("antigravity", None, false), SyncMode::Symlink);
+        assert_eq!(sync_mode_for_tool_on("antigravity", Some("copy"), false), SyncMode::Copy);
+        assert_eq!(sync_mode_for_tool_on("cursor", None, true), SyncMode::Symlink);
+        assert_eq!(sync_mode_for_tool_on("cursor", Some("copy"), true), SyncMode::Copy);
     }
 
     #[test]

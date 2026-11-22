@@ -14,7 +14,7 @@ use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
 use crate::core::timing::should_log_first_or_slow;
 use crate::core::{
     error::AppError, file_manager, installer, project_scanner, sync_engine, sync_metadata,
-    tool_adapters,
+    tool_adapters, tool_service,
 };
 
 #[derive(Serialize, Default, Debug)]
@@ -91,6 +91,46 @@ fn agent_skill_configs(store: &SkillStore) -> Vec<project_scanner::AgentSkillCon
             })
         })
         .collect()
+}
+
+/// The sync mode for the project skills directory `agent` writes into.
+/// Antigravity does not load a project skill that links outside the
+/// workspace (#653, measured with its CLI on macOS), and every link we deploy
+/// points into the library, which is outside it. So a directory an installed,
+/// enabled Antigravity reads gets copies on every platform, whatever the
+/// setting; the other agents sharing that directory read the copies too.
+fn project_sync_mode(store: &SkillStore, agent: &str, configured_mode: Option<&str>) -> sync_engine::SyncMode {
+    let adapters = tool_adapters::all_tool_adapters(store);
+    let disabled = tool_service::get_disabled_tools(store);
+    if project_dir_read_by_antigravity(agent, &adapters, |adapter| {
+        adapter.is_installed() && !disabled.contains(&adapter.key)
+    }) {
+        sync_engine::SyncMode::Copy
+    } else {
+        sync_engine::configured_sync_mode(configured_mode)
+    }
+}
+
+/// Whether the project skills directory of `agent` is also Antigravity's,
+/// with that same Antigravity adapter `usable`.
+fn project_dir_read_by_antigravity(
+    agent: &str,
+    adapters: &[tool_adapters::ToolAdapter],
+    usable: impl Fn(&tool_adapters::ToolAdapter) -> bool,
+) -> bool {
+    let Some(dir) = adapters
+        .iter()
+        .find(|adapter| adapter.key == agent)
+        .map(|adapter| adapter.project_relative_skills_dir())
+        .filter(|dir| !dir.is_empty())
+    else {
+        return false;
+    };
+    adapters.iter().any(|adapter| {
+        adapter.key == sync_engine::ANTIGRAVITY
+            && adapter.project_relative_skills_dir() == dir
+            && usable(adapter)
+    })
 }
 
 fn linked_workspace_agent_key(rec: &ProjectRecord) -> String {
@@ -1279,65 +1319,74 @@ pub async fn update_project_skill_from_center(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
-
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let configs = agent_skill_configs(&store);
-        let skills = read_workspace_skills(&record, &configs);
-        let skill = skills
-            .iter()
-            .find(|s| s.relative_path == skill_relative_path && s.agent == agent)
-            .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
-
-        let all_managed = store.get_all_skills().unwrap_or_default();
-        let managed = find_best_center_match(skill, &all_managed)
-            .ok_or_else(|| AppError::not_found("No matching skill in center"))?;
-
-        // Mirror the global-workspace protection (agent_workspace.rs): never
-        // overwrite a project copy that has unsynced local edits (#225 review).
-        if classify_sync_status(skill, Some(managed)) == "project_newer" {
-            return Err(AppError::invalid_input(
-                "Project skill is newer than the Skills Center version",
-            ));
-        }
-
-        let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
-            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
-        let target_path = PathBuf::from(&skill.path);
-        if target_path.starts_with(&skills_root) {
-            ensure_dir_within_root(&target_path, &skills_root)?;
-        } else if disabled_root
-            .as_ref()
-            .map(|root| target_path.starts_with(root))
-            .unwrap_or(false)
-        {
-            let disabled_root = disabled_root.expect("checked above");
-            ensure_dir_within_root(&target_path, &disabled_root)?;
-        } else {
-            return Err(AppError::invalid_input("Invalid skill directory path"));
-        }
-
-        let source = PathBuf::from(&managed.central_path);
-        let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-        let mode = sync_engine::sync_mode_for_tool(&agent, configured_mode.as_deref());
-        // UserConfirmed: this intentionally replaces an existing project copy
-        // the user chose to update, and project deployments never create
-        // `skill_targets` rows, so no record could vouch for it. The
-        // project_newer check above is the guard that makes this safe.
-        sync_engine::sync_skill(
-            &source,
-            &target_path,
-            mode,
-            sync_engine::ReplacePolicy::UserConfirmed,
-        )
-        .map_err(AppError::io)?;
-        Ok(())
+        update_project_skill_from_center_internal(&store, &project_id, &skill_relative_path, &agent)
     })
     .await?
+}
+
+fn update_project_skill_from_center_internal(
+    store: &SkillStore,
+    project_id: &str,
+    skill_relative_path: &str,
+    agent: &str,
+) -> Result<(), AppError> {
+    ensure_safe_skill_relative_path(skill_relative_path)?;
+
+    let record = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let configs = agent_skill_configs(store);
+    let skills = read_workspace_skills(&record, &configs);
+    let skill = skills
+        .iter()
+        .find(|s| s.relative_path == skill_relative_path && s.agent == agent)
+        .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
+
+    let all_managed = store.get_all_skills().unwrap_or_default();
+    let managed = find_best_center_match(skill, &all_managed)
+        .ok_or_else(|| AppError::not_found("No matching skill in center"))?;
+
+    // Mirror the global-workspace protection (agent_workspace.rs): never
+    // overwrite a project copy that has unsynced local edits (#225 review).
+    if classify_sync_status(skill, Some(managed)) == "project_newer" {
+        return Err(AppError::invalid_input(
+            "Project skill is newer than the Skills Center version",
+        ));
+    }
+
+    let (skills_root, disabled_root) = resolve_agent_skills_roots(store, &record, agent)
+        .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
+    let target_path = PathBuf::from(&skill.path);
+    if target_path.starts_with(&skills_root) {
+        ensure_dir_within_root(&target_path, &skills_root)?;
+    } else if disabled_root
+        .as_ref()
+        .map(|root| target_path.starts_with(root))
+        .unwrap_or(false)
+    {
+        let disabled_root = disabled_root.expect("checked above");
+        ensure_dir_within_root(&target_path, &disabled_root)?;
+    } else {
+        return Err(AppError::invalid_input("Invalid skill directory path"));
+    }
+
+    let source = PathBuf::from(&managed.central_path);
+    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+    let mode = project_sync_mode(store, agent, configured_mode.as_deref());
+    // UserConfirmed: this intentionally replaces an existing project copy
+    // the user chose to update, and project deployments never create
+    // `skill_targets` rows, so no record could vouch for it. The
+    // project_newer check above is the guard that makes this safe.
+    sync_engine::sync_skill(
+        &source,
+        &target_path,
+        mode,
+        sync_engine::ReplacePolicy::UserConfirmed,
+    )
+    .map_err(AppError::io)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1812,7 +1861,7 @@ pub fn apply_project_deploy(
         if let Some(parent) = target_dir.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mode = sync_engine::sync_mode_for_tool(&target.agent, configured_mode.as_deref());
+        let mode = project_sync_mode(store, &target.agent, configured_mode.as_deref());
         sync_engine::sync_skill(
             &target.source,
             &target_dir,
@@ -3367,5 +3416,71 @@ mod project_plan_tests {
         }
         assert!(plan_project_import(&fx.store, &fx.project_id, "mine", "cursor").is_err());
         assert!(fx.store.get_all_skills().unwrap().is_empty());
+    }
+
+    /// #653: a project directory Antigravity reads gets copies, whichever
+    /// agent's row deploys into it and in whatever order the adapters come;
+    /// not when Antigravity is unusable or the directory is someone else's.
+    #[test]
+    fn project_dir_read_by_antigravity_needs_a_usable_antigravity() {
+        use crate::core::tool_adapters::default_tool_adapters;
+        let adapters = default_tool_adapters();
+        let sharer = adapters
+            .iter()
+            .find(|a| a.key != "antigravity" && a.project_relative_skills_dir() == ".agents/skills")
+            .expect("another agent shares .agents/skills")
+            .key
+            .clone();
+        let all = |_: &crate::core::tool_adapters::ToolAdapter| true;
+        assert!(super::project_dir_read_by_antigravity(&sharer, &adapters, all));
+        assert!(super::project_dir_read_by_antigravity("antigravity", &adapters, all));
+        let mut reversed = default_tool_adapters();
+        reversed.reverse();
+        assert!(super::project_dir_read_by_antigravity(&sharer, &reversed, all));
+
+        let not_antigravity = |a: &crate::core::tool_adapters::ToolAdapter| a.key != "antigravity";
+        assert!(!super::project_dir_read_by_antigravity(&sharer, &adapters, not_antigravity));
+        assert!(!super::project_dir_read_by_antigravity("claude_code", &adapters, all));
+    }
+
+    /// #653: a project directory an installed, enabled Antigravity reads gets
+    /// a copy on every platform, even when another sharing agent's row deploys
+    /// it, and updating it from the library keeps it a copy.
+    #[test]
+    fn a_project_directory_antigravity_reads_gets_copies() {
+        let fx = fixture(&["antigravity", "gitlab_duo"]);
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["gitlab_duo".into()]).unwrap();
+        apply_project_deploy(&fx.store, &plan).unwrap();
+        let target = fx.repo.join(".agents/skills/demo");
+        assert!(!fs::symlink_metadata(&target).unwrap().file_type().is_symlink(), "a copy, not a link");
+        assert!(target.join("SKILL.md").is_file());
+
+        let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        fs::File::options()
+            .write(true)
+            .open(target.join("SKILL.md"))
+            .unwrap()
+            .set_modified(an_hour_ago)
+            .unwrap();
+        let central = central_repo::skills_dir().join("demo/SKILL.md");
+        let v2 = format!("{}\nv2\n", fs::read_to_string(&central).unwrap());
+        fs::write(&central, &v2).unwrap();
+        update_project_skill_from_center_internal(&fx.store, &fx.project_id, "demo", &plan[0].agent).unwrap();
+        assert!(!fs::symlink_metadata(&target).unwrap().file_type().is_symlink(), "still a copy");
+        assert_eq!(fs::read_to_string(target.join("SKILL.md")).unwrap(), v2);
+    }
+
+    /// With Antigravity disabled the shared directory follows the setting.
+    #[cfg(unix)]
+    #[test]
+    fn a_project_directory_without_a_usable_antigravity_keeps_links() {
+        let fx = fixture(&["antigravity", "gitlab_duo"]);
+        fx.store.set_setting("disabled_tools", r#"["antigravity"]"#).unwrap();
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let plan = plan_project_deploy(&fx.store, &fx.project_id, &ids(&[&demo]), &["gitlab_duo".into()]).unwrap();
+        apply_project_deploy(&fx.store, &plan).unwrap();
+        let target = fx.repo.join(".agents/skills/demo");
+        assert!(fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
     }
 }

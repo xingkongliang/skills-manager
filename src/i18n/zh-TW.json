@@ -629,7 +629,7 @@
     "changeDir": "變更目錄",
     "openInFinder": "開啟資料夾",
     "syncMode": "預設同步模式",
-    "syncModeDesc": "建議使用符號連結，佔用空間極小且修改可即時生效。全域與專案工作區均生效；注意專案裡的符號連結指向本機中央庫，不會隨倉庫帶走。",
+    "syncModeDesc": "建議使用符號連結，佔用空間極小且修改可即時生效。全域與專案工作區均生效；注意專案裡的符號連結指向本機中央庫，不會隨倉庫帶走。例外：Antigravity 在 Windows 上使用複製；Antigravity 已安裝且啟用時，專案的 .agents/skills 目錄也使用複製，因為它讀不到那裡的連結。",
     "symlink": "符號連結",
     "copy": "檔案複製",
     "currentPreset": "當前 Preset",
