@@ -1317,9 +1317,20 @@ fn run_skill_deployment(
         select_agent_keys_for_removal(store, requested_agents, &skill_ids, &existing_targets)?
     };
     let pair_count = skills.len() * agent_keys.len();
+    // A deployed pair still changes when its recorded mode is not what the
+    // `sync_mode` setting asks for now: the deployment rewrites it (a link
+    // becomes a copy), so it has to be counted and audited (#654).
+    let configured_mode = store.get_setting("sync_mode")?;
     let existing: std::collections::HashSet<(String, String)> = existing_targets
         .iter()
-        .filter(|target| !deploy || target.status == "ok")
+        .filter(|target| {
+            !deploy
+                || (target.status == "ok"
+                    && scenario_service::recorded_mode_satisfies(
+                        &target.mode,
+                        sync_engine::sync_mode_for_tool(&target.tool, configured_mode.as_deref()),
+                    ))
+        })
         .map(|target| (target.skill_id.clone(), target.tool.clone()))
         .collect();
     let changed: std::collections::HashSet<(String, String)> = skills
@@ -4225,6 +4236,136 @@ mod tests {
                 }
             }) if reference == "Web Dev" && agents == vec!["codex"]
         ));
+    }
+
+    /// One library skill `demo` and one custom agent `test_agent` deploying to
+    /// `<tmp>/agent-skills`, with `sync_mode` set to `mode`.
+    fn sync_mode_fixture(tmp: &Path, mode: &str) -> (SkillStore, PathBuf) {
+        let store = SkillStore::new(&tmp.join("skills.db")).unwrap();
+        let source = tmp.join("central/demo");
+        let target_root = tmp.join("agent-skills");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target_root).unwrap();
+        fs::write(
+            source.join("SKILL.md"),
+            "---\nname: demo\ndescription: test skill\n---\n",
+        )
+        .unwrap();
+        tool_service::set_custom_tools(
+            &store,
+            &[CustomToolDef {
+                key: "test_agent".to_string(),
+                display_name: "Test Agent".to_string(),
+                skills_dir: target_root.to_string_lossy().to_string(),
+                project_relative_skills_dir: None,
+                category: ToolCategory::Coding,
+            }],
+        )
+        .unwrap();
+        store.set_setting("sync_mode", mode).unwrap();
+        store
+            .insert_skill(&SkillRecord {
+                id: "skill-demo".to_string(),
+                name: "demo".to_string(),
+                description: Some("test skill".to_string()),
+                source_type: "local".to_string(),
+                source_ref: Some(source.to_string_lossy().to_string()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: source.to_string_lossy().to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: 1,
+                updated_at: 1,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+        (store, target_root)
+    }
+
+    fn recorded_mode(store: &SkillStore) -> String {
+        let targets = store.get_all_targets().unwrap();
+        assert_eq!(targets.len(), 1);
+        targets[0].mode.clone()
+    }
+
+    /// #654: a link deployed in Symlink mode is rewritten as a copy by the next
+    /// deploy after the setting changed to Copy, so the report counts it and
+    /// the audit log records it, dry run included.
+    #[cfg(unix)]
+    #[test]
+    fn deploy_counts_a_link_it_converts_after_switching_to_copy() {
+        let tmp = tempdir().unwrap();
+        let (store, target_root) = sync_mode_fixture(tmp.path(), "symlink");
+        let deploy = |dry_run: bool| {
+            run_skill_deployment(
+                &store,
+                &["demo".to_string()],
+                &["test_agent".to_string()],
+                true,
+                dry_run,
+            )
+            .unwrap()
+        };
+        let target = target_root.join("demo");
+
+        assert_eq!(deploy(false).changed_pairs, 1);
+        assert!(fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
+        assert_eq!(recorded_mode(&store), "symlink");
+        assert_eq!(deploy(false).changed_pairs, 0, "same mode: nothing to do");
+
+        store.set_setting("sync_mode", "copy").unwrap();
+        assert_eq!(deploy(true).changed_pairs, 1, "dry run sees the conversion");
+        assert!(fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
+
+        let audit_before = store.list_audit(None).unwrap().len();
+        assert_eq!(deploy(false).changed_pairs, 1);
+        assert!(fs::symlink_metadata(&target).unwrap().is_dir());
+        assert_eq!(recorded_mode(&store), "copy");
+        assert_eq!(store.list_audit(None).unwrap().len(), audit_before + 1);
+
+        assert_eq!(deploy(false).changed_pairs, 0, "converted: nothing left to do");
+    }
+
+    /// #654: changing the setting converts the links deployed in the old mode
+    /// without another deploy, and leaves a recorded copy alone when switching
+    /// back to Symlink (a copy still serves Symlink mode, #153).
+    #[cfg(unix)]
+    #[test]
+    fn switching_sync_mode_converts_existing_links() {
+        let tmp = tempdir().unwrap();
+        let (store, target_root) = sync_mode_fixture(tmp.path(), "symlink");
+        run_skill_deployment(
+            &store,
+            &["demo".to_string()],
+            &["test_agent".to_string()],
+            true,
+            false,
+        )
+        .unwrap();
+        let target = target_root.join("demo");
+        assert_eq!(
+            scenario_service::resync_targets_to_sync_mode(&store).unwrap(),
+            0,
+            "nothing is off the current mode"
+        );
+        assert!(fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
+
+        store.set_setting("sync_mode", "copy").unwrap();
+        assert_eq!(scenario_service::resync_targets_to_sync_mode(&store).unwrap(), 1);
+        assert!(fs::symlink_metadata(&target).unwrap().is_dir());
+        assert!(target.join("SKILL.md").is_file());
+        assert_eq!(recorded_mode(&store), "copy");
+
+        store.set_setting("sync_mode", "symlink").unwrap();
+        assert_eq!(scenario_service::resync_targets_to_sync_mode(&store).unwrap(), 0);
+        assert!(fs::symlink_metadata(&target).unwrap().is_dir());
     }
 
     #[test]
