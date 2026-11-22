@@ -279,6 +279,9 @@ pub struct SkillSourceDiffDto {
     pub source_label: String,
     pub revision: String,
     pub entries: Vec<SkillSourceDiffEntryDto>,
+    /// More files differ than `entries` lists ([`MAX_DIFF_ENTRIES`]); the
+    /// scan stopped there, so the total is unknown.
+    pub truncated: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -286,7 +289,8 @@ pub struct SkillSourceDiffEntryDto {
     pub relative_path: String,
     /// "added" | "removed" | "modified"
     pub status: String,
-    /// "text" | "binary" | "too_large" | "permission_only"
+    /// "text" | "binary" | "too_large" | "permission_only" | "omitted"
+    /// ("omitted": text past the preview's [`MAX_DIFF_TEXT_BYTES`] budget)
     pub content_kind: String,
     /// Present only when `content_kind == "text"`.
     pub original_text: Option<String>,
@@ -627,13 +631,90 @@ fn classify_diff_bytes(bytes: Option<Vec<u8>>) -> (&'static str, Option<String>)
     }
 }
 
+/// The source diff is a preview, so it is bounded however many files differ
+/// (#658: 5,000+ changed files took the window to 13 GB). At most this many
+/// entries are listed; the scan stops at the next difference.
+const MAX_DIFF_ENTRIES: usize = 200;
+
+/// Text sent across all entries, both sides together. Entries past it are
+/// listed without their text (`"omitted"`).
+const MAX_DIFF_TEXT_BYTES: usize = 2 * 1024 * 1024;
+
+/// One side of a file pair: read only when small enough to preview, so a
+/// large model or archive in the skill is never pulled into memory.
+enum DiffSide {
+    Bytes(Vec<u8>),
+    TooLarge(u64),
+    Unreadable,
+}
+
+fn read_diff_side(path: &Path) -> DiffSide {
+    use std::io::Read;
+    let len = match std::fs::metadata(path) {
+        Ok(m) if m.len() > MAX_DIFF_FILE_BYTES as u64 => return DiffSide::TooLarge(m.len()),
+        Ok(m) => m.len(),
+        Err(_) => return DiffSide::Unreadable,
+    };
+    // Read no more than the limit even if the file grew since the stat.
+    let mut bytes = Vec::with_capacity(len as usize);
+    let read = std::fs::File::open(path)
+        .and_then(|f| f.take(MAX_DIFF_FILE_BYTES as u64 + 1).read_to_end(&mut bytes));
+    match read {
+        Ok(_) if bytes.len() > MAX_DIFF_FILE_BYTES => DiffSide::TooLarge(bytes.len() as u64),
+        Ok(_) => DiffSide::Bytes(bytes),
+        Err(_) => DiffSide::Unreadable,
+    }
+}
+
+fn classify_diff_side(side: DiffSide) -> (&'static str, Option<String>) {
+    match side {
+        DiffSide::Bytes(bytes) => classify_diff_bytes(Some(bytes)),
+        DiffSide::TooLarge(_) => ("too_large", None),
+        DiffSide::Unreadable => ("binary", None),
+    }
+}
+
+/// Compare two files too large to preview a block at a time.
+fn same_large_file(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    fn fill(file: &mut std::fs::File, buf: &mut [u8]) -> Option<usize> {
+        let mut filled = 0;
+        while filled < buf.len() {
+            match file.read(&mut buf[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(_) => return None,
+            }
+        }
+        Some(filled)
+    }
+    let (Ok(mut fa), Ok(mut fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    let mut ba = vec![0u8; 64 * 1024];
+    let mut bb = vec![0u8; 64 * 1024];
+    loop {
+        match (fill(&mut fa, &mut ba), fill(&mut fb, &mut bb)) {
+            (Some(na), Some(nb)) if na == nb && ba[..na] == bb[..nb] => {
+                if na == 0 {
+                    return true;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
+struct SourceDiffEntries {
+    entries: Vec<SkillSourceDiffEntryDto>,
+    truncated: bool,
+}
+
 /// Diff the whole content scope of two skill directories. `original_dir` is
 /// the central copy (old), `updated_dir` is the source (new). Uses the same
-/// file enumeration as the hash so it reports exactly what flips the badge.
-fn build_source_diff_entries(
-    original_dir: &Path,
-    updated_dir: &Path,
-) -> Vec<SkillSourceDiffEntryDto> {
+/// file enumeration as the hash so it reports exactly what flips the badge,
+/// within the preview's limits ([`MAX_DIFF_ENTRIES`], [`MAX_DIFF_TEXT_BYTES`]).
+fn build_source_diff_entries(original_dir: &Path, updated_dir: &Path) -> SourceDiffEntries {
     use crate::core::content_hash::{self, ContentEntry};
     use std::collections::BTreeMap;
 
@@ -651,11 +732,13 @@ fn build_source_diff_entries(
     keys.dedup();
 
     let mut entries = Vec::new();
+    let mut text_bytes = 0usize;
+    let mut truncated = false;
     for key in keys {
-        match (original.get(key), updated.get(key)) {
+        let entry = match (original.get(key), updated.get(key)) {
             (None, Some(u)) => {
-                let (kind, text) = classify_diff_bytes(std::fs::read(&u.path).ok());
-                entries.push(SkillSourceDiffEntryDto {
+                let (kind, text) = classify_diff_side(read_diff_side(&u.path));
+                SkillSourceDiffEntryDto {
                     relative_path: key.clone(),
                     status: "added".into(),
                     content_kind: kind.into(),
@@ -663,11 +746,11 @@ fn build_source_diff_entries(
                     updated_text: text,
                     executable_before: false,
                     executable_after: u.is_executable(),
-                });
+                }
             }
             (Some(o), None) => {
-                let (kind, text) = classify_diff_bytes(std::fs::read(&o.path).ok());
-                entries.push(SkillSourceDiffEntryDto {
+                let (kind, text) = classify_diff_side(read_diff_side(&o.path));
+                SkillSourceDiffEntryDto {
                     relative_path: key.clone(),
                     status: "removed".into(),
                     content_kind: kind.into(),
@@ -675,20 +758,26 @@ fn build_source_diff_entries(
                     updated_text: None,
                     executable_before: o.is_executable(),
                     executable_after: false,
-                });
+                }
             }
             (Some(o), Some(u)) => {
-                let o_bytes = std::fs::read(&o.path).ok();
-                let u_bytes = std::fs::read(&u.path).ok();
+                let o_side = read_diff_side(&o.path);
+                let u_side = read_diff_side(&u.path);
                 let exec_before = o.is_executable();
                 let exec_after = u.is_executable();
-                let bytes_equal = o_bytes.is_some() && o_bytes == u_bytes;
+                let bytes_equal = match (&o_side, &u_side) {
+                    (DiffSide::Bytes(a), DiffSide::Bytes(b)) => a == b,
+                    (DiffSide::TooLarge(a), DiffSide::TooLarge(b)) => {
+                        a == b && same_large_file(&o.path, &u.path)
+                    }
+                    _ => false,
+                };
 
                 if bytes_equal {
                     if exec_before == exec_after {
                         continue; // unchanged — must match the hash's verdict
                     }
-                    entries.push(SkillSourceDiffEntryDto {
+                    SkillSourceDiffEntryDto {
                         relative_path: key.clone(),
                         status: "modified".into(),
                         content_kind: "permission_only".into(),
@@ -696,34 +785,52 @@ fn build_source_diff_entries(
                         updated_text: None,
                         executable_before: exec_before,
                         executable_after: exec_after,
-                    });
-                    continue;
-                }
-
-                let (o_kind, o_text) = classify_diff_bytes(o_bytes);
-                let (u_kind, u_text) = classify_diff_bytes(u_bytes);
-                let (kind, original_text, updated_text) = if o_kind == "text" && u_kind == "text" {
-                    ("text", o_text, u_text)
-                } else if o_kind == "too_large" || u_kind == "too_large" {
-                    ("too_large", None, None)
+                    }
                 } else {
-                    ("binary", None, None)
-                };
-                entries.push(SkillSourceDiffEntryDto {
-                    relative_path: key.clone(),
-                    status: "modified".into(),
-                    content_kind: kind.into(),
-                    original_text,
-                    updated_text,
-                    executable_before: exec_before,
-                    executable_after: exec_after,
-                });
+                    let (o_kind, o_text) = classify_diff_side(o_side);
+                    let (u_kind, u_text) = classify_diff_side(u_side);
+                    let (kind, original_text, updated_text) =
+                        if o_kind == "text" && u_kind == "text" {
+                            ("text", o_text, u_text)
+                        } else if o_kind == "too_large" || u_kind == "too_large" {
+                            ("too_large", None, None)
+                        } else {
+                            ("binary", None, None)
+                        };
+                    SkillSourceDiffEntryDto {
+                        relative_path: key.clone(),
+                        status: "modified".into(),
+                        content_kind: kind.into(),
+                        original_text,
+                        updated_text,
+                        executable_before: exec_before,
+                        executable_after: exec_after,
+                    }
+                }
             }
-            (None, None) => {}
+            (None, None) => continue,
+        };
+
+        if entries.len() == MAX_DIFF_ENTRIES {
+            truncated = true;
+            break;
         }
+        let mut entry = entry;
+        if entry.content_kind == "text" {
+            let size = entry.original_text.as_ref().map_or(0, String::len)
+                + entry.updated_text.as_ref().map_or(0, String::len);
+            if text_bytes + size > MAX_DIFF_TEXT_BYTES {
+                entry.content_kind = "omitted".into();
+                entry.original_text = None;
+                entry.updated_text = None;
+            } else {
+                text_bytes += size;
+            }
+        }
+        entries.push(entry);
     }
 
-    entries
+    SourceDiffEntries { entries, truncated }
 }
 
 #[tauri::command]
@@ -750,12 +857,13 @@ pub async fn get_skill_source_diff(
             if !source_dir.exists() {
                 return Err(AppError::not_found("Original source path no longer exists"));
             }
-            let entries = build_source_diff_entries(&central_dir, &source_dir);
+            let diff = build_source_diff_entries(&central_dir, &source_dir);
             return Ok(SkillSourceDiffDto {
                 skill_id,
                 source_label,
                 revision: "workspace".to_string(),
-                entries,
+                entries: diff.entries,
+                truncated: diff.truncated,
             });
         }
 
@@ -791,12 +899,13 @@ pub async fn get_skill_source_diff(
                 git_source.subpath.as_deref(),
                 git_source.locator_skill_id.as_deref(),
             )?;
-            let entries = build_source_diff_entries(&central_dir, &skill_dir);
+            let diff = build_source_diff_entries(&central_dir, &skill_dir);
             Ok(SkillSourceDiffDto {
                 skill_id,
                 source_label,
                 revision: remote_revision,
-                entries,
+                entries: diff.entries,
+                truncated: diff.truncated,
             })
         })();
 
@@ -5143,6 +5252,81 @@ mod tests {
         .unwrap();
         assert_eq!(installed.name, "lark-doc-2");
         assert_eq!(fs::read_to_string(stray.join("notes.md")).unwrap(), "mine");
+    }
+
+    fn diff_dirs() -> (TempDir, PathBuf, PathBuf) {
+        let tmp = tempdir().unwrap();
+        let (old, new) = (tmp.path().join("old"), tmp.path().join("new"));
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(old.join("SKILL.md"), "# Demo\n").unwrap();
+        fs::write(new.join("SKILL.md"), "# Demo\n").unwrap();
+        (tmp, old, new)
+    }
+
+    /// #658: thousands of changed files list only the first
+    /// MAX_DIFF_ENTRIES and say there are more.
+    #[test]
+    fn source_diff_lists_at_most_max_entries_and_flags_the_rest() {
+        let (_tmp, old, new) = diff_dirs();
+        for i in 0..MAX_DIFF_ENTRIES + 50 {
+            fs::write(new.join(format!("f{i:04}.txt")), "x\n").unwrap();
+        }
+        let diff = build_source_diff_entries(&old, &new);
+        assert_eq!(diff.entries.len(), MAX_DIFF_ENTRIES);
+        assert!(diff.truncated);
+        assert_eq!(diff.entries[0].relative_path, "f0000.txt");
+
+        let (_tmp, old, new) = diff_dirs();
+        for i in 0..3 {
+            fs::write(new.join(format!("f{i}.txt")), "x\n").unwrap();
+        }
+        let diff = build_source_diff_entries(&old, &new);
+        assert_eq!(diff.entries.len(), 3);
+        assert!(!diff.truncated);
+    }
+
+    /// Text across entries stays within MAX_DIFF_TEXT_BYTES; the files past it
+    /// are still listed, without their text.
+    #[test]
+    fn source_diff_text_stays_within_the_budget() {
+        let (_tmp, old, new) = diff_dirs();
+        let body = "line\n".repeat(MAX_DIFF_FILE_BYTES / 5 - 1);
+        let files = MAX_DIFF_TEXT_BYTES / body.len() + 5;
+        for i in 0..files {
+            fs::write(new.join(format!("f{i:02}.md")), &body).unwrap();
+        }
+        let diff = build_source_diff_entries(&old, &new);
+        assert_eq!(diff.entries.len(), files);
+        let sent: usize = diff
+            .entries
+            .iter()
+            .map(|e| e.updated_text.as_ref().map_or(0, String::len))
+            .sum();
+        assert!(sent <= MAX_DIFF_TEXT_BYTES, "sent {sent} bytes");
+        assert_eq!(diff.entries[0].content_kind, "text");
+        let omitted = diff.entries.iter().filter(|e| e.content_kind == "omitted").count();
+        assert!(omitted >= 5, "only {omitted} omitted");
+        assert!(diff.entries.iter().filter(|e| e.content_kind == "omitted").all(|e| e.updated_text.is_none()));
+    }
+
+    /// Files too large to preview are compared by content without being read
+    /// whole: an identical pair is unchanged, a same-sized different pair is
+    /// reported as too large.
+    #[test]
+    fn source_diff_compares_large_files_by_content() {
+        let (_tmp, old, new) = diff_dirs();
+        let big = "a".repeat(MAX_DIFF_FILE_BYTES + 100_000);
+        fs::write(old.join("same.bin"), &big).unwrap();
+        fs::write(new.join("same.bin"), &big).unwrap();
+        let mut changed = big.clone();
+        changed.replace_range(MAX_DIFF_FILE_BYTES + 50_000..MAX_DIFF_FILE_BYTES + 50_001, "b");
+        fs::write(old.join("changed.bin"), &big).unwrap();
+        fs::write(new.join("changed.bin"), &changed).unwrap();
+
+        let diff = build_source_diff_entries(&old, &new);
+        let paths: Vec<_> = diff.entries.iter().map(|e| (e.relative_path.as_str(), e.content_kind.as_str())).collect();
+        assert_eq!(paths, [("changed.bin", "too_large")]);
     }
 
     fn skill_files_fixture() -> (TempDir, PathBuf) {

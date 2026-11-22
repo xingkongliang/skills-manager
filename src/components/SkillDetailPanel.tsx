@@ -433,7 +433,7 @@ function SkillDetailPanelContent({
   let body: ReactNode;
   if (contentTab === "diff") {
     body = activeSourceDiff
-      ? <SkillSourceDiffViewer entries={activeSourceDiff.entries} />
+      ? <SkillSourceDiffViewer entries={activeSourceDiff.entries} truncated={activeSourceDiff.truncated} />
       : sourceDiffFailed ? unavailablePaper : loadingPaper;
   } else if (contentTab === "source") {
     body = activeSourceDoc

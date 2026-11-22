@@ -95,7 +95,9 @@ export type SkillSourceDiffContentKind =
   | "text"
   | "binary"
   | "too_large"
-  | "permission_only";
+  | "permission_only"
+  /** Text past the preview's total budget, listed without its content. */
+  | "omitted";
 
 export interface SkillSourceDiffEntry {
   relative_path: string;
@@ -112,6 +114,8 @@ export interface SkillSourceDiff {
   source_label: string;
   revision: string;
   entries: SkillSourceDiffEntry[];
+  /** More files differ than `entries` lists; the scan stopped at its limit. */
+  truncated: boolean;
 }
 
 export interface Preset {

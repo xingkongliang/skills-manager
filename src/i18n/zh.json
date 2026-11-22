@@ -344,10 +344,13 @@
         "modified": "修改"
       },
       "execBit": "权限 {{before}} → {{after}}",
+      "collapsedHint": "{{count}} 个文件有变化，点开文件查看具体改动。",
+      "truncated": "只显示前 {{count}} 个有变化的文件，实际还有更多。更新时会应用全部改动。",
       "summary": {
         "binary": "二进制文件已变更",
         "too_large": "文件已变更，但过大无法预览",
-        "permission_only": "仅文件权限发生变化"
+        "permission_only": "仅文件权限发生变化",
+        "omitted": "文件已变更；改动太多，这里不加载它的内容"
       }
     },
     "localSource": "本地仓库",
@@ -843,6 +846,7 @@
     "loadFailed": "加载{{item}}失败",
     "dataOutOfDate": "部分数据未成功刷新",
     "documentMissing": "没有找到文档文件",
+    "diffTooLarge": "行数太多，这里无法比较",
     "presets": "Preset",
     "agents": "Agent 状态",
     "skills": "Skills 列表",

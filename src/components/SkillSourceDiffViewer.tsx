@@ -1,10 +1,15 @@
+import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../utils";
 import { DocumentDiffViewer } from "./DocumentDiffViewer";
+import { diffExceedsBudget } from "../lib/diffBudget";
 import type { SkillSourceDiffEntry } from "../lib/tauri";
 
 interface Props {
   entries: SkillSourceDiffEntry[];
+  /** More files differ than `entries` lists (the backend stops at its limit). */
+  truncated?: boolean;
   className?: string;
 }
 
@@ -14,8 +19,18 @@ const STATUS_TONE: Record<SkillSourceDiffEntry["status"], string> = {
   modified: "border-sky-300 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
 };
 
-export function SkillSourceDiffViewer({ entries, className }: Props) {
+/** Up to this many files are all shown open, as before; a longer list starts
+ * collapsed and opens one file at a time, so the rendered diffs stay bounded
+ * however many files changed (#658). */
+const EXPAND_ALL_MAX = 3;
+
+function fitsBudget(entry: SkillSourceDiffEntry): boolean {
+  return entry.content_kind !== "text" || !diffExceedsBudget(entry.original_text ?? "", entry.updated_text ?? "");
+}
+
+export function SkillSourceDiffViewer({ entries, truncated = false, className }: Props) {
   const { t } = useTranslation();
+  const [openPath, setOpenPath] = useState<string | null>(null);
 
   if (entries.length === 0) {
     return (
@@ -25,11 +40,26 @@ export function SkillSourceDiffViewer({ entries, className }: Props) {
     );
   }
 
+  const expandAll = entries.length <= EXPAND_ALL_MAX && entries.every(fitsBudget);
+
   return (
     <div className={cn("space-y-4", className)}>
-      {entries.map((entry) => (
-        <div key={entry.relative_path} className="overflow-hidden rounded-xl border border-border-subtle">
-          <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle bg-surface px-3 py-2">
+      {(truncated || !expandAll) && (
+        <div className="text-[12px] text-muted">
+          {truncated
+            ? t("mySkills.sourceDiff.truncated", { count: entries.length })
+            : t("mySkills.sourceDiff.collapsedHint", { count: entries.length })}
+        </div>
+      )}
+      {entries.map((entry) => {
+        const open = expandAll || openPath === entry.relative_path;
+        const header = (
+          <>
+            {!expandAll && (
+              <ChevronRight
+                className={cn("h-3.5 w-3.5 shrink-0 text-muted transition-transform", open && "rotate-90")}
+              />
+            )}
             <span
               className={cn(
                 "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium",
@@ -49,21 +79,43 @@ export function SkillSourceDiffViewer({ entries, className }: Props) {
                 })}
               </span>
             )}
-          </div>
+          </>
+        );
+        const headerClass = cn(
+          "flex w-full flex-wrap items-center gap-2 bg-surface px-3 py-2 text-left",
+          open && "border-b border-border-subtle"
+        );
 
-          {entry.content_kind === "text" ? (
-            <DocumentDiffViewer
-              original={entry.original_text ?? ""}
-              updated={entry.updated_text ?? ""}
-              className="!space-y-0 !rounded-none !border-0"
-            />
-          ) : (
-            <div className="px-4 py-4 text-[12px] text-muted">
-              {t(`mySkills.sourceDiff.summary.${entry.content_kind}`)}
-            </div>
-          )}
-        </div>
-      ))}
+        return (
+          <div key={entry.relative_path} className="overflow-hidden rounded-xl border border-border-subtle">
+            {expandAll ? (
+              <div className={headerClass}>{header}</div>
+            ) : (
+              <button
+                type="button"
+                className={cn(headerClass, "hover:bg-surface-hover")}
+                aria-expanded={open}
+                onClick={() => setOpenPath(open ? null : entry.relative_path)}
+              >
+                {header}
+              </button>
+            )}
+
+            {open &&
+              (entry.content_kind === "text" ? (
+                <DocumentDiffViewer
+                  original={entry.original_text ?? ""}
+                  updated={entry.updated_text ?? ""}
+                  className="!space-y-0 !rounded-none !border-0"
+                />
+              ) : (
+                <div className="px-4 py-4 text-[12px] text-muted">
+                  {t(`mySkills.sourceDiff.summary.${entry.content_kind}`)}
+                </div>
+              ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
