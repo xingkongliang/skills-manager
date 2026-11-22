@@ -664,7 +664,7 @@
     "changeDir": "Change Directory",
     "openInFinder": "Open Folder",
     "syncMode": "Default Sync Mode",
-    "syncModeDesc": "Symlinks are recommended — minimal disk usage with live updates. Applies to both global and project workspaces; note that symlinks in a project point to this machine's central library and won't travel with the repo.",
+    "syncModeDesc": "Symlinks are recommended — minimal disk usage with live updates. Applies to both global and project workspaces; note that symlinks in a project point to this machine's central library and won't travel with the repo. Exception: Antigravity gets copies on Windows, and a project's .agents/skills folder gets copies while Antigravity is installed and enabled, because Antigravity does not load links there.",
     "symlink": "Symlink",
     "copy": "File Copy",
     "currentPreset": "Current Preset",
