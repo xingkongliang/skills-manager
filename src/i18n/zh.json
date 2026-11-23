@@ -326,15 +326,14 @@
     "confirmSyncMessage": "将把“{{name}}”同步到以下 {{count}} 个 Agent。",
     "confirmUnsyncMessage": "将从以下 {{count}} 个 Agent 移除“{{name}}”的同步结果。",
     "sourceType": "来源类型",
-    "sourceRef": "来源位置",
-    "sourceResolved": "解析后来源",
     "sourceBranch": "分支 / 标签",
     "sourceSubpath": "子路径",
     "sourceRevision": "版本",
     "docTabs": {
       "local": "本地",
       "diff": "差异",
-      "source": "来源"
+      "source": "来源",
+      "files": "文件"
     },
     "sourceDiffUnavailable": "暂时无法读取来源版本内容",
     "sourceDiff": {
@@ -345,19 +344,19 @@
         "modified": "修改"
       },
       "execBit": "权限 {{before}} → {{after}}",
+      "collapsedHint": "{{count}} 个文件有变化，点开文件查看具体改动。",
+      "truncated": "只显示前 {{count}} 个有变化的文件，实际还有更多。更新时会应用全部改动。",
       "summary": {
         "binary": "二进制文件已变更",
         "too_large": "文件已变更，但过大无法预览",
-        "permission_only": "仅文件权限发生变化"
+        "permission_only": "仅文件权限发生变化",
+        "omitted": "文件已变更；改动太多，这里不加载它的内容"
       }
     },
     "localSource": "本地仓库",
     "agentCount": "{{count}} 个 Agent",
     "ready": "已就绪",
     "standby": "待启用",
-    "agentTogglesTitle": "全局工作区",
-    "expandAgentToggles": "展开",
-    "collapseAgentToggles": "收起",
     "agentToggleEnabled": "{{agent}} 已开启",
     "agentToggleDisabled": "{{agent}} 已关闭",
     "agentToggleNotInstalled": "未安装",
@@ -430,7 +429,8 @@
       "manageHint": "右键重命名或删除",
       "tagRenamed": "标签已重命名",
       "tagDeleted": "标签已删除",
-      "deleteConfirm": "确定从所有技能中移除标签「{{tag}}」吗？"
+      "deleteConfirm": "确定从所有技能中移除标签「{{tag}}」吗？",
+      "addTagShort": "添加标签"
     },
     "selectMode": "多选",
     "selectedCount": "已选 {{count}} 个",
@@ -476,6 +476,26 @@
       "apply": "同步 {{count}} 项",
       "noAgents": "没有已安装并启用的 Agent。",
       "allSynced": "选中的 Skill 都已同步到这个 Agent"
+    },
+    "detail": {
+      "preset": "Preset",
+      "agents": "Agents",
+      "deployedTo": "已部署到",
+      "source": "来源",
+      "neverChecked": "尚未检查",
+      "copyPath": "复制路径",
+      "pathCopied": "已复制路径",
+      "revealFolder": "在文件管理器中显示",
+      "filesUnavailable": "读取 Skill 文件失败",
+      "fileNotFound": "Skill 里没有这个文件",
+      "fileBinary": "二进制文件，不显示内容",
+      "fileTooLarge": "文件过大，无法预览（超过 256 KB）",
+      "backToFiles": "返回列表",
+      "noFiles": "这个 Skill 没有文件",
+      "executable": "可执行",
+      "executableHint": "可执行文件",
+      "location": "位置",
+      "lastCheckedLabel": "上次检查"
     }
   },
   "install": {
@@ -624,6 +644,9 @@
     "overridePathHint": "当前使用手动覆盖的 skills 路径",
     "customAgentAdded": "自定义 Agent 已添加",
     "customAgentRemoved": "自定义 Agent 已移除",
+    "agentIcon": "图标",
+    "noIcon": "无图标",
+    "changeAgentIcon": "更改图标",
     "selectFolder": "选择",
     "addAgent": "添加",
     "globalConfig": "全局配置",
@@ -641,7 +664,7 @@
     "changeDir": "更改目录",
     "openInFinder": "打开文件夹",
     "syncMode": "默认同步模式",
-    "syncModeDesc": "推荐使用符号链接，占用空间极小且修改可实时生效。全局与项目工作区均生效；注意项目里的符号链接指向本机中央库，不会随仓库带走。",
+    "syncModeDesc": "推荐使用符号链接，占用空间极小且修改可实时生效。全局与项目工作区均生效；注意项目里的符号链接指向本机中央库，不会随仓库带走。例外：Antigravity 在 Windows 上使用复制；Antigravity 已安装且启用时，项目的 .agents/skills 目录也使用复制，因为它读不到那里的链接。",
     "symlink": "符号链接",
     "copy": "文件复制",
     "currentPreset": "当前 Preset",
@@ -823,6 +846,7 @@
     "loadFailed": "加载{{item}}失败",
     "dataOutOfDate": "部分数据未成功刷新",
     "documentMissing": "没有找到文档文件",
+    "diffTooLarge": "行数太多，这里无法比较",
     "presets": "Preset",
     "agents": "Agent 状态",
     "skills": "Skills 列表",
@@ -837,7 +861,8 @@
     "search": "搜索",
     "goToSettings": "设置",
     "expandAll": "展开全部",
-    "collapse": "收起"
+    "collapse": "收起",
+    "expand": "展开"
   },
   "addFromLibrary": {
     "title": "从技能库添加",
@@ -865,8 +890,6 @@
     "toastRemovedFromProject": "已从 {{project}} 移除“{{skill}}”",
     "removeConfirmTitle": "从工作区移除",
     "removeConfirm": "从 {{project}}（{{agent}}）永久删除“{{skill}}”文件夹？此操作无法撤销。",
-    "add": "添加",
-    "installedShort": "已添加",
     "projectsTitle": "项目工作区",
     "projectsSummary": "{{installed}} / {{total}} 已添加",
     "errors": {
@@ -882,7 +905,9 @@
       "remove": "点击从此 Agent 移除",
       "conflict": "请先重命名库中的 Skill",
       "unavailable": "请先选择目标 Agent"
-    }
+    },
+    "addToProject": "添加到项目…",
+    "addToAgent": "添加到 {{agent}}"
   },
   "preset": {
     "create": "新建 Preset",

@@ -245,10 +245,11 @@ fn import_agent_local_skill_to_center(
     let all_managed = store.get_all_skills().unwrap_or_default();
     let all_targets = store.get_all_targets().unwrap_or_default();
     if let Some(existing) = find_verified_center_match(&skill, &all_managed, &all_targets) {
+        let central_path = crate::commands::skills::library_dir(&existing.central_path)?;
         let result = installer::install_from_local_to_destination(
             &source_path,
             Some(&existing.name),
-            Path::new(&existing.central_path),
+            &central_path,
         )
         .map_err(AppError::io)?;
         store
@@ -1026,6 +1027,67 @@ mod tests {
         assert!(skills.iter().any(|skill| skill.name == "local-tool-2"));
 
         central_repo::set_test_base_dir_override(None);
+    }
+
+    /// The match's library directory is replaced in place, so a record that
+    /// points outside the library is refused and that folder kept (#422).
+    #[test]
+    fn importing_over_a_match_recorded_outside_the_library_is_refused() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(temp.path().join("center")));
+        let store = SkillStore::new(&temp.path().join("store.db")).unwrap();
+
+        let skills_root = temp.path().join("agent-skills");
+        let skill_dir = skills_root.join("local-tool");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: local-tool\n---\nlocal\n").unwrap();
+
+        let outside = central_repo::skills_dir().join("../outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), "mine").unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        store
+            .insert_skill(&SkillRecord {
+                id: "existing-center".to_string(),
+                name: "local-tool".to_string(),
+                description: None,
+                source_type: "local".to_string(),
+                source_ref: Some(skill_dir.to_string_lossy().to_string()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: outside.to_string_lossy().to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: now,
+                updated_at: now,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: Some(now),
+                last_check_error: None,
+            })
+            .unwrap();
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::json!([{
+                    "key": "test_agent",
+                    "display_name": "Test Agent",
+                    "skills_dir": skills_root.to_string_lossy(),
+                    "project_relative_skills_dir": ".test-agent/skills"
+                }])
+                .to_string(),
+            )
+            .unwrap();
+
+        let result = import_agent_local_skill_to_center(&store, "test_agent", "local-tool");
+        central_repo::set_test_base_dir_override(None);
+        assert!(result.is_err(), "got {result:?}");
+        assert_eq!(std::fs::read_to_string(outside.join("keep.txt")).unwrap(), "mine");
+        assert!(!outside.join("SKILL.md").exists());
     }
 
     #[test]

@@ -255,12 +255,21 @@ pub(crate) fn run_round_blocking(store: &SkillStore) -> Outcome {
 
     let mut committed = false;
     match git_backup::has_uncommitted_changes(&skills_dir) {
-        Ok(true) => {
-            if let Err(e) = git_backup::commit_all_unlocked(&skills_dir, AUTO_COMMIT_MESSAGE) {
-                return Outcome::Failed(format!("{e:#}"));
-            }
-            committed = true;
-        }
+        Ok(true) => match git_backup::commit_all_unlocked(&skills_dir, AUTO_COMMIT_MESSAGE) {
+            Ok(()) => committed = true,
+            // With `core.autocrlf=true` (Git for Windows' default) a checkout
+            // leaves metadata in CRLF and the projection above rewrites it in
+            // LF: status reports it modified until `git add` normalizes it back
+            // and finds nothing to commit. Same case as the pre-merge step in
+            // `merge::apply` (#681). A clean tree after staging is not a failure.
+            Err(e) => match git_backup::has_uncommitted_changes(&skills_dir) {
+                Ok(false) => {
+                    log::info!("auto backup: changes were line endings only; nothing to commit")
+                }
+                Ok(true) => return Outcome::Failed(format!("{e:#}")),
+                Err(e) => return Outcome::Failed(format!("{e:#}")),
+            },
+        },
         Ok(false) => {}
         Err(e) => return Outcome::Failed(format!("{e:#}")),
     }
@@ -477,6 +486,31 @@ mod tests {
 
         // A second round with nothing new is a no-op.
         assert_eq!(run_round_blocking(&env.store), Outcome::UpToDate);
+    }
+
+    /// Git for Windows defaults to `core.autocrlf=true`, so a checkout writes the
+    /// metadata files in CRLF. The round's projection rewrites them in LF; status
+    /// reports them modified, `git add` normalizes them back and the commit finds
+    /// nothing to commit. That must not fail the round (#681 fixed the same case
+    /// in the pre-merge step).
+    #[test]
+    fn line_ending_only_changes_do_not_fail_the_round() {
+        let env = test_env();
+        // First round puts the metadata files under version control.
+        assert_eq!(run_round_blocking(&env.store), Outcome::BackedUp);
+
+        // Check the tree out again the way Git for Windows would.
+        git(&env.skills_dir, &["config", "core.autocrlf", "true"]);
+        git(&env.skills_dir, &["rm", "-r", "-q", "--cached", "."]);
+        git(&env.skills_dir, &["reset", "-q", "--hard"]);
+        let schema = std::fs::read(env.skills_dir.join(".skills-manager/schema.json")).unwrap();
+        assert!(
+            schema.windows(2).any(|w| w == b"\r\n"),
+            "metadata is checked out in CRLF"
+        );
+
+        assert_eq!(run_round_blocking(&env.store), Outcome::UpToDate);
+        assert_eq!(env.store.get_setting(SETTING_LAST_ERROR).unwrap(), None);
     }
 
     #[test]

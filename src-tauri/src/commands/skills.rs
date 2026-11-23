@@ -11,7 +11,7 @@ use crate::core::{
     audit_log::AuditDraft,
     central_repo,
     error::AppError,
-    git_fetcher,
+    file_manager, git_fetcher,
     install_cancel::InstallCancelRegistry,
     installer, path_guard,
     repo_lock::RepoLock,
@@ -252,6 +252,24 @@ pub struct SourceSkillDocumentDto {
     pub revision: String,
 }
 
+/// One file in a skill's central copy, from the same enumeration as the
+/// content hash and the source diff.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct SkillFileDto {
+    pub relative_path: String,
+    pub size: u64,
+    pub executable: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SkillFileContentDto {
+    pub relative_path: String,
+    /// "text" | "binary" | "too_large"
+    pub content_kind: String,
+    /// Present only when `content_kind == "text"`.
+    pub text: Option<String>,
+}
+
 /// Whole-directory diff between the central copy (`original`) and the source
 /// (`updated`), covering the same file scope that drives the update badge so
 /// the diff can never come back empty while the badge says "update available".
@@ -261,6 +279,9 @@ pub struct SkillSourceDiffDto {
     pub source_label: String,
     pub revision: String,
     pub entries: Vec<SkillSourceDiffEntryDto>,
+    /// More files differ than `entries` lists ([`MAX_DIFF_ENTRIES`]); the
+    /// scan stopped there, so the total is unknown.
+    pub truncated: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -268,7 +289,8 @@ pub struct SkillSourceDiffEntryDto {
     pub relative_path: String,
     /// "added" | "removed" | "modified"
     pub status: String,
-    /// "text" | "binary" | "too_large" | "permission_only"
+    /// "text" | "binary" | "too_large" | "permission_only" | "omitted"
+    /// ("omitted": text past the preview's [`MAX_DIFF_TEXT_BYTES`] budget)
     pub content_kind: String,
     /// Present only when `content_kind == "text"`.
     pub original_text: Option<String>,
@@ -485,6 +507,112 @@ pub async fn get_source_skill_document(
     .await?
 }
 
+fn skill_central_dir(store: &SkillStore, skill_id: &str) -> Result<PathBuf, AppError> {
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+    Ok(PathBuf::from(skill.central_path))
+}
+
+fn list_skill_files_in(dir: &Path) -> Vec<SkillFileDto> {
+    crate::core::content_hash::list_content_files(dir)
+        .into_iter()
+        .map(|entry| SkillFileDto {
+            size: std::fs::metadata(&entry.path).map(|m| m.len()).unwrap_or(0),
+            executable: entry.is_executable(),
+            relative_path: entry.relative_path,
+        })
+        .collect()
+}
+
+/// Reads only a file the content enumeration returned, looked up by exact
+/// `relative_path`. The requested string is never joined onto the directory,
+/// so `../`, absolute paths and symlinks out of the skill (the walk does not
+/// follow them) cannot be reached.
+fn read_skill_file_in(dir: &Path, relative_path: &str) -> Result<SkillFileContentDto, AppError> {
+    let entry = crate::core::content_hash::list_content_files(dir)
+        .into_iter()
+        .find(|entry| entry.relative_path == relative_path)
+        .ok_or_else(|| AppError::not_found(format!("File not found in skill: {relative_path}")))?;
+    // Judge the size before reading, so a large model or archive in the skill
+    // is not pulled into memory just to be reported as too large.
+    let too_large = std::fs::metadata(&entry.path)
+        .map(|m| m.len() > MAX_DIFF_FILE_BYTES as u64)
+        .unwrap_or(false);
+    let (kind, text) = if too_large {
+        ("too_large", None)
+    } else {
+        // A read failure (permissions, a file removed since the walk) is an
+        // error, not "binary": classify_diff_bytes treats None as binary for
+        // the diff, where it means a side without the file.
+        let bytes = std::fs::read(&entry.path)
+            .map_err(|e| AppError::io(format!("Failed to read {relative_path}: {e}")))?;
+        classify_diff_bytes(Some(bytes))
+    };
+    Ok(SkillFileContentDto {
+        relative_path: entry.relative_path,
+        content_kind: kind.into(),
+        text,
+    })
+}
+
+#[tauri::command]
+pub async fn list_skill_files(
+    skill_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<SkillFileDto>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = skill_central_dir(&store, &skill_id)?;
+        Ok(list_skill_files_in(&dir))
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn read_skill_file(
+    skill_id: String,
+    relative_path: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<SkillFileContentDto, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = skill_central_dir(&store, &skill_id)?;
+        read_skill_file_in(&dir, &relative_path)
+    })
+    .await?
+}
+
+/// Shows the skill's central copy in the file manager. The path comes from
+/// the id, never from the frontend (same reasoning as `reveal_project_folder`).
+#[tauri::command]
+pub async fn reveal_skill_folder(
+    skill_id: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = skill_central_dir(&store, &skill_id)?;
+        if !path.is_dir() {
+            return Err(AppError::invalid_input(format!(
+                "Folder does not exist: {}",
+                path.display()
+            )));
+        }
+        // explorer.exe exits non-zero even when it succeeds, so the platform
+        // branch is judged by `exit_is_failure` rather than checked here.
+        let status = file_manager::reveal_item(&path).map_err(AppError::io)?;
+        if file_manager::exit_is_failure(status.success()) {
+            return Err(AppError::io(format!(
+                "File manager exited with status: {status}"
+            )));
+        }
+        Ok(())
+    })
+    .await?
+}
+
 /// Files larger than this are flagged but not sent to the frontend — the
 /// line diff is O(n²), so previewing a huge file would hang the UI.
 const MAX_DIFF_FILE_BYTES: usize = 256 * 1024;
@@ -503,13 +631,90 @@ fn classify_diff_bytes(bytes: Option<Vec<u8>>) -> (&'static str, Option<String>)
     }
 }
 
+/// The source diff is a preview, so it is bounded however many files differ
+/// (#658: 5,000+ changed files took the window to 13 GB). At most this many
+/// entries are listed; the scan stops at the next difference.
+const MAX_DIFF_ENTRIES: usize = 200;
+
+/// Text sent across all entries, both sides together. Entries past it are
+/// listed without their text (`"omitted"`).
+const MAX_DIFF_TEXT_BYTES: usize = 2 * 1024 * 1024;
+
+/// One side of a file pair: read only when small enough to preview, so a
+/// large model or archive in the skill is never pulled into memory.
+enum DiffSide {
+    Bytes(Vec<u8>),
+    TooLarge(u64),
+    Unreadable,
+}
+
+fn read_diff_side(path: &Path) -> DiffSide {
+    use std::io::Read;
+    let len = match std::fs::metadata(path) {
+        Ok(m) if m.len() > MAX_DIFF_FILE_BYTES as u64 => return DiffSide::TooLarge(m.len()),
+        Ok(m) => m.len(),
+        Err(_) => return DiffSide::Unreadable,
+    };
+    // Read no more than the limit even if the file grew since the stat.
+    let mut bytes = Vec::with_capacity(len as usize);
+    let read = std::fs::File::open(path)
+        .and_then(|f| f.take(MAX_DIFF_FILE_BYTES as u64 + 1).read_to_end(&mut bytes));
+    match read {
+        Ok(_) if bytes.len() > MAX_DIFF_FILE_BYTES => DiffSide::TooLarge(bytes.len() as u64),
+        Ok(_) => DiffSide::Bytes(bytes),
+        Err(_) => DiffSide::Unreadable,
+    }
+}
+
+fn classify_diff_side(side: DiffSide) -> (&'static str, Option<String>) {
+    match side {
+        DiffSide::Bytes(bytes) => classify_diff_bytes(Some(bytes)),
+        DiffSide::TooLarge(_) => ("too_large", None),
+        DiffSide::Unreadable => ("binary", None),
+    }
+}
+
+/// Compare two files too large to preview a block at a time.
+fn same_large_file(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    fn fill(file: &mut std::fs::File, buf: &mut [u8]) -> Option<usize> {
+        let mut filled = 0;
+        while filled < buf.len() {
+            match file.read(&mut buf[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(_) => return None,
+            }
+        }
+        Some(filled)
+    }
+    let (Ok(mut fa), Ok(mut fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    let mut ba = vec![0u8; 64 * 1024];
+    let mut bb = vec![0u8; 64 * 1024];
+    loop {
+        match (fill(&mut fa, &mut ba), fill(&mut fb, &mut bb)) {
+            (Some(na), Some(nb)) if na == nb && ba[..na] == bb[..nb] => {
+                if na == 0 {
+                    return true;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
+struct SourceDiffEntries {
+    entries: Vec<SkillSourceDiffEntryDto>,
+    truncated: bool,
+}
+
 /// Diff the whole content scope of two skill directories. `original_dir` is
 /// the central copy (old), `updated_dir` is the source (new). Uses the same
-/// file enumeration as the hash so it reports exactly what flips the badge.
-fn build_source_diff_entries(
-    original_dir: &Path,
-    updated_dir: &Path,
-) -> Vec<SkillSourceDiffEntryDto> {
+/// file enumeration as the hash so it reports exactly what flips the badge,
+/// within the preview's limits ([`MAX_DIFF_ENTRIES`], [`MAX_DIFF_TEXT_BYTES`]).
+fn build_source_diff_entries(original_dir: &Path, updated_dir: &Path) -> SourceDiffEntries {
     use crate::core::content_hash::{self, ContentEntry};
     use std::collections::BTreeMap;
 
@@ -527,11 +732,13 @@ fn build_source_diff_entries(
     keys.dedup();
 
     let mut entries = Vec::new();
+    let mut text_bytes = 0usize;
+    let mut truncated = false;
     for key in keys {
-        match (original.get(key), updated.get(key)) {
+        let entry = match (original.get(key), updated.get(key)) {
             (None, Some(u)) => {
-                let (kind, text) = classify_diff_bytes(std::fs::read(&u.path).ok());
-                entries.push(SkillSourceDiffEntryDto {
+                let (kind, text) = classify_diff_side(read_diff_side(&u.path));
+                SkillSourceDiffEntryDto {
                     relative_path: key.clone(),
                     status: "added".into(),
                     content_kind: kind.into(),
@@ -539,11 +746,11 @@ fn build_source_diff_entries(
                     updated_text: text,
                     executable_before: false,
                     executable_after: u.is_executable(),
-                });
+                }
             }
             (Some(o), None) => {
-                let (kind, text) = classify_diff_bytes(std::fs::read(&o.path).ok());
-                entries.push(SkillSourceDiffEntryDto {
+                let (kind, text) = classify_diff_side(read_diff_side(&o.path));
+                SkillSourceDiffEntryDto {
                     relative_path: key.clone(),
                     status: "removed".into(),
                     content_kind: kind.into(),
@@ -551,20 +758,26 @@ fn build_source_diff_entries(
                     updated_text: None,
                     executable_before: o.is_executable(),
                     executable_after: false,
-                });
+                }
             }
             (Some(o), Some(u)) => {
-                let o_bytes = std::fs::read(&o.path).ok();
-                let u_bytes = std::fs::read(&u.path).ok();
+                let o_side = read_diff_side(&o.path);
+                let u_side = read_diff_side(&u.path);
                 let exec_before = o.is_executable();
                 let exec_after = u.is_executable();
-                let bytes_equal = o_bytes.is_some() && o_bytes == u_bytes;
+                let bytes_equal = match (&o_side, &u_side) {
+                    (DiffSide::Bytes(a), DiffSide::Bytes(b)) => a == b,
+                    (DiffSide::TooLarge(a), DiffSide::TooLarge(b)) => {
+                        a == b && same_large_file(&o.path, &u.path)
+                    }
+                    _ => false,
+                };
 
                 if bytes_equal {
                     if exec_before == exec_after {
                         continue; // unchanged — must match the hash's verdict
                     }
-                    entries.push(SkillSourceDiffEntryDto {
+                    SkillSourceDiffEntryDto {
                         relative_path: key.clone(),
                         status: "modified".into(),
                         content_kind: "permission_only".into(),
@@ -572,34 +785,52 @@ fn build_source_diff_entries(
                         updated_text: None,
                         executable_before: exec_before,
                         executable_after: exec_after,
-                    });
-                    continue;
-                }
-
-                let (o_kind, o_text) = classify_diff_bytes(o_bytes);
-                let (u_kind, u_text) = classify_diff_bytes(u_bytes);
-                let (kind, original_text, updated_text) = if o_kind == "text" && u_kind == "text" {
-                    ("text", o_text, u_text)
-                } else if o_kind == "too_large" || u_kind == "too_large" {
-                    ("too_large", None, None)
+                    }
                 } else {
-                    ("binary", None, None)
-                };
-                entries.push(SkillSourceDiffEntryDto {
-                    relative_path: key.clone(),
-                    status: "modified".into(),
-                    content_kind: kind.into(),
-                    original_text,
-                    updated_text,
-                    executable_before: exec_before,
-                    executable_after: exec_after,
-                });
+                    let (o_kind, o_text) = classify_diff_side(o_side);
+                    let (u_kind, u_text) = classify_diff_side(u_side);
+                    let (kind, original_text, updated_text) =
+                        if o_kind == "text" && u_kind == "text" {
+                            ("text", o_text, u_text)
+                        } else if o_kind == "too_large" || u_kind == "too_large" {
+                            ("too_large", None, None)
+                        } else {
+                            ("binary", None, None)
+                        };
+                    SkillSourceDiffEntryDto {
+                        relative_path: key.clone(),
+                        status: "modified".into(),
+                        content_kind: kind.into(),
+                        original_text,
+                        updated_text,
+                        executable_before: exec_before,
+                        executable_after: exec_after,
+                    }
+                }
             }
-            (None, None) => {}
+            (None, None) => continue,
+        };
+
+        if entries.len() == MAX_DIFF_ENTRIES {
+            truncated = true;
+            break;
         }
+        let mut entry = entry;
+        if entry.content_kind == "text" {
+            let size = entry.original_text.as_ref().map_or(0, String::len)
+                + entry.updated_text.as_ref().map_or(0, String::len);
+            if text_bytes + size > MAX_DIFF_TEXT_BYTES {
+                entry.content_kind = "omitted".into();
+                entry.original_text = None;
+                entry.updated_text = None;
+            } else {
+                text_bytes += size;
+            }
+        }
+        entries.push(entry);
     }
 
-    entries
+    SourceDiffEntries { entries, truncated }
 }
 
 #[tauri::command]
@@ -626,12 +857,13 @@ pub async fn get_skill_source_diff(
             if !source_dir.exists() {
                 return Err(AppError::not_found("Original source path no longer exists"));
             }
-            let entries = build_source_diff_entries(&central_dir, &source_dir);
+            let diff = build_source_diff_entries(&central_dir, &source_dir);
             return Ok(SkillSourceDiffDto {
                 skill_id,
                 source_label,
                 revision: "workspace".to_string(),
-                entries,
+                entries: diff.entries,
+                truncated: diff.truncated,
             });
         }
 
@@ -667,12 +899,13 @@ pub async fn get_skill_source_diff(
                 git_source.subpath.as_deref(),
                 git_source.locator_skill_id.as_deref(),
             )?;
-            let entries = build_source_diff_entries(&central_dir, &skill_dir);
+            let diff = build_source_diff_entries(&central_dir, &skill_dir);
             Ok(SkillSourceDiffDto {
                 skill_id,
                 source_label,
                 revision: remote_revision,
-                entries,
+                entries: diff.entries,
+                truncated: diff.truncated,
             })
         })();
 
@@ -765,6 +998,17 @@ pub fn delete_managed_skills_by_ids(
                 failed.push(skill_id.clone());
                 continue;
             };
+
+            // Checked before anything is removed, deployments included.
+            if let Err(error) = library_dir(&skill.central_path) {
+                store.log_audit(
+                    AuditDraft::new("remove")
+                        .skill(skill_id.clone(), skill.name.clone())
+                        .fail(error.to_string()),
+                );
+                failed.push(skill_id.clone());
+                continue;
+            }
 
             let targets = store.get_targets_for_skill(skill_id)?;
             for target in &targets {
@@ -1917,7 +2161,7 @@ pub async fn relink_local_skill_source(
 
         let result = (|| -> Result<(Vec<PendingRemoval>, Option<String>), AppError> {
             let _lock = RepoLock::acquire_foreground("relink local skill").map_err(AppError::db)?;
-            let staged_path = staged_path_for(&skill.central_path);
+            let staged_path = staged_path_for(&skill.central_path)?;
             let install_result = installer::install_from_local_to_destination(
                 &path,
                 Some(&skill.name),
@@ -2175,7 +2419,7 @@ pub fn update_git_skill_internal(
         // installer's output, not the raw checkout — it drops `.git` and every
         // symlink — so comparing against the checkout would report a path as
         // surviving that the swap then removes.
-        let staged_path = staged_path_for(&skill.central_path);
+        let staged_path = staged_path_for(&skill.central_path)?;
         let install_result = if content_changed {
             Some(
                 installer::install_skill_dir_to_destination(&skill_dir, &skill.name, &staged_path)
@@ -2468,7 +2712,7 @@ pub fn set_git_source_internal(
         // copy exactly the set of files `content_hash` covers, so the rewrite
         // could alter files while still reporting `content_changed: false`.
         let description = if content_changed {
-            let staged_path = staged_path_for(&skill.central_path);
+            let staged_path = staged_path_for(&skill.central_path)?;
             let install_result =
                 installer::install_skill_dir_to_destination(&skill_dir, &skill.name, &staged_path)
                     .inspect_err(|_| {
@@ -2592,7 +2836,7 @@ pub fn reimport_local_skill_internal(
 
     let result = (|| -> Result<(Vec<PendingRemoval>, Option<String>), AppError> {
         let _lock = RepoLock::acquire_foreground("reimport local skill").map_err(AppError::db)?;
-        let staged_path = staged_path_for(&skill.central_path);
+        let staged_path = staged_path_for(&skill.central_path)?;
         let install_result =
             installer::install_from_local_to_destination(&path, Some(&skill.name), &staged_path)
                 .inspect_err(|_| {
@@ -3182,16 +3426,27 @@ fn resolve_install_target(
     source_ref: &str,
     skill_id: &str,
 ) -> Result<(String, PathBuf), AppError> {
+    if skill_id.trim().is_empty() {
+        return Err(AppError::invalid_input("Skill id is empty"));
+    }
+    // Judged as given: trimming first would rewrite `demo ` into `demo`.
+    let base_name = skill_id;
+    // The id comes from a skills.sh listing or a CLI argument and becomes a
+    // directory name under the library: anything but one plain path segment
+    // could land the install elsewhere (#422).
+    if !skill_metadata::is_portable_dir_name(base_name) {
+        return Err(AppError::invalid_input(format!(
+            "Invalid skill id: '{skill_id}'"
+        )));
+    }
+
     if let Some(existing) = store
         .get_skill_by_source_ref(source_type, source_ref)
         .map_err(AppError::db)?
     {
-        return Ok((existing.name, PathBuf::from(existing.central_path)));
-    }
-
-    let base_name = skill_id.trim();
-    if base_name.is_empty() {
-        return Err(AppError::invalid_input("Skill id is empty"));
+        // The installer replaces this directory wholesale.
+        let central_path = library_dir(&existing.central_path)?;
+        return Ok((existing.name, central_path));
     }
 
     let mut attempt = 1;
@@ -3217,13 +3472,42 @@ fn resolve_install_target(
     }
 }
 
-pub fn staged_path_for(central_path: &str) -> PathBuf {
+/// `path` lies below `root` (not equal to it) by plain components, so no
+/// `..` can walk it back out.
+fn is_strictly_inside(path: &Path, root: &Path) -> bool {
+    use std::path::Component;
+    match path.strip_prefix(root) {
+        Ok(rest) => {
+            rest.components().next().is_some()
+                && rest.components().all(|c| matches!(c, Component::Normal(_)))
+        }
+        Err(_) => false,
+    }
+}
+
+/// The library directory a record names, for an operation about to replace
+/// or delete it. A record that points outside the library (possible before
+/// skill ids were checked, #422) is refused, never followed.
+pub(crate) fn library_dir(central_path: &str) -> Result<PathBuf, AppError> {
     let path = PathBuf::from(central_path);
+    if is_strictly_inside(&path, &central_repo::skills_dir()) {
+        Ok(path)
+    } else {
+        Err(AppError::invalid_input(format!(
+            "This skill is recorded outside the library ({central_path}); Skills Manager will not modify that folder"
+        )))
+    }
+}
+
+/// Where a replacement is built before it is swapped in: next to the
+/// library directory being replaced, which must lie inside the library.
+pub fn staged_path_for(central_path: &str) -> Result<PathBuf, AppError> {
+    let path = library_dir(central_path)?;
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| "skill".to_string());
-    path.with_file_name(format!(".{file_name}.staged-{}", uuid::Uuid::new_v4()))
+    Ok(path.with_file_name(format!(".{file_name}.staged-{}", uuid::Uuid::new_v4())))
 }
 
 pub fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(), AppError> {
@@ -4813,6 +5097,139 @@ mod tests {
         assert_eq!(original.source_ref.as_deref(), Some(feishu));
     }
 
+    /// A skills.sh id becomes a directory name in the library, so only one
+    /// plain path segment is accepted (#422), checked before any record is
+    /// looked up; ordinary names still install under their own name.
+    #[test]
+    fn a_skillssh_id_must_be_one_path_segment() {
+        let repo = test_repo();
+        for bad in [
+            "../escape", "../../escape", "a/b", "a\\b", "..", ".", "/abs", "  ../x  ",
+            "C:x", "a:b", "a\u{1}b", "a|b", "a*b", "CON", "nul.txt", "trailing.",
+            "demo ", " demo", "demo\n", "\tdemo", "COM¹", "lpt³.txt",
+        ] {
+            let result = resolve_skillssh_install_target(&repo.store, &format!("o/r/{bad}"), bad);
+            assert!(result.is_err(), "{bad:?} must be rejected, got {result:?}");
+        }
+        // A record for the same source does not let a bad id through.
+        let inside = write_skill_dir("evil");
+        let mut record = sample_skill("s-evil", "evil", &inside);
+        record.source_type = "skillssh".to_string();
+        record.source_ref = Some("o/r/../evil".to_string());
+        repo.store.insert_skill(&record).unwrap();
+        assert!(resolve_skillssh_install_target(&repo.store, "o/r/../evil", "../evil").is_err());
+
+        for good in ["frontend-design", "my_skill", "v1.2", "技能", "a b", "x@y", "(beta)"] {
+            let (name, path) =
+                resolve_skillssh_install_target(&repo.store, &format!("o/r/{good}"), good).unwrap();
+            assert_eq!(name, good);
+            assert_eq!(path, central_repo::skills_dir().join(good));
+        }
+    }
+
+    /// A record written before ids were checked can point outside the library;
+    /// reinstalling it would replace that directory wholesale, so it is refused
+    /// and the directory is left alone (#422).
+    #[test]
+    fn a_reinstall_recorded_outside_the_library_is_refused() {
+        let repo = test_repo();
+        // The shape an unchecked id left behind: lexically under the library.
+        let outside = central_repo::skills_dir().join("../outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "mine").unwrap();
+        let mut record = sample_skill("s-out", "escape", &outside);
+        record.source_type = "skillssh".to_string();
+        record.source_ref = Some("o/r/escape".to_string());
+        repo.store.insert_skill(&record).unwrap();
+
+        let result = resolve_skillssh_install_target(&repo.store, "o/r/escape", "escape");
+        assert!(result.is_err(), "got {result:?}");
+        assert_eq!(fs::read_to_string(outside.join("keep.txt")).unwrap(), "mine");
+
+        let inside = write_skill_dir("fine");
+        let mut ok = sample_skill("s-in", "fine", &inside);
+        ok.source_type = "skillssh".to_string();
+        ok.source_ref = Some("o/r/fine".to_string());
+        repo.store.insert_skill(&ok).unwrap();
+        let (name, path) = resolve_skillssh_install_target(&repo.store, "o/r/fine", "fine").unwrap();
+        assert_eq!((name.as_str(), path), ("fine", inside));
+    }
+
+    /// Every replace-in-place (update, set-source, relink, reimport) stages
+    /// next to the directory it replaces through `staged_path_for`, which
+    /// refuses a directory outside the library (#422).
+    #[test]
+    fn staging_is_refused_outside_the_library() {
+        let repo = test_repo();
+        let outside = repo._tmp.path().join("outside");
+        assert!(staged_path_for(&outside.to_string_lossy()).is_err());
+        let lib = central_repo::skills_dir();
+        assert!(staged_path_for(&lib.join("../outside").to_string_lossy()).is_err());
+        assert!(staged_path_for(&lib.to_string_lossy()).is_err());
+        let staged = staged_path_for(&lib.join("cat/fine").to_string_lossy()).unwrap();
+        assert_eq!(staged.parent(), Some(lib.join("cat").as_path()));
+    }
+
+    /// A local reimport of a record that points outside the library fails
+    /// without creating anything next to, or touching, that directory.
+    #[test]
+    fn a_reimport_recorded_outside_the_library_leaves_it_alone() {
+        let repo = test_repo();
+        let outside = central_repo::skills_dir().join("../outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("SKILL.md"), "---\nname: escape\n---\nmine\n").unwrap();
+        let source = repo._tmp.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "---\nname: escape\n---\nnew\n").unwrap();
+        let mut record = sample_skill("s-out", "escape", &outside);
+        record.source_type = "local".to_string();
+        record.source_ref = Some(source.to_string_lossy().to_string());
+        repo.store.insert_skill(&record).unwrap();
+
+        assert!(reimport_local_skill_internal(&repo.store, "s-out", None).is_err());
+        assert!(fs::read_to_string(outside.join("SKILL.md")).unwrap().ends_with("mine\n"));
+        let parent = central_repo::skills_dir().parent().unwrap().to_path_buf();
+        let siblings: Vec<_> = fs::read_dir(parent).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert!(
+            siblings.iter().all(|n| !n.to_string_lossy().contains("staged")),
+            "staging created next to the outside directory: {siblings:?}"
+        );
+    }
+
+    /// Deleting a record that points outside the library fails and removes
+    /// nothing: not the directory, not its deployments, not the record.
+    #[test]
+    fn deleting_a_skill_recorded_outside_the_library_removes_nothing() {
+        let repo = test_repo();
+        let outside = central_repo::skills_dir().join("../outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "mine").unwrap();
+        repo.store.insert_skill(&sample_skill("s-out", "escape", &outside)).unwrap();
+        let deployed = repo._tmp.path().join("agent/escape");
+        fs::create_dir_all(&deployed).unwrap();
+        fs::write(deployed.join("SKILL.md"), "copy").unwrap();
+        repo.store
+            .insert_target(&SkillTargetRecord {
+                id: "t-out".to_string(),
+                skill_id: "s-out".to_string(),
+                tool: "cursor".to_string(),
+                target_path: deployed.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: None,
+            })
+            .unwrap();
+
+        let result = delete_managed_skills_by_ids(&repo.store, &["s-out".to_string()]).unwrap();
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.failed, vec!["s-out".to_string()]);
+        assert_eq!(fs::read_to_string(outside.join("keep.txt")).unwrap(), "mine");
+        assert!(deployed.join("SKILL.md").exists(), "its deployment is left alone too");
+        assert!(repo.store.get_skill_by_id("s-out").unwrap().is_some());
+    }
+
     /// A folder already in the library that no record owns is not ours to
     /// replace: a new website skill with the same name goes next to it.
     #[test]
@@ -4835,5 +5252,211 @@ mod tests {
         .unwrap();
         assert_eq!(installed.name, "lark-doc-2");
         assert_eq!(fs::read_to_string(stray.join("notes.md")).unwrap(), "mine");
+    }
+
+    fn diff_dirs() -> (TempDir, PathBuf, PathBuf) {
+        let tmp = tempdir().unwrap();
+        let (old, new) = (tmp.path().join("old"), tmp.path().join("new"));
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(old.join("SKILL.md"), "# Demo\n").unwrap();
+        fs::write(new.join("SKILL.md"), "# Demo\n").unwrap();
+        (tmp, old, new)
+    }
+
+    /// #658: thousands of changed files list only the first
+    /// MAX_DIFF_ENTRIES and say there are more.
+    #[test]
+    fn source_diff_lists_at_most_max_entries_and_flags_the_rest() {
+        let (_tmp, old, new) = diff_dirs();
+        for i in 0..MAX_DIFF_ENTRIES + 50 {
+            fs::write(new.join(format!("f{i:04}.txt")), "x\n").unwrap();
+        }
+        let diff = build_source_diff_entries(&old, &new);
+        assert_eq!(diff.entries.len(), MAX_DIFF_ENTRIES);
+        assert!(diff.truncated);
+        assert_eq!(diff.entries[0].relative_path, "f0000.txt");
+
+        let (_tmp, old, new) = diff_dirs();
+        for i in 0..3 {
+            fs::write(new.join(format!("f{i}.txt")), "x\n").unwrap();
+        }
+        let diff = build_source_diff_entries(&old, &new);
+        assert_eq!(diff.entries.len(), 3);
+        assert!(!diff.truncated);
+    }
+
+    /// Text across entries stays within MAX_DIFF_TEXT_BYTES; the files past it
+    /// are still listed, without their text.
+    #[test]
+    fn source_diff_text_stays_within_the_budget() {
+        let (_tmp, old, new) = diff_dirs();
+        let body = "line\n".repeat(MAX_DIFF_FILE_BYTES / 5 - 1);
+        let files = MAX_DIFF_TEXT_BYTES / body.len() + 5;
+        for i in 0..files {
+            fs::write(new.join(format!("f{i:02}.md")), &body).unwrap();
+        }
+        let diff = build_source_diff_entries(&old, &new);
+        assert_eq!(diff.entries.len(), files);
+        let sent: usize = diff
+            .entries
+            .iter()
+            .map(|e| e.updated_text.as_ref().map_or(0, String::len))
+            .sum();
+        assert!(sent <= MAX_DIFF_TEXT_BYTES, "sent {sent} bytes");
+        assert_eq!(diff.entries[0].content_kind, "text");
+        let omitted = diff.entries.iter().filter(|e| e.content_kind == "omitted").count();
+        assert!(omitted >= 5, "only {omitted} omitted");
+        assert!(diff.entries.iter().filter(|e| e.content_kind == "omitted").all(|e| e.updated_text.is_none()));
+    }
+
+    /// Files too large to preview are compared by content without being read
+    /// whole: an identical pair is unchanged, a same-sized different pair is
+    /// reported as too large.
+    #[test]
+    fn source_diff_compares_large_files_by_content() {
+        let (_tmp, old, new) = diff_dirs();
+        let big = "a".repeat(MAX_DIFF_FILE_BYTES + 100_000);
+        fs::write(old.join("same.bin"), &big).unwrap();
+        fs::write(new.join("same.bin"), &big).unwrap();
+        let mut changed = big.clone();
+        changed.replace_range(MAX_DIFF_FILE_BYTES + 50_000..MAX_DIFF_FILE_BYTES + 50_001, "b");
+        fs::write(old.join("changed.bin"), &big).unwrap();
+        fs::write(new.join("changed.bin"), &changed).unwrap();
+
+        let diff = build_source_diff_entries(&old, &new);
+        let paths: Vec<_> = diff.entries.iter().map(|e| (e.relative_path.as_str(), e.content_kind.as_str())).collect();
+        assert_eq!(paths, [("changed.bin", "too_large")]);
+    }
+
+    fn skill_files_fixture() -> (TempDir, PathBuf) {
+        let tmp = tempdir().unwrap();
+        let skill = tmp.path().join("skill");
+        fs::create_dir_all(skill.join("references")).unwrap();
+        fs::write(skill.join("SKILL.md"), "# Demo\n").unwrap();
+        fs::write(skill.join("references/notes.md"), "notes").unwrap();
+        fs::write(skill.join("logo.bin"), [0u8, 1, 2, 3]).unwrap();
+        fs::write(skill.join("big.txt"), "a".repeat(MAX_DIFF_FILE_BYTES + 1)).unwrap();
+        // A sibling outside the skill that a traversal would reach.
+        fs::write(tmp.path().join("secret.txt"), "outside").unwrap();
+        (tmp, skill)
+    }
+
+    #[test]
+    fn list_skill_files_returns_content_scope_with_sizes() {
+        let (_tmp, skill) = skill_files_fixture();
+        fs::create_dir_all(skill.join(".git")).unwrap();
+        fs::write(skill.join(".git/HEAD"), "ref").unwrap();
+
+        let files = list_skill_files_in(&skill);
+        let paths: Vec<&str> = files.iter().map(|f| f.relative_path.as_str()).collect();
+        assert_eq!(
+            paths,
+            ["SKILL.md", "big.txt", "logo.bin", "references/notes.md"]
+        );
+        let notes = files
+            .iter()
+            .find(|f| f.relative_path == "references/notes.md")
+            .unwrap();
+        assert_eq!(notes.size, 5);
+        assert!(!notes.executable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_skill_files_marks_executables() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, skill) = skill_files_fixture();
+        let script = skill.join("run.sh");
+        fs::write(&script, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let files = list_skill_files_in(&skill);
+        assert!(
+            files
+                .iter()
+                .find(|f| f.relative_path == "run.sh")
+                .unwrap()
+                .executable
+        );
+        assert!(
+            !files
+                .iter()
+                .find(|f| f.relative_path == "SKILL.md")
+                .unwrap()
+                .executable
+        );
+    }
+
+    #[test]
+    fn read_skill_file_classifies_text_binary_and_too_large() {
+        let (_tmp, skill) = skill_files_fixture();
+
+        let text = read_skill_file_in(&skill, "references/notes.md").unwrap();
+        assert_eq!(text.content_kind, "text");
+        assert_eq!(text.text.as_deref(), Some("notes"));
+
+        let binary = read_skill_file_in(&skill, "logo.bin").unwrap();
+        assert_eq!(binary.content_kind, "binary");
+        assert!(binary.text.is_none());
+
+        let big = read_skill_file_in(&skill, "big.txt").unwrap();
+        assert_eq!(big.content_kind, "too_large");
+        assert!(big.text.is_none());
+    }
+
+    /// An unreadable file pins both rules: a large one is judged from its size
+    /// without being read (reading it would fail), and a small one reports the
+    /// read failure instead of passing for binary.
+    #[cfg(unix)]
+    #[test]
+    fn read_skill_file_judges_size_unread_and_reports_read_failures() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, skill) = skill_files_fixture();
+        let small = skill.join("locked.md");
+        fs::write(&small, "locked").unwrap();
+        for name in ["big.txt", "locked.md"] {
+            fs::set_permissions(skill.join(name), fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        // Root reads through 0o000, so there is nothing to pin.
+        if fs::read(&small).is_ok() {
+            return;
+        }
+
+        let big = read_skill_file_in(&skill, "big.txt").unwrap();
+        assert_eq!(big.content_kind, "too_large");
+        assert!(read_skill_file_in(&skill, "locked.md").is_err());
+    }
+
+    #[test]
+    fn read_skill_file_only_reads_listed_paths() {
+        let (tmp, skill) = skill_files_fixture();
+        let outside = tmp.path().join("secret.txt");
+        let absolute = outside.to_string_lossy().into_owned();
+        for path in [
+            "../secret.txt",
+            "references/../../secret.txt",
+            absolute.as_str(),
+            "./SKILL.md",
+            "references",
+            "missing.md",
+        ] {
+            assert!(
+                read_skill_file_in(&skill, path).is_err(),
+                "{path} must not be readable"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_skill_file_does_not_follow_symlinks_out_of_the_skill() {
+        let (tmp, skill) = skill_files_fixture();
+        std::os::unix::fs::symlink(tmp.path().join("secret.txt"), skill.join("link.txt")).unwrap();
+
+        assert!(list_skill_files_in(&skill)
+            .iter()
+            .all(|f| f.relative_path != "link.txt"));
+        assert!(read_skill_file_in(&skill, "link.txt").is_err());
     }
 }

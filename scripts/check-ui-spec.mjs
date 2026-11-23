@@ -38,9 +38,7 @@ const RADIUS_EXCEPTIONS = {
 const TYPE_SCALE = ['11px', '12px', '13px', '14px', '17px'];
 const FONT_SIZE_EXCEPTIONS = {
   // Headings of a rendered SKILL.md are document typography, not UI chrome.
-  'src/components/SkillMarkdown.tsx': ['28px', '20px', '16px'],
-  // The sheet's title and lead sit directly above that document and match its h1.
-  'src/components/DetailSheet.tsx': ['28px', '15px'],
+  'src/components/SkillMarkdown.tsx': ['20px', '16px'],
   // The deliberate welcome dialog.
   'src/components/HelpDialog.tsx': ['20px'],
   // The device-login code the user reads and types into GitHub.

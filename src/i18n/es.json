@@ -240,7 +240,6 @@
     "agentToggleDisabledGlobally": "Deshabilitado en Ajustes",
     "agentToggleEnabled": "{{agent}} habilitado",
     "agentToggleNotInstalled": "No instalado",
-    "agentTogglesTitle": "Espacio de trabajo global",
     "agentUnavailableCount": "{{count}} no disponibles",
     "allStatus": "Todos los estados",
     "applied": "Aplicado",
@@ -288,7 +287,6 @@
     "batchUpdated": "{{count}} skills actualizados",
     "cancelSelect": "Cancelar selección",
     "clearFilters": "Borrar filtros",
-    "collapseAgentToggles": "Contraer",
     "compactEnabledCount": "{{count}} habilitados",
     "confirmSyncMessage": "Sincronizar \"{{name}}\" con estos {{count}} agentes.",
     "confirmSyncTitle": "Confirmar alcance de sincronización",
@@ -314,7 +312,6 @@
     "enableForPreset": "Habilitar para el preset actual",
     "enabledButton": "Habilitado",
     "enabledInPreset": "Agregado al preset actual",
-    "expandAgentToggles": "Expandir",
     "filters": {
       "all": "Todos",
       "available": "Disponibles",
@@ -393,8 +390,6 @@
       "local": "Local",
       "skillssh": "skills.sh"
     },
-    "sourceRef": "Origen",
-    "sourceResolved": "Origen resuelto",
     "sourceRevision": "Revisión",
     "sourceSubpath": "Subruta",
     "sourceType": "Tipo de origen",
@@ -823,7 +818,6 @@
     "collapse": "Contraer"
   },
   "addFromLibrary": {
-    "add": "Añadir",
     "changeTarget": "Cambiar destino",
     "clearTargets": "Limpiar",
     "ctaEmpty": "Elige skills para añadir a {{agent}}",
@@ -837,7 +831,6 @@
     "errors": {
       "noTarget": "Selecciona al menos un agente de destino"
     },
-    "installedShort": "Añadida",
     "noTargetSelected": "sin destino",
     "projectsSummary": "{{installed}} / {{total}} instaladas",
     "projectsTitle": "Espacios de trabajo de proyecto",

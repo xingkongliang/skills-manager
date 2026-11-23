@@ -18,8 +18,3 @@ export function agentToggleState(
   if (item.deployed) return "deployed";
   return showPendingSync ? "pending" : "enabled";
 }
-
-/** The `enabled` value a click asks for: a pending row deploys, it does not turn off. */
-export function nextToggleValue(state: AgentToggleState): boolean {
-  return state === "off" || state === "pending";
-}

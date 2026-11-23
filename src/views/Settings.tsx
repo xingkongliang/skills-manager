@@ -59,6 +59,7 @@ import { cn, compactHomePath } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
 import { AgentIcon } from "../components/AgentIcon";
+import { AgentIconPicker } from "../components/AgentIconPicker";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { WhatsNewDialog } from "../components/WhatsNewDialog";
 import { loadChangelog, selectWhatsNew, type ChangelogEntry } from "../lib/changelog";
@@ -153,10 +154,11 @@ function AgentGroupDnd({ items, sensors, dragLabel, onDragEnd, renderAgentCard }
 export function Settings() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { tools, refreshTools, openHelp, appUpdate, refreshAppUpdate } = useApp();
+  const { tools, refreshTools, refreshManagedSkills, openHelp, appUpdate, refreshAppUpdate } = useApp();
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const { theme, setTheme } = useThemeContext();
   const [syncMode, setSyncMode] = useState("symlink");
+  const [savingSyncMode, setSavingSyncMode] = useState(false);
   const [closeAction, setCloseAction] = useState("");
   const [showTrayIcon, setShowTrayIcon] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -201,7 +203,9 @@ export function Settings() {
   const [customName, setCustomName] = useState("");
   const [customPath, setCustomPath] = useState("");
   const [customProjectPath, setCustomProjectPath] = useState("");
+  const [customIcon, setCustomIcon] = useState<string | null>(null);
   const [addingCustom, setAddingCustom] = useState(false);
+  const [editingIconFor, setEditingIconFor] = useState<string | null>(null);
   const [showMoreAgents, setShowMoreAgents] = useState(false);
 
   const GITHUB_URL = "https://github.com/xingkongliang/skills-manager";
@@ -295,17 +299,40 @@ export function Settings() {
     const trimKey = generateCustomAgentKey(trimName);
     setAddingCustom(true);
     try {
-      await api.addCustomTool(trimKey, trimName, trimPath, trimProjectPath || undefined);
+      await api.addCustomTool(trimKey, trimName, trimPath, trimProjectPath || undefined, customIcon);
       await refreshTools();
       toast.success(t("settings.customAgentAdded"));
       setShowAddCustom(false);
       setCustomName("");
       setCustomPath("");
       setCustomProjectPath("");
+      setCustomIcon(null);
     } catch (e) {
       toast.error(String(e));
     } finally {
       setAddingCustom(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!editingIconFor) return;
+    const handlePointer = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-icon-picker-root]")) {
+        setEditingIconFor(null);
+      }
+    };
+    document.addEventListener("mousedown", handlePointer);
+    return () => document.removeEventListener("mousedown", handlePointer);
+  }, [editingIconFor]);
+
+  const handleChangeAgentIcon = async (key: string, icon: string | null) => {
+    try {
+      await api.setCustomToolIcon(key, icon);
+      await refreshTools();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setEditingIconFor(null);
     }
   };
 
@@ -413,8 +440,19 @@ export function Settings() {
   };
 
   const handleSyncModeChange = async (mode: string) => {
+    if (savingSyncMode) return;
     setSyncMode(mode);
-    await api.setSettings("sync_mode", mode);
+    setSavingSyncMode(true);
+    try {
+      // Saving the mode also converts the deployments made in the old mode
+      // (#654), so a failure here names what is still on the old mode.
+      await api.setSettings("sync_mode", mode);
+    } catch (e) {
+      toast.error(getErrorMessage(e, t("common.error")));
+    } finally {
+      setSavingSyncMode(false);
+      await refreshManagedSkills();
+    }
   };
 
   const handleCloseActionChange = async (action: string) => {
@@ -877,11 +915,39 @@ export function Settings() {
     >
       <div className="flex items-start gap-2.5">
         {dragHandle}
-        <AgentIcon
-          agentKey={agent.key}
-          displayName={agent.display_name}
-          className="mt-px h-6 w-6 shrink-0 rounded-md"
-        />
+        {agent.is_custom ? (
+          <div className="relative mt-px shrink-0" data-icon-picker-root>
+            <button
+              type="button"
+              onClick={() =>
+                setEditingIconFor((current) => (current === agent.key ? null : agent.key))
+              }
+              title={t("settings.changeAgentIcon")}
+              className="outline-none"
+            >
+              <AgentIcon
+                agentKey={agent.key}
+                iconOverride={agent.icon}
+                displayName={agent.display_name}
+                className="h-6 w-6 rounded-md ring-offset-1 hover:ring-2 hover:ring-accent"
+              />
+            </button>
+            {editingIconFor === agent.key && (
+              <div className="absolute left-0 top-full z-10 mt-1 w-56 rounded-lg border border-border bg-surface p-1.5 shadow-lg">
+                <AgentIconPicker
+                  value={agent.icon}
+                  onChange={(icon) => void handleChangeAgentIcon(agent.key, icon)}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <AgentIcon
+            agentKey={agent.key}
+            displayName={agent.display_name}
+            className="mt-px h-6 w-6 shrink-0 rounded-md"
+          />
+        )}
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -1193,6 +1259,12 @@ export function Settings() {
                   {t("settings.projectSkillsPathDesc")}
                 </p>
               </div>
+              <AgentIconPicker
+                value={customIcon}
+                onChange={setCustomIcon}
+                label={t("settings.agentIcon")}
+                noneLabel={t("settings.noIcon")}
+              />
               <div className="flex justify-end">
                 <button
                   onClick={handleAddCustomAgent}
@@ -1411,6 +1483,7 @@ export function Settings() {
               <div className="app-segmented flex-wrap bg-background">
                 <button
                   onClick={() => handleSyncModeChange("symlink")}
+                  disabled={savingSyncMode}
                   className={cn(
                     segmentedButtonClass,
                     syncMode === "symlink" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
@@ -1420,6 +1493,7 @@ export function Settings() {
                 </button>
                 <button
                   onClick={() => handleSyncModeChange("copy")}
+                  disabled={savingSyncMode}
                   className={cn(
                     segmentedButtonClass,
                     syncMode === "copy" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"

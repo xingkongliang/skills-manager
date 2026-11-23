@@ -106,7 +106,7 @@ pub async fn create_preset(
 ) -> Result<PresetDto, AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        create_and_activate_preset_internal(&store, &name, description.as_deref(), icon.as_deref())
+        create_preset_internal(&store, &name, description.as_deref(), icon.as_deref())
             .map(|scenario| preset_dto(&store, scenario))
     })
     .await?;
@@ -150,25 +150,6 @@ pub fn create_preset_internal(
         sync_metadata::write_all_from_db_unlocked(store)
     })
     .map_err(AppError::db)?;
-    Ok(record)
-}
-
-/// Preserve the desktop app's legacy create-and-select behavior while the CLI
-/// uses [`create_preset_internal`] as a pure organization operation.
-fn create_and_activate_preset_internal(
-    store: &SkillStore,
-    name: &str,
-    description: Option<&str>,
-    icon: Option<&str>,
-) -> Result<ScenarioRecord, AppError> {
-    let previous_active_id = store.get_active_scenario_id().map_err(AppError::db)?;
-    let record = create_preset_internal(store, name, description, icon)?;
-    if let Some(previous_id) = previous_active_id.as_deref() {
-        unsync_scenario_skills(store, previous_id)?;
-    }
-    store
-        .set_active_scenario(&record.id)
-        .map_err(AppError::db)?;
     Ok(record)
 }
 
@@ -220,10 +201,8 @@ pub async fn delete_preset(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        delete_preset_with_active_fallback_internal(&store, &id)
-    })
-    .await?;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || delete_preset_internal(&store, &id)).await?;
     if result.is_ok() {
         refresh_tray_menu_best_effort(&app);
     }
@@ -246,41 +225,6 @@ pub fn delete_preset_internal(store: &SkillStore, id: &str) -> Result<(), AppErr
         sync_metadata::write_all_from_db_unlocked(store)
     })
     .map_err(AppError::db)
-}
-
-/// Preserve the desktop app's legacy active-preset transition. The CLI calls
-/// [`delete_preset_internal`] directly so deleting an organization object does
-/// not implicitly undeploy skills.
-fn delete_preset_with_active_fallback_internal(
-    store: &SkillStore,
-    id: &str,
-) -> Result<(), AppError> {
-    scenario_service::ensure_scenario_exists(store, id)?;
-    let was_active = store
-        .get_active_scenario_id()
-        .map_err(AppError::db)?
-        .as_deref()
-        == Some(id);
-
-    if was_active {
-        unsync_scenario_skills(store, id)?;
-    }
-
-    delete_preset_internal(store, id)?;
-
-    if was_active {
-        let remaining = store.get_all_scenarios().map_err(AppError::db)?;
-        if let Some(first) = remaining.first() {
-            store.set_active_scenario(&first.id).map_err(AppError::db)?;
-            // The preset is already deleted and the fallback already active, so
-            // a refusal here cannot undo any of that — report it, don't fail.
-            for refusal in sync_scenario_skills(store, &first.id)? {
-                log::warn!("fallback preset sync skipped a target: {refusal}");
-            }
-        }
-    }
-
-    Ok(())
 }
 
 /// Apply a preset to the default targets (all enabled agent globals).
@@ -460,22 +404,6 @@ pub async fn reorder_preset_skills(
     .await?
 }
 
-// ── Internal helpers ──
-
-pub(crate) fn sync_scenario_skills(
-    store: &SkillStore,
-    scenario_id: &str,
-) -> Result<Vec<scenario_service::TargetConflict>, AppError> {
-    scenario_service::sync_scenario_skills(store, scenario_id)
-}
-
-pub(crate) fn unsync_scenario_skills(
-    store: &SkillStore,
-    scenario_id: &str,
-) -> Result<(), AppError> {
-    scenario_service::unsync_scenario_skills(store, scenario_id)
-}
-
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PresetApplyMode {
@@ -535,7 +463,8 @@ pub async fn apply_preset_to_coding_agents(
 mod tests {
     use super::*;
     use crate::core::scenario_service::{
-        collect_scenario_sync_targets, sync_desired_targets, unsync_obsolete_scenario_targets,
+        collect_scenario_sync_targets, sync_desired_targets, sync_scenario_skills,
+        unsync_obsolete_scenario_targets,
     };
     use crate::core::skill_store::SkillRecord;
     use crate::core::tool_adapters::{self, CustomToolDef};
@@ -623,6 +552,7 @@ mod tests {
             skills_dir: target_base.to_string_lossy().to_string(),
             project_relative_skills_dir: None,
             category: Default::default(),
+            icon: None,
         }];
         store
             .set_setting(
@@ -670,6 +600,42 @@ mod tests {
         delete_preset_internal(&repo.store, "current").unwrap();
         assert_eq!(repo.store.get_active_scenario_id().unwrap(), None);
         assert!(repo.store.get_all_targets().unwrap().is_empty());
+    }
+
+    /// The desktop app's create/delete used to undeploy the active preset's
+    /// skills. Both now share the CLI's organization-only functions, so a
+    /// skill already deployed from the active preset must stay deployed.
+    #[cfg(unix)]
+    #[test]
+    fn organization_crud_keeps_existing_deployments() {
+        let repo = metadata_test_repo();
+        let agent_tmp = tempdir().unwrap();
+        let target_base = agent_tmp.path().join("agent-skills");
+        fs::create_dir_all(&target_base).unwrap();
+        configure_single_custom_tool(&repo.store, &target_base);
+
+        let skill_dir = write_skill_dir(&crate::core::central_repo::skills_dir(), "deployed");
+        repo.store
+            .insert_skill(&sample_skill("deployed", "deployed", &skill_dir))
+            .unwrap();
+        repo.store
+            .insert_scenario(&sample_scenario("current", "Current"))
+            .unwrap();
+        repo.store
+            .add_skill_to_scenario("current", "deployed")
+            .unwrap();
+        repo.store.set_active_scenario("current").unwrap();
+        sync_scenario_skills(&repo.store, "current").unwrap();
+        let target = target_base.join("deployed");
+        assert_eq!(fs::read_link(&target).unwrap(), skill_dir);
+
+        create_preset_internal(&repo.store, "Web Dev", None, None).unwrap();
+        assert_eq!(fs::read_link(&target).unwrap(), skill_dir);
+        assert_eq!(repo.store.get_all_targets().unwrap().len(), 1);
+
+        delete_preset_internal(&repo.store, "current").unwrap();
+        assert_eq!(fs::read_link(&target).unwrap(), skill_dir);
+        assert_eq!(repo.store.get_all_targets().unwrap().len(), 1);
     }
 
     #[cfg(unix)]

@@ -326,15 +326,14 @@
     "confirmSyncMessage": "Sync \"{{name}}\" to these {{count}} agents.",
     "confirmUnsyncMessage": "Remove \"{{name}}\" from these {{count}} synced agents.",
     "sourceType": "Source type",
-    "sourceRef": "Source",
-    "sourceResolved": "Resolved source",
     "sourceBranch": "Branch / Tag",
     "sourceSubpath": "Subpath",
     "sourceRevision": "Revision",
     "docTabs": {
       "local": "Local",
       "diff": "Diff",
-      "source": "Source"
+      "source": "Source",
+      "files": "Files"
     },
     "sourceDiffUnavailable": "Source content is unavailable right now",
     "sourceDiff": {
@@ -345,19 +344,19 @@
         "modified": "Modified"
       },
       "execBit": "Permission {{before}} → {{after}}",
+      "collapsedHint": "{{count}} files changed. Click a file to see its changes.",
+      "truncated": "Showing the first {{count}} changed files; more files changed. Updating applies every change.",
       "summary": {
         "binary": "Binary file changed",
         "too_large": "File changed but is too large to preview",
-        "permission_only": "Only file permissions changed"
+        "permission_only": "Only file permissions changed",
+        "omitted": "File changed; too many changes to load its content here"
       }
     },
     "localSource": "Local library",
     "agentCount": "{{count}} agents",
     "ready": "Ready",
     "standby": "Standby",
-    "agentTogglesTitle": "Global Workspace",
-    "expandAgentToggles": "Expand",
-    "collapseAgentToggles": "Collapse",
     "agentToggleEnabled": "{{agent}} enabled",
     "agentToggleDisabled": "{{agent}} disabled",
     "agentToggleNotInstalled": "Not installed",
@@ -430,7 +429,8 @@
       "manageHint": "Right-click to rename or delete",
       "tagRenamed": "Tag renamed",
       "tagDeleted": "Tag deleted",
-      "deleteConfirm": "Remove the tag \"{{tag}}\" from all skills?"
+      "deleteConfirm": "Remove the tag \"{{tag}}\" from all skills?",
+      "addTagShort": "Add tag"
     },
     "selectMode": "Select",
     "selectedCount": "{{count}} selected",
@@ -476,6 +476,26 @@
       "apply": "Sync {{count}}",
       "noAgents": "No installed and enabled agents.",
       "allSynced": "Every selected skill is already on this agent"
+    },
+    "detail": {
+      "preset": "Preset",
+      "agents": "Agents",
+      "deployedTo": "Deployed to",
+      "source": "Source",
+      "neverChecked": "Not checked yet",
+      "copyPath": "Copy path",
+      "pathCopied": "Path copied",
+      "revealFolder": "Show in file manager",
+      "filesUnavailable": "The skill's files could not be read",
+      "fileNotFound": "This file is not in the skill",
+      "fileBinary": "Binary file, not shown",
+      "fileTooLarge": "Too large to preview (over 256 KB)",
+      "backToFiles": "Back to files",
+      "noFiles": "This skill has no files",
+      "executable": "exec",
+      "executableHint": "Executable file",
+      "location": "Location",
+      "lastCheckedLabel": "Last checked"
     }
   },
   "install": {
@@ -624,6 +644,9 @@
     "overridePathHint": "Using a manually overridden skills path",
     "customAgentAdded": "Custom agent added",
     "customAgentRemoved": "Custom agent removed",
+    "agentIcon": "Icon",
+    "noIcon": "No icon",
+    "changeAgentIcon": "Change icon",
     "selectFolder": "Select",
     "addAgent": "Add",
     "globalConfig": "Global Configuration",
@@ -641,7 +664,7 @@
     "changeDir": "Change Directory",
     "openInFinder": "Open Folder",
     "syncMode": "Default Sync Mode",
-    "syncModeDesc": "Symlinks are recommended — minimal disk usage with live updates. Applies to both global and project workspaces; note that symlinks in a project point to this machine's central library and won't travel with the repo.",
+    "syncModeDesc": "Symlinks are recommended — minimal disk usage with live updates. Applies to both global and project workspaces; note that symlinks in a project point to this machine's central library and won't travel with the repo. Exception: Antigravity gets copies on Windows, and a project's .agents/skills folder gets copies while Antigravity is installed and enabled, because Antigravity does not load links there.",
     "symlink": "Symlink",
     "copy": "File Copy",
     "currentPreset": "Current Preset",
@@ -823,6 +846,7 @@
     "loadFailed": "Failed to load {{item}}",
     "dataOutOfDate": "Some data could not be refreshed",
     "documentMissing": "No document file was found",
+    "diffTooLarge": "Too many lines to compare here",
     "presets": "presets",
     "agents": "agent status",
     "skills": "skill list",
@@ -837,7 +861,8 @@
     "search": "Search",
     "goToSettings": "Settings",
     "expandAll": "Show all",
-    "collapse": "Collapse"
+    "collapse": "Collapse",
+    "expand": "Expand"
   },
   "addFromLibrary": {
     "title": "Add from Library",
@@ -865,8 +890,6 @@
     "toastRemovedFromProject": "Removed \"{{skill}}\" from {{project}}",
     "removeConfirmTitle": "Remove from workspace",
     "removeConfirm": "Permanently delete the \"{{skill}}\" folder from {{project}} ({{agent}})? This action cannot be undone.",
-    "add": "Add",
-    "installedShort": "Added",
     "projectsTitle": "Project Workspaces",
     "projectsSummary": "{{installed}} / {{total}} installed",
     "errors": {
@@ -882,7 +905,9 @@
       "remove": "Click to remove from this agent",
       "conflict": "Rename the skill in your library first",
       "unavailable": "Select a target agent first"
-    }
+    },
+    "addToProject": "Add to project…",
+    "addToAgent": "Add to {{agent}}"
   },
   "preset": {
     "create": "New Preset",

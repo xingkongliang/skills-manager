@@ -1011,6 +1011,7 @@ pub fn run() {
             commands::tools::set_custom_tool_project_path,
             commands::tools::reset_custom_tool_project_path,
             commands::tools::add_custom_tool,
+            commands::tools::set_custom_tool_icon,
             commands::tools::remove_custom_tool,
             // Skills
             commands::skills::get_managed_skills,
@@ -1018,6 +1019,9 @@ pub fn run() {
             commands::skills::get_skill_document,
             commands::skills::get_source_skill_document,
             commands::skills::get_skill_source_diff,
+            commands::skills::list_skill_files,
+            commands::skills::read_skill_file,
+            commands::skills::reveal_skill_folder,
             commands::skills::delete_managed_skill,
             commands::skills::delete_managed_skills,
             commands::skills::install_local,

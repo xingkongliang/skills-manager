@@ -22,6 +22,8 @@ import {
   CheckCircle2,
   Circle,
   Tag,
+  CloudOff,
+  FileQuestion,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -33,6 +35,8 @@ import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
 import { DetailSheet } from "../components/DetailSheet";
 import { AgentToggleSection, type AgentToggleItem } from "../components/AgentToggleSection";
+import { SegmentedTabs } from "../components/SegmentedTabs";
+import { DetailEmptyPaper, DetailPaper } from "../components/DetailPaper";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { ProjectAgentDots } from "../components/ProjectAgentDots";
 import { PresetBar } from "../components/PresetBar";
@@ -40,7 +44,7 @@ import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import { enabledInstalledAgentKeys, getDefaultExportAgents } from "../lib/exportAgents";
-import { cn } from "../utils";
+import { cn, compactHomePath } from "../utils";
 import * as api from "../lib/tauri";
 import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
@@ -98,18 +102,6 @@ function getSyncStatusMeta(t: (key: string) => string, status: ProjectSkill["syn
 
 function getAssignedAgents(variants: ProjectSkill[]) {
   return Array.from(new Set(variants.map((variant) => variant.agent))).sort();
-}
-
-function getAgentDotTargets(variants: ProjectSkill[]) {
-  const seen = new Set<string>();
-  const targets: { key: string; display_name: string }[] = [];
-  for (const v of variants) {
-    if (!seen.has(v.agent)) {
-      seen.add(v.agent);
-      targets.push({ key: v.agent, display_name: v.agent_display_name });
-    }
-  }
-  return targets;
 }
 
 function getGroupStatus(variants: ProjectSkill[]): ProjectSkill["sync_status"] {
@@ -1730,111 +1722,84 @@ function ProjectSkillDetailPanel({
             : null,
     };
   });
-  const meta = (
-    <>
-      <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted">
-        <ProjectAgentDots
-          assignedAgents={getAssignedAgents(skill.variants)}
-          targets={getAgentDotTargets(skill.variants).map((t) => ({
-            key: t.key,
-            display_name: t.display_name,
-            enabled: true,
-            installed: true,
-            is_custom: false,
-          }))}
-        />
-        {skill.tags.length > 0 && (
-          <>
-            <span className="mx-0.5 h-3 w-px bg-border-subtle" />
-            {skill.tags.map((tag) => (
-              <span
-                key={tag}
-                className="inline-flex items-center rounded-full bg-surface-hover px-2 py-0.5 text-[11px] font-medium text-secondary"
-              >
-                {tag}
-              </span>
-            ))}
-          </>
-        )}
-      </div>
-      <div className="mt-3 flex items-center gap-4 text-[12px] text-muted">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-          <span className="font-mono truncate">{skill.primaryVariant.path}</span>
-        </div>
-        {skill.files.length > 0 && (
-          <div className="flex shrink-0 items-center gap-1.5">
-            <FileText className="h-3.5 w-3.5" />
-            {skill.files.join(", ")}
-          </div>
-        )}
-      </div>
-    </>
+  const meta = skill.tags.length > 0 ? (
+    <div className="flex flex-wrap items-center gap-1">
+      {skill.tags.map((tag) => (
+        <span
+          key={tag}
+          className="inline-flex items-center rounded-full bg-surface-hover px-2 py-0.5 text-[11px] font-medium text-secondary"
+        >
+          {tag}
+        </span>
+      ))}
+    </div>
+  ) : null;
+  const subtitle = (
+    <span title={skill.primaryVariant.path}>
+      <span className="font-mono">{compactHomePath(skill.primaryVariant.path)}</span>
+      {skill.files.length > 0 && <> · {skill.files.join(", ")}</>}
+    </span>
+  );
+
+  const aside = (
+    <section className="px-5 py-4">
+      <h3 className="app-section-title">{t("mySkills.detail.agents")}</h3>
+      <AgentToggleSection
+        className="mt-2"
+        items={toggleItems}
+        togglingKey={togglingAgent}
+        onToggle={onToggleAgent}
+        showPendingSync={false}
+      />
+    </section>
   );
 
   return (
     <DetailSheet
       open={true}
       title={skill.name}
-      description={skill.description ? <p className="line-clamp-3">{skill.description}</p> : undefined}
+      icon={<FolderOpen className="h-[18px] w-[18px]" />}
+      subtitle={subtitle}
+      description={skill.description}
       meta={meta}
+      aside={aside}
       onClose={onClose}
     >
-      <AgentToggleSection
-        items={toggleItems}
-        togglingKey={togglingAgent}
-        onToggle={onToggleAgent}
-        showPendingSync={false}
-        className="mb-4"
-      />
-
       {supportsCenterDiff && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          {(["local", "diff", "center"] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setContentTab(tab)}
-              className={cn(
-                "rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
-                contentTab === tab
-                  ? "bg-accent text-white"
-                  : "bg-surface-hover text-muted hover:text-secondary"
-              )}
-              disabled={(tab === "diff" || tab === "center") && centerDocLoading}
-            >
-              {tab === "local"
-                ? t("mySkills.docTabs.local")
-                : tab === "diff"
-                  ? t("mySkills.docTabs.diff")
-                  : t("project.docTabs.center")}
-            </button>
-          ))}
-        </div>
+        <SegmentedTabs
+          className="mb-4"
+          value={contentTab}
+          onChange={setContentTab}
+          tabs={[
+            { key: "local", label: t("mySkills.docTabs.local") },
+            { key: "diff", label: t("mySkills.docTabs.diff"), disabled: centerDocLoading },
+            { key: "center", label: t("project.docTabs.center"), disabled: centerDocLoading },
+          ]}
+        />
       )}
 
       {docLoading ? (
-        <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+        <DetailEmptyPaper loading text={t("common.loading")} />
       ) : contentTab === "diff" ? (
         docContent && centerDocContent ? (
           <DocumentDiffViewer original={docContent} updated={centerDocContent} />
         ) : centerDocLoading ? (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+          <DetailEmptyPaper loading text={t("common.loading")} />
         ) : (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+          <DetailEmptyPaper icon={CloudOff} text={t("mySkills.sourceDiffUnavailable")} />
         )
       ) : contentTab === "center" ? (
         centerDocLoading ? (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
+          <DetailEmptyPaper loading text={t("common.loading")} />
         ) : centerDocContent ? (
-          <SkillMarkdown content={centerDocContent} />
+          <DetailPaper><SkillMarkdown content={centerDocContent} /></DetailPaper>
         ) : (
-          <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
+          <DetailEmptyPaper icon={CloudOff} text={t("mySkills.sourceDiffUnavailable")} />
         )
       ) : docContent ? (
-        <SkillMarkdown content={docContent} />
+        <DetailPaper><SkillMarkdown content={docContent} /></DetailPaper>
       ) : (
-        <div className="mt-12 text-center text-[13px] text-muted">{t("common.documentMissing")}</div>
+        <DetailEmptyPaper icon={FileQuestion} text={t("common.documentMissing")} />
       )}
     </DetailSheet>
   );

@@ -181,8 +181,11 @@ export function Sidebar() {
   };
 
   const handleCreatePreset = async (name: string, description?: string, icon?: string) => {
-    await api.createPreset(name, description, icon);
-    await Promise.all([refreshPresets(), refreshManagedSkills()]);
+    // Creating a preset only adds an empty group; it no longer becomes the
+    // active preset, so select it explicitly to open it for editing.
+    const created = await api.createPreset(name, description, icon);
+    await refreshPresets();
+    setViewedPresetId(created.id);
     if (location.pathname === "/settings") {
       navigate("/my-skills");
     }
@@ -330,6 +333,7 @@ export function Sidebar() {
                                 >
                                   <AgentIcon
                                     agentKey={tool.key}
+                                    iconOverride={tool.icon}
                                     displayName={tool.display_name}
                                     className={cn(
                                       "h-[20px] w-[20px] rounded-[4px] border transition-colors",

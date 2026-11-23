@@ -15,6 +15,7 @@ export interface ToolInfo {
   project_relative_skills_dir: string | null;
   has_project_path_override: boolean;
   category: ToolCategory;
+  icon: string | null;
 }
 
 export interface ManagedSkill {
@@ -75,12 +76,28 @@ export interface SourceSkillDocument {
   revision: string;
 }
 
+/** A file in a skill's central copy (same scope as the content hash and the diff). */
+export interface SkillFile {
+  relative_path: string;
+  size: number;
+  executable: boolean;
+}
+
+export interface SkillFileContent {
+  relative_path: string;
+  content_kind: "text" | "binary" | "too_large";
+  /** Present only when `content_kind === "text"`. */
+  text: string | null;
+}
+
 export type SkillSourceDiffStatus = "added" | "removed" | "modified";
 export type SkillSourceDiffContentKind =
   | "text"
   | "binary"
   | "too_large"
-  | "permission_only";
+  | "permission_only"
+  /** Text past the preview's total budget, listed without its content. */
+  | "omitted";
 
 export interface SkillSourceDiffEntry {
   relative_path: string;
@@ -97,6 +114,8 @@ export interface SkillSourceDiff {
   source_label: string;
   revision: string;
   entries: SkillSourceDiffEntry[];
+  /** More files differ than `entries` lists; the scan stopped at its limit. */
+  truncated: boolean;
 }
 
 export interface Preset {
@@ -222,13 +241,18 @@ export const addCustomTool = (
   displayName: string,
   skillsDir: string,
   projectRelativeSkillsDir?: string,
+  icon?: string | null,
 ) =>
   invoke<void>("add_custom_tool", {
     key,
     displayName,
     skillsDir,
     projectRelativeSkillsDir: projectRelativeSkillsDir ?? null,
+    icon: icon ?? null,
   });
+
+export const setCustomToolIcon = (key: string, icon: string | null) =>
+  invoke<void>("set_custom_tool_icon", { key, icon });
 
 export const removeCustomTool = (key: string) =>
   invoke<void>("remove_custom_tool", { key });
@@ -251,6 +275,15 @@ export const getSourceSkillDocument = (skillId: string) =>
 
 export const getSkillSourceDiff = (skillId: string) =>
   invoke<SkillSourceDiff>("get_skill_source_diff", { skillId });
+
+export const listSkillFiles = (skillId: string) =>
+  invoke<SkillFile[]>("list_skill_files", { skillId });
+
+export const readSkillFile = (skillId: string, relativePath: string) =>
+  invoke<SkillFileContent>("read_skill_file", { skillId, relativePath });
+
+export const revealSkillFolder = (skillId: string) =>
+  invoke<void>("reveal_skill_folder", { skillId });
 
 export const deleteManagedSkill = (skillId: string) =>
   invoke<void>("delete_managed_skill", { skillId });

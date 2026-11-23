@@ -475,3 +475,8 @@ export function useApp() {
   if (!ctx) throw new Error("useApp must be used within AppProvider");
   return ctx;
 }
+
+/** For leaf components that can also render outside the provider (tests, isolated views). */
+export function useOptionalApp() {
+  return useContext(AppContext);
+}
