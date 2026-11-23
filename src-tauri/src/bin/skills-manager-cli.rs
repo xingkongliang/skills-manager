@@ -634,12 +634,19 @@ struct UpdateReport {
     /// website snapshot) instead of failing on it, as `skills check` does.
     skipped: bool,
     /// Present when the update was held back because it would have removed
-    /// these paths (#256). Nothing changed, and the CLI offers no way to
-    /// accept: approving means seeing the list, which needs a person, so it
-    /// only exists in the app. A bare `refreshed: false` would read as
-    /// "already up to date".
+    /// these paths, or overwritten the user's edits to them (#256). Nothing
+    /// changed, and the CLI offers no way to accept: approving means seeing the
+    /// list, which needs a person, so it only exists in the app. A bare
+    /// `refreshed: false` would read as "already up to date".
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     held_back_removals: Vec<String>,
+    /// Structured companion to the stable legacy strings above.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    held_back_changes: Vec<cmd::PendingRemoval>,
+}
+
+fn describe_pending_removal(p: &cmd::PendingRemoval) -> String {
+    format!("{}: {}", p.location, p.path)
 }
 
 #[derive(Debug, Serialize)]
@@ -1991,8 +1998,9 @@ fn run_update(
                         held_back_removals: r
                             .pending_removals
                             .iter()
-                            .map(|p| format!("{}: {}", p.location, p.path))
+                            .map(describe_pending_removal)
                             .collect(),
+                        held_back_changes: r.pending_removals,
                     },
                     Err(e) => UpdateReport {
                         skill_id: skill.id.clone(),
@@ -2002,6 +2010,7 @@ fn run_update(
                         error: Some(e.message.clone()),
                         skipped: false,
                         held_back_removals: Vec::new(),
+                        held_back_changes: Vec::new(),
                     },
                 }
             }
@@ -2016,8 +2025,9 @@ fn run_update(
                     held_back_removals: r
                         .pending_removals
                         .iter()
-                        .map(|p| format!("{}: {}", p.location, p.path))
+                        .map(describe_pending_removal)
                         .collect(),
+                    held_back_changes: r.pending_removals,
                 },
                 Err(e) => UpdateReport {
                     skill_id: skill.id.clone(),
@@ -2027,6 +2037,7 @@ fn run_update(
                     error: Some(e.message.clone()),
                     skipped: false,
                     held_back_removals: Vec::new(),
+                    held_back_changes: Vec::new(),
                 },
             },
             other => UpdateReport {
@@ -2039,6 +2050,7 @@ fn run_update(
                 error: (!all).then(|| format!("source type '{other}' cannot be refreshed")),
                 skipped: all,
                 held_back_removals: Vec::new(),
+                held_back_changes: Vec::new(),
             },
         };
         reports.push(report);
@@ -4640,8 +4652,46 @@ mod tests {
             error: None,
             skipped: false,
             held_back_removals: vec!["library: notes.md".to_string()],
+            held_back_changes: Vec::new(),
         };
         assert!(update_outcome(&[held_back]).is_ok());
+    }
+
+    #[test]
+    fn held_back_update_keeps_legacy_strings_and_serializes_change_kinds() {
+        let changes = vec![
+            cmd::PendingRemoval {
+                location: "library".into(),
+                path: "gone.md".into(),
+                kind: cmd::PendingRemovalKind::Removed,
+            },
+            cmd::PendingRemoval {
+                location: "claude_code".into(),
+                path: "edited.md".into(),
+                kind: cmd::PendingRemovalKind::Overwritten,
+            },
+        ];
+        let mut report = UpdateReport {
+            skill_id: "x".into(),
+            name: "x".into(),
+            source_type: "git".into(),
+            refreshed: false,
+            error: None,
+            skipped: false,
+            held_back_removals: changes.iter().map(describe_pending_removal).collect(),
+            held_back_changes: changes,
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["held_back_removals"], serde_json::json!(["library: gone.md", "claude_code: edited.md"]));
+        assert_eq!(json["held_back_changes"], serde_json::json!([
+            {"location": "library", "path": "gone.md", "kind": "removed"},
+            {"location": "claude_code", "path": "edited.md", "kind": "overwritten"},
+        ]));
+        report.held_back_removals.clear();
+        report.held_back_changes.clear();
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json.get("held_back_removals").is_none());
+        assert!(json.get("held_back_changes").is_none());
     }
 
     /// A dry run has to fail where the real run fails; it used to preview a
