@@ -247,12 +247,34 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
                     .filter(|(_, stamped)| stamped == hash)
             })
             .map(|(stamp, hash)| (stamp.as_str(), hash.as_str()));
-        let hashed = super::content_hash::hash_directory_reusing(&skill_dir, cached);
+        let had_git_baseline = previous.is_some_and(|prev| {
+            matches!(prev.source_type.as_str(), "git" | "skillssh")
+                && prev.source_revision.is_some()
+        });
+        // File timestamps may come from another device. A cached stamp is
+        // useful for indexing, but cannot vouch for a Git revision.
+        let hashed = super::content_hash::hash_directory_reusing(
+            &skill_dir,
+            if had_git_baseline { None } else { cached },
+        );
         let new_hash = Some(hashed.hash.clone());
         let updated_at = match previous {
             Some(prev) if prev.content_hash == new_hash => prev.updated_at,
             _ => now,
         };
+
+        // The synchronized metadata does not carry an installed revision.
+        // Keep local provenance only if both the source and the verified
+        // content are unchanged; a new tree or source could be another install.
+        let same_install = previous.filter(|prev| {
+            (!had_git_baseline || hashed.stamp.is_some())
+                && prev.content_hash.is_some()
+                && prev.content_hash == new_hash
+                && prev.source_type == meta.source.source_type
+                && prev.source_ref == source_ref
+                && prev.source_subpath == meta.source.subpath
+                && prev.source_branch == meta.source.branch
+        });
 
         let record = SkillRecord {
             id: meta.skill_id.clone(),
@@ -260,22 +282,26 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
             description: parsed.description,
             source_type: meta.source.source_type.clone(),
             source_ref,
-            source_ref_resolved: previous.and_then(|s| s.source_ref_resolved.clone()),
+            source_ref_resolved: same_install.and_then(|s| s.source_ref_resolved.clone()),
             source_subpath: meta.source.subpath.clone(),
             source_branch: meta.source.branch.clone(),
-            source_revision: previous.and_then(|s| s.source_revision.clone()),
-            remote_revision: previous.and_then(|s| s.remote_revision.clone()),
+            source_revision: same_install.and_then(|s| s.source_revision.clone()),
+            remote_revision: same_install.and_then(|s| s.remote_revision.clone()),
             central_path,
             content_hash: new_hash,
             enabled: meta.enabled,
             created_at: previous.map(|s| s.created_at).unwrap_or(now),
             updated_at,
             status: "ok".to_string(),
-            update_status: previous
+            update_status: same_install
+                .or(previous.filter(|s| {
+                    matches!(s.source_type.as_str(), "local" | "import")
+                        && s.source_type == meta.source.source_type
+                }))
                 .map(|s| s.update_status.clone())
                 .unwrap_or_else(|| "unknown".to_string()),
-            last_checked_at: previous.and_then(|s| s.last_checked_at),
-            last_check_error: previous.and_then(|s| s.last_check_error.clone()),
+            last_checked_at: same_install.and_then(|s| s.last_checked_at),
+            last_check_error: same_install.and_then(|s| s.last_check_error.clone()),
         };
         store.upsert_skill(&record)?;
         store.set_tags_for_skill(&meta.skill_id, &meta.tags)?;
@@ -920,6 +946,33 @@ mod tests {
             after.updated_at, 1_000_000,
             "updated_at must not change when skill content is unchanged"
         );
+    }
+
+    #[test]
+    fn reindex_drops_git_provenance_when_the_synced_tree_changes() {
+        let repo = test_repo();
+        let dir = write_skill_dir("demo");
+        let mut skill = sample_skill("skill-1", &dir);
+        skill.source_type = "git".into();
+        skill.source_ref = Some("https://example.com/original.git".into());
+        skill.source_subpath = Some("skills/demo".into());
+        skill.source_revision = Some("1".repeat(40));
+        skill.remote_revision = Some("2".repeat(40));
+        skill.content_hash = Some(super::super::content_hash::hash_directory(&dir).unwrap());
+        skill.update_status = "update_available".into();
+        repo.store.insert_skill(&skill).unwrap();
+        write_all_from_db_unlocked(&repo.store).unwrap();
+
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+        let unchanged = repo.store.get_skill_by_id(&skill.id).unwrap().unwrap();
+        assert_eq!(unchanged.source_revision, skill.source_revision);
+
+        fs::write(dir.join("extra.txt"), "synced from another device").unwrap();
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+        let changed = repo.store.get_skill_by_id(&skill.id).unwrap().unwrap();
+        assert!(changed.source_revision.is_none());
+        assert!(changed.remote_revision.is_none());
+        assert_eq!(changed.update_status, "unknown");
     }
 
     fn insert_preset_with_member(store: &SkillStore, scenario_id: &str, skill_id: &str) {
