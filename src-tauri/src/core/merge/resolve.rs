@@ -180,6 +180,7 @@ fn apply_use_remote(
         enabled: theirs_skill.meta.enabled,
         tags: theirs_skill.meta.tags.clone(),
         source: theirs_skill.meta.source.clone(),
+        installed_revision: theirs_skill.meta.git_installed_revision().cloned(),
     };
     write_worktree_meta(skills_dir, &meta)
 }
@@ -225,6 +226,7 @@ fn apply_keep_both(
         enabled: theirs_skill.meta.enabled,
         tags: theirs_skill.meta.tags.clone(),
         source: theirs_skill.meta.source.clone(),
+        installed_revision: theirs_skill.meta.git_installed_revision().cloned(),
     };
     write_worktree_meta(skills_dir, &meta)
 }

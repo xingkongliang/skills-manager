@@ -41,6 +41,33 @@ pub struct SkillMetaFile {
     pub enabled: bool,
     pub tags: Vec<String>,
     pub source: SourceMeta,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_revision: Option<InstalledRevision>,
+}
+
+/// The installed Git baseline is part of the library, while check timestamps
+/// and errors are device-local. The flag preserves a verified same-revision
+/// comparison as of the backup, and the next check refreshes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledRevision {
+    pub revision: String,
+    pub verified_up_to_date: bool,
+}
+
+impl SkillMetaFile {
+    pub(crate) fn git_installed_revision(&self) -> Option<&InstalledRevision> {
+        self.installed_revision.as_ref().filter(|version| {
+            is_git_source(&self.source.source_type) && valid_git_revision(&version.revision)
+        })
+    }
+}
+
+fn is_git_source(source_type: &str) -> bool {
+    matches!(source_type, "git" | "skillssh")
+}
+
+fn valid_git_revision(revision: &str) -> bool {
+    matches!(revision.len(), 40 | 64) && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -254,28 +281,69 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
             _ => now,
         };
 
+        let previous_source = previous.filter(|prior| {
+            prior.source_type == meta.source.source_type
+                && prior.source_ref == source_ref
+                && prior.source_branch == meta.source.branch
+                && prior.source_subpath == meta.source.subpath
+        });
+        let previous_content = previous_source.filter(|prior| prior.content_hash == new_hash);
+        let saved_revision = meta.git_installed_revision();
+        // A legacy snapshot has no revision to override the existing source
+        // baseline. Keep its prior behavior for locally edited skills.
+        let local_baseline = if saved_revision.is_some() {
+            previous_content
+        } else {
+            previous_source
+        };
+        let source_revision = if is_git_source(&meta.source.source_type) {
+            local_baseline
+                .and_then(|prior| prior.source_revision.clone())
+                .or_else(|| saved_revision.map(|version| version.revision.clone()))
+        } else {
+            previous.and_then(|prior| prior.source_revision.clone())
+        };
+        let previous_check = if is_git_source(&meta.source.source_type) {
+            local_baseline.filter(|prior| prior.source_revision == source_revision)
+        } else {
+            previous
+        };
+        let saved_verified = saved_revision.is_some_and(|version| {
+            version.verified_up_to_date
+                && Some(version.revision.as_str()) == source_revision.as_deref()
+        });
+
         let record = SkillRecord {
             id: meta.skill_id.clone(),
             name,
             description: parsed.description,
             source_type: meta.source.source_type.clone(),
             source_ref,
-            source_ref_resolved: previous.and_then(|s| s.source_ref_resolved.clone()),
+            source_ref_resolved: previous_source.and_then(|s| s.source_ref_resolved.clone()),
             source_subpath: meta.source.subpath.clone(),
             source_branch: meta.source.branch.clone(),
-            source_revision: previous.and_then(|s| s.source_revision.clone()),
-            remote_revision: previous.and_then(|s| s.remote_revision.clone()),
+            remote_revision: previous_check
+                .and_then(|s| s.remote_revision.clone())
+                .or_else(|| source_revision.clone().filter(|_| saved_verified)),
+            source_revision,
             central_path,
             content_hash: new_hash,
             enabled: meta.enabled,
             created_at: previous.map(|s| s.created_at).unwrap_or(now),
             updated_at,
             status: "ok".to_string(),
-            update_status: previous
+            update_status: previous_check
                 .map(|s| s.update_status.clone())
-                .unwrap_or_else(|| "unknown".to_string()),
-            last_checked_at: previous.and_then(|s| s.last_checked_at),
-            last_check_error: previous.and_then(|s| s.last_check_error.clone()),
+                .unwrap_or_else(|| {
+                    if saved_verified {
+                        "up_to_date"
+                    } else {
+                        "unknown"
+                    }
+                    .to_string()
+                }),
+            last_checked_at: previous_check.and_then(|s| s.last_checked_at),
+            last_check_error: previous_check.and_then(|s| s.last_check_error.clone()),
         };
         store.upsert_skill(&record)?;
         store.set_tags_for_skill(&meta.skill_id, &meta.tags)?;
@@ -479,6 +547,15 @@ fn write_skill_file(skill: &SkillRecord, tags: &[String]) -> Result<()> {
         "import" | "local" => None,
         _ => skill.source_ref.clone(),
     };
+    let installed_revision = skill
+        .source_revision
+        .as_ref()
+        .filter(|revision| is_git_source(&skill.source_type) && valid_git_revision(revision))
+        .map(|revision| InstalledRevision {
+            revision: revision.clone(),
+            verified_up_to_date: skill.update_status == "up_to_date"
+                && skill.remote_revision.as_ref() == Some(revision),
+        });
     let meta = SkillMetaFile {
         schema_version: SCHEMA_VERSION,
         skill_id: skill.id.clone(),
@@ -492,6 +569,7 @@ fn write_skill_file(skill: &SkillRecord, tags: &[String]) -> Result<()> {
             subpath: skill.source_subpath.clone(),
             branch: skill.source_branch.clone(),
         },
+        installed_revision,
     };
     atomic_write_json(
         &metadata_dir()
@@ -784,6 +862,59 @@ mod tests {
             last_checked_at: None,
             last_check_error: None,
         }
+    }
+
+    #[test]
+    fn installed_git_revision_survives_reindex_into_fresh_database() {
+        let repo = test_repo();
+        let dir = write_skill_dir("portable");
+        let mut skill = sample_skill("portable", &dir);
+        let revision = "a".repeat(40);
+        skill.source_type = "git".into();
+        skill.source_ref = Some("https://github.com/example/skills.git".into());
+        skill.source_revision = Some(revision.clone());
+        skill.remote_revision = Some(revision.clone());
+        skill.update_status = "up_to_date".into();
+        skill.last_checked_at = Some(123);
+        repo.store.insert_skill(&skill).unwrap();
+        write_all_from_db_unlocked(&repo.store).unwrap();
+
+        let restored = SkillStore::new(&repo._tmp.path().join("restored.db")).unwrap();
+        reindex_from_metadata_unlocked(&restored).unwrap();
+        let restored = restored.get_skill_by_id(&skill.id).unwrap().unwrap();
+        assert_eq!(restored.source_revision, Some(revision.clone()));
+        assert_eq!(restored.remote_revision, Some(revision));
+        assert_eq!(restored.update_status, "up_to_date");
+        assert_eq!(restored.last_checked_at, None);
+    }
+
+    #[test]
+    fn restored_content_does_not_inherit_another_installed_revision() {
+        let repo = test_repo();
+        let dir = write_skill_dir("portable");
+        let mut installed = sample_skill("portable", &dir);
+        let old_revision = "a".repeat(40);
+        installed.source_type = "git".into();
+        installed.source_ref = Some("https://github.com/example/skills.git".into());
+        installed.source_revision = Some(old_revision.clone());
+        installed.content_hash = Some(super::super::content_hash::hash_directory(&dir).unwrap());
+        repo.store.insert_skill(&installed).unwrap();
+        write_all_from_db_unlocked(&repo.store).unwrap();
+
+        // A different copy was installed locally before the old snapshot was restored.
+        installed.source_revision = Some("b".repeat(40));
+        installed.remote_revision = installed.source_revision.clone();
+        installed.update_status = "up_to_date".into();
+        installed.content_hash = Some("new-content-hash".to_string());
+        installed.last_checked_at = Some(456);
+        repo.store.upsert_skill(&installed).unwrap();
+
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+        let restored = repo.store.get_skill_by_id(&installed.id).unwrap().unwrap();
+        assert_eq!(restored.source_revision, Some(old_revision));
+        assert_eq!(restored.remote_revision, None);
+        assert_eq!(restored.update_status, "unknown");
+        assert_eq!(restored.last_checked_at, None);
     }
 
     /// The single-member write must produce the file a full write would.

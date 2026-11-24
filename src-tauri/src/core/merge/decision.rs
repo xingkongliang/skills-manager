@@ -185,6 +185,23 @@ pub fn decide(input: &DecisionInput) -> Result<MergePlan> {
         }
     }
 
+    // Install baselines follow the selected skill content and source, independently
+    // of tag, enabled-state, and path changes from either device.
+    for (id, skill) in &mut plan.skills {
+        skill.meta.installed_revision = [input.base, input.ours, input.theirs]
+            .iter()
+            .filter_map(|snapshot| snapshot.skills.get(id))
+            .filter(|candidate| {
+                candidate.content == skill.content && candidate.meta.source == skill.meta.source
+            })
+            .filter_map(|candidate| candidate.meta.git_installed_revision())
+            .max_by(|left, right| {
+                (&left.revision, left.verified_up_to_date)
+                    .cmp(&(&right.revision, right.verified_up_to_date))
+            })
+            .cloned();
+    }
+
     // ── whole-file objects (§3): scenarios / memberships / residual ──
     plan.scenarios = merge_whole_files(
         &input.base.scenarios,
@@ -297,6 +314,7 @@ fn merge_components(b: &SkillObj, o: &SkillObj, t: &SkillObj) -> ComponentOutcom
                 enabled: attrs_src.enabled,
                 tags: attrs_src.tags.clone(),
                 source: attrs_src.source.clone(),
+                installed_revision: None,
             };
             let from_theirs = c_t || p_t || a_t;
             ComponentOutcome::Merged {
@@ -511,9 +529,36 @@ mod tests {
                     subpath: None,
                     branch: None,
                 },
+                installed_revision: None,
             },
             content: Some(oid(content)),
         }
+    }
+
+    #[test]
+    fn installed_revision_follows_matching_content_in_a_merge() {
+        use crate::core::sync_metadata::InstalledRevision;
+        let mut base = skill("portable", "portable", 1, true, &[]);
+        base.meta.source.source_type = "git".into();
+        base.meta.source.ref_ = Some("https://github.com/example/skills.git".into());
+        base.meta.installed_revision = Some(InstalledRevision {
+            revision: "a".repeat(40),
+            verified_up_to_date: true,
+        });
+        let mut ours = base.clone();
+        ours.content = Some(oid(2));
+        let new_revision = "b".repeat(40);
+        ours.meta.installed_revision.as_mut().unwrap().revision = new_revision.clone();
+        let mut theirs = base.clone();
+        theirs.meta.tags = vec!["using-on-two-devices".into()];
+        let planned = decide_simple(&snap(vec![base]), &snap(vec![ours]), &snap(vec![theirs]));
+        let merged = &planned.skills["portable"];
+        assert_eq!(merged.content, Some(oid(2)));
+        assert_eq!(merged.meta.tags, vec!["using-on-two-devices"]);
+        assert_eq!(
+            merged.meta.git_installed_revision().unwrap().revision,
+            new_revision
+        );
     }
 
     fn snap(skills: Vec<SkillObj>) -> Snapshot {

@@ -130,6 +130,7 @@ impl Device {
                 subpath: None,
                 branch: None,
             },
+            installed_revision: None,
         };
         let meta_dir = self.skills.join(".skills-manager/skills");
         std::fs::create_dir_all(&meta_dir).unwrap();
