@@ -1013,6 +1013,7 @@ pub fn run() {
             commands::tools::add_custom_tool,
             commands::tools::set_custom_tool_icon,
             commands::tools::remove_custom_tool,
+            commands::tools::set_tool_extra_scan_dirs,
             // Skills
             commands::skills::get_managed_skills,
             commands::skills::get_skills_for_preset,

@@ -1002,6 +1002,21 @@ pub fn custom_tool_project_paths(
         .unwrap_or_default()
 }
 
+/// Read the extra directories users declared an agent also reads, keyed by
+/// tool key (#696). Covers agents that read a folder only because their own
+/// config says so, such as Hermes' `skills.external_dirs`. Discovery only,
+/// like `additional_scan_dirs`: nothing is ever deployed there.
+pub fn tool_extra_scan_dirs(
+    store: &crate::core::skill_store::SkillStore,
+) -> HashMap<String, Vec<String>> {
+    store
+        .get_setting("tool_extra_scan_dirs")
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default()
+}
+
 /// Read user-defined custom tools from store.
 pub fn custom_tools(store: &crate::core::skill_store::SkillStore) -> Vec<CustomToolDef> {
     store

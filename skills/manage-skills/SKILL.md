@@ -200,7 +200,7 @@ These commands change real managed deployments without deleting the central-libr
 
 `skills deploy` and `skills undeploy` always require at least one explicit `--agent`, whether the command names one skill or several. `skills status` also reports target rows left by a custom agent that is no longer registered, so stale deployments stay visible and can be cleaned with an explicit undeploy while the row exists.
 
-Some agents also read the shared `~/.agents/skills` (Codex, OpenCode, GitHub Copilot, Pi and others). When `skills deploy` or `presets deploy` (with or without `--dry-run`) leaves such an agent finding the same skill in two directories it reads, the output has a `duplicates` list: one entry per skill and agent, with the `dirs` it reads the skill from. The deploy still goes ahead; tell the user, and offer to undeploy one of the copies.
+Some agents also read the shared `~/.agents/skills` (Codex, OpenCode, GitHub Copilot, Pi and others). When `skills deploy` or `presets deploy` (with or without `--dry-run`) leaves such an agent finding the same skill in two directories it reads, the output has a `duplicates` list: one entry per skill and agent, with the `dirs` it reads the skill from. The deploy still goes ahead; tell the user, and offer to undeploy one of the copies. `agents list` shows, per agent, `also_reads` (every extra folder it reads), `read_by` (installed agents that read its folder) and `extra_scan_dirs` (the folders the user declared in Settings, e.g. for Hermes' `skills.external_dirs`). Nothing is ever deployed into those folders.
 
 ## Legacy exclusive sync
 

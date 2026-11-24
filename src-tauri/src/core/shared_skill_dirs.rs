@@ -29,14 +29,24 @@ pub struct AgentDirs {
 }
 
 impl AgentDirs {
-    pub fn from_adapter(adapter: &ToolAdapter) -> Self {
+    /// `extra` is what the user declared for this agent
+    /// ([`tool_adapters::tool_extra_scan_dirs`]), merged with the built-in
+    /// additional dirs.
+    pub fn from_adapter(adapter: &ToolAdapter, extra: &[String]) -> Self {
         let own = adapter.skills_dir();
-        let own_key = dir_key(&own);
-        let also = adapter
+        let mut keys = vec![dir_key(&own)];
+        let mut also = Vec::new();
+        for dir in adapter
             .additional_scan_dir_paths()
             .into_iter()
-            .filter(|dir| dir_key(dir) != own_key)
-            .collect();
+            .chain(extra.iter().map(PathBuf::from))
+        {
+            let key = dir_key(&dir);
+            if !keys.contains(&key) {
+                keys.push(key);
+                also.push(dir);
+            }
+        }
         Self {
             key: adapter.key.clone(),
             display_name: adapter.display_name.clone(),
@@ -48,9 +58,12 @@ impl AgentDirs {
 }
 
 pub fn all_agent_dirs(store: &SkillStore) -> Vec<AgentDirs> {
+    let extra = tool_adapters::tool_extra_scan_dirs(store);
     tool_adapters::all_tool_adapters(store)
         .iter()
-        .map(AgentDirs::from_adapter)
+        .map(|adapter| {
+            AgentDirs::from_adapter(adapter, extra.get(&adapter.key).map_or(&[], Vec::as_slice))
+        })
         .collect()
 }
 
@@ -178,6 +191,9 @@ fn duplicates(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::skill_store::SkillRecord;
+    use crate::core::tool_adapters::CustomToolDef;
+    use crate::core::tool_service;
     use tempfile::tempdir;
 
     fn agent(key: &str, own: &Path, also: &[&Path]) -> AgentDirs {
@@ -335,5 +351,147 @@ mod tests {
         let f = fixture();
         assert_eq!(read_by(&f.agents[1], &f.agents), vec!["CODEX".to_string()]);
         assert!(read_by(&f.agents[0], &f.agents).is_empty());
+    }
+
+    /// A store with a custom agent that owns `shared`, the built-in Hermes
+    /// pointed at its own temp dir (a path override also marks it installed),
+    /// and skill `s1` deployed to the shared agent.
+    fn hermes_store(tmp: &Path) -> (SkillStore, PathBuf, PathBuf) {
+        let store = SkillStore::new(&tmp.join("test.db")).unwrap();
+        let shared = tmp.join(".agents").join("skills");
+        let hermes = tmp.join(".hermes").join("skills");
+        std::fs::create_dir_all(&shared).unwrap();
+        let customs = vec![CustomToolDef {
+            key: "agents_shared".into(),
+            display_name: "Shared".into(),
+            skills_dir: shared.to_string_lossy().to_string(),
+            project_relative_skills_dir: None,
+            category: Default::default(),
+            icon: None,
+        }];
+        tool_service::set_custom_tools(&store, &customs).unwrap();
+        let paths = [("hermes".to_string(), hermes.to_string_lossy().to_string())].into();
+        tool_service::set_custom_tool_paths(&store, &paths).unwrap();
+        let central = tmp.join("library").join("my-skill");
+        store
+            .insert_skill(&SkillRecord {
+                id: "s1".into(),
+                name: "my-skill".into(),
+                description: None,
+                source_type: "import".into(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: central.to_string_lossy().to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: 1,
+                updated_at: 1,
+                status: "ok".into(),
+                update_status: "local_only".into(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+        store
+            .insert_target(&target("s1", "agents_shared", &shared))
+            .unwrap();
+        (store, shared, hermes)
+    }
+
+    fn info(store: &SkillStore, key: &str) -> tool_service::ToolInfo {
+        tool_service::list_tool_info(store)
+            .into_iter()
+            .find(|i| i.key == key)
+            .unwrap()
+    }
+
+    #[test]
+    fn user_declared_dir_makes_hermes_see_a_shared_skill_twice() {
+        let tmp = tempdir().unwrap();
+        let (store, shared, _) = hermes_store(tmp.path());
+        let ids = vec!["s1".to_string()];
+        let hermes = vec!["hermes".to_string()];
+
+        // Hermes reads `~/.agents/skills` only when its config says so, so
+        // nothing is known until the user declares it.
+        assert!(find_duplicate_deployments(&store, &ids, &hermes, true)
+            .unwrap()
+            .is_empty());
+
+        tool_service::set_tool_extra_scan_dirs(
+            &store,
+            "hermes",
+            &[shared.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        let found = find_duplicate_deployments(&store, &ids, &hermes, true).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].agent, "hermes");
+        assert_eq!(found[0].skill_name, "my-skill");
+        // The shared agent's card names Hermes as a reader.
+        assert_eq!(
+            info(&store, "agents_shared").read_by,
+            vec!["Hermes Agent".to_string()]
+        );
+    }
+
+    #[test]
+    fn extra_scan_dirs_round_trip_through_settings() {
+        let tmp = tempdir().unwrap();
+        let (store, shared, hermes) = hermes_store(tmp.path());
+
+        // Without the setting every agent loads with no declared dirs.
+        assert!(store.get_setting("tool_extra_scan_dirs").unwrap().is_none());
+        assert!(info(&store, "hermes").extra_scan_dirs.is_empty());
+
+        let shared_str = shared.to_string_lossy().to_string();
+        let saved = tool_service::set_tool_extra_scan_dirs(
+            &store,
+            "hermes",
+            &[
+                shared_str.clone(),
+                // Another spelling of the same dir, and Hermes' own dir: both dropped.
+                shared.join(".").to_string_lossy().to_string(),
+                hermes.to_string_lossy().to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(saved, vec![shared_str.clone()]);
+        let hermes_info = info(&store, "hermes");
+        assert_eq!(hermes_info.extra_scan_dirs, vec![shared_str.clone()]);
+        assert!(hermes_info.also_reads.contains(&shared_str));
+
+        // Custom agents take the same setting.
+        tool_service::set_tool_extra_scan_dirs(
+            &store,
+            "agents_shared",
+            &[hermes.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        assert_eq!(info(&store, "agents_shared").also_reads.len(), 1);
+
+        // Clearing removes the entry; a relative path or unknown agent is refused.
+        tool_service::set_tool_extra_scan_dirs(&store, "hermes", &[]).unwrap();
+        assert!(info(&store, "hermes").extra_scan_dirs.is_empty());
+        let raw = store.get_setting("tool_extra_scan_dirs").unwrap().unwrap();
+        let saved: std::collections::HashMap<String, Vec<String>> =
+            serde_json::from_str(&raw).unwrap();
+        assert!(!saved.contains_key("hermes"));
+        assert!(saved.contains_key("agents_shared"));
+        assert!(
+            tool_service::set_tool_extra_scan_dirs(&store, "hermes", &["relative/dir".into()])
+                .is_err()
+        );
+        assert!(tool_service::set_tool_extra_scan_dirs(&store, "no_such_agent", &[]).is_err());
+
+        // A corrupt value loads as empty rather than failing.
+        store
+            .set_setting("tool_extra_scan_dirs", "not json")
+            .unwrap();
+        assert!(info(&store, "hermes").extra_scan_dirs.is_empty());
     }
 }

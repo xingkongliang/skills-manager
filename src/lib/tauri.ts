@@ -20,6 +20,8 @@ export interface ToolInfo {
   also_reads: string[];
   /** Installed agents that also read this agent's `skills_dir`. */
   read_by: string[];
+  /** The user-declared part of `also_reads`, editable in Settings. */
+  extra_scan_dirs: string[];
 }
 
 /** An agent that finds one skill in two directories it reads. */
@@ -458,6 +460,9 @@ export const syncSkillToTool = (skillId: string, tool: string) =>
 
 export const unsyncSkillFromTool = (skillId: string, tool: string) =>
   invoke<void>("unsync_skill_from_tool", { skillId, tool });
+
+export const setToolExtraScanDirs = (key: string, dirs: string[]) =>
+  invoke<string[]>("set_tool_extra_scan_dirs", { key, dirs });
 
 export const findDuplicateDeployments = (skillIds: string[], tools: string[]) =>
   invoke<DuplicateDeployment[]>("find_duplicate_deployments", { skillIds, tools });

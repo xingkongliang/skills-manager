@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Folder,
   FolderOpen,
+  FolderPlus,
   RefreshCw,
   Link as LinkIcon,
   Unlink,
@@ -195,6 +196,9 @@ export function Settings() {
   // Agent path editing
   const [editingPathKey, setEditingPathKey] = useState<string | null>(null);
   const [editingPathValue, setEditingPathValue] = useState("");
+  // Extra "also reads" dirs editing (#696)
+  const [editingExtraKey, setEditingExtraKey] = useState<string | null>(null);
+  const [extraDirValue, setExtraDirValue] = useState("");
   // Project path editing (custom agents only)
   const [editingProjectPathKey, setEditingProjectPathKey] = useState<string | null>(null);
   const [editingProjectPathValue, setEditingProjectPathValue] = useState("");
@@ -226,6 +230,17 @@ export function Settings() {
       toast.error(String(e));
     } finally {
       setEditingPathKey(null);
+    }
+  };
+
+  const saveExtraDirs = async (key: string, dirs: string[]) => {
+    try {
+      await api.setToolExtraScanDirs(key, dirs);
+      await refreshTools();
+      setExtraDirValue("");
+      toast.success(t("settings.pathSaved"));
+    } catch (e) {
+      toast.error(getErrorMessage(e, t("common.error")));
     }
   };
 
@@ -1063,6 +1078,17 @@ export function Settings() {
             >
               <Pencil className="h-3 w-3" />
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditingExtraKey(editingExtraKey === agent.key ? null : agent.key);
+                setExtraDirValue("");
+              }}
+              className="shrink-0 p-0.5 text-muted hover:text-accent outline-none opacity-0 transition-opacity group-hover:opacity-100"
+              title={t("settings.editAlsoReads")}
+            >
+              <FolderPlus className="h-3 w-3" />
+            </button>
             {agent.has_path_override && !agent.is_custom && (
               <button
                 type="button"
@@ -1094,6 +1120,65 @@ export function Settings() {
             </p>
           );
         })()}
+
+        {/* User-declared dirs this agent also reads, e.g. Hermes' skills.external_dirs (#696). */}
+        {editingExtraKey === agent.key && (
+          <div className="space-y-1">
+            {agent.extra_scan_dirs.map((dir) => (
+              <div key={dir} className="flex items-center gap-1">
+                <p className="min-w-0 flex-1 truncate text-[12px] font-mono leading-tight text-muted" title={dir}>
+                  {compactHomePath(dir)}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => saveExtraDirs(agent.key, agent.extra_scan_dirs.filter((d) => d !== dir))}
+                  className="shrink-0 p-0.5 text-muted hover:text-red-500 outline-none"
+                  title={t("settings.removeAlsoReads")}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                value={extraDirValue}
+                onChange={(e) => setExtraDirValue(e.target.value)}
+                placeholder={t("settings.alsoReadsPlaceholder")}
+                className="h-7 min-w-0 flex-1 rounded-lg border border-border-subtle bg-background px-1.5 text-[12px] font-mono text-secondary outline-none focus:border-accent"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && extraDirValue.trim())
+                    saveExtraDirs(agent.key, [...agent.extra_scan_dirs, extraDirValue.trim()]);
+                  if (e.key === "Escape") setEditingExtraKey(null);
+                }}
+              />
+              <button
+                onClick={() => handleBrowsePath(setExtraDirValue)}
+                className="shrink-0 p-1 text-muted hover:text-accent outline-none"
+                title={t("settings.selectFolder")}
+              >
+                <FolderOpen className="h-3 w-3" />
+              </button>
+              <button
+                onClick={() =>
+                  extraDirValue.trim() &&
+                  saveExtraDirs(agent.key, [...agent.extra_scan_dirs, extraDirValue.trim()])
+                }
+                className="shrink-0 p-1 text-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 outline-none"
+                title={t("settings.addAlsoReads")}
+              >
+                <Check className="h-3 w-3" />
+              </button>
+              <button
+                onClick={() => setEditingExtraKey(null)}
+                className="shrink-0 p-1 text-muted hover:text-secondary outline-none"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Project-relative skills path — always rendered so every card is the
             same height, installed or not. */}
