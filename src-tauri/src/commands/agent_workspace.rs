@@ -13,6 +13,7 @@ use crate::core::{
     content_hash, error::AppError, installer, project_scanner, scenario_service, sync_engine,
     sync_metadata, tool_adapters, tool_service,
 };
+use crate::core::shared_skill_dirs;
 
 fn target_path_equals_skill(target_path: &str, skill_path: &str) -> bool {
     if target_path == skill_path {
@@ -47,6 +48,45 @@ fn read_agent_local_skills(
         &adapter.display_name,
         adapter.recursive_scan,
     )
+}
+
+/// Add the skills `adapter` also reads from other folders (#696): each comes
+/// back read-only with `shared_from` set to its folder. When a name appears
+/// both in the agent's own folder and in one of those, both copies get
+/// `duplicate_of` pointing at the other copy's folder.
+fn with_shared_skills(
+    adapter: &tool_adapters::ToolAdapter,
+    mut own: Vec<project_scanner::ProjectSkillInfo>,
+    also_reads: &[PathBuf],
+) -> Vec<project_scanner::ProjectSkillInfo> {
+    let mut shared = Vec::new();
+    for dir in also_reads {
+        let folder = dir.to_string_lossy().to_string();
+        for mut skill in project_scanner::read_linked_workspace_skills(
+            dir,
+            None,
+            &adapter.key,
+            &adapter.display_name,
+            adapter.recursive_scan,
+        ) {
+            skill.shared_from = Some(folder.clone());
+            shared.push(skill);
+        }
+    }
+    let own_folder = adapter.skills_dir().to_string_lossy().to_string();
+    for skill in &mut own {
+        skill.duplicate_of = shared
+            .iter()
+            .find(|other| other.name == skill.name)
+            .and_then(|other| other.shared_from.clone());
+    }
+    for skill in &mut shared {
+        if own.iter().any(|other| other.name == skill.name) {
+            skill.duplicate_of = Some(own_folder.clone());
+        }
+    }
+    own.extend(shared);
+    own
 }
 
 fn enrich_center_status(
@@ -147,7 +187,12 @@ pub async fn get_global_local_skills(
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let adapter = adapter_for_agent(&store, &agent)?;
-        let skills = read_agent_local_skills(&adapter);
+        let extra = tool_adapters::tool_extra_scan_dirs(&store);
+        let dirs = shared_skill_dirs::AgentDirs::from_adapter(
+            &adapter,
+            extra.get(&adapter.key).map_or(&[], Vec::as_slice),
+        );
+        let skills = with_shared_skills(&adapter, read_agent_local_skills(&adapter), &dirs.also);
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
         let all_targets = store.get_all_targets().map_err(AppError::db)?;
         let tags_map = store.get_tags_map().unwrap_or_default();
@@ -692,8 +737,8 @@ fn delete_agent_local_skill(
 #[cfg(test)]
 mod tests {
     use super::{
-        backfill_stranded_agent_targets, enrich_center_status,
-        import_agent_local_skill_to_center, update_agent_local_skill_from_center,
+        backfill_stranded_agent_targets, enrich_center_status, import_agent_local_skill_to_center,
+        update_agent_local_skill_from_center, with_shared_skills,
     };
     use crate::core::content_hash;
     use crate::core::project_scanner::ProjectSkillInfo;
@@ -895,6 +940,60 @@ mod tests {
     }
 
     #[test]
+    fn shared_folder_skills_are_flagged_and_duplicates_marked_on_both_copies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let own_dir = tmp.path().join("own");
+        let shared_dir = tmp.path().join("shared");
+        for (dir, name) in [
+            (&own_dir, "alpha"),
+            (&own_dir, "beta"),
+            (&shared_dir, "beta"),
+            (&shared_dir, "gamma"),
+        ] {
+            let skill = dir.join(name);
+            std::fs::create_dir_all(&skill).unwrap();
+            std::fs::write(skill.join("SKILL.md"), format!("---\nname: {name}\n---\n")).unwrap();
+        }
+        let adapter = tool_adapters::ToolAdapter {
+            key: "test_agent".into(),
+            display_name: "Test Agent".into(),
+            relative_skills_dir: String::new(),
+            relative_detect_dir: String::new(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: Some(own_dir.to_string_lossy().to_string()),
+            is_custom: true,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+            category: Default::default(),
+        };
+        let own = super::read_agent_local_skills(&adapter);
+        let all = with_shared_skills(&adapter, own, std::slice::from_ref(&shared_dir));
+
+        let find = |name: &str, shared: bool| {
+            all.iter()
+                .find(|s| s.name == name && s.shared_from.is_some() == shared)
+                .unwrap_or_else(|| panic!("{name} shared={shared} missing"))
+        };
+        let shared_str = shared_dir.to_string_lossy().to_string();
+        let own_str = own_dir.to_string_lossy().to_string();
+        assert_eq!(all.len(), 4);
+        assert_eq!(find("alpha", false).duplicate_of, None);
+        assert_eq!(
+            find("beta", false).duplicate_of.as_deref(),
+            Some(shared_str.as_str())
+        );
+        assert_eq!(
+            find("beta", true).shared_from.as_deref(),
+            Some(shared_str.as_str())
+        );
+        assert_eq!(
+            find("beta", true).duplicate_of.as_deref(),
+            Some(own_str.as_str())
+        );
+        assert_eq!(find("gamma", true).duplicate_of, None);
+    }
+
+    #[test]
     fn enriching_agent_local_skills_copies_center_tags() {
         let skill = ProjectSkillInfo {
             name: "local-tool".to_string(),
@@ -910,6 +1009,8 @@ mod tests {
             in_center: false,
             sync_status: "project_only".to_string(),
             center_skill_id: None,
+            shared_from: None,
+            duplicate_of: None,
             last_modified_at: None,
             content_hash: Some("same-hash".to_string()),
         };

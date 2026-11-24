@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useParams, useNavigate, Navigate } from "react-router-dom";
 import {
   ChevronRight,
+  Copy,
+  Link2,
+  TriangleAlert,
   Download,
   FileText,
   Globe,
@@ -23,7 +26,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { cn, compactHomePath } from "../utils";
+import { cn, compactHomePath, formatList } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useSkillViewMode } from "../hooks/useSkillViewMode";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -45,9 +48,17 @@ import { useMultiSelect } from "../hooks/useMultiSelect";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import type { WorkspaceConfig } from "./workspaceConfigs";
 
+// shortcut: compares folder paths textually (case-folded, separators unified);
+// the backend already matched them canonically, this only finds the owner agent.
+const normPath = (path: string) => path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+/** Last two segments of a folder, e.g. `.agents\skills`. */
+const shortFolder = (path: string) =>
+  path.split(/[\\/]/).filter(Boolean).slice(-2).join(path.includes("\\") ? "\\" : "/");
+
 interface WorkspaceSkillCardTag {
   label: string;
   className: string;
+  title?: string;
 }
 
 interface WorkspaceSkillCardStatus {
@@ -67,6 +78,7 @@ function WorkspaceSkillCard({
   actionsHover = false,
   selectable = false,
   selected = false,
+  className,
   onClick,
 }: {
   viewMode: "grid" | "list";
@@ -81,6 +93,7 @@ function WorkspaceSkillCard({
   /** Multi-select mode: the leading slot becomes a checkbox and clicks select. */
   selectable?: boolean;
   selected?: boolean;
+  className?: string;
   onClick: () => void;
 }) {
   const leadingSlot = selectable
@@ -102,7 +115,8 @@ function WorkspaceSkillCard({
       <div
         className={cn(
           "app-panel group relative flex cursor-pointer items-center gap-3.5 rounded-xl border-transparent px-3.5 py-3 transition-all hover:border-border hover:bg-surface-hover",
-          selectable && selected && "ring-1 ring-accent border-accent/40"
+          selectable && selected && "ring-1 ring-accent border-accent/40",
+          className
         )}
         onClick={onClick}
       >
@@ -123,6 +137,7 @@ function WorkspaceSkillCard({
             {tags.map((tag) => (
               <span
                 key={tag.label}
+                title={tag.title}
                 className={cn(
                   "inline-flex items-center rounded-full px-1.5 py-0.5 text-[11px] font-medium",
                   tag.className
@@ -162,7 +177,8 @@ function WorkspaceSkillCard({
     <div
       className={cn(
         "app-panel group relative flex h-full cursor-pointer flex-col overflow-hidden shadow-card transition-all hover:-translate-y-px hover:border-border hover:shadow-card-hover",
-        selectable && selected && "ring-1 ring-accent border-accent/40"
+        selectable && selected && "ring-1 ring-accent border-accent/40",
+        className
       )}
       onClick={onClick}
     >
@@ -192,6 +208,7 @@ function WorkspaceSkillCard({
             {tags.map((tag) => (
               <span
                 key={tag.label}
+                title={tag.title}
                 className={cn(
                   "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
                   tag.className
@@ -246,7 +263,7 @@ function getLocalStatusMeta(t: (key: string) => string, status: ProjectSkill["sy
 export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const { agentKey } = useParams<{ agentKey?: string }>();
   const navigate = useNavigate();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { tools, managedSkills, presets, refreshManagedSkills, refreshTools } = useApp();
 
   const [viewMode, setViewMode] = useSkillViewMode();
@@ -254,7 +271,14 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [removingLocalSkillId, setRemovingLocalSkillId] = useState<string | null>(null);
-  const [localSkills, setLocalSkills] = useState<ProjectSkill[]>([]);
+  // The scan also returns skills from folders the agent also reads (#696),
+  // flagged `shared_from`. They are shown read-only and kept out of every
+  // count and action, which all work on `localSkills`.
+  const [scannedSkills, setScannedSkills] = useState<ProjectSkill[]>([]);
+  const localSkills = useMemo(() => scannedSkills.filter((s) => !s.shared_from), [scannedSkills]);
+  const sharedSkills = useMemo(() => scannedSkills.filter((s) => !!s.shared_from), [scannedSkills]);
+  /** "all", "own", "dup", or one of the agent's extra folders. */
+  const [sourceFilter, setSourceFilter] = useState("all");
   const [localSkillsLoading, setLocalSkillsLoading] = useState(false);
   const [localActionKey, setLocalActionKey] = useState<string | null>(null);
   const [localDetailSkill, setLocalDetailSkill] = useState<ProjectSkill | null>(null);
@@ -331,17 +355,17 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const loadLocalSkills = useCallback(async () => {
     const requestId = ++localSkillsRequestRef.current;
     if (!currentToolKey) {
-      setLocalSkills([]);
+      setScannedSkills([]);
       return;
     }
     setLocalSkillsLoading(true);
     try {
       const skills = await api.getGlobalLocalSkills(currentToolKey);
-      if (localSkillsRequestRef.current === requestId) setLocalSkills(skills);
+      if (localSkillsRequestRef.current === requestId) setScannedSkills(skills);
     } catch (error: unknown) {
       if (localSkillsRequestRef.current === requestId) {
         toast.error(getErrorMessage(error, t("common.error")));
-        setLocalSkills([]);
+        setScannedSkills([]);
       }
     } finally {
       if (localSkillsRequestRef.current === requestId) setLocalSkillsLoading(false);
@@ -352,7 +376,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   useEffect(() => {
     if (!currentToolKey) {
       loadedAgentKeyRef.current = null;
-      setLocalSkills([]);
+      setScannedSkills([]);
       return;
     }
     if (loadedAgentKeyRef.current === currentToolKey) return;
@@ -411,6 +435,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     setPullConfirmSkill(null);
     setDeleteLocalConfirmSkill(null);
     setTagFilters(new Set());
+    setSourceFilter("all");
   }, [currentTool?.key]);
 
   const agentSkills = useMemo(
@@ -435,7 +460,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
 
   // Prune tag filters whose pill disappeared (e.g. its last skill was deleted),
   // otherwise a stale filter silently hides everything. An empty list is also
-  // what a failed load and the overview leave behind (`setLocalSkills([])`), and
+  // what a failed load and the overview leave behind (`setScannedSkills([])`), and
   // that says nothing about which tags are valid — wait for a real list.
   useEffect(() => {
     if (localSkills.length === 0) return;
@@ -443,10 +468,16 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     setTagFilters((prev) => pruneStaleTagFilters(prev, allLocalTags, hasUntagged));
   }, [allLocalTags, localSkills]);
 
-  const visibleLocalSkills = useMemo(() => {
+  const [visibleLocalSkills, visibleSharedSkills] = useMemo(() => {
     const q = normalizeSkillSearch(search);
-    return localSkills
+    const inSource = (skill: ProjectSkill) =>
+      sourceFilter === "all"
+      || (sourceFilter === "own" && !skill.shared_from)
+      || (sourceFilter === "dup" && !!skill.duplicate_of)
+      || skill.shared_from === sourceFilter;
+    const visible = (list: ProjectSkill[]) => list
       .filter((skill) => {
+        if (!inSource(skill)) return false;
         if (!skillSearchMatches(q, [skill.name, skill.dir_name, skill.description])) return false;
         if (tagFilters.size > 0) {
           const wantUntagged = tagFilters.has(UNTAGGED_FILTER);
@@ -465,11 +496,21 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           in_sync: 4,
         };
         return (
+          Number(!!b.duplicate_of) - Number(!!a.duplicate_of) ||
           priority[a.sync_status] - priority[b.sync_status] ||
           a.name.localeCompare(b.name)
         );
       });
-  }, [localSkills, search, tagFilters]);
+    return [visible(localSkills), visible(sharedSkills)];
+  }, [localSkills, sharedSkills, search, sourceFilter, tagFilters]);
+
+  const duplicateSkills = useMemo(() => localSkills.filter((s) => !!s.duplicate_of), [localSkills]);
+  const ownerOf = (dir: string) =>
+    tools.find((tool) => tool.key !== currentTool?.key && normPath(tool.skills_dir) === normPath(dir));
+  const openOwner = (dir: string) => {
+    const owner = ownerOf(dir);
+    if (owner) navigate(`${config.basePath}/${owner.key}`);
+  };
 
   const inSyncLocalCount = useMemo(
     () => localSkills.filter((skill) => skill.sync_status === "in_sync").length,
@@ -910,6 +951,23 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             </h1>
             <p className="mt-1 truncate text-[13px] text-muted" title={currentTool.skills_dir}>
               {compactHomePath(currentTool.skills_dir)}
+              {currentTool.also_reads.map((dir) => {
+                const owner = ownerOf(dir);
+                return (
+                  <button
+                    key={dir}
+                    type="button"
+                    onClick={() => openOwner(dir)}
+                    className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-surface-hover px-2 py-0.5 align-middle text-[12px] text-muted hover:text-secondary"
+                    title={owner
+                      ? t("globalWorkspace.localSkills.externalDirOwnerTooltip", { agent: currentTool.display_name, owner: owner.display_name })
+                      : t("globalWorkspace.localSkills.externalDirTooltip", { agent: currentTool.display_name })}
+                  >
+                    <Link2 className="h-3 w-3" />
+                    {compactHomePath(dir)}
+                  </button>
+                );
+              })}
               <span className="px-1.5">·</span>
               {t("globalWorkspace.localSkills.summary", {
                 total: localSkills.length,
@@ -1052,6 +1110,52 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           </div>
         )}
 
+        {/* Source filter (#696): only when the agent reads folders besides its own. */}
+        {currentTool.also_reads.length > 0 && (() => {
+          const sources: { key: string; label: ReactNode; count: number; title?: string }[] = [
+            { key: "all", label: t("globalWorkspace.localSkills.sourceAll"), count: scannedSkills.length },
+            { key: "own", label: t("globalWorkspace.localSkills.sourceOwn"), count: localSkills.length },
+            ...currentTool.also_reads.map((dir) => ({
+              key: dir,
+              label: <><Link2 className="h-3 w-3" />{compactHomePath(dir)}</>,
+              count: sharedSkills.filter((skill) => skill.shared_from === dir).length,
+              title: dir,
+            })),
+          ];
+          return (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[12px] text-muted">{t("globalWorkspace.localSkills.sourceLabel")}</span>
+              {sources.map((source) => (
+                <button
+                  key={source.key}
+                  onClick={() => setSourceFilter(source.key)}
+                  title={source.title}
+                  className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                    sourceFilter === source.key
+                      ? "bg-accent text-white dark:bg-accent dark:text-white"
+                      : "bg-surface-hover text-muted hover:text-secondary"
+                  )}
+                >
+                  {source.label} {source.count}
+                </button>
+              ))}
+              {duplicateSkills.length > 0 && (
+                <button
+                  onClick={() => setSourceFilter("dup")}
+                  className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                    sourceFilter === "dup"
+                      ? "bg-amber-500/20 text-amber-700 dark:text-amber-300"
+                      : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+                  )}
+                >
+                  <Copy className="h-3 w-3" />
+                  {t("globalWorkspace.localSkills.sourceDuplicate")} {duplicateSkills.length}
+                </button>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Preset bar */}
         {presets.length > 0 && (
           <PresetBar
@@ -1064,6 +1168,26 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             onComplete={handlePresetComplete}
           />
         )}
+
+        {duplicateSkills.length > 0 && (
+          <div className="flex items-center gap-2.5 rounded-lg bg-amber-500/10 px-3 py-2 text-[13px] text-amber-700 dark:text-amber-300">
+            <TriangleAlert className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1">
+              {t("globalWorkspace.localSkills.duplicateBanner", {
+                agent: currentTool.display_name,
+                count: duplicateSkills.length,
+                names: formatList(duplicateSkills.map((skill) => skill.name), i18n.language),
+                folders: formatList([...new Set(duplicateSkills.map((skill) => compactHomePath(skill.duplicate_of ?? "")))], i18n.language),
+              })}
+            </span>
+            <button
+              onClick={() => setSourceFilter("dup")}
+              className="shrink-0 rounded-md border border-amber-500/40 px-2 py-0.5 text-[12px] font-medium hover:bg-amber-500/20"
+            >
+              {t("globalWorkspace.localSkills.onlyDuplicates")}
+            </button>
+          </div>
+        )}
       </div>
 
       {localSkillsLoading ? (
@@ -1071,7 +1195,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           {t("common.loading")}
         </div>
-      ) : visibleLocalSkills.length === 0 ? (
+      ) : visibleLocalSkills.length === 0 && visibleSharedSkills.length === 0 ? (
         <div className="flex min-h-[260px] flex-col items-center justify-center px-4 text-center">
           <Globe className="mb-4 h-12 w-12 text-faint" />
           <h3 className="mb-1.5 text-[14px] font-semibold text-tertiary">
@@ -1147,7 +1271,17 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
                 viewMode={viewMode}
                 title={skill.name}
                 description={skill.description || skill.relative_path}
-                tags={skill.tags.map((tag) => ({ label: tag, className: getTagColor(tag, allLocalTags) }))}
+                tags={[
+                  ...skill.tags.map((tag) => ({ label: tag, className: getTagColor(tag, allLocalTags) })),
+                  ...(skill.duplicate_of
+                    ? [{
+                        label: t("globalWorkspace.localSkills.duplicateInShared", { folder: shortFolder(skill.duplicate_of) }),
+                        title: t("globalWorkspace.localSkills.duplicateTooltip", { agent: currentTool.display_name, path: skill.duplicate_of }),
+                        className: "bg-amber-500/12 text-amber-700 dark:text-amber-300",
+                      }]
+                    : []),
+                ]}
+                className={skill.duplicate_of ? "border-amber-500/40" : undefined}
                 status={statusMeta}
                 fileCount={skill.files.length}
                 active={isManaged}
@@ -1156,6 +1290,42 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
                 selectable={isMultiSelect}
                 selected={selectedIds.has(key)}
                 onClick={() => isMultiSelect ? toggleSelect(key) : void openLocalDetail(skill)}
+              />
+            );
+          })}
+          {/* Read-only: actions here resolve paths in the agent's own folder. */}
+          {visibleSharedSkills.map((skill) => {
+            const folder = skill.shared_from ?? "";
+            const owner = ownerOf(folder);
+            return (
+              <WorkspaceSkillCard
+                key={`shared:${folder}:${skill.relative_path}`}
+                viewMode={viewMode}
+                title={skill.name}
+                description={skill.description || skill.relative_path}
+                tags={[
+                  {
+                    label: t("globalWorkspace.localSkills.externalBadge", { folder: shortFolder(folder) }),
+                    title: t("globalWorkspace.localSkills.externalBadgeTooltip", { path: folder }),
+                    className: "bg-surface-hover text-muted",
+                  },
+                  ...(skill.duplicate_of
+                    ? [{
+                        label: t("globalWorkspace.localSkills.duplicateInOwn"),
+                        title: t("globalWorkspace.localSkills.duplicateTooltip", { agent: currentTool.display_name, path: skill.duplicate_of }),
+                        className: "bg-amber-500/12 text-amber-700 dark:text-amber-300",
+                      }]
+                    : []),
+                ]}
+                className={cn("border-dashed", skill.duplicate_of && "border-amber-500/40")}
+                status={{
+                  label: owner
+                    ? t("globalWorkspace.localSkills.readOnlyOpen", { owner: owner.display_name })
+                    : t("globalWorkspace.localSkills.readOnly"),
+                  className: "text-muted",
+                }}
+                fileCount={skill.files.length}
+                onClick={() => { if (!isMultiSelect) openOwner(folder); }}
               />
             );
           })}

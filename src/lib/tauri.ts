@@ -210,6 +210,10 @@ export interface ProjectSkill {
   in_center: boolean;
   sync_status: "project_only" | "in_sync" | "project_newer" | "center_newer" | "diverged";
   center_skill_id: string | null;
+  /** Set when the skill comes from a folder the agent also reads (#696). Read-only. */
+  shared_from?: string | null;
+  /** The folder holding the other copy when the agent reads this skill twice (#696). */
+  duplicate_of?: string | null;
 }
 
 export interface ProjectSkillDocument {

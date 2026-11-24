@@ -2292,6 +2292,8 @@ mod tests {
             in_center: true,
             sync_status: "project_only".to_string(),
             center_skill_id: Some("skill-1".to_string()),
+            shared_from: None,
+            duplicate_of: None,
             last_modified_at,
             content_hash,
         }
@@ -2319,6 +2321,8 @@ mod tests {
             in_center: false,
             sync_status: "project_only".to_string(),
             center_skill_id: None,
+            shared_from: None,
+            duplicate_of: None,
             last_modified_at: Some(1_000),
             content_hash,
         }

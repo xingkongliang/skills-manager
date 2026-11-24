@@ -36,6 +36,14 @@ pub struct ProjectSkillInfo {
     pub sync_status: String,
     #[serde(default)]
     pub center_skill_id: Option<String>,
+    /// Set when the skill sits in a folder the agent also reads, such as the
+    /// shared `~/.agents/skills`, rather than in its own (#696). Read-only.
+    #[serde(default)]
+    pub shared_from: Option<String>,
+    /// On a skill in the agent's own folder: a folder it also reads that holds
+    /// a skill of the same name, so the agent loads it twice (#696).
+    #[serde(default)]
+    pub duplicate_of: Option<String>,
     #[serde(skip_serializing)]
     pub last_modified_at: Option<i64>,
     #[serde(skip_serializing)]
@@ -207,6 +215,8 @@ fn read_skills_from_dir_recursive(
                 in_center: false,
                 sync_status: "project_only".to_string(),
                 center_skill_id: None,
+                shared_from: None,
+                duplicate_of: None,
                 last_modified_at,
                 content_hash,
             });

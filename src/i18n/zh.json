@@ -1171,7 +1171,22 @@
       "deleteLocalSelected": "永久删除 {{count}} 个",
       "deleteLocalBatchConfirm": "永久删除 {{agent}} 里的 {{count}} 个本地 Skill？这些 Skill 只存在于该 Agent 目录，删除后无法恢复。",
       "deletedLocalBatch": "已删除 {{count}} 个本地 Skill",
-      "deleteLocalBatchFailed": "{{count}} 个本地 Skill 删除失败"
+      "deleteLocalBatchFailed": "{{count}} 个本地 Skill 删除失败",
+      "sourceLabel": "来源",
+      "sourceAll": "全部",
+      "sourceOwn": "自有",
+      "sourceDuplicate": "重复",
+      "externalDirTooltip": "{{agent}} 也会读取这个目录",
+      "externalDirOwnerTooltip": "{{agent}} 也会读取这个目录（{{owner}} 的目录），点击打开",
+      "externalBadge": "外部 · {{folder}}",
+      "externalBadgeTooltip": "来自 {{path}}，在这里只读",
+      "readOnly": "只读",
+      "readOnlyOpen": "只读 · 点击打开 {{owner}}",
+      "duplicateInShared": "重复 · 也在 {{folder}}",
+      "duplicateInOwn": "重复 · 自有目录也有",
+      "duplicateTooltip": "{{agent}} 会读到两份，另一份在 {{path}}",
+      "duplicateBanner": "{{agent}} 会读到 {{count}} 个重复的 skill：{{names}}。它们在自有目录和 {{folders}} 里各有一份，建议从其中一处取消部署。",
+      "onlyDuplicates": "只看重复"
     }
   },
   "errorBoundary": {
