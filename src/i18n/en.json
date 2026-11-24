@@ -636,6 +636,8 @@
     "projectSkillsPathValue": "Project path: {{path}}",
     "projectSkillsPathDefault": "Project path: {{path}} (default)",
     "projectSkillsPathEmpty": "Project path: not set",
+    "alsoReads": "Also reads {{paths}}",
+    "readBy": "Read by {{agents}}",
     "projectAgentSupported": "Project workspace supported",
     "pathSaved": "Agent path updated",
     "pathReset": "Agent path reset to default",
@@ -841,6 +843,7 @@
   "common": {
     "loading": "Loading...",
     "error": "Something went wrong",
+    "duplicateDeployment": "Deployed, but {{agents}} now reads {{skills}} from two folders. Undeploy one of the copies to avoid loading it twice.",
     "requestFailed": "Request failed",
     "retry": "Retry",
     "loadFailed": "Failed to load {{item}}",

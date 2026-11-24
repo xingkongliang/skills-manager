@@ -6,6 +6,7 @@ import * as api from "../lib/tauri";
 import i18n from "../i18n";
 import { applyTextSize } from "../lib/textScale";
 import { toast } from "sonner";
+import { warnDuplicateDeployments } from "../lib/duplicateDeployments";
 
 interface AppState {
   presets: Preset[];
@@ -159,9 +160,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const handleApplyPresetToDefault = useCallback(
     async (id: string) => {
       await api.applyPresetToDefault(id);
+      void warnDuplicateDeployments(
+        managedSkills.filter((s) => s.preset_ids.includes(id)).map((s) => s.id),
+        tools.filter((tool) => tool.enabled && tool.installed).map((tool) => tool.key)
+      );
       await Promise.all([refreshPresets(), refreshManagedSkills()]);
     },
-    [refreshManagedSkills, refreshPresets]
+    [managedSkills, refreshManagedSkills, refreshPresets, tools]
   );
 
   // Resolve viewedPreset: persisted id > activePreset > first preset.

@@ -636,6 +636,8 @@
     "projectSkillsPathValue": "项目路径：{{path}}",
     "projectSkillsPathDefault": "项目路径：{{path}}（默认）",
     "projectSkillsPathEmpty": "项目路径：未设置",
+    "alsoReads": "也会读取 {{paths}}",
+    "readBy": "被 {{agents}} 读取",
     "projectAgentSupported": "支持项目工作区",
     "pathSaved": "Agent 路径已更新",
     "pathReset": "Agent 路径已恢复默认",
@@ -841,6 +843,7 @@
   "common": {
     "loading": "加载中...",
     "error": "出错了",
+    "duplicateDeployment": "已部署，但 {{agents}} 现在会从两个目录读到 {{skills}}。取消其中一处部署可避免重复加载。",
     "requestFailed": "请求失败",
     "retry": "重试",
     "loadFailed": "加载{{item}}失败",

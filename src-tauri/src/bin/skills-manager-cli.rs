@@ -13,6 +13,7 @@ use app_lib::core::{
     skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
     well_known,
 };
+use app_lib::core::shared_skill_dirs::{self, DuplicateDeployment};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
@@ -544,6 +545,11 @@ struct SkillDeploymentReport {
     /// recorded — someone else's content now lives there (#363).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     preserved: Vec<String>,
+    /// Agents that will find a skill in two directories they read, e.g. their
+    /// own and the shared `~/.agents/skills` (#696). A warning only: the
+    /// deployment goes ahead as it would without it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    duplicates: Vec<DuplicateDeployment>,
 }
 
 struct DeploymentVerification {
@@ -601,6 +607,11 @@ struct PresetDeploymentReport {
     /// See [`SkillDeploymentReport::preserved`].
     #[serde(skip_serializing_if = "Vec::is_empty")]
     preserved: Vec<String>,
+    /// Agents that will find a skill in two directories they read, e.g. their
+    /// own and the shared `~/.agents/skills` (#696). A warning only: the
+    /// deployment goes ahead as it would without it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    duplicates: Vec<DuplicateDeployment>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1351,6 +1362,13 @@ fn run_skill_deployment(
         })
         .collect();
     let changed_pairs = changed.len();
+    // Computed before deploying so `--dry-run` reports the same warnings.
+    let duplicates = if deploy {
+        shared_skill_dirs::find_duplicate_deployments(store, &skill_ids, &agent_keys, true)
+            .map_err(map_app_err)?
+    } else {
+        Vec::new()
+    };
 
     let mut preserved: Vec<String> = Vec::new();
     if dry_run && deploy {
@@ -1407,6 +1425,8 @@ fn run_skill_deployment(
         changed_pairs,
         skills: skills.into_iter().map(|skill| skill.name).collect(),
         preserved,
+
+        duplicates,
     })
 }
 
@@ -3109,6 +3129,13 @@ fn run_preset_deployment(
         })
         .collect();
     let changed_pairs = changed.len();
+    // Computed before deploying so `--dry-run` reports the same warnings.
+    let duplicates = if deploy {
+        shared_skill_dirs::find_duplicate_deployments(store, &skill_ids, &agent_keys, true)
+            .map_err(map_app_err)?
+    } else {
+        Vec::new()
+    };
 
     let mut preserved: Vec<String> = Vec::new();
     if dry_run && deploy {
@@ -3174,6 +3201,7 @@ fn run_preset_deployment(
         pair_count,
         changed_pairs,
         preserved,
+        duplicates,
     })
 }
 

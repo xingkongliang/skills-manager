@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
+use super::shared_skill_dirs::{self, AgentDirs};
 use super::{
     error::AppError,
     skill_store::SkillStore,
@@ -22,6 +23,11 @@ pub struct ToolInfo {
     /// Icon key for custom agents (see `CustomToolDef::icon`). `None` for
     /// built-in tools, which are keyed by `key` instead.
     pub icon: Option<String>,
+    /// Directories this agent reads besides `skills_dir`, such as the shared
+    /// `~/.agents/skills` (#696).
+    pub also_reads: Vec<String>,
+    /// Installed agents that also read this agent's `skills_dir` (#696).
+    pub read_by: Vec<String>,
 }
 
 pub fn get_disabled_tools(store: &SkillStore) -> Vec<String> {
@@ -273,9 +279,12 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
         .into_iter()
         .map(|ct| (ct.key, ct.icon))
         .collect();
-    let infos: Vec<ToolInfo> = tool_adapters::all_tool_adapters(store)
+    let adapters = tool_adapters::all_tool_adapters(store);
+    let agent_dirs: Vec<AgentDirs> = adapters.iter().map(AgentDirs::from_adapter).collect();
+    let infos: Vec<ToolInfo> = adapters
         .into_iter()
-        .map(|adapter| ToolInfo {
+        .zip(&agent_dirs)
+        .map(|(adapter, dirs)| ToolInfo {
             key: adapter.key.clone(),
             display_name: adapter.display_name.clone(),
             installed: adapter.is_installed(),
@@ -297,6 +306,12 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
                 && project_overrides.contains_key(&adapter.key),
             category: adapter.category,
             icon: custom_icons.get(&adapter.key).cloned().flatten(),
+            also_reads: dirs
+                .also
+                .iter()
+                .map(|dir| dir.to_string_lossy().to_string())
+                .collect(),
+            read_by: shared_skill_dirs::read_by(dirs, &agent_dirs),
         })
         .collect();
 

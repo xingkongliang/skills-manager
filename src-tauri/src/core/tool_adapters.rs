@@ -131,6 +131,19 @@ impl ToolAdapter {
         dirs
     }
 
+    /// The additional directories this adapter reads, whether or not they exist
+    /// yet, resolved the same way as [`Self::skills_dir`].
+    pub fn additional_scan_dir_paths(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        for rel in &self.additional_scan_dirs {
+            let dir = Self::select_existing_or_default(&Self::candidate_paths(rel));
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+        dirs
+    }
+
     pub fn is_installed(&self) -> bool {
         // Product decision: when users explicitly provide a skills path (override/custom),
         // we treat the tool as available so sync can proceed without probing vendor install state.
@@ -230,11 +243,14 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: None,
         },
         ToolAdapter {
+            // OpenCode also reads the shared `~/.agents/skills` root as a global
+            // skills path (https://opencode.ai/docs/skills/) — discovery only,
+            // like Codex: deployments still land in its own directory.
             key: "opencode".into(),
             display_name: "OpenCode".into(),
             relative_skills_dir: ".config/opencode/skills".into(),
             relative_detect_dir: ".config/opencode".into(),
-            additional_scan_dirs: vec![],
+            additional_scan_dirs: vec![".agents/skills".into()],
             override_skills_dir: None,
             category: ToolCategory::Coding,
             is_custom: false,
@@ -1329,6 +1345,11 @@ mod tests {
         assert_eq!(adapter.relative_skills_dir, ".config/opencode/skills");
         // Project path under workspace: .opencode/skills
         assert_eq!(adapter.project_relative_skills_dir(), ".opencode/skills");
+        // Also reads the shared global root (#696), for discovery only.
+        assert_eq!(
+            adapter.additional_scan_dirs,
+            vec![".agents/skills".to_string()]
+        );
     }
 
     #[test]

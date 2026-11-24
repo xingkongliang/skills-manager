@@ -37,6 +37,7 @@ import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectSkill } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { warnDuplicateDeployments } from "../lib/duplicateDeployments";
 import { normalizeSkillSearch, skillSearchMatches } from "../lib/skillSearch";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
@@ -704,8 +705,13 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     []
   );
 
+  // What a preset run deployed, so its duplicate check runs once at the end.
+  const presetDeployedRef = useRef({ skillIds: new Set<string>(), tools: new Set<string>() });
+
   const handlePresetAdd = useCallback(async (skill: ManagedSkill, agentK: string) => {
     await api.syncSkillToTool(skill.id, agentK);
+    presetDeployedRef.current.skillIds.add(skill.id);
+    presetDeployedRef.current.tools.add(agentK);
   }, []);
 
   const handlePresetRemove = useCallback(async (skill: ManagedSkill, agentK: string) => {
@@ -713,6 +719,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   }, []);
 
   const handlePresetComplete = useCallback(async () => {
+    const { skillIds, tools: deployedTools } = presetDeployedRef.current;
+    presetDeployedRef.current = { skillIds: new Set(), tools: new Set() };
+    void warnDuplicateDeployments([...skillIds], [...deployedTools]);
     await Promise.all([refreshManagedSkills(), refreshTools(), loadLocalSkills()]);
   }, [loadLocalSkills, refreshManagedSkills, refreshTools]);
 

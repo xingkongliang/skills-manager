@@ -55,7 +55,7 @@ import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-ma
 import { check as checkUpdater } from "@tauri-apps/plugin-updater";
 import { open as dialogOpen, confirm as dialogConfirm } from "@tauri-apps/plugin-dialog";
 import { useNavigate } from "react-router-dom";
-import { cn, compactHomePath } from "../utils";
+import { cn, compactHomePath, formatList } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
 import { AgentIcon } from "../components/AgentIcon";
@@ -1075,6 +1075,25 @@ export function Settings() {
             )}
           </div>
         )}
+
+        {/* Shared directories (#696): what else this agent reads, and who else reads its dir. */}
+        {(agent.also_reads.length > 0 || agent.read_by.length > 0) && (() => {
+          const text = [
+            agent.also_reads.length > 0 &&
+              t("settings.alsoReads", {
+                paths: formatList(agent.also_reads.map(compactHomePath), i18n.language),
+              }),
+            agent.read_by.length > 0 &&
+              t("settings.readBy", { agents: formatList(agent.read_by, i18n.language) }),
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          return (
+            <p className="truncate text-[12px] leading-tight text-muted" title={text}>
+              {text}
+            </p>
+          );
+        })()}
 
         {/* Project-relative skills path — always rendered so every card is the
             same height, installed or not. */}

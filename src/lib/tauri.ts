@@ -16,6 +16,19 @@ export interface ToolInfo {
   has_project_path_override: boolean;
   category: ToolCategory;
   icon: string | null;
+  /** Directories the agent reads besides `skills_dir`, e.g. `~/.agents/skills`. */
+  also_reads: string[];
+  /** Installed agents that also read this agent's `skills_dir`. */
+  read_by: string[];
+}
+
+/** An agent that finds one skill in two directories it reads. */
+export interface DuplicateDeployment {
+  skill_id: string;
+  skill_name: string;
+  agent: string;
+  agent_name: string;
+  dirs: string[];
 }
 
 export interface ManagedSkill {
@@ -445,6 +458,9 @@ export const syncSkillToTool = (skillId: string, tool: string) =>
 
 export const unsyncSkillFromTool = (skillId: string, tool: string) =>
   invoke<void>("unsync_skill_from_tool", { skillId, tool });
+
+export const findDuplicateDeployments = (skillIds: string[], tools: string[]) =>
+  invoke<DuplicateDeployment[]>("find_duplicate_deployments", { skillIds, tools });
 
 export const getSkillToolToggles = (skillId: string, presetId: string) =>
   invoke<SkillToolToggle[]>("get_skill_tool_toggles", { skillId, presetId });
