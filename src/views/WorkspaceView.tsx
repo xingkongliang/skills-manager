@@ -59,6 +59,7 @@ interface WorkspaceSkillCardTag {
   label: string;
   className: string;
   title?: string;
+  icon?: ReactNode;
 }
 
 interface WorkspaceSkillCardStatus {
@@ -143,6 +144,7 @@ function WorkspaceSkillCard({
                   tag.className
                 )}
               >
+                {tag.icon}
                 {tag.label}
               </span>
             ))}
@@ -214,6 +216,7 @@ function WorkspaceSkillCard({
                   tag.className
                 )}
               >
+                {tag.icon}
                 {tag.label}
               </span>
             ))}
@@ -505,8 +508,13 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   }, [localSkills, sharedSkills, search, sourceFilter, tagFilters]);
 
   const duplicateSkills = useMemo(() => localSkills.filter((s) => !!s.duplicate_of), [localSkills]);
-  const ownerOf = (dir: string) =>
-    tools.find((tool) => tool.key !== currentTool?.key && normPath(tool.skills_dir) === normPath(dir));
+  // Several agents can own one folder (Cline, Warp and a custom agent all use
+  // ~/.agents/skills): prefer one the user has enabled, custom agents first.
+  const ownerOf = (dir: string) => {
+    const owners = tools.filter((tool) => tool.key !== currentTool?.key && normPath(tool.skills_dir) === normPath(dir));
+    const live = owners.filter((tool) => tool.installed && tool.enabled);
+    return live.find((tool) => tool.is_custom) ?? live[0];
+  };
   const openOwner = (dir: string) => {
     const owner = ownerOf(dir);
     if (owner) navigate(`${config.basePath}/${owner.key}`);
@@ -1277,7 +1285,8 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
                     ? [{
                         label: t("globalWorkspace.localSkills.duplicateInShared", { folder: shortFolder(skill.duplicate_of) }),
                         title: t("globalWorkspace.localSkills.duplicateTooltip", { agent: currentTool.display_name, path: skill.duplicate_of }),
-                        className: "bg-amber-500/12 text-amber-700 dark:text-amber-300",
+                        className: "gap-1 bg-amber-500/12 text-amber-700 dark:text-amber-300",
+                        icon: <Copy className="h-3 w-3" />,
                       }]
                     : []),
                 ]}
@@ -1307,13 +1316,15 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
                   {
                     label: t("globalWorkspace.localSkills.externalBadge", { folder: shortFolder(folder) }),
                     title: t("globalWorkspace.localSkills.externalBadgeTooltip", { path: folder }),
-                    className: "bg-surface-hover text-muted",
+                    className: "gap-1 bg-surface-hover text-muted",
+                    icon: <Link2 className="h-3 w-3" />,
                   },
                   ...(skill.duplicate_of
                     ? [{
                         label: t("globalWorkspace.localSkills.duplicateInOwn"),
                         title: t("globalWorkspace.localSkills.duplicateTooltip", { agent: currentTool.display_name, path: skill.duplicate_of }),
-                        className: "bg-amber-500/12 text-amber-700 dark:text-amber-300",
+                        className: "gap-1 bg-amber-500/12 text-amber-700 dark:text-amber-300",
+                        icon: <Copy className="h-3 w-3" />,
                       }]
                     : []),
                 ]}
@@ -1322,7 +1333,8 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
                   label: owner
                     ? t("globalWorkspace.localSkills.readOnlyOpen", { owner: owner.display_name })
                     : t("globalWorkspace.localSkills.readOnly"),
-                  className: "text-muted",
+                  // A note, not a status pill.
+                  className: "px-0 text-[12px] font-normal text-muted",
                 }}
                 fileCount={skill.files.length}
                 onClick={() => { if (!isMultiSelect) openOwner(folder); }}
