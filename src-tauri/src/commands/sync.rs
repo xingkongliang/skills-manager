@@ -9,6 +9,7 @@ use crate::core::{
     sync_engine, sync_metadata, tool_adapters,
     tool_service,
 };
+use crate::core::shared_skill_dirs::{self, DuplicateDeployment};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -116,6 +117,22 @@ pub async fn sync_skill_to_tool(
         schedule_tray_refresh(&app);
     }
     result
+}
+
+/// Agents that would find one of `skill_ids` in two directories they read
+/// once deployed to `tools` (#696). Read-only: the UI calls it after a deploy
+/// to show a warning; it never blocks or changes the deployment.
+#[tauri::command]
+pub async fn find_duplicate_deployments(
+    skill_ids: Vec<String>,
+    tools: Vec<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<DuplicateDeployment>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        shared_skill_dirs::find_duplicate_deployments(&store, &skill_ids, &tools, false)
+    })
+    .await?
 }
 
 fn unsync_skill_from_tool_internal(

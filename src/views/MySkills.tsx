@@ -30,6 +30,7 @@ import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { warnDuplicateDeployments } from "../lib/duplicateDeployments";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useSkillViewMode } from "../hooks/useSkillViewMode";
@@ -586,6 +587,7 @@ export function MySkills() {
           ? t("mySkills.agentToggleEnabled", { agent: displayName })
           : t("mySkills.agentToggleDisabled", { agent: displayName })
       );
+      if (enabled) void warnDuplicateDeployments([selectedSkill.id], [toolKey]);
       const [, toggles] = await Promise.all([
         refreshManagedSkills(),
         api.getSkillToolToggles(selectedSkill.id, viewedPreset.id),
@@ -608,6 +610,7 @@ export function MySkills() {
         if (enabled) {
           await api.syncSkillToTool(skill.id, toolKey);
           toast.success(t("mySkills.targetInstalled", { name: skill.name, agent: displayName }));
+          void warnDuplicateDeployments([skill.id], [toolKey]);
         } else {
           await api.unsyncSkillFromTool(skill.id, toolKey);
           toast.success(t("mySkills.targetUninstalled", { name: skill.name, agent: displayName }));
@@ -775,6 +778,7 @@ export function MySkills() {
     }
     if (synced > 0) {
       toast.success(t("mySkills.batchSynced", { count: synced }));
+      void warnDuplicateDeployments(selectedSkillsList.map((s) => s.id), agentKeys);
     }
     if (failed > 0) {
       toast.error(t("mySkills.batchSyncFailed", { count: failed }));

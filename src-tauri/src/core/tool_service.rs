@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
+use super::shared_skill_dirs::{self, AgentDirs};
 use super::{
     error::AppError,
     skill_store::SkillStore,
@@ -22,6 +23,13 @@ pub struct ToolInfo {
     /// Icon key for custom agents (see `CustomToolDef::icon`). `None` for
     /// built-in tools, which are keyed by `key` instead.
     pub icon: Option<String>,
+    /// Directories this agent reads besides `skills_dir`, such as the shared
+    /// `~/.agents/skills` (#696).
+    pub also_reads: Vec<String>,
+    /// Installed agents that also read this agent's `skills_dir` (#696).
+    pub read_by: Vec<String>,
+    /// The part of `also_reads` the user declared, editable in Settings (#696).
+    pub extra_scan_dirs: Vec<String>,
 }
 
 pub fn get_disabled_tools(store: &SkillStore) -> Vec<String> {
@@ -216,6 +224,41 @@ pub fn set_custom_tool_icon(
     set_custom_tools(store, &customs)
 }
 
+/// Replace the extra directories the user says `key` also reads (#696).
+/// Entries are expanded like a skills path, and ones that name the agent's
+/// own directory or repeat another entry are dropped. Returns what was saved.
+pub fn set_tool_extra_scan_dirs(
+    store: &SkillStore,
+    key: &str,
+    dirs: &[String],
+) -> Result<Vec<String>, AppError> {
+    let adapter = tool_adapters::find_adapter_with_store(store, key)
+        .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
+    let mut seen = vec![shared_skill_dirs::dir_key(&adapter.skills_dir())];
+    let mut saved = Vec::new();
+    for dir in dirs {
+        let dir = normalize_skills_dir_input(dir)?;
+        let dir_key = shared_skill_dirs::dir_key(std::path::Path::new(&dir));
+        if !seen.contains(&dir_key) {
+            seen.push(dir_key);
+            saved.push(dir);
+        }
+    }
+
+    let mut all = tool_adapters::tool_extra_scan_dirs(store);
+    if saved.is_empty() {
+        all.remove(key);
+    } else {
+        all.insert(key.to_string(), saved.clone());
+    }
+    let json = serde_json::to_string(&all)
+        .map_err(|e| AppError::internal(format!("Failed to serialize: {e}")))?;
+    store
+        .set_setting("tool_extra_scan_dirs", &json)
+        .map_err(AppError::db)?;
+    Ok(saved)
+}
+
 pub fn normalize_skills_dir_input(path: &str) -> Result<String, AppError> {
     let raw = path.trim();
     if raw.is_empty() {
@@ -273,9 +316,13 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
         .into_iter()
         .map(|ct| (ct.key, ct.icon))
         .collect();
-    let infos: Vec<ToolInfo> = tool_adapters::all_tool_adapters(store)
+    let adapters = tool_adapters::all_tool_adapters(store);
+    let mut extra = tool_adapters::tool_extra_scan_dirs(store);
+    let agent_dirs: Vec<AgentDirs> = shared_skill_dirs::all_agent_dirs(store);
+    let infos: Vec<ToolInfo> = adapters
         .into_iter()
-        .map(|adapter| ToolInfo {
+        .zip(&agent_dirs)
+        .map(|(adapter, dirs)| ToolInfo {
             key: adapter.key.clone(),
             display_name: adapter.display_name.clone(),
             installed: adapter.is_installed(),
@@ -297,6 +344,13 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
                 && project_overrides.contains_key(&adapter.key),
             category: adapter.category,
             icon: custom_icons.get(&adapter.key).cloned().flatten(),
+            also_reads: dirs
+                .also
+                .iter()
+                .map(|dir| dir.to_string_lossy().to_string())
+                .collect(),
+            read_by: shared_skill_dirs::read_by(dirs, &agent_dirs),
+            extra_scan_dirs: extra.remove(&adapter.key).unwrap_or_default(),
         })
         .collect();
 

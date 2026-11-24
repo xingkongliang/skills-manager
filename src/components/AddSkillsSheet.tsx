@@ -14,6 +14,7 @@ import { cn } from "../utils";
 import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { warnDuplicateDeployments } from "../lib/duplicateDeployments";
 import { normalizeSkillSearch, skillSearchMatches } from "../lib/skillSearch";
 import { countHiddenSelected } from "../lib/selectionVisibility";
 import {
@@ -401,6 +402,7 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
             failures.push(getErrorMessage(e, t("common.error")));
           }
         }
+        if (ok > 0) void warnDuplicateDeployments(selectableSelected, [target.agentKey]);
       } else {
         if (selectedAgents.length === 0) {
           toast.error(t("addFromLibrary.errors.noTarget"));

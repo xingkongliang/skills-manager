@@ -32,6 +32,9 @@ pub struct ToolInfoDto {
     pub has_project_path_override: bool,
     pub category: ToolCategory,
     pub icon: Option<String>,
+    pub also_reads: Vec<String>,
+    pub read_by: Vec<String>,
+    pub extra_scan_dirs: Vec<String>,
 }
 
 /// Sync active scenario skills to a single tool.
@@ -106,6 +109,9 @@ pub async fn get_tool_status(
                 has_project_path_override: info.has_project_path_override,
                 category: info.category,
                 icon: info.icon,
+                also_reads: info.also_reads,
+                read_by: info.read_by,
+                extra_scan_dirs: info.extra_scan_dirs,
             })
             .collect();
         let elapsed_ms = start.elapsed().as_millis();
@@ -482,6 +488,21 @@ pub async fn set_custom_tool_icon(
     .await?
 }
 
+/// Replace the extra directories `key` also reads (#696). Discovery only:
+/// nothing is deployed there.
+#[tauri::command]
+pub async fn set_tool_extra_scan_dirs(
+    key: String,
+    dirs: Vec<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<String>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        tool_service::set_tool_extra_scan_dirs(&store, &key, &dirs)
+    })
+    .await?
+}
+
 #[tauri::command]
 pub async fn remove_custom_tool(
     key: String,
@@ -491,6 +512,8 @@ pub async fn remove_custom_tool(
     tauri::async_runtime::spawn_blocking(move || {
         // Remove synced targets for this tool
         unsync_all_for_tool(&store, &key);
+        // Drop its declared extra dirs while the key still resolves.
+        tool_service::set_tool_extra_scan_dirs(&store, &key, &[])?;
         // Remove from custom_tools list
         let mut customs = get_custom_tools(&store);
         customs.retain(|c| c.key != key);

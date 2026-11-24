@@ -1013,6 +1013,7 @@ pub fn run() {
             commands::tools::add_custom_tool,
             commands::tools::set_custom_tool_icon,
             commands::tools::remove_custom_tool,
+            commands::tools::set_tool_extra_scan_dirs,
             // Skills
             commands::skills::get_managed_skills,
             commands::skills::get_skills_for_preset,
@@ -1048,6 +1049,7 @@ pub fn run() {
             commands::sync::unsync_skill_from_tool,
             commands::sync::get_skill_tool_toggles,
             commands::sync::set_skill_tool_toggle,
+            commands::sync::find_duplicate_deployments,
             // Scan
             commands::scan::scan_local_skills,
             commands::scan::import_existing_skill,
