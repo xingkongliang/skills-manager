@@ -787,6 +787,11 @@ const SKILL_LOCATOR_MAX_DEPTH: usize = 6;
 ///   case-insensitive filesystem — the macOS and Windows default — `foo/`
 ///   answers a lookup for `FOO`, and that is what a full checkout resolves; the
 ///   tree compares exact strings and would pick `skills/FOO` instead.
+/// * An id that is not ASCII is refused outright. `eq_ignore_ascii_case` only
+///   folds ASCII, so `ä/` and `skills/Ä/` look distinct to the tree while a
+///   case-insensitive filesystem resolves `Ä` to `ä` and installs the root
+///   skill. There is no exact comparison that predicts that, so a full checkout
+///   is the only safe answer.
 /// * Frontmatter `name:` matches need file contents, so they are never
 ///   predicted: a layout that only resolves through one takes the full
 ///   checkout. That is not a gap in the prediction, because a full checkout
@@ -794,6 +799,12 @@ const SKILL_LOCATOR_MAX_DEPTH: usize = 6;
 ///   function only answers when it found one.
 fn resolve_skill_subpath_from_tree(tree_paths: &[u8], skill_id: &str) -> Option<String> {
     let skill_id = sparse_pattern(Some(skill_id))?;
+    // Case folding below is ASCII-only, so a non-ASCII id cannot be compared
+    // against a case-insensitive checkout's answer. Always let the installer
+    // resolve it.
+    if !skill_id.is_ascii() {
+        return None;
+    }
     let directories = tree_skill_directories(tree_paths);
 
     // `find_skill_dir` probes `<id>`, `skills/<id>`, then `.agents/skills/<id>`
@@ -1041,41 +1052,18 @@ fn run_git_watched_at(
 /// call this: it has no end-to-end test coverage, so the safe move is to add a
 /// path beside it, not to rewrite it.
 fn run_git_watched(
-    command: Command,
-    cancel: Option<&Arc<AtomicBool>>,
-    on_progress: &Option<ProgressCallback>,
-) -> Result<()> {
-    run_git_watched_collecting_stdout(command, cancel, on_progress).map(|_| ())
-}
-
-/// The same cancel/timeout supervision as [`run_git_watched`], also returning
-/// what git wrote to stdout.
-///
-/// `Command::output()` is the obvious way to read a command's stdout and the
-/// wrong one here: it waits to completion with no deadline and no way to react
-/// to a cancelled install, and the cache lock is held for the whole time. A
-/// wedged git — an object fetch behind a promisor remote, a stalled pack
-/// negotiation — would park that lock until the process was killed externally.
-/// So stdout is drained on its own thread next to stderr while the supervisor
-/// polls `cancel` and the deadline, exactly as the no-stdout path does.
-///
-/// The stdout pipe must be drained concurrently, not after the wait: a command
-/// that fills it blocks on write, and a supervisor that only reads afterwards
-/// then waits on a child that is waiting on it.
-fn run_git_watched_collecting_stdout(
     mut command: Command,
     cancel: Option<&Arc<AtomicBool>>,
     on_progress: &Option<ProgressCallback>,
-) -> Result<Vec<u8>> {
+) -> Result<()> {
     let mut child = command
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .context("Failed to start git")?;
 
     let (stderr_rx, stderr_thread) =
         spawn_stderr_collector(child.stderr.take(), on_progress.is_some());
-    let stdout_thread = spawn_stdout_collector(child.stdout.take());
     let deadline = Instant::now() + Duration::from_secs(CLONE_TIMEOUT_SECS);
 
     loop {
@@ -1095,8 +1083,97 @@ fn run_git_watched_collecting_stdout(
 
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stderr = stderr_thread.join().unwrap_or_default();
-                let stdout = stdout_thread.join().unwrap_or_default();
+                let collected = stderr_thread.join().unwrap_or_default();
+                if status.success() {
+                    return Ok(());
+                }
+                bail!("git exited with {}: {}", status, collected.trim());
+            }
+            Ok(None) => {
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!("git timed out after {}s", CLONE_TIMEOUT_SECS);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("Failed to wait for git: {e}")
+            }
+        }
+    }
+}
+
+/// The same cancel/timeout supervision as [`run_git_watched`], also returning
+/// what git wrote to stdout.
+///
+/// `Command::output()` is the obvious way to read a command's stdout and the
+/// wrong one here: it waits to completion with no deadline and no way to react
+/// to a cancelled install, and the cache lock is held for the whole time. A
+/// wedged git — an object fetch behind a promisor remote, a stalled pack
+/// negotiation — would park that lock until the process was killed externally.
+/// So stdout is drained on its own thread next to stderr while the supervisor
+/// polls `cancel` and the deadline, exactly as the no-stdout path does.
+///
+/// The stdout pipe must be drained concurrently, not after the wait: a command
+/// that fills it blocks on write, and a supervisor that only reads afterwards
+/// then waits on a child that is waiting on it.
+///
+/// The drain thread hands its result back over a channel and is never joined
+/// from here. A `join()` on it would wait outside both the cancel check and the
+/// deadline: git's own children can inherit the pipe, so a daemonized
+/// grandchild holding stdout open would keep this call — and the cache lock it
+/// holds — waiting long past a cancellation or timeout that already fired.
+fn run_git_watched_collecting_stdout(
+    mut command: Command,
+    cancel: Option<&Arc<AtomicBool>>,
+    on_progress: &Option<ProgressCallback>,
+) -> Result<Vec<u8>> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to start git")?;
+
+    let (stderr_rx, stderr_thread) =
+        spawn_stderr_collector(child.stderr.take(), on_progress.is_some());
+    // Report the stderr collector's result over a channel rather than joining
+    // it: the same leaked descendant that keeps stdout open keeps stderr open,
+    // so a join here would be a second unbounded wait (see the note below).
+    let (stderr_done_tx, stderr_done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = stderr_done_tx.send(stderr_thread.join().unwrap_or_default());
+    });
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
+    spawn_stdout_collector(child.stdout.take(), stdout_tx);
+    let deadline = Instant::now() + Duration::from_secs(CLONE_TIMEOUT_SECS);
+
+    // Once the child is reaped its pipes are closed at the source, so the
+    // collectors finish unless something else still holds the write ends. Bound
+    // that last wait so a leaked grandchild cannot pin the cache lock.
+    let drain_deadline = Duration::from_secs(2);
+
+    loop {
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("Installation cancelled");
+        }
+
+        if let Some(ref cb) = on_progress {
+            while let Ok(line) = stderr_rx.try_recv() {
+                if !is_ssh_warning(&line) && !line.trim().is_empty() {
+                    cb(&line);
+                }
+            }
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stderr = stderr_done_rx.recv_timeout(drain_deadline).unwrap_or_default();
+                let stdout = stdout_rx.recv_timeout(drain_deadline).unwrap_or_default();
                 if status.success() {
                     return Ok(stdout);
                 }
@@ -1119,15 +1196,16 @@ fn run_git_watched_collecting_stdout(
     }
 }
 
-/// Drain a child's stdout on its own thread so the supervisor never blocks on it.
-fn spawn_stdout_collector(stdout: Option<ChildStdout>) -> std::thread::JoinHandle<Vec<u8>> {
+/// Drain a child's stdout on its own thread so the supervisor never blocks on
+/// it, reporting the bytes over `tx` instead of being joined.
+fn spawn_stdout_collector(stdout: Option<ChildStdout>, tx: std::sync::mpsc::Sender<Vec<u8>>) {
     std::thread::spawn(move || {
         let mut collected = Vec::new();
         if let Some(mut stdout) = stdout {
             let _ = stdout.read_to_end(&mut collected);
         }
-        collected
-    })
+        let _ = tx.send(collected);
+    });
 }
 
 fn clone_repo_full(
@@ -2612,6 +2690,32 @@ mod tests {
         );
     }
 
+    /// `eq_ignore_ascii_case` folds only ASCII, so a non-ASCII id cannot be
+    /// compared against a case-insensitive checkout's answer at all.
+    ///
+    /// `ä/` and `skills/Ä/` look distinct to a byte comparison, but a
+    /// case-insensitive filesystem resolves the root `Ä` probe to `ä` and
+    /// installs that one, while the tree would narrow to `skills/Ä`. Nothing in
+    /// the tree predicts the filesystem's fold, so the answer has to be `None`.
+    /// Delete the `is_ascii` guard and this assertion turns red: the exact
+    /// `skills/Ä` probe would win.
+    #[test]
+    fn tree_locator_refuses_ids_it_cannot_case_fold() {
+        let tree = b"\xC3\xA4/SKILL.md\0skills/\xC3\x84/SKILL.md\0";
+        assert_eq!(resolve_skill_subpath_from_tree(tree, "Ä"), None);
+        // The same shape with ASCII ids still narrows, so this is about the
+        // fold and not about nested skill directories in general.
+        assert_eq!(
+            resolve_skill_subpath_from_tree(b"zz/SKILL.md\0skills/ZZ/SKILL.md\0", "ZZ"),
+            None,
+            "the ASCII case collision is refused by the case-insensitive probe"
+        );
+        assert_eq!(
+            resolve_skill_subpath_from_tree(b"skills/nested/SKILL.md\0", "nested").as_deref(),
+            Some("skills/nested")
+        );
+    }
+
     /// The id is used verbatim as a sparse-checkout pattern and joined onto the
     /// checkout by the caller, so one that is not already a clean path is refused
     /// rather than tidied into one.
@@ -3104,6 +3208,88 @@ mod tests {
         // The exact-case id is unambiguous and still narrows.
         assert_eq!(narrow_checkout_answer(&url, "foo").as_deref(), Some("foo"));
         central_repo::set_test_base_dir_override(None);
+    }
+
+    /// Case (iii): an id the tree cannot case-fold.
+    ///
+    /// `eq_ignore_ascii_case` folds only ASCII. With `ä/` at the root and
+    /// `skills/Ä/` nested, an id of `Ä` is answered by `ä/` on a
+    /// case-insensitive filesystem, while a byte comparison sees `skills/Ä` as
+    /// the only exact match and would narrow to a different skill.
+    #[test]
+    fn a_narrow_clone_agrees_with_the_full_checkout_on_non_ascii_ids() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().to_path_buf()));
+
+        let repo = tmp.path().join("non-ascii-repo");
+        commit_tree(
+            &repo,
+            &[
+                ("ä/SKILL.md", "---\nname: lower\n---\n"),
+                ("skills/Ä/SKILL.md", "---\nname: upper\n---\n"),
+            ],
+        );
+        let url = serve_partial_clone(&repo);
+
+        let narrow = narrow_checkout_answer(&url, "Ä");
+        let full = full_checkout_answer(&url, "Ä").expect("a full checkout resolves the id");
+        let expected = if cfg!(windows) || cfg!(target_os = "macos") {
+            "ä"
+        } else {
+            "skills/Ä"
+        };
+        assert_eq!(full, expected, "the full checkout's own answer, pinned");
+        assert_eq!(
+            narrow.as_deref(), Some(full.as_str()),
+            "a non-ASCII id must follow the filesystem's fold, not an ASCII-only one"
+        );
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    /// The tree walk holds the cache lock, so its stdout drain must not be able
+    /// to outlive the supervised wait.
+    ///
+    /// A command that exits while a descendant keeps stdout open is exactly the
+    /// shape the review described: the child is reaped, but `read_to_end` in the
+    /// drain thread does not finish. Joining that thread would block past both
+    /// the cancel flag and the deadline. Here the shell exits immediately and
+    /// leaves a sleeper holding the inherited pipe; the call has to return on the
+    /// bounded drain wait rather than after the sleeper exits.
+    ///
+    /// Swap the `recv_timeout` for a plain `recv` and this test takes the
+    /// sleeper's full lifetime instead of returning promptly.
+    #[test]
+    fn a_leaked_stdout_writer_cannot_pin_the_tree_walk() {
+        const SLEEPER_SECS: u64 = 30;
+        const DRAIN_BUDGET: Duration = Duration::from_secs(10);
+
+        let mut command = if cfg!(windows) {
+            // `start /b` launches the sleeper as a separate process that
+            // inherits our pipes, then cmd exits at once. Its output is
+            // deliberately not redirected: redirecting would close the pipe and
+            // stop this test from exercising the leaked-writer shape.
+            let mut command = Command::new("cmd");
+            command.args([
+                "/C",
+                &format!("start /b ping -n {SLEEPER_SECS} 127.0.0.1"),
+            ]);
+            command
+        } else {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", &format!("sleep {SLEEPER_SECS} & exit 0")]);
+            command
+        };
+
+        let started = Instant::now();
+        run_git_watched_collecting_stdout(command, None, &None)
+            .expect("the command itself exits successfully");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < DRAIN_BUDGET,
+            "both drain waits must be bounded, not tied to the leaked writer; waited {elapsed:?}"
+        );
     }
 
     /// Case (ii): a candidate past the installer's six-level walk.
