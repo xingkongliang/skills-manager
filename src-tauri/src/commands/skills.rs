@@ -1417,9 +1417,10 @@ pub async fn install_from_skillssh(
                     )
                     .ok();
             });
-            let temp_dir = git_fetcher::clone_repo_ref_with_progress(
+            let temp_dir = git_fetcher::clone_repo_ref_for_skill_id(
                 &repo_url,
                 None,
+                &skill_id,
                 Some(&cancel),
                 proxy_url.as_deref(),
                 Some(progress_cb),

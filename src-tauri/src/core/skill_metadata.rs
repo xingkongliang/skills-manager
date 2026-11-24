@@ -87,6 +87,14 @@ pub fn is_valid_skill_dir(dir: &Path) -> bool {
             .any(|name| has_named_file_exact(dir, name))
 }
 
+/// Whether `file_name` is one of the marker files [`is_valid_skill_dir`] looks
+/// for, matched by its exact name. Lets callers that only hold a path list —
+/// a git tree, a remote listing — apply the same rule as the filesystem check
+/// instead of restating the marker names.
+pub fn is_skill_marker_file(file_name: &str) -> bool {
+    SKILL_DIR_MARKERS.contains(&file_name)
+}
+
 /// Characters that are invalid in Windows file/directory names.
 const WINDOWS_RESERVED: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 
