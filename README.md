@@ -36,6 +36,19 @@
   <a href="https://skills.sh/xingkongliang/skills-manager"><img src="https://skills.sh/b/xingkongliang/skills-manager" alt="manage-skills on skills.sh" /></a>
 </p>
 
+## What this fork adds
+
+This branch builds on [xingkongliang/skills-manager at `8bce085`](https://github.com/xingkongliang/skills-manager/commit/8bce085df8c209923a1dd79dc5777d5ca8a1cf5d).
+
+- **Repository-level controls.** The upstream library can already group Skills by source, deploy selected Skills in batches, and apply Presets. This fork adds enable and disable controls for a Git repository and its selected ref. Pick an Agent in the library, global workspace, or project workspace to see how many Skills are deployed. A partially enabled repository offers both actions, and individual Skill controls are still available. [Usage](#manage-skills-by-repository)
+- **Repository catalog.** Save a Git source before importing any Skills, including repositories without a standalone Skill. Scan upstream to list members at a particular commit, then import selected Skills or deploy the entire collection. Existing Git and skills.sh imports are grouped by their recorded source.
+- **Host integrations.** Open the upstream installation guide or copy a setup task for an AI Agent with the selected host and project scope. Local checks can report Ponytail plugin or Hook entries and OpenSpec CLI or project files. The host handles Hook trust, and OpenSpec handles project initialization.
+- **Catalog backup.** The existing Git backup also saves the catalog and its last scan. Each machine checks its local deployments and integrations. [Backup coverage](#whats-included)
+
+### Windows x64 acceptance build
+
+Download the ZIP from the [Windows acceptance build](https://github.com/Liuzkai/skills-manager/actions/runs/45798262016), then run `skills-manager_1.45.0_x64-setup.exe`. The artifact for commit `0b6b732` includes the unsigned installer, portable app and CLI, and SHA-256 checksums. [Builds for this branch](https://github.com/Liuzkai/skills-manager/actions/workflows/windows-acceptance.yml?query=branch%3Acodex%2Frepository-skills)
+
 <p align="center">
   <img src="assets/demo/library.png" width="800" alt="Skills Manager Library" />
 </p>
@@ -85,6 +98,8 @@
 
 ## Install
 
+The package managers and release links below distribute the upstream app. The build above includes this fork's repository features.
+
 ### macOS
 
 Install with [Homebrew](https://brew.sh):
@@ -133,6 +148,8 @@ npx skills add xingkongliang/skills-manager
 
 Open **My Skills → By repository** to save a Git source or see Skills grouped by the repository they came from. Select an Agent in the library, global workspace, or project workspace to see its deployment count and enable or disable all Skills in a repository. Expand the row to manage individual Skills. Use **Scan upstream** to discover additional members before importing or enabling them.
 
+For an existing repository whose upstream has yet to be scanned, **Scan and enable all** discovers and deploys its members in one action. **Disable all** acts on the selected Agent and workspace, and the central library keeps the imported Skills.
+
 For repositories with host integrations, such as Ponytail and OpenSpec, expand the source entry and select the Agent and installation scope. Open the official guide or copy a setup task for an AI Agent. Ponytail uses its host's plugin or Hooks setup. OpenSpec's CLI and project setup can be checked separately, with specs and change records stored in the project.
 
 ## Backup & Multi-Device Sync
@@ -155,6 +172,10 @@ The **Backup** page (sidebar) keeps your skill library versioned in a Git reposi
 ### What's included
 
 Skills, tags, presets, and per-agent skill toggles are backed up. Secrets (API keys, tokens, proxy settings) and machine-specific wiring never leave the machine. Skills over 100 MB stay local and are excluded from backup automatically (labeled on the Backup page). The SQLite database is not in Git — it stores metadata that is rebuilt from the skill files.
+
+The repository catalog is backed up in `.skills-manager/repositories.json`. It includes saved repositories, refs, guide links, and the last scan, even for repositories with zero imported Skills. The workspace calculates the enabled count from local deployments. Plugins, Hook trust, and installed CLIs are managed on each machine. OpenSpec specs and change records live in the project.
+
+Simultaneous catalog edits on different machines are merged as one file, so only one side's changes may survive.
 
 ### Disconnecting
 

@@ -32,6 +32,19 @@
   <a href="https://skills.sh/xingkongliang/skills-manager"><img src="https://skills.sh/b/xingkongliang/skills-manager" alt="skills.sh 上的 manage-skills" /></a>
 </p>
 
+## 与上游仓库的差异
+
+本分支基于 [xingkongliang/skills-manager 的 `8bce085` 提交](https://github.com/xingkongliang/skills-manager/commit/8bce085df8c209923a1dd79dc5777d5ca8a1cf5d)。
+
+- **仓库级启停。** 上游已支持按来源分组、多选部署和 Preset。本分支为每个 Git 仓库及其所选分支或标签加上启停操作。在中央库、全局工作区或项目工作区选择目标 Agent，即可查看已部署数量。部分启用时可补齐或全部关闭，展开后仍可逐项管理。[操作说明](#按仓库管理-skills)
+- **仓库收录。** 可以先保存 Git 来源，再决定导入哪些 Skills。没有独立 Skill 的仓库也可收录。扫描后会记录上游提交及其成员，支持按需导入或一键部署。已有的 Git 和 skills.sh 导入项会按已记录的来源归组。
+- **宿主集成。** 可以打开官方安装说明，或复制包含目标宿主和项目范围的安装任务给 AI Agent。本机检查可显示已发现的 Ponytail 插件或 Hook 条目，以及 OpenSpec CLI 或项目文件。Hook 信任由宿主处理，项目初始化由 OpenSpec 处理。
+- **仓库目录备份。** 原有 Git 备份会一并保存已收录的仓库和最近一次扫描结果。实际部署和集成状态在各设备上检查。[备份范围](#备份包含什么)
+
+### Windows x64 验收包
+
+在 [Windows 验收构建](https://github.com/Liuzkai/skills-manager/actions/runs/45798262016)下载 ZIP，解压后运行 `skills-manager_1.45.0_x64-setup.exe`。提交 `0b6b732` 的构建产物包括未签名的安装包、便携版与 CLI，以及 SHA-256 校验和。[本分支的构建记录](https://github.com/Liuzkai/skills-manager/actions/workflows/windows-acceptance.yml?query=branch%3Acodex%2Frepository-skills)
+
 <p align="center">
   <img src="assets/demo/library.png" width="800" alt="Skills Manager 技能库" />
 </p>
@@ -81,6 +94,8 @@
 
 ## 安装
 
+下列包管理器及 Release 链接提供上游版本。上方的 Windows 验收包包含本分支的仓库管理功能。
+
 ### macOS
 
 使用 [Homebrew](https://brew.sh) 安装：
@@ -117,6 +132,8 @@ scoop install extras/skills-manager
 
 在 **我的 Skills → 按仓库** 中收录 Git 来源，或查看从已有 Skills 归组的仓库。在中央库、全局 Agent 工作区或项目工作区选择目标 Agent 后，仓库行会显示已启用数量，并提供「全部启用」和「全部关闭」。展开仓库可逐项管理。点击「扫描上游」可发现新 Skills，再按需导入或一键启用。
 
+已有仓库首次使用时，可点「扫描并全部启用」，一次发现并部署该仓库的成员。「全部关闭」作用于所选 Agent 和工作区，已导入的 Skills 仍保存在中央库。
+
 对于 Ponytail、OpenSpec 等提供额外集成的仓库，展开「仓库来源」中的对应条目，选择目标 Agent 和安装范围，查看官方说明或复制安装任务给 AI Agent。Ponytail 的插件和 Hooks 按宿主的方式配置。OpenSpec 的 CLI 与项目初始化分别检查，项目中的规格和变更记录随项目保存。
 
 ## 让你的 Agent 来管理 Skills
@@ -151,6 +168,10 @@ npx skills add xingkongliang/skills-manager
 ### 备份包含什么
 
 技能文件、标签、Preset 及每个 Agent 的技能开关会被备份。机密信息（API Key、令牌、代理配置）和本机接线永不上传。超过 100 MB 的技能自动留在本机、不进备份（备份页会标注）。SQLite 数据库不进 Git——其中的元数据可从技能文件重建。
+
+仓库目录保存在备份中的 `.skills-manager/repositories.json`，包括收录的仓库、分支或标签、安装文档链接及最近一次扫描结果。只收录、尚未导入任何 Skill 的仓库也会保存。工作区根据本机实际部署计算启用数量。插件、Hook 信任和已安装的 CLI 由各设备管理。OpenSpec 规格及变更记录随项目保存。
+
+如果两台设备同时修改仓库目录，同步时按整个文件合并，可能只保留一侧的目录改动。
 
 ### 断开连接
 
