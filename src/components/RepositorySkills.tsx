@@ -78,12 +78,13 @@ export function RepositoryGroupLabel({ group }: { group: RepositorySkillGroup })
 }
 
 /** The state is actual deployment, independently of preset membership or intent. */
-export function RepositorySkillActions({ skills, agentKey, compact = false, availableCount, onEnableAll, ...deployment }: RepositoryDeploymentProps & {
+export function RepositorySkillActions({ skills, agentKey, compact = false, availableCount, onEnableAll, upstreamUnscanned = false, ...deployment }: RepositoryDeploymentProps & {
   skills: ManagedSkill[];
   agentKey: string;
   compact?: boolean;
   availableCount?: number;
-  onEnableAll?: () => Promise<void>;
+  onEnableAll?: () => Promise<number>;
+  upstreamUnscanned?: boolean;
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
@@ -98,9 +99,13 @@ export function RepositorySkillActions({ skills, agentKey, compact = false, avai
     setBusy(true);
     try {
       if (!enabled && deployment.confirmRemove && !(await deployment.confirmRemove(changing.map((skill) => ({ skill, agentKey }))))) return;
-      if (enabled && onEnableAll) await onEnableAll();
-      else await deployment.onApply(changing, agentKey, enabled);
-      toast.success(t(enabled ? "repositoryGroups.enabledToast" : "repositoryGroups.disabledToast", { count: enabled && onEnableAll ? status.total - status.enabled : changing.length }));
+      let count = changing.length;
+      if (enabled && onEnableAll) {
+        count = await onEnableAll();
+      } else {
+        await deployment.onApply(changing, agentKey, enabled);
+      }
+      toast.success(t(enabled ? "repositoryGroups.enabledToast" : "repositoryGroups.disabledToast", { count }));
     } catch (error) {
       toast.error(getErrorMessage(error, t("repositoryGroups.failedToast")));
     } finally {
@@ -114,12 +119,14 @@ export function RepositorySkillActions({ skills, agentKey, compact = false, avai
     <div className="flex flex-wrap items-center gap-2" aria-busy={busy}>
       <span role="status" className={cn("inline-flex items-center gap-1 text-[12px]", status.state === "on" ? "text-accent-light" : "text-muted")}>
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <StateIcon className="h-3.5 w-3.5" />}
-        {t("repositoryGroups.enabledCount", { enabled: status.enabled, total: status.total })}
+        {t(upstreamUnscanned ? "repositoryGroups.unscannedCount" : "repositoryGroups.enabledCount",
+          { enabled: status.enabled, total: status.total })}
       </span>
-      {status.enabled < status.total && (
+      {(status.enabled < status.total || upstreamUnscanned) && (
         <button type="button" onClick={() => void apply(true)} disabled={busy || deployment.disabled || !agentKey}
           className="app-button-secondary px-2 py-1 text-[12px] disabled:opacity-50">
-          {t(compact ? "repositoryGroups.enable" : "repositoryGroups.enableAll")}
+          {t(upstreamUnscanned ? "repositoryGroups.discoverAndEnable"
+            : compact ? "repositoryGroups.enable" : "repositoryGroups.enableAll")}
         </button>
       )}
       {status.enabled > 0 && (
@@ -179,7 +186,13 @@ export function RepositorySkills({ skills, agents, scopeLabel, search = "", tagF
               </button>
               <RepositorySkillActions {...deployment} skills={group.skills} agentKey={agentKey}
                 availableCount={repositoryAvailableCount(group)}
-                onEnableAll={group.repository ? async () => deployment.onApply((await prepareRepositorySkills(group)).filter((skill) => !deployment.existsInWorkspace(skill, agentKey)), agentKey, true) : undefined} />
+                upstreamUnscanned={!!group.repository && !group.repository.snapshot_revision}
+                onEnableAll={group.repository ? async () => {
+                  const members = await prepareRepositorySkills(group, !group.repository?.snapshot_revision);
+                  const missing = members.filter((skill) => !deployment.existsInWorkspace(skill, agentKey));
+                  if (missing.length > 0) await deployment.onApply(missing, agentKey, true);
+                  return missing.length;
+                } : undefined} />
             </div>
             <p className="px-3 pb-2 text-[11px] text-faint">{t("repositoryGroups.fullScope", { total: group.count })}{visible.length !== group.count && ` ${t("repositoryGroups.shownCount", { shown: visible.length, total: group.count })}`}</p>
             {expanded && (

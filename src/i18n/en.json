@@ -1191,6 +1191,8 @@
     "projectScope": "{{project}} · {{agent}}",
     "defaultRef": "Default branch",
     "enabledCount": "{{enabled}} / {{total}} enabled",
+    "unscannedCount": "{{enabled}} / {{total}} imported Skills enabled · upstream unscanned",
+    "discoverAndEnable": "Scan and enable all",
     "enableAll": "Enable all",
     "disableAll": "Disable all",
     "enable": "Enable",

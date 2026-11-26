@@ -1191,6 +1191,8 @@
     "projectScope": "{{project}} · {{agent}}",
     "defaultRef": "默认分支",
     "enabledCount": "已启用 {{enabled}} / {{total}}",
+    "unscannedCount": "已启用 {{enabled}} / {{total}} 个已导入 Skills · 上游未扫描",
+    "discoverAndEnable": "扫描并全部启用",
     "enableAll": "全部启用",
     "disableAll": "全部关闭",
     "enable": "启用",

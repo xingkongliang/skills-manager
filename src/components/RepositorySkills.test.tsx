@@ -65,12 +65,23 @@ describe("repository batch controls", () => {
   });
 
   it("supports confirmed upstream members before any skills are imported", async () => {
-    const onEnableAll = vi.fn().mockResolvedValue(undefined);
+    const onEnableAll = vi.fn().mockResolvedValue(4);
     await act(async () => root.render(<RepositorySkillActions {...props} skills={[]} availableCount={4} agentKey="codex" onEnableAll={onEnableAll} />));
     expect(container.querySelector('[role="status"]')?.textContent).toContain('{"enabled":0,"total":4}');
     await act(async () => button("enableAll").click());
     expect(onEnableAll).toHaveBeenCalledOnce();
     expect(props.onApply).not.toHaveBeenCalled();
+  });
+
+  it("can discover and enable the whole upstream repository even if every imported member is enabled", async () => {
+    const onEnableAll = vi.fn().mockResolvedValue(9);
+    await act(async () => root.render(
+      <RepositorySkillActions {...props} skills={[members[0]]} agentKey="codex" upstreamUnscanned onEnableAll={onEnableAll} />,
+    ));
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("repositoryGroups.unscannedCount");
+    await act(async () => button("discoverAndEnable").click());
+    expect(onEnableAll).toHaveBeenCalledOnce();
+    expect(messages.success).toHaveBeenCalledWith('repositoryGroups.enabledToast{"count":9}');
   });
 
   it("does not apply a batch after removal is cancelled", async () => {

@@ -72,8 +72,8 @@ export function repositoryAvailableCount(group: RepositorySkillGroup): number {
   return group.skills.length + (group.repository?.members.filter((member) => member.upstream_present === true && !member.is_stale && member.installed_skill_ids.length === 0).length ?? 0);
 }
 
-export async function prepareRepositorySkills(group: RepositorySkillGroup): Promise<ManagedSkill[]> {
-  if (!group.repository || repositoryAvailableCount(group) === group.skills.length) return group.skills;
+export async function prepareRepositorySkills(group: RepositorySkillGroup, discoverUpstream = false): Promise<ManagedSkill[]> {
+  if (!group.repository || (!discoverUpstream && repositoryAvailableCount(group) === group.skills.length)) return group.skills;
   const result = await importRepositorySkills(group.repository.id);
   window.dispatchEvent(new Event("repository-catalog-changed"));
   const ids = new Set(result.repository.skill_ids);

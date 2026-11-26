@@ -1517,13 +1517,18 @@ export function MySkills() {
                       </button>
                       <RepositorySkillActions skills={repositoryGroup.skills} agentKey={repositoryAgentKey}
                         availableCount={repositoryAvailableCount(repositoryGroup)}
+                        upstreamUnscanned={!!repositoryGroup.repository && !repositoryGroup.repository.snapshot_revision}
                         existsInWorkspace={(skill, agent) => skill.targets.some((target) => target.tool === agent)}
                         onApply={(groupSkills, agent, enabled) => enabled
                           ? api.batchSyncSkillsToTools(groupSkills.map((skill) => skill.id), [agent])
                           : api.batchUnsyncSkillsFromTools(groupSkills.map((skill) => skill.id), [agent])}
                         onEnableAll={repositoryGroup.repository ? async () => {
-                          const members = await prepareRepositorySkills(repositoryGroup);
-                          await api.batchSyncSkillsToTools(members.filter((skill) => !skill.targets.some((target) => target.tool === repositoryAgentKey)).map((skill) => skill.id), [repositoryAgentKey]);
+                          const members = await prepareRepositorySkills(repositoryGroup, !repositoryGroup.repository?.snapshot_revision);
+                          const missing = members.filter((skill) => !skill.targets.some((target) => target.tool === repositoryAgentKey));
+                          if (missing.length > 0) {
+                            await api.batchSyncSkillsToTools(missing.map((skill) => skill.id), [repositoryAgentKey]);
+                          }
+                          return missing.length;
                         } : undefined}
                         onComplete={async () => { await Promise.all([refreshManagedSkills(), refreshTools(), refreshPresets()]); }} />
                     </div>
