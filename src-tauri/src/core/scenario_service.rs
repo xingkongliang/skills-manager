@@ -1498,8 +1498,39 @@ pub fn apply_skills_to_tools(
     tool_keys: &[String],
     mode: BatchApplyMode,
 ) -> Result<(), AppError> {
-    if skill_ids.is_empty() || tool_keys.is_empty() {
+    // The CLI performs its own post-write verification and records successful
+    // pairs even after partial failure. Preserve that path for existing callers.
+    execute_skills_batch(store, skill_ids, tool_keys, mode).map(drop)
+}
+
+pub(crate) fn apply_skills_batch_with_report(
+    store: &SkillStore,
+    skill_ids: &[String],
+    tool_keys: &[String],
+    mode: BatchApplyMode,
+) -> Result<(), AppError> {
+    let failures = execute_skills_batch(store, skill_ids, tool_keys, mode)?;
+    if failures.is_empty() {
         return Ok(());
+    }
+    let summary = match mode {
+        BatchApplyMode::Add => "Deployment incomplete. Some skills may have been deployed.",
+        BatchApplyMode::Remove => "Removal incomplete. Some deployments may have been removed.",
+    };
+    Err(AppError::io(format!(
+        "{summary} {}",
+        failures.join("; ")
+    )))
+}
+
+fn execute_skills_batch(
+    store: &SkillStore,
+    skill_ids: &[String],
+    tool_keys: &[String],
+    mode: BatchApplyMode,
+) -> Result<Vec<String>, AppError> {
+    if skill_ids.is_empty() || tool_keys.is_empty() {
+        return Ok(Vec::new());
     }
 
     let add = matches!(mode, BatchApplyMode::Add);
@@ -1519,7 +1550,7 @@ pub fn preflight_add_skills_to_tools(
     if skill_ids.is_empty() || tool_keys.is_empty() {
         return Ok(());
     }
-    apply_add(store, skill_ids, tool_keys, true)
+    apply_add(store, skill_ids, tool_keys, true).map(drop)
 }
 
 fn apply_add(
@@ -1527,7 +1558,7 @@ fn apply_add(
     skill_ids: &[String],
     tool_keys: &[String],
     preflight_only: bool,
-) -> Result<(), AppError> {
+) -> Result<Vec<String>, AppError> {
     let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
     let disabled = tool_service::get_disabled_tools(store);
 
@@ -1674,7 +1705,7 @@ fn apply_add(
         return Err(AppError::target_conflict(summary, conflicts));
     }
     if preflight_only {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let mut synced = 0usize;
@@ -1753,20 +1784,14 @@ fn apply_add(
         skill_ids.len(),
         adapters.len(),
     );
-    if !failures.is_empty() {
-        return Err(AppError::io(format!(
-            "Deployment failed for {} target(s). Some skills may have been deployed. {}",
-            failures.len(), failures.join("; ")
-        )));
-    }
-    Ok(())
+    Ok(failures)
 }
 
 fn apply_remove(
     store: &SkillStore,
     skill_ids: &[String],
     tool_keys: &[String],
-) -> Result<(), AppError> {
+) -> Result<Vec<String>, AppError> {
     let tool_set: HashSet<&String> = tool_keys.iter().collect();
 
     // Keep each row's recorded mode: it is the only evidence of what we put at
@@ -1788,7 +1813,7 @@ fn apply_remove(
     }
 
     if to_delete.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     // Rows go first, exactly as before: the recorded modes this batch needs are
@@ -1822,9 +1847,10 @@ fn apply_remove(
                 "apply_skills_to_tools(Remove): cannot verify remaining references ({e}); \
                  leaving every affected path on disk"
             );
-            return Err(AppError::db(format!(
+            failures.push(format!(
                 "Removal could not verify remaining references; deployment records may have changed, but files were preserved: {e}"
-            )));
+            ));
+            return Ok(failures);
         }
     };
 
@@ -1903,13 +1929,7 @@ fn apply_remove(
         "apply_skills_to_tools(Remove): pairs={} fs_removed={removed} preserved={preserved}",
         to_delete.len(),
     );
-    if !failures.is_empty() {
-        return Err(AppError::io(format!(
-            "Removal failed for {} target(s). Some deployments may have been removed. {}",
-            failures.len(), failures.join("; ")
-        )));
-    }
-    Ok(())
+    Ok(failures)
 }
 
 #[cfg(test)]

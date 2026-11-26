@@ -65,7 +65,7 @@ pub(crate) fn batch_global_internal(
     if deploy {
         scenario_service::preflight_add_skills_to_tools(store, &skill_ids, &tools)?;
     }
-    let result = scenario_service::apply_skills_to_tools(
+    let result = scenario_service::apply_skills_batch_with_report(
         store,
         &skill_ids,
         &tools,
