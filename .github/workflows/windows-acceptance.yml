@@ -1,0 +1,136 @@
+name: Windows acceptance EXE
+
+# A feature branch can produce a test installer before this workflow reaches
+# main (workflow_dispatch is only discoverable after it exists on main).
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'codex/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    name: Validate and build Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Restore Rust dependencies
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+          # The Windows linker can leave locked cache files behind. Avoid a
+          # post-job cache-save failure after an otherwise successful build.
+          save-if: false
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Rust tests (Windows x64)
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+
+      - name: Build bundled CLI
+        run: cargo build --locked --release --manifest-path src-tauri/Cargo.toml --bin skills-manager-cli --target x86_64-pc-windows-msvc
+
+      - name: Build acceptance installer
+        run: |
+          # Acceptance builds use no release secrets and never publish updater
+          # metadata. Tauri also runs the frontend type check and Vite build.
+          $config = Join-Path $env:RUNNER_TEMP 'tauri.acceptance.json'
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Path $config -Encoding utf8
+          npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis --config $config -- --locked
+
+      - name: Verify and collect executables
+        run: |
+          $release = 'src-tauri/target/x86_64-pc-windows-msvc/release'
+          $output = 'windows-acceptance'
+          New-Item -ItemType Directory -Path $output -Force | Out-Null
+          foreach ($name in @('skills-manager.exe', 'skills-manager-cli.exe')) {
+            $source = Join-Path $release $name
+            if (!(Test-Path $source) -or (Get-Item $source).Length -eq 0) {
+              throw "Missing executable: $source"
+            }
+            Copy-Item $source $output
+          }
+          $installers = @(Get-ChildItem "$release/bundle/nsis/*-setup.exe")
+          if ($installers.Count -ne 1 -or $installers[0].Length -eq 0) {
+            throw 'Expected exactly one nonempty NSIS setup executable'
+          }
+          Copy-Item $installers[0].FullName $output
+          $version = (& "$output/skills-manager-cli.exe" --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'The built CLI failed its version smoke check' }
+          $expectedVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if (($version -split '\s+')[-1] -ne $expectedVersion) {
+            throw "CLI version mismatch: expected $expectedVersion, received $version"
+          }
+          @(
+            "Skills Manager Windows x64 acceptance build"
+            "Commit: $env:GITHUB_SHA"
+            "Branch: $env:GITHUB_REF_NAME"
+            "CLI: $version"
+            "Run: https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            ''
+            'Run the *-setup.exe installer, or extract the entire archive and run skills-manager.exe.'
+            'Keep skills-manager-cli.exe beside the portable app to preserve the bundled CLI bridge.'
+            'These acceptance executables are unsigned. Windows may show a SmartScreen prompt.'
+            'The desktop app requires Microsoft Edge WebView2; the installer provisions it if needed.'
+          ) | Set-Content "$output/README.txt" -Encoding utf8
+          Get-ChildItem "$output/*.exe" | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content "$output/SHA256SUMS.txt" -Encoding ascii
+
+      - name: Upload Windows acceptance build
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: skills-manager-Windows-x64-${{ github.sha }}
+          path: windows-acceptance/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Report acceptance download
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          @(
+            '### Windows x64 acceptance build'
+            ''
+            "Commit: ``$env:GITHUB_SHA``"
+            ''
+            "[Download the installer and portable EXEs]($env:ARTIFACT_URL)"
+            ''
+            'Includes the NSIS installer, desktop and CLI EXEs, build details, and SHA-256 checksums.'
+          ) | Add-Content $env:GITHUB_STEP_SUMMARY
