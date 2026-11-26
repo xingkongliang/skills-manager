@@ -333,6 +333,83 @@ export const confirmGitInstall = (repoUrl: string, tempDir: string, items: Skill
 export const cancelGitPreview = (tempDir: string) =>
   invoke<void>("cancel_git_preview", { tempDir });
 
+export interface RepositoryMember {
+  rel_path: string;
+  name: string;
+  description: string | null;
+  installed_skill_ids: string[];
+  upstream_present: boolean | null;
+  is_stale: boolean;
+}
+
+export interface SkillRepository {
+  id: string;
+  identity: string;
+  name: string;
+  source_ref: string;
+  clone_url: string;
+  branch: string | null;
+  documentation_url: string | null;
+  added_at: number;
+  updated_at: number;
+  last_scanned_at: number | null;
+  snapshot_revision: string | null;
+  scan_error: string | null;
+  members: RepositoryMember[];
+  skill_ids: string[];
+}
+
+export const listRepositories = () => invoke<SkillRepository[]>("list_repositories");
+
+export const saveRepository = (repoUrl: string, documentationUrl?: string, branch?: string) =>
+  invoke<SkillRepository>("save_repository", {
+    repoUrl,
+    documentationUrl: documentationUrl || null,
+    branch: branch || null,
+  });
+
+export const scanRepository = (id: string) =>
+  invoke<SkillRepository>("scan_repository", { id });
+
+export const removeRepository = (id: string) =>
+  invoke<void>("remove_repository", { id });
+
+export const importRepositorySkills = (id: string, memberPaths?: string[]) =>
+  invoke<{ repository: SkillRepository; imported_skill_ids: string[]; skipped_count: number }>(
+    "import_repository_skills",
+    { id, memberPaths: memberPaths ?? null },
+  );
+
+export interface OpenSpecObservation {
+  cli_path: string | null;
+  project_config_found: boolean;
+  workflow_found: boolean;
+  workflow_check_supported: boolean;
+}
+
+export const observeOpenSpec = (agent: string, projectId: string | null) =>
+  invoke<OpenSpecObservation>("observe_openspec", { agent, projectId });
+
+export interface PonytailObservation {
+  plugin_files_found: boolean | null;
+  cursor_hook_entries_found: boolean | null;
+}
+
+export const observePonytail = (agent: string, projectId: string | null) =>
+  invoke<PonytailObservation>("observe_ponytail", { agent, projectId });
+
+export const batchSyncSkillsToTools = (skillIds: string[], tools: string[]) =>
+  invoke<void>("batch_sync_skills_to_tools", { skillIds, tools });
+
+export const batchUnsyncSkillsFromTools = (skillIds: string[], tools: string[]) =>
+  invoke<void>("batch_unsync_skills_from_tools", { skillIds, tools });
+
+export const batchDeploySkillsToProject = (skillIds: string[], projectId: string, agents: string[]) =>
+  invoke<void>("batch_deploy_skills_to_project", { skillIds, projectId, agents });
+
+export const batchUndeploySkillsFromProject = (skillIds: string[], projectId: string, agents: string[]) =>
+  invoke<void>("batch_undeploy_skills_from_project", { skillIds, projectId, agents });
+
 export const installFromSkillssh = (source: string, skillId: string) =>
   invoke<void>("install_from_skillssh", { source, skillId });
 

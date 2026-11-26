@@ -1679,6 +1679,7 @@ fn apply_add(
 
     let mut synced = 0usize;
     let mut failed = 0usize;
+    let mut failures = Vec::new();
     let mut left = 0usize;
     for pair in &plan {
         let PlannedPair {
@@ -1730,12 +1731,14 @@ fn apply_add(
                         "apply_skills_to_tools: failed to insert target for skill {skill_id} / {tool_key}: {e}"
                     );
                     failed += 1;
+                    failures.push(format!("{} / {tool_key}: {e}", skill.name));
                 } else {
                     synced += 1;
                 }
             }
             Err(e) => {
                 failed += 1;
+                failures.push(format!("{}: {e}", target.display()));
                 log::warn!(
                     "apply_skills_to_tools: failed to sync skill {skill_id} ({}) to {}: {e}",
                     skill.name,
@@ -1750,6 +1753,12 @@ fn apply_add(
         skill_ids.len(),
         adapters.len(),
     );
+    if !failures.is_empty() {
+        return Err(AppError::io(format!(
+            "Deployment failed for {} target(s). Some skills may have been deployed. {}",
+            failures.len(), failures.join("; ")
+        )));
+    }
     Ok(())
 }
 
@@ -1765,7 +1774,7 @@ fn apply_remove(
     // (#363, expectation 5).
     let mut to_delete: Vec<(String, String, PathBuf, String)> = Vec::new();
     for skill_id in skill_ids {
-        let targets = store.get_targets_for_skill(skill_id).unwrap_or_default();
+        let targets = store.get_targets_for_skill(skill_id).map_err(AppError::db)?;
         for target in targets {
             if tool_set.contains(&target.tool) {
                 to_delete.push((
@@ -1787,19 +1796,19 @@ fn apply_remove(
     // afterwards keeps the survivor set honest if any delete failed. Reading
     // must not fail open — treating a DB error as "nothing survives" would
     // authorize removing a path another tool is still using.
+    let mut failures = Vec::new();
     for (skill_id, tool, _, _) in &to_delete {
         if let Err(e) = store.delete_target(skill_id, tool) {
             log::warn!(
                 "apply_skills_to_tools(Remove): failed to delete target record for skill {skill_id} / {tool}: {e}"
             );
+            failures.push(format!("{skill_id} / {tool}: {e}"));
         }
     }
 
     // Must not fail open: treating a read error as "nothing survives" would
-    // authorize deleting a path another tool still uses. It also must not fail
-    // with an error, because the rows above are already gone — returning Err
-    // here would leave callers thinking nothing happened. So on a read error,
-    // keep every path and stop.
+    // authorize deleting a path another tool still uses. On a read error keep
+    // every path, and report that the operation may have partially completed.
     // Keyed by directory entry, as deployment pools them: a surviving row that
     // reaches the same directory through a symlinked parent still uses it.
     let mut key_memo: HashMap<PathBuf, PathBuf> = HashMap::new();
@@ -1813,7 +1822,9 @@ fn apply_remove(
                 "apply_skills_to_tools(Remove): cannot verify remaining references ({e}); \
                  leaving every affected path on disk"
             );
-            return Ok(());
+            return Err(AppError::db(format!(
+                "Removal could not verify remaining references; deployment records may have changed, but files were preserved: {e}"
+            )));
         }
     };
 
@@ -1883,6 +1894,7 @@ fn apply_remove(
                     "apply_skills_to_tools(Remove): failed to remove {}: {e}",
                     path.display()
                 );
+                failures.push(format!("{}: {e}", path.display()));
             }
         }
     }
@@ -1891,6 +1903,12 @@ fn apply_remove(
         "apply_skills_to_tools(Remove): pairs={} fs_removed={removed} preserved={preserved}",
         to_delete.len(),
     );
+    if !failures.is_empty() {
+        return Err(AppError::io(format!(
+            "Removal failed for {} target(s). Some deployments may have been removed. {}",
+            failures.len(), failures.join("; ")
+        )));
+    }
     Ok(())
 }
 

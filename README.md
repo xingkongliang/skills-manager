@@ -129,6 +129,12 @@ It is also an ordinary published skill, so it can be installed without the app:
 npx skills add xingkongliang/skills-manager
 ```
 
+## Manage Skills by Repository
+
+Open **My Skills → By repository** to save a Git source or see Skills grouped by the repository they came from. Select an Agent in the library, global workspace, or project workspace to see its deployment count and enable or disable all Skills in a repository. Expand the row to manage individual Skills. Use **Scan upstream** to discover additional members before importing or enabling them.
+
+For repositories with host integrations, such as Ponytail and OpenSpec, expand the source entry and select the Agent and installation scope. Open the official guide or copy a setup task for an AI Agent. Ponytail uses its host's plugin or Hooks setup. OpenSpec's CLI and project setup can be checked separately, with specs and change records stored in the project.
+
 ## Backup & Multi-Device Sync
 
 The **Backup** page (sidebar) keeps your skill library versioned in a Git repository. One device gets versioned backup with restorable snapshots; several devices connected to the same repository stay in sync with each other automatically. The remote stays a plain Git repository — you can `git clone` it anywhere, no lock-in.

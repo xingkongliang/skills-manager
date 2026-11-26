@@ -113,6 +113,12 @@ scoop install extras/skills-manager
 5. 在 **设置** 中配置 Agent 路径、自定义工具、主题、语言、代理和 Git 偏好。
 6. 如果需要历史版本或多机同步，从侧边栏打开 **备份** 页，点击 **使用 GitHub 登录**——之后备份和跨设备同步都会自动进行。
 
+## 按仓库管理 Skills
+
+在 **我的 Skills → 按仓库** 中收录 Git 来源，或查看从已有 Skills 归组的仓库。在中央库、全局 Agent 工作区或项目工作区选择目标 Agent 后，仓库行会显示已启用数量，并提供「全部启用」和「全部关闭」。展开仓库可逐项管理。点击「扫描上游」可发现新 Skills，再按需导入或一键启用。
+
+对于 Ponytail、OpenSpec 等提供额外集成的仓库，展开「仓库来源」中的对应条目，选择目标 Agent 和安装范围，查看官方说明或复制安装任务给 AI Agent。Ponytail 的插件和 Hooks 按宿主的方式配置。OpenSpec 的 CLI 与项目初始化分别检查，项目中的规格和变更记录随项目保存。
+
 ## 让你的 Agent 来管理 Skills
 
 Claude Code、Codex、Cursor 等可以替你装一个 Skill、把它部署到另一个 Agent、或者报告哪个 Agent 有什么——做法是驱动 Skills Manager，而不是绕过它直接往 Agent 目录里写。这正是来源元数据、Preset 归属、更新追踪和跨 Agent 部署状态得以保全的原因。

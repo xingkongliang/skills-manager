@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::State;
 
 use crate::core::error::TargetConflictDetail;
@@ -1381,13 +1382,22 @@ fn update_project_skill_from_center_internal(
     // the user chose to update, and project deployments never create
     // `skill_targets` rows, so no record could vouch for it. The
     // project_newer check above is the guard that makes this safe.
-    sync_engine::sync_skill(
+    let actual_mode = sync_engine::sync_skill(
         &source,
         &target_path,
         mode,
         sync_engine::ReplacePolicy::UserConfirmed,
     )
     .map_err(AppError::io)?;
+    write_project_deployment(
+        store,
+        &target_path,
+        Some(&ProjectDeploymentOwnership {
+            skill_id: managed.id.clone(),
+            mode: actual_mode.as_str().to_string(),
+            identity: project_entry_identity(&target_path),
+        }),
+    )?;
     Ok(())
 }
 
@@ -1414,7 +1424,13 @@ pub async fn toggle_project_skill(
             AppError::invalid_input("This workspace does not support disabling skills")
         })?;
 
-        set_project_skill_enabled_state(&skills_dir, &disabled_dir, &skill_relative_path, enabled)
+        set_project_skill_enabled_with_ownership(
+            &store,
+            &skills_dir,
+            &disabled_dir,
+            &skill_relative_path,
+            enabled,
+        )
     })
     .await?
 }
@@ -1476,7 +1492,7 @@ pub fn delete_project_skill_internal(
         ensure_removable(store, &record, &target)?;
     }
     remove_workspace_skill_target(&target)?;
-    Ok(())
+    write_project_deployment(store, &target, None)
 }
 
 /// Remove exactly the copy a removal plan named. Without `force`, the copy is
@@ -1500,7 +1516,8 @@ pub fn remove_planned_project_copy(
     if !force {
         ensure_removable(store, &record, &path)?;
     }
-    remove_workspace_skill_target(&path)
+    remove_workspace_skill_target(&path)?;
+    write_project_deployment(store, &path, None)
 }
 
 /// Refuse unless what sits at `target` is a scanned project skill whose
@@ -1864,13 +1881,95 @@ pub fn apply_project_deploy(
             std::fs::create_dir_all(parent)?;
         }
         let mode = project_sync_mode(store, &target.agent, configured_mode.as_deref());
-        sync_engine::sync_skill(
+        let actual_mode = sync_engine::sync_skill(
             &target.source,
             &target_dir,
             mode,
             sync_engine::ReplacePolicy::NoClobber,
         )
         .map_err(AppError::io)?;
+        // Project copies have no global `skill_targets` row. Keep separate
+        // local ownership evidence so a later group removal cannot mistake an
+        // independently created, identical copy for one of our deployments.
+        write_project_deployment(
+            store,
+            &target_dir,
+            Some(&ProjectDeploymentOwnership {
+                skill_id: target.skill_id.clone(),
+                mode: actual_mode.as_str().to_string(),
+                identity: project_entry_identity(&target_dir),
+            }),
+        )?;
+    }
+    Ok(())
+}
+
+/// A group enable also reactivates owned copies that are parked in the
+/// disabled directory. Plan every move before creating or moving any target.
+pub(crate) fn apply_project_batch_deploy(
+    store: &SkillStore,
+    project_id: &str,
+    plan: &[ProjectDeployTarget],
+) -> Result<(), AppError> {
+    let project = get_project_record(store, project_id)?;
+    let mut moves = Vec::new();
+    for target in plan
+        .iter()
+        .filter(|target| target.state == ProjectDeployState::AlreadyDeployed)
+    {
+        let group = project_agent_group(store, &project, &target.agent)
+            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", target.agent)))?;
+        let Some(disabled_root) = &group.disabled_root else {
+            continue;
+        };
+        let Ok(relative_path) = Path::new(&target.path).strip_prefix(disabled_root) else {
+            continue;
+        };
+        let enabled_path = Path::new(&group.skills_root).join(relative_path);
+        if std::fs::symlink_metadata(&enabled_path).is_ok() {
+            return Err(AppError::target_conflict(
+                "Cannot enable a project skill while its active path is occupied",
+                vec![TargetConflictDetail {
+                    path: enabled_path.to_string_lossy().to_string(),
+                    reason: "already exists".to_string(),
+                }],
+            ));
+        }
+        let removal = ProjectRemovalTarget {
+            skill_id: target.skill_id.clone(),
+            skill: target.skill.clone(),
+            agent: target.agent.clone(),
+            shared_by: target.shared_by.clone(),
+            relative_path: relative_path.to_string_lossy().to_string(),
+            path: target.path.clone(),
+            sync_status: target.sync_status.clone().unwrap_or_default(),
+            safe: false,
+        };
+        preflight_owned_project_removals(store, std::slice::from_ref(&removal))?;
+        moves.push((removal, group, enabled_path));
+    }
+    apply_project_deploy(store, plan)?;
+    for (target, group, enabled_path) in moves {
+        preflight_owned_project_removals(store, std::slice::from_ref(&target))?;
+        if std::fs::symlink_metadata(&enabled_path).is_ok() {
+            return Err(AppError::target_conflict(
+                "Project skill enable was interrupted because its active path became occupied",
+                vec![TargetConflictDetail {
+                    path: enabled_path.to_string_lossy().to_string(),
+                    reason: "already exists".to_string(),
+                }],
+            ));
+        }
+        set_project_skill_enabled_with_ownership(
+            store,
+            Path::new(&group.skills_root),
+            group
+                .disabled_root
+                .as_deref()
+                .expect("disabled root was planned"),
+            &target.relative_path,
+            true,
+        )?;
     }
     Ok(())
 }
@@ -1886,6 +1985,157 @@ pub struct ProjectRemovalTarget {
     pub sync_status: String,
     /// False when the copy may hold content the library does not have.
     pub safe: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ProjectDeploymentOwnership {
+    skill_id: String,
+    mode: String,
+    identity: Option<String>,
+}
+
+fn project_deployment_key(path: &Path) -> String {
+    let path = crate::core::scenario_service::ownership_key(path, &mut HashMap::new());
+    format!(
+        "project_deployment:{:x}",
+        Sha256::digest(path.to_string_lossy().as_bytes())
+    )
+}
+
+/// The identity is unchanged by moving a deployment into skills-disabled, but
+/// changes when somebody replaces our directory with their own copy.
+fn project_entry_identity(path: &Path) -> Option<String> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(format!("{}:{}", metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        metadata
+            .created()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|created| format!("{}", created.as_nanos()))
+    }
+}
+
+fn read_project_deployment(
+    store: &SkillStore,
+    path: &Path,
+) -> Result<Option<ProjectDeploymentOwnership>, AppError> {
+    store
+        .get_setting(&project_deployment_key(path))
+        .map_err(AppError::db)?
+        .filter(|value| !value.is_empty())
+        .map(|value| serde_json::from_str(&value).map_err(AppError::internal))
+        .transpose()
+}
+
+fn write_project_deployment(
+    store: &SkillStore,
+    path: &Path,
+    ownership: Option<&ProjectDeploymentOwnership>,
+) -> Result<(), AppError> {
+    let value = ownership
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(AppError::internal)?
+        .unwrap_or_default();
+    store
+        .set_setting(&project_deployment_key(path), &value)
+        .map_err(AppError::db)
+}
+
+fn set_project_skill_enabled_with_ownership(
+    store: &SkillStore,
+    skills_dir: &Path,
+    disabled_dir: &Path,
+    relative_path: &str,
+    enabled: bool,
+) -> Result<(), AppError> {
+    let from = if enabled {
+        disabled_dir.join(relative_path)
+    } else {
+        skills_dir.join(relative_path)
+    };
+    let to = if enabled {
+        skills_dir.join(relative_path)
+    } else {
+        disabled_dir.join(relative_path)
+    };
+    // Move ownership only for the actual object we deployed. A stale row
+    // must not turn a replacement directory into a managed deployment.
+    let ownership = read_project_deployment(store, &from)?.filter(|record| {
+        record.identity.is_some() && record.identity == project_entry_identity(&from)
+    });
+    set_project_skill_enabled_state(skills_dir, disabled_dir, relative_path, enabled)?;
+    if let Some(ownership) = ownership.filter(|record| record.identity == project_entry_identity(&to)) {
+        write_project_deployment(store, &to, Some(&ownership))?;
+        write_project_deployment(store, &from, None)?;
+    }
+    Ok(())
+}
+
+fn owns_project_removal(
+    store: &SkillStore,
+    target: &ProjectRemovalTarget,
+) -> Result<bool, AppError> {
+    let skill = store
+        .get_skill_by_id(&target.skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+    let path = Path::new(&target.path);
+    let state = sync_engine::classify_target(path, Some(Path::new(&skill.central_path)))
+        .map_err(AppError::io)?;
+    // A link to the exact library source is recognizable without a historical
+    // record, and unlinking it never removes the library source itself.
+    if state == sync_engine::TargetState::LinkToSource {
+        return Ok(true);
+    }
+    let Some(ownership) = read_project_deployment(store, path)? else {
+        return Ok(false);
+    };
+    Ok(ownership.skill_id == target.skill_id
+        && ownership.mode == "copy"
+        && state == sync_engine::TargetState::RealDir
+        && ownership.identity.is_some()
+        && ownership.identity == project_entry_identity(path))
+}
+
+pub(crate) fn preflight_owned_project_removals(
+    store: &SkillStore,
+    plan: &[ProjectRemovalTarget],
+) -> Result<(), AppError> {
+    let mut conflicts = Vec::new();
+    for target in plan {
+        if !owns_project_removal(store, target)? {
+            conflicts.push(TargetConflictDetail {
+                path: target.path.clone(),
+                reason:
+                    "is not a recorded Skills Manager deployment; the existing skill was preserved"
+                        .to_string(),
+            });
+        }
+    }
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::target_conflict(
+        "Refusing to remove project skills that are not owned deployments",
+        conflicts,
+    ))
+}
+
+pub(crate) fn remove_owned_project_copy(
+    store: &SkillStore,
+    project_id: &str,
+    target: &ProjectRemovalTarget,
+) -> Result<(), AppError> {
+    preflight_owned_project_removals(store, std::slice::from_ref(target))?;
+    remove_planned_project_copy(store, project_id, target, false)
 }
 
 /// Only a hash match proves a copy holds nothing of its own; `center_newer`
@@ -2974,6 +3224,108 @@ mod project_plan_tests {
 
     fn ids(skills: &[&SkillRecord]) -> Vec<String> {
         skills.iter().map(|s| s.id.clone()).collect()
+    }
+
+    fn batch(
+        fx: &Fixture,
+        skills: &[&SkillRecord],
+        agents: &[&str],
+        deploy: bool,
+    ) -> Result<(), AppError> {
+        crate::commands::batch::batch_project_internal(
+            &fx.store,
+            ids(skills),
+            &fx.project_id,
+            agents.iter().map(|agent| agent.to_string()).collect(),
+            deploy,
+        )
+    }
+
+    #[test]
+    fn group_batch_removes_owned_copies_and_preserves_another_skill() {
+        let fx = fixture(&["warp"]);
+        fx.store.set_setting("sync_mode", "copy").unwrap();
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let other = library_skill(&fx, "s-other", "other", "# Other");
+        batch(&fx, &[&demo, &other], &["warp", "gitlab_duo"], true).unwrap();
+        let demo_copy = fx.repo.join(".agents/skills/demo");
+        assert!(demo_copy.join("SKILL.md").is_file());
+        batch(&fx, &[&demo], &["cline"], false).unwrap();
+        assert!(!demo_copy.exists());
+        assert!(fx.repo.join(".agents/skills/other/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn group_batch_refuses_an_identical_external_copy_before_removing_owned_members() {
+        let fx = fixture(&["claude_code"]);
+        fx.store.set_setting("sync_mode", "copy").unwrap();
+        let owned = library_skill(&fx, "s-owned", "owned", "# Owned");
+        let external = library_skill(&fx, "s-external", "external", "# External");
+        batch(&fx, &[&owned], &["claude_code"], true).unwrap();
+        let external_copy = fx.repo.join(".claude/skills/external");
+        fs::create_dir_all(&external_copy).unwrap();
+        fs::copy(
+            Path::new(&external.central_path).join("SKILL.md"),
+            external_copy.join("SKILL.md"),
+        )
+        .unwrap();
+
+        let error = batch(&fx, &[&owned, &external], &["claude_code"], false).unwrap_err();
+        assert_eq!(conflict_paths(&error), vec![external_copy.clone()]);
+        assert!(external_copy.join("SKILL.md").is_file());
+        assert!(fx.repo.join(".claude/skills/owned/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn group_batch_refuses_a_replacement_even_when_its_content_is_identical() {
+        let fx = fixture(&["claude_code"]);
+        fx.store.set_setting("sync_mode", "copy").unwrap();
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        batch(&fx, &[&demo], &["claude_code"], true).unwrap();
+        let target = fx.repo.join(".claude/skills/demo");
+        fs::rename(&target, fx.repo.join("original-owned-copy")).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::copy(
+            Path::new(&demo.central_path).join("SKILL.md"),
+            target.join("SKILL.md"),
+        )
+        .unwrap();
+        assert!(batch(&fx, &[&demo], &["claude_code"], false).is_err());
+        assert!(target.join("SKILL.md").is_file());
+    }
+
+    #[test]
+    fn group_batch_reactivates_owned_disabled_copy_and_then_removes_it() {
+        let fx = fixture(&["claude_code"]);
+        fx.store.set_setting("sync_mode", "copy").unwrap();
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        batch(&fx, &[&demo], &["claude_code"], true).unwrap();
+        let active_root = fx.repo.join(".claude/skills");
+        let disabled_root = fx.repo.join(".claude/skills-disabled");
+        let active = active_root.join("demo");
+        let disabled = disabled_root.join("demo");
+        set_project_skill_enabled_with_ownership(
+            &fx.store, &active_root, &disabled_root, "demo", false,
+        )
+        .unwrap();
+        batch(&fx, &[&demo], &["claude_code"], true).unwrap();
+        assert!(active.join("SKILL.md").is_file());
+        assert!(!disabled.exists());
+        batch(&fx, &[&demo], &["claude_code"], false).unwrap();
+        assert!(!active.exists());
+    }
+
+    #[test]
+    fn group_batch_refuses_unsynced_owned_copy_before_any_removal() {
+        let fx = fixture(&["claude_code"]);
+        fx.store.set_setting("sync_mode", "copy").unwrap();
+        let demo = library_skill(&fx, "s-demo", "demo", "# Demo");
+        let other = library_skill(&fx, "s-other", "other", "# Other");
+        batch(&fx, &[&demo, &other], &["claude_code"], true).unwrap();
+        fs::write(fx.repo.join(".claude/skills/other/local.txt"), "keep this").unwrap();
+        assert!(batch(&fx, &[&demo, &other], &["claude_code"], false).is_err());
+        assert!(fx.repo.join(".claude/skills/demo/SKILL.md").is_file());
+        assert!(fx.repo.join(".claude/skills/other/local.txt").is_file());
     }
 
     /// Compared as paths, not strings: on Windows a conflict path mixes `\` with

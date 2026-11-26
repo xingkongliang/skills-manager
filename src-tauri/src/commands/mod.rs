@@ -1,7 +1,10 @@
 pub mod agent_workspace;
 pub mod browse;
+pub mod batch;
 pub mod git_backup;
 pub mod projects;
+pub mod repositories;
+pub mod repository_integrations;
 pub mod scan;
 pub mod presets;
 pub mod settings;

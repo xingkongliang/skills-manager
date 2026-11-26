@@ -1519,6 +1519,18 @@ export function InstallSkills() {
                   </button>
                 )}
               </div>
+              <button
+                type="button"
+                className="app-button-secondary w-full"
+                disabled={gitLoading}
+                onClick={() => {
+                  const params = new URLSearchParams({ view: "repositories" });
+                  if (gitUrl.trim()) params.set("source", gitUrl.trim());
+                  navigate(`/my-skills?${params}`);
+                }}
+              >
+                {t("repositoryCatalog.inLibrary")}
+              </button>
             </div>
           </div>
         </div>

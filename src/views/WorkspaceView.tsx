@@ -42,6 +42,8 @@ import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER }
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 import { useMultiSelect } from "../hooks/useMultiSelect";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
+import { RepositorySkills, RepositoryViewSwitch } from "../components/RepositorySkills";
+import { getRepositorySkillIdentity, sharedRepositoryAgents } from "../lib/repositoryGroups";
 import type { WorkspaceConfig } from "./workspaceConfigs";
 
 interface WorkspaceSkillCardTag {
@@ -248,7 +250,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const { t } = useTranslation();
   const { tools, managedSkills, presets, refreshManagedSkills, refreshTools } = useApp();
 
-  const [viewMode, setViewMode] = useSkillViewMode();
+  const [viewMode, setViewMode, groupByRepository, setGroupByRepository] = useSkillViewMode();
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -474,6 +476,11 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     () => localSkills.filter((skill) => skill.sync_status === "in_sync").length,
     [localSkills]
   );
+
+  const repositorySkillIds = useMemo(() => new Set(managedSkills.filter(getRepositorySkillIdentity).map((skill) => skill.id)), [managedSkills]);
+  const displayedLocalSkills = groupByRepository
+    ? visibleLocalSkills.filter((skill) => !skill.center_skill_id || !repositorySkillIds.has(skill.center_skill_id))
+    : visibleLocalSkills;
 
   const installedIds = useMemo(() => new Set(agentSkills.map((s) => s.id)), [agentSkills]);
 
@@ -911,6 +918,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           </div>
 
           <div className="flex min-w-0 flex-[2_1_520px] flex-wrap items-center justify-end gap-2">
+            <RepositoryViewSwitch grouped={groupByRepository} onChange={(grouped) => { exitMultiSelect(); setGroupByRepository(grouped); }} />
             <div className="relative w-full min-w-[220px] max-w-[320px]">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
               <input
@@ -958,6 +966,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
               <button
                 type="button"
                 aria-pressed={isMultiSelect}
+                disabled={groupByRepository}
                 onClick={() => isMultiSelect ? exitMultiSelect() : setIsMultiSelect(true)}
                 className={cn(
                   "app-segmented-button inline-flex items-center gap-1.5 hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-border",
@@ -1057,12 +1066,27 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
         )}
       </div>
 
-      {localSkillsLoading ? (
+      {groupByRepository && (
+        <RepositorySkills skills={managedSkills} agents={[currentTool]} search={search} tagFilters={tagFilters}
+          sharedAgents={(agent) => sharedRepositoryAgents(agent, tools, "global")}
+          scopeLabel={(agent) => t("repositoryGroups.globalScope", { agent: agent.display_name })}
+          existsInWorkspace={existsInGlobal}
+          onApply={(members, agent, enabled) => enabled
+            ? api.batchSyncSkillsToTools(members.map((skill) => skill.id), [agent])
+            : api.batchUnsyncSkillsFromTools(members.map((skill) => skill.id), [agent])}
+          onComplete={handlePresetComplete}
+          onOpenSkill={(skill) => {
+            const local = localSkills.find((item) => item.center_skill_id === skill.id);
+            if (local) void openLocalDetail(local);
+          }} />
+      )}
+
+      {groupByRepository && displayedLocalSkills.length === 0 ? null : localSkillsLoading ? (
         <div className="flex items-center gap-2 py-4 text-[13px] text-muted">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           {t("common.loading")}
         </div>
-      ) : visibleLocalSkills.length === 0 ? (
+      ) : displayedLocalSkills.length === 0 ? (
         <div className="flex min-h-[260px] flex-col items-center justify-center px-4 text-center">
           <Globe className="mb-4 h-12 w-12 text-faint" />
           <h3 className="mb-1.5 text-[14px] font-semibold text-tertiary">
@@ -1127,7 +1151,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
               : "flex flex-col gap-0.5"
           )}
         >
-          {visibleLocalSkills.map((skill) => {
+          {displayedLocalSkills.map((skill) => {
             const statusMeta = getLocalStatusMeta(t, skill.sync_status);
             const isManaged = !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id);
             const key = localSkillKey(skill);

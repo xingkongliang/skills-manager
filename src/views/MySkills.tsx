@@ -20,14 +20,13 @@ import {
   Circle,
   ChevronDown,
   ChevronRight,
-  FolderTree,
   Pencil,
   Share2,
   Tag,
   Trash2,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cn } from "../utils";
@@ -60,6 +59,9 @@ import { channelsForSkills } from "../lib/skillChannels";
 import { ChannelPills } from "../components/ChannelPills";
 import { SourcePicker } from "../components/SourcePicker";
 import { TagFilterPills } from "../components/TagFilterPills";
+import { RepositoryCatalog } from "../components/RepositoryCatalog";
+import { RepositoryGroupLabel, RepositorySkillActions, RepositoryTargetPicker, RepositoryViewSwitch } from "../components/RepositorySkills";
+import { buildRepositorySkillGroups, buildRepositoryViewGroups, prepareRepositorySkills, repositoryAvailableCount, sharedRepositoryAgents } from "../lib/repositoryGroups";
 import {
   buildSourceGroups,
   getSkillSourceInfo,
@@ -150,6 +152,7 @@ function centralDirName(skill: ManagedSkill) {
 export function MySkills() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const {
     viewedPreset,
     activePreset,
@@ -172,6 +175,31 @@ export function MySkills() {
   // keeps its default: a group of one starts open, since collapsing it by
   // default would hide the only skill it holds without saving a row.
   const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({});
+  const [repositories, setRepositories] = useState<api.SkillRepository[]>([]);
+  const [repositoryAgent, setRepositoryAgent] = useState("");
+  const repositoryAgents = tools.filter((tool) => tool.installed && tool.enabled);
+  const repositoryAgentKey = repositoryAgents.some((tool) => tool.key === repositoryAgent) ? repositoryAgent : repositoryAgents[0]?.key ?? "";
+  useEffect(() => {
+    const requested = searchParams.get("view");
+    if (requested === "repositories") setGroupBySource(true);
+    else if (requested === "skills") setGroupBySource(false);
+  }, [searchParams, setGroupBySource]);
+  const changeRepositoryView = (grouped: boolean) => {
+    setGroupBySource(grouped);
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      next.set("view", grouped ? "repositories" : "skills");
+      return next;
+    }, { replace: true });
+  };
+  useEffect(() => {
+    let cancelled = false;
+    const reload = () => { void api.listRepositories().then((value) => { if (!cancelled) setRepositories(value); }).catch(() => {}); };
+    reload();
+    window.addEventListener("repository-catalog-changed", reload);
+    return () => { cancelled = true; window.removeEventListener("repository-catalog-changed", reload); };
+  }, [skills]);
+  const fullRepositoryGroups = useMemo(() => new Map(buildRepositorySkillGroups(skills, repositories).map((group) => [group.key, group])), [skills, repositories]);
   const [sourceSelection, setSourceSelection] = useState<Set<string>>(new Set());
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
   // Which channel (`source_type`) a skill came through — git, skills.sh, a
@@ -320,7 +348,7 @@ export function MySkills() {
     return displayNames;
   }, [skills]);
 
-  const { filtered, sourceOptions, preSelectionSourceGroups } = useMemo(() => {
+  const { filtered, sourceOptions } = useMemo(() => {
     const result = skills.filter((skill) => {
       const displayName = skillDisplayNames.get(skill.id) || skill.name;
       const matchesSearch = skillSearchMatches(normalizedQuery, [
@@ -382,20 +410,9 @@ export function MySkills() {
     };
   }, [skills, skillDisplayNames, normalizedQuery, channelFilters, tagFilters, sourceSelection, filterMode, viewedPreset, presetSkillOrder]);
 
-  // Without a source selection the groups from above already describe
-  // `filtered`; only a narrowing selection forces a rebuild. That rebuild must
-  // keep the labels of the pre-selection groups: path labels are
-  // disambiguated against the other paths, so a group rebuilt from the
-  // survivors alone would read `skills` again instead of `a/skills`.
-  const sourceGroups = useMemo(() => {
-    if (!groupBySource) return null;
-    if (sourceSelection.size === 0) return preSelectionSourceGroups;
-    const labels = new Map(preSelectionSourceGroups.map((group) => [group.key, group.label]));
-    return buildSourceGroups(filtered).map((group) => {
-      const known = labels.get(group.key);
-      return known === undefined ? group : { ...group, label: known };
-    });
-  }, [groupBySource, sourceSelection.size, preSelectionSourceGroups, filtered]);
+  // Repository identity includes its ref; the Source filter remains a broader
+  // upstream filter, while this view keeps branches separate.
+  const sourceGroups = useMemo(() => groupBySource ? buildRepositoryViewGroups(filtered, repositories) : null, [groupBySource, filtered, repositories]);
 
   // A search forces every Source open: a query that matched something inside a
   // collapsed group would otherwise look like no match at all.
@@ -1239,7 +1256,7 @@ export function MySkills() {
             {skills.length}
           </span>
         </h1>
-
+        <RepositoryViewSwitch grouped={groupBySource} onChange={changeRepositoryView} />
       </div>
 
       <div className="app-toolbar">
@@ -1332,18 +1349,6 @@ export function MySkills() {
             >
               <List className="h-4 w-4" />
             </button>
-            <button
-              onClick={() => setGroupBySource(!groupBySource)}
-              aria-pressed={groupBySource}
-              className={cn(
-                "rounded-md p-2 transition-colors outline-none",
-                groupBySource ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
-              )}
-              title={t("mySkills.groupBySource")}
-              aria-label={t("mySkills.groupBySource")}
-            >
-              <FolderTree className="h-4 w-4" />
-            </button>
 
             {/* Selection can stay active in either view. */}
             <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 self-center bg-border-subtle" />
@@ -1396,6 +1401,15 @@ export function MySkills() {
           </>
         )}
       </div>
+
+      {groupBySource && (
+        <>
+          <RepositoryCatalog />
+          <RepositoryTargetPicker agents={repositoryAgents} agentKey={repositoryAgentKey} onChange={setRepositoryAgent}
+            sharedAgents={sharedRepositoryAgents(repositoryAgentKey, tools, "global")}
+            scopeLabel={(agent) => t("repositoryGroups.globalScope", { agent: agent.display_name })} />
+        </>
+      )}
 
       {isMultiSelect && (
         <MultiSelectToolbar
@@ -1490,6 +1504,36 @@ export function MySkills() {
           >
           {sourceRows.map((row) => {
             if (row.kind === "group") {
+              const repositoryGroup = fullRepositoryGroups.get(row.group.key);
+              if (repositoryGroup) {
+                return (
+                  <div key={`group-${row.group.key}`} className={cn("app-panel px-3 py-2.5", viewMode === "grid" && "col-span-full")}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <button type="button" disabled={!row.collapsible} aria-expanded={row.expanded}
+                        onClick={() => setGroupOpen((previous) => ({ ...previous, [row.group.key]: !row.expanded }))}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                        {row.expanded ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" />}
+                        <RepositoryGroupLabel group={repositoryGroup} />
+                      </button>
+                      <RepositorySkillActions skills={repositoryGroup.skills} agentKey={repositoryAgentKey}
+                        availableCount={repositoryAvailableCount(repositoryGroup)}
+                        existsInWorkspace={(skill, agent) => skill.targets.some((target) => target.tool === agent)}
+                        onApply={(groupSkills, agent, enabled) => enabled
+                          ? api.batchSyncSkillsToTools(groupSkills.map((skill) => skill.id), [agent])
+                          : api.batchUnsyncSkillsFromTools(groupSkills.map((skill) => skill.id), [agent])}
+                        onEnableAll={repositoryGroup.repository ? async () => {
+                          const members = await prepareRepositorySkills(repositoryGroup);
+                          await api.batchSyncSkillsToTools(members.filter((skill) => !skill.targets.some((target) => target.tool === repositoryAgentKey)).map((skill) => skill.id), [repositoryAgentKey]);
+                        } : undefined}
+                        onComplete={async () => { await Promise.all([refreshManagedSkills(), refreshTools(), refreshPresets()]); }} />
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-faint">
+                      {t("repositoryGroups.fullScope", { total: repositoryGroup.count })}
+                      {row.group.count !== repositoryGroup.count && ` ${t("repositoryGroups.shownCount", { shown: row.group.count, total: repositoryGroup.count })}`}
+                    </p>
+                  </div>
+                );
+              }
               const label = row.group.label || t("mySkills.sourcePicker.unknownSource");
               const header = (
                 <>

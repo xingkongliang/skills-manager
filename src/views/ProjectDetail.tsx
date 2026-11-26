@@ -51,6 +51,8 @@ import { getErrorMessage } from "../lib/error";
 import { normalizeSkillSearch, skillSearchMatches } from "../lib/skillSearch";
 import { useRevealProjectFolder } from "../hooks/useRevealProjectFolder";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
+import { RepositorySkills, RepositoryViewSwitch } from "../components/RepositorySkills";
+import { getRepositorySkillIdentity, sharedRepositoryAgents } from "../lib/repositoryGroups";
 const projectLastUsedAgentsKey = (projectId: string) =>
   `project_last_used_export_agents:${projectId}`;
 
@@ -125,11 +127,11 @@ export function ProjectDetail() {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { label: revealLabel, reveal: revealProjectFolder } = useRevealProjectFolder();
-  const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
+  const { projects, presets, managedSkills, tools, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
   const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useSkillViewMode();
+  const [viewMode, setViewMode, groupByRepository, setGroupByRepository] = useSkillViewMode();
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("all");
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
@@ -307,6 +309,11 @@ export function ProjectDetail() {
       return true;
     });
   }, [groupedSkills, search, filterMode, tagFilters]);
+
+  const repositorySkillIds = useMemo(() => new Set(managedSkills.filter(getRepositorySkillIdentity).map((skill) => skill.id)), [managedSkills]);
+  const displayedSkills = groupByRepository
+    ? filtered.filter((skill) => !skill.centerSkillIds.length || !skill.centerSkillIds.every((centerId) => repositorySkillIds.has(centerId)))
+    : filtered;
 
   const {
     isMultiSelect, setIsMultiSelect,
@@ -980,6 +987,7 @@ export function ProjectDetail() {
           </div>
 
           <div className="flex min-w-0 flex-[2_1_560px] flex-wrap items-center justify-end gap-2">
+            <RepositoryViewSwitch grouped={groupByRepository} onChange={(grouped) => { exitMultiSelect(); setGroupByRepository(grouped); }} />
             <div className="relative w-full min-w-[220px] max-w-[300px]">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
               <input
@@ -1040,6 +1048,7 @@ export function ProjectDetail() {
               <button
                 type="button"
                 aria-pressed={isMultiSelect}
+                disabled={groupByRepository}
                 onClick={() => isMultiSelect ? exitMultiSelect() : setIsMultiSelect(true)}
                 className={cn(
                   "app-segmented-button inline-flex items-center gap-1.5 hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-border",
@@ -1158,6 +1167,22 @@ export function ProjectDetail() {
         )}
       </div>
 
+      {groupByRepository && (
+        <RepositorySkills skills={managedSkills} agents={projectAgentTargets.filter((agent) => agent.enabled && agent.installed)}
+          sharedAgents={(agent) => project.workspace_type === "project" ? sharedRepositoryAgents(agent, tools, "project") : []}
+          scopeLabel={(agent) => t("repositoryGroups.projectScope", { project: project.name, agent: agent.display_name })}
+          search={search} tagFilters={tagFilters} filterMode={filterMode} disabled={loading}
+          existsInWorkspace={(skill, agent) => findProjectPresetVariant(skill, agent)?.enabled === true}
+          onApply={(members, agent, enabled) => enabled
+            ? api.batchDeploySkillsToProject(members.map((skill) => skill.id), project.id, [agent])
+            : api.batchUndeploySkillsFromProject(members.map((skill) => skill.id), project.id, [agent])}
+          onComplete={async () => { await Promise.all([handlePresetActionComplete(), refreshManagedSkills()]); }}
+          onOpenSkill={(skill) => {
+            const group = groupedSkills.find((item) => item.centerSkillIds.includes(skill.id));
+            if (group) void handleOpenDetail(group);
+          }} />
+      )}
+
       {isMultiSelect && (
         <MultiSelectToolbar
           selectedCount={selectedIds.size}
@@ -1226,11 +1251,11 @@ export function ProjectDetail() {
         />
       )}
 
-      {loading ? (
+      {groupByRepository && displayedSkills.length === 0 ? null : loading ? (
         <div className="flex flex-1 flex-col items-center justify-center pb-20 text-center">
           <div className="text-[13px] text-muted">{t("common.loading")}</div>
         </div>
-      ) : filtered.length === 0 ? (
+      ) : displayedSkills.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center pb-20 text-center">
           <Layers className="mb-4 h-12 w-12 text-faint" />
           <h3 className="mb-1.5 text-[14px] font-semibold text-tertiary">
@@ -1261,7 +1286,7 @@ export function ProjectDetail() {
               : "flex flex-col gap-0.5"
           )}
         >
-          {filtered.map((skill) => {
+          {displayedSkills.map((skill) => {
             const skillKey = getSkillKey(skill);
             const isSelected = selectedIds.has(skillKey);
             const isUpdatingCenter = updatingCenterSkill === skillKey;
