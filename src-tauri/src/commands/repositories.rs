@@ -560,7 +560,11 @@ fn scan_checkout(
             continue;
         }
         let meta = skill_metadata::parse_skill_md(dir);
-        let rel_path = git_fetcher::relative_subpath(root, dir).unwrap_or_else(|| ".".to_string());
+        let rel_path = if dir == root {
+            ".".to_string()
+        } else {
+            super::skills::skill_rel_key(root, dir)
+        };
         let name = meta
             .name
             .filter(|name| !name.trim().is_empty())
