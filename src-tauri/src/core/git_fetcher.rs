@@ -123,6 +123,13 @@ fn repo_cache_dir_for(url: &str, sparse: bool) -> PathBuf {
     central_repo::cache_dir().join("repos").join(name)
 }
 
+/// Both cache slots a repository can occupy: the full checkout first, then the
+/// subpath-scoped one. Callers that only display or open a cache try them in
+/// that order — see [`repo_cache_dir_for`] for why the two are not shared.
+pub fn repo_cache_slots(url: &str) -> (PathBuf, PathBuf) {
+    (repo_cache_dir_for(url, false), repo_cache_dir_for(url, true))
+}
+
 /// Upper bound on the whole repo cache.
 ///
 /// A backstop, not a quota. Nothing ever deleted a cache slot before, so a

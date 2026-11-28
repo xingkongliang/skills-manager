@@ -312,11 +312,28 @@ export interface GitSkillPreview {
   rel_path: string;
   name: string;
   description: string | null;
+  /** The library already holds this skill from the same repository and folder. */
+  installed: boolean;
 }
 
 export interface GitPreviewResult {
   temp_dir: string;
   skills: GitSkillPreview[];
+}
+
+/** One repository the Git tab offers to re-open. */
+export interface GitRepoHistoryEntry {
+  /** URL last used, or the resolved clone URL for repositories known only by
+   * their installed skills. */
+  repo_url: string;
+  /** Repository identity; its cache slots derive from it. */
+  clone_url: string;
+  /** Cached checkout still on disk, when the cache kept one. */
+  cache_dir: string | null;
+  /** Distinct skills installed from this repository. */
+  installed_count: number;
+  /** Last preview or install, ms since epoch. */
+  last_used_at: number;
 }
 
 export interface SkillInstallItem {
@@ -332,6 +349,12 @@ export const confirmGitInstall = (repoUrl: string, tempDir: string, items: Skill
 
 export const cancelGitPreview = (tempDir: string) =>
   invoke<void>("cancel_git_preview", { tempDir });
+
+export const listGitRepoHistory = () =>
+  invoke<GitRepoHistoryEntry[]>("list_git_repo_history");
+
+export const revealGitRepoCache = (repoUrl: string) =>
+  invoke<void>("reveal_git_repo_cache", { repoUrl });
 
 export const installFromSkillssh = (source: string, skillId: string) =>
   invoke<void>("install_from_skillssh", { source, skillId });

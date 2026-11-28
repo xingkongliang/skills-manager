@@ -407,6 +407,18 @@
       "website": "网站"
     },
     "groupBySource": "按来源分组",
+    "sort": {
+      "label": "排序",
+      "keys": {
+        "name": "名称",
+        "created": "创建时间",
+        "updated": "更新时间"
+      },
+      "asc": "升序",
+      "desc": "降序",
+      "prioritizeEnabled": "优先展示已开启",
+      "prioritizeEnabledHint": "打开后当前 Preset 已启用的 Skill 会排在最前；关闭则完全按所选排序展示"
+    },
     "sourcePicker": {
       "label": "来源",
       "clear": "清除来源筛选",
@@ -568,11 +580,31 @@
     "gitPreview": {
       "title": "选择要导入的技能",
       "description": "从仓库中发现了以下技能，可自定义名称后导入。",
+      "installedHint": "本库已有的技能已默认取消勾选。",
+      "statusFilter": "状态筛选",
+      "filter": {
+        "all": "全部",
+        "installed": "已安装",
+        "uninstalled": "未安装"
+      },
+      "selectedCount": "已选：{{selected}}/{{total}} 个",
+      "noMatches": "没有符合当前筛选的技能",
+      "pickRepo": "从左侧选择一个历史仓库，或输入地址后点击「克隆并预览」。",
+      "loading": "正在克隆 {{url}}…",
       "selectAll": "全选",
       "deselectAll": "取消全选",
       "namePlaceholder": "技能名称",
       "confirm": "导入选中项",
       "empty": "未发现可导入的技能"
+    },
+    "gitHistory": {
+      "title": "历史仓库",
+      "count": "共 {{count}} 个",
+      "empty": "还没有历史仓库。克隆并预览过的仓库会出现在这里。",
+      "installedCount": "已安装 {{count}} 个",
+      "noneInstalled": "未安装",
+      "noCache": "未缓存",
+      "openCache": "打开缓存文件夹"
     },
     "scan": {
       "title": "扫描本地 Skills 并导入",

@@ -234,6 +234,18 @@
     "hint": "Puedes conectar o restaurar una copia en cualquier momento desde la página Copia de seguridad en la barra lateral."
   },
   "mySkills": {
+    "sort": {
+      "label": "Ordenar",
+      "keys": {
+        "name": "Nombre",
+        "created": "Creado",
+        "updated": "Actualizado"
+      },
+      "asc": "Ascendente",
+      "desc": "Descendente",
+      "prioritizeEnabled": "Priorizar activados",
+      "prioritizeEnabledHint": "Muestra primero los skills activados en el Preset actual; desactívalo para ordenar toda la lista"
+    },
     "addFirst": "Haz clic en \"Instalar skills\" para agregar skills a la biblioteca central",
     "agentCount": "{{count}} agentes",
     "agentToggleDisabled": "{{agent}} deshabilitado",
@@ -471,11 +483,31 @@
     "gitAlreadyInstalled": "\"{{name}}\" ya está instalado. Reinstalarlo lo actualizará.",
     "gitDesc": "Introduce la URL de un repositorio Git público o privado. Para repositorios privados, asegúrate de tener configuradas las claves SSH.",
     "gitInstall": "Instalación de Git",
+    "gitHistory": {
+      "title": "Repositorios",
+      "count": "{{count}} en total",
+      "empty": "Todavía no hay repositorios. Los que clones para previsualizar aparecerán aquí.",
+      "installedCount": "{{count}} instalados",
+      "noneInstalled": "Nada instalado",
+      "noCache": "Sin copia en caché",
+      "openCache": "Abrir copia en caché"
+    },
     "gitPreview": {
       "confirm": "Importar seleccionados",
       "deselectAll": "Deseleccionar todo",
       "description": "Se encontraron los siguientes skills en el repositorio. Cámbialos de nombre si es necesario y confirma.",
       "empty": "No se encontraron skills importables",
+      "filter": {
+        "all": "Todos",
+        "installed": "Instalados",
+        "uninstalled": "No instalados"
+      },
+      "statusFilter": "Filtrar por estado",
+      "selectedCount": "{{selected}}/{{total}} seleccionados",
+      "noMatches": "Ningún skill coincide con este filtro",
+      "pickRepo": "Elige un repositorio a la izquierda, o introduce una URL y clona para previsualizar.",
+      "loading": "Clonando {{url}}…",
+      "installedHint": "Los skills que esta biblioteca ya tiene están desmarcados de forma predeterminada.",
       "namePlaceholder": "Nombre del skill",
       "selectAll": "Seleccionar todo",
       "title": "Seleccionar skills para importar"
