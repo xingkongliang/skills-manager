@@ -60,6 +60,8 @@ import { channelsForSkills } from "../lib/skillChannels";
 import { ChannelPills } from "../components/ChannelPills";
 import { SourcePicker } from "../components/SourcePicker";
 import { TagFilterPills } from "../components/TagFilterPills";
+import { SkillSortMenu } from "../components/SkillSortMenu";
+import { compareForList } from "../lib/skillSort";
 import {
   buildSourceGroups,
   getSkillSourceInfo,
@@ -164,7 +166,8 @@ export function MySkills() {
     projects,
     refreshProjects,
   } = useApp();
-  const [viewMode, setViewMode, groupBySource, setGroupBySource] = useSkillViewMode();
+  const [viewMode, setViewMode, groupBySource, setGroupBySource, skillSort, setSkillSort, prioritizeEnabled, setPrioritizeEnabled] =
+    useSkillViewMode();
   // Grouping is a view preference, so it persists; which groups are open is
   // session state, because a group the user expanded once is not a statement
   // about the next launch.
@@ -348,21 +351,17 @@ export function MySkills() {
       return true;
     });
 
-    // Always sort enabled skills first; within enabled group, use custom sort order
-    if (viewedPreset) {
-      result.sort((a, b) => {
-        const aEnabled = a.preset_ids.includes(viewedPreset.id) ? 0 : 1;
-        const bEnabled = b.preset_ids.includes(viewedPreset.id) ? 0 : 1;
-        if (aEnabled !== bEnabled) return aEnabled - bEnabled;
-        // Within same group, use preset sort order
-        const aOrder = presetSkillOrder.indexOf(a.id);
-        const bOrder = presetSkillOrder.indexOf(b.id);
-        if (aOrder !== -1 && bOrder !== -1) return aOrder - bOrder;
-        if (aOrder !== -1) return -1;
-        if (bOrder !== -1) return 1;
-        return a.name.localeCompare(b.name);
-      });
-    }
+    // Sort the filtered list. Inside a Preset the enabled skills usually stay
+    // grouped in front (that grouping is what the Preset toggle controls) and
+    // the chosen sort applies within each group; the "ignore enabled state"
+    // switch drops that grouping. See `compareForList` for the details.
+    const getName = (skill: ManagedSkill) => skillDisplayNames.get(skill.id) || skill.name;
+    const order = {
+      presetId: viewedPreset?.id ?? null,
+      presetOrder: presetSkillOrder,
+      prioritizeEnabled,
+    };
+    result.sort((a, b) => compareForList(a, b, skillSort, order, getName));
 
     // Candidates, and the grouping to reuse below, come from the result
     // *before* the source selection is applied. Otherwise picking a source
@@ -380,7 +379,7 @@ export function MySkills() {
       sourceOptions: candidates,
       preSelectionSourceGroups: groups,
     };
-  }, [skills, skillDisplayNames, normalizedQuery, channelFilters, tagFilters, sourceSelection, filterMode, viewedPreset, presetSkillOrder]);
+  }, [skills, skillDisplayNames, normalizedQuery, channelFilters, tagFilters, sourceSelection, filterMode, viewedPreset, presetSkillOrder, skillSort, prioritizeEnabled]);
 
   // Without a source selection the groups from above already describe
   // `filtered`; only a narrowing selection forces a rebuild. That rebuild must
@@ -1313,6 +1312,12 @@ export function MySkills() {
               <RotateCcw className={cn("h-3.5 w-3.5", batchUpdating && "animate-spin")} />
               {t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
             </button>
+            <SkillSortMenu
+              sort={skillSort}
+              onChange={setSkillSort}
+              prioritizeEnabled={prioritizeEnabled}
+              onPrioritizeEnabledChange={setPrioritizeEnabled}
+            />
             <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 self-center bg-border-subtle" />
             <button
               onClick={() => setViewMode("grid")}

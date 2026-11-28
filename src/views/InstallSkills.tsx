@@ -13,6 +13,8 @@ import {
   RefreshCw,
   FolderSearch,
   FolderInput,
+  FolderOpen,
+  HardDrive,
   ExternalLink,
   Check,
   ChevronLeft,
@@ -35,6 +37,15 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { StatusBanner } from "../components/StatusBanner";
 import { getErrorMessage, getErrorKind } from "../lib/error";
+import {
+  buildGitPreviewSelections,
+  countGitPreviewSelection,
+  duplicateGitPreviewNames,
+  filterGitPreviewSelections,
+  setVisibleGitPreviewSelection,
+  type GitPreviewSelection,
+  type GitPreviewStatusFilter,
+} from "../lib/gitPreview";
 
 const MARKET_PAGE_SIZE = 24;
 const MARKET_SEARCH_STEP = 60;
@@ -67,7 +78,12 @@ export function InstallSkills() {
   const [gitCancelKey, setGitCancelKey] = useState<string | null>(null);
   const [gitPreview, setGitPreview] = useState<GitPreviewResult | null>(null);
   const [gitPreviewRepoUrl, setGitPreviewRepoUrl] = useState<string | null>(null);
-  const [gitSelections, setGitSelections] = useState<{ rel_path: string; name: string; description: string | null; selected: boolean }[]>([]);
+  const [gitSelections, setGitSelections] = useState<GitPreviewSelection[]>([]);
+  const [gitStatusFilter, setGitStatusFilter] = useState<GitPreviewStatusFilter>("all");
+  const [gitHistory, setGitHistory] = useState<api.GitRepoHistoryEntry[] | null>(null);
+  const [gitHistoryError, setGitHistoryError] = useState<string | null>(null);
+  const [gitPreviewError, setGitPreviewError] = useState<string | null>(null);
+  const [revealingRepo, setRevealingRepo] = useState<string | null>(null);
   const [gitConfirmLoading, setGitConfirmLoading] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
@@ -472,10 +488,43 @@ export function InstallSkills() {
     });
   };
 
-  const handleGitPreview = async () => {
-    if (!gitUrl.trim()) return;
+  const loadGitHistory = useCallback(async () => {
+    try {
+      const entries = await api.listGitRepoHistory();
+      setGitHistory(entries);
+      setGitHistoryError(null);
+    } catch (error: unknown) {
+      setGitHistoryError(getErrorMessage(error, t("common.error")));
+    }
+  }, [t]);
+
+  useEffect(() => {
+    if (activeTab !== "git") return;
+    void loadGitHistory();
+  }, [activeTab, loadGitHistory]);
+
+  // The preview owns a temp checkout; dropping it without telling the backend
+  // would leak that clone until the OS clears the temp directory.
+  const discardGitPreview = () => {
+    if (gitPreview) {
+      api.cancelGitPreview(gitPreview.temp_dir).catch(() => {});
+    }
+    setGitPreview(null);
+    setGitPreviewRepoUrl(null);
+    setGitSelections([]);
+  };
+
+  const runGitPreview = async (rawUrl: string) => {
+    const url = rawUrl.trim();
+    if (!url || gitLoading) return;
+    // Re-opening the repository already on screen would clone it again for the
+    // same rows.
+    if (gitPreview && gitPreviewRepoUrl === url) return;
+    // One preview session at a time: confirm reads the temp checkout of the
+    // preview on screen, so the previous one is discarded before cloning again.
+    discardGitPreview();
+    setGitPreviewError(null);
     setGitLoading(true);
-    const url = gitUrl.trim();
     setGitCancelKey(url);
 
     const toastId = toast.loading(t("install.toast.cloning"));
@@ -499,17 +548,17 @@ export function InstallSkills() {
       toast.dismiss(toastId);
       setGitPreview(preview);
       setGitPreviewRepoUrl(url);
-      setGitSelections(preview.skills.map((s) => ({
-        rel_path: s.rel_path,
-        name: s.name,
-        description: s.description,
-        selected: true,
-      })));
+      setGitSelections(buildGitPreviewSelections(preview.skills));
+      setGitStatusFilter("all");
+      // The backend just recorded this repository in the history.
+      void loadGitHistory();
     } catch (error: unknown) {
       if (getErrorKind(error) === "cancelled") {
         toast.info(t("install.toast.cancelled"), { id: toastId });
       } else {
-        toast.error(getErrorMessage(error, t("common.error")), { id: toastId });
+        const message = getErrorMessage(error, t("common.error"));
+        setGitPreviewError(message);
+        toast.error(message, { id: toastId });
       }
     } finally {
       setGitLoading(false);
@@ -518,14 +567,29 @@ export function InstallSkills() {
     }
   };
 
+  const handleGitPreview = () => {
+    void runGitPreview(gitUrl);
+  };
+
+  const openGitHistoryEntry = (repoUrl: string) => {
+    setGitUrl(repoUrl);
+    void runGitPreview(repoUrl);
+  };
+
+  const handleRevealGitCache = async (repoUrl: string) => {
+    setRevealingRepo(repoUrl);
+    try {
+      await api.revealGitRepoCache(repoUrl);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      setRevealingRepo(null);
+    }
+  };
+
   const handleGitPreviewClose = () => {
     if (gitConfirmLoading) return;
-    if (gitPreview) {
-      api.cancelGitPreview(gitPreview.temp_dir).catch(() => {});
-    }
-    setGitPreview(null);
-    setGitPreviewRepoUrl(null);
-    setGitSelections([]);
+    discardGitPreview();
   };
 
   const handleGitConfirm = async () => {
@@ -547,6 +611,8 @@ export function InstallSkills() {
       setGitPreview(null);
       setGitPreviewRepoUrl(null);
       setGitSelections([]);
+      // Installed counts and the repository's place in the history changed.
+      void loadGitHistory();
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -607,6 +673,23 @@ export function InstallSkills() {
   const changeMarketPage = (page: number) => {
     setMarketPage(page);
     scrollMarketListToTop();
+  };
+
+  const visibleGitSelections = useMemo(
+    () => filterGitPreviewSelections(gitSelections, gitStatusFilter),
+    [gitSelections, gitStatusFilter]
+  );
+  const gitSelectionCount = useMemo(
+    () => countGitPreviewSelection(gitSelections),
+    [gitSelections]
+  );
+  const gitDuplicateNames = useMemo(
+    () => duplicateGitPreviewNames(gitSelections),
+    [gitSelections]
+  );
+  const setVisibleGitSelected = (selected: boolean) => {
+    const visible = new Set(visibleGitSelections.map((item) => item.rel_path));
+    setGitSelections((prev) => setVisibleGitPreviewSelection(prev, visible, selected));
   };
 
   const scanGroups = scanResult?.groups ?? [];
@@ -1460,181 +1543,380 @@ export function InstallSkills() {
       )}
 
       {activeTab === "git" && (
-        <div className="animate-in fade-in duration-300">
-          <div className="app-panel max-w-lg p-5">
-            <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-surface-hover">
-              <Github className="h-5 w-5 text-tertiary" />
-            </div>
-            <h2 className="mb-1 text-[14px] font-semibold text-primary">{t("install.gitTitle")}</h2>
-            <p className="mb-4 text-[13px] text-muted">{t("install.gitDesc")}</p>
+        <div className="animate-in fade-in duration-300 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,440px)_minmax(0,1fr)] lg:items-start">
+          <div className="flex min-w-0 flex-col gap-4">
+            <div className="app-panel p-5">
+              <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-surface-hover">
+                <Github className="h-5 w-5 text-tertiary" />
+              </div>
+              <h2 className="mb-1 text-[14px] font-semibold text-primary">{t("install.gitTitle")}</h2>
+              <p className="mb-4 text-[13px] text-muted">{t("install.gitDesc")}</p>
 
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-[13px] font-medium text-tertiary">
-                  {t("install.repoUrl")}
-                </label>
-                <input
-                  type="text"
-                  value={gitUrl}
-                  onChange={(e) => setGitUrl(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !gitLoading && gitUrl.trim()) handleGitPreview(); }}
-                  placeholder={t("install.repoUrlPlaceholder")}
-                  disabled={gitLoading}
-                  className="app-input w-full bg-background"
-                />
-              </div>
-              {gitUrl.trim() && findInstalledByGitUrl(gitUrl) && (
-                <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-800 dark:text-amber-400">
-                  <Check className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    {t("install.gitAlreadyInstalled", { name: findInstalledByGitUrl(gitUrl)!.name })}
-                  </span>
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-[13px] font-medium text-tertiary">
+                    {t("install.repoUrl")}
+                  </label>
+                  <input
+                    type="text"
+                    value={gitUrl}
+                    onChange={(e) => setGitUrl(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !gitLoading && gitUrl.trim()) handleGitPreview(); }}
+                    placeholder={t("install.repoUrlPlaceholder")}
+                    disabled={gitLoading}
+                    className="app-input w-full bg-background"
+                  />
                 </div>
-              )}
-              <div className="flex gap-2 pt-2">
-                {gitLoading ? (
-                  <button
-                    onClick={() => gitCancelKey && handleCancelInstall(gitCancelKey)}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-[13px] font-medium text-red-600 dark:text-red-400 transition-colors hover:bg-red-500/20"
-                    disabled={!gitCancelKey}
-                  >
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {t("install.cancel")}
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleGitPreview}
-                    disabled={!gitUrl.trim()}
-                    className={cn(
-                      "flex w-full",
-                      gitUrl.trim() && findInstalledByGitUrl(gitUrl)
-                        ? "app-button-secondary bg-background"
-                        : "app-button-primary"
-                    )}
-                  >
-                    <DownloadCloud className="h-3.5 w-3.5" />
-                    {gitUrl.trim() && findInstalledByGitUrl(gitUrl)
-                      ? t("install.gitReinstall")
-                      : t("install.installClone")}
-                  </button>
+                {gitUrl.trim() && findInstalledByGitUrl(gitUrl) && (
+                  <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-800 dark:text-amber-400">
+                    <Check className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      {t("install.gitAlreadyInstalled", { name: findInstalledByGitUrl(gitUrl)!.name })}
+                    </span>
+                  </div>
                 )}
+                <div className="flex gap-2 pt-2">
+                  {gitLoading ? (
+                    <button
+                      onClick={() => gitCancelKey && handleCancelInstall(gitCancelKey)}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-[13px] font-medium text-red-600 dark:text-red-400 transition-colors hover:bg-red-500/20"
+                      disabled={!gitCancelKey}
+                    >
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {t("install.cancel")}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleGitPreview}
+                      disabled={!gitUrl.trim()}
+                      className={cn(
+                        "flex w-full",
+                        gitUrl.trim() && findInstalledByGitUrl(gitUrl)
+                          ? "app-button-secondary bg-background"
+                          : "app-button-primary"
+                      )}
+                    >
+                      <DownloadCloud className="h-3.5 w-3.5" />
+                      {gitUrl.trim() && findInstalledByGitUrl(gitUrl)
+                        ? t("install.gitReinstall")
+                        : t("install.installClone")}
+                    </button>
+                  )}
+                </div>
               </div>
+            </div>
+
+            {/* Repositories used before: re-open, count what is installed, or
+                jump straight to the cached checkout. */}
+            <div className="app-panel p-4">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h2 className="text-[13px] font-semibold text-secondary">
+                  {t("install.gitHistory.title")}
+                </h2>
+                {gitHistory && gitHistory.length > 0 ? (
+                  <span className="text-[12px] text-muted">
+                    {t("install.gitHistory.count", { count: gitHistory.length })}
+                  </span>
+                ) : null}
+              </div>
+
+              {gitHistoryError ? (
+                <StatusBanner
+                  compact
+                  title={t("common.requestFailed")}
+                  description={gitHistoryError}
+                  actionLabel={t("common.retry")}
+                  onAction={() => { void loadGitHistory(); }}
+                  tone="danger"
+                />
+              ) : gitHistory === null ? (
+                <div className="flex items-center gap-2 py-3 text-[13px] text-muted">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  {t("common.loading")}
+                </div>
+              ) : gitHistory.length === 0 ? (
+                <p className="py-2 text-[13px] text-muted">{t("install.gitHistory.empty")}</p>
+              ) : (
+                <ul className="flex flex-col gap-1.5">
+                  {gitHistory.map((entry) => {
+                    const active =
+                      gitPreviewRepoUrl === entry.repo_url || gitCancelKey === entry.repo_url;
+                    return (
+                      <li
+                        key={entry.clone_url}
+                        className={cn(
+                          "flex items-start rounded-lg border transition-colors",
+                          active
+                            ? "border-accent-border bg-accent-bg/40"
+                            : "border-border-subtle bg-background hover:bg-surface-hover"
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => openGitHistoryEntry(entry.repo_url)}
+                          disabled={gitLoading || gitConfirmLoading}
+                          aria-current={active}
+                          className="min-w-0 flex-1 px-3 py-2 text-left disabled:opacity-60"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="truncate text-[13px] font-medium text-secondary"
+                              title={entry.repo_url}
+                            >
+                              {entry.repo_url}
+                            </span>
+                            {entry.installed_count > 0 ? (
+                              <span className="shrink-0 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[12px] font-medium text-emerald-600 dark:text-emerald-400">
+                                {t("install.gitHistory.installedCount", {
+                                  count: entry.installed_count,
+                                })}
+                              </span>
+                            ) : (
+                              <span className="shrink-0 rounded-full border border-border-subtle bg-background px-1.5 py-0.5 text-[12px] font-medium text-muted">
+                                {t("install.gitHistory.noneInstalled")}
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-0.5 flex items-center gap-1 text-[12px] text-muted">
+                            <HardDrive className="h-3 w-3 shrink-0" />
+                            <span
+                              className="truncate"
+                              title={entry.cache_dir ?? undefined}
+                            >
+                              {entry.cache_dir ?? t("install.gitHistory.noCache")}
+                            </span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { void handleRevealGitCache(entry.repo_url); }}
+                          disabled={!entry.cache_dir || revealingRepo === entry.repo_url}
+                          title={t("install.gitHistory.openCache")}
+                          aria-label={t("install.gitHistory.openCache")}
+                          className="mr-2 mt-2 shrink-0 rounded-md border border-border-subtle p-1 text-muted transition-colors hover:text-secondary disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {revealingRepo === entry.repo_url ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <FolderOpen className="h-3 w-3" />
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
           </div>
-        </div>
-      )}
 
-      {/* Git preview / selection dialog */}
-      {gitPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-            onClick={handleGitPreviewClose}
-          />
-          <div className="relative w-full max-w-md rounded-xl border border-border bg-surface p-5 shadow-2xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-[14px] font-semibold text-primary">{t("install.gitPreview.title")}</h2>
-              <button
-                onClick={handleGitPreviewClose}
-                disabled={gitConfirmLoading}
-                className="rounded-md p-1 text-muted transition-colors hover:text-secondary"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <p className="mb-3 text-[13px] text-muted">{t("install.gitPreview.description")}</p>
-
-            {/* Select all / deselect all */}
-            <div className="mb-2 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setGitSelections((prev) => prev.map((s) => ({ ...s, selected: true })))}
-                disabled={gitConfirmLoading}
-                className="text-[13px] text-accent-light hover:underline"
-              >
-                {t("install.gitPreview.selectAll")}
-              </button>
-              <span className="text-faint">·</span>
-              <button
-                type="button"
-                onClick={() => setGitSelections((prev) => prev.map((s) => ({ ...s, selected: false })))}
-                disabled={gitConfirmLoading}
-                className="text-[13px] text-muted hover:underline"
-              >
-                {t("install.gitPreview.deselectAll")}
-              </button>
-            </div>
-
-            {gitSelections.length === 0 ? (
-              <p className="py-6 text-center text-[13px] text-muted">{t("install.gitPreview.empty")}</p>
-            ) : (
-              <div className="max-h-64 space-y-2 overflow-y-auto scrollbar-hide pr-1">
-                {gitSelections.map((item, idx) => (
-                  <div
-                    key={item.rel_path}
-                    className={cn(
-                      "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors",
-                      item.selected
-                        ? "border-accent-border bg-accent-bg/40"
-                        : "border-border-subtle bg-background opacity-50"
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={item.selected}
-                      disabled={gitConfirmLoading}
-                      onChange={(e) =>
-                        setGitSelections((prev) =>
-                          prev.map((s, i) => i === idx ? { ...s, selected: e.target.checked } : s)
-                        )
-                      }
-                      className="h-4 w-4 shrink-0 accent-accent"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <input
-                        type="text"
-                        value={item.name}
-                        onChange={(e) =>
-                          setGitSelections((prev) =>
-                            prev.map((s, i) => i === idx ? { ...s, name: e.target.value } : s)
-                          )
-                        }
-                        disabled={!item.selected || gitConfirmLoading}
-                        placeholder={t("install.gitPreview.namePlaceholder")}
-                        className="app-input w-full bg-background py-1 text-[13px]"
-                      />
-                      {item.description ? (
-                        <p className="mt-1 truncate text-[12px] text-muted">{item.description}</p>
-                      ) : null}
-                    </div>
+          {/* Preview of one repository: pick what to import, see what is
+              already installed. */}
+          <div className="app-panel flex min-h-[480px] min-w-0 flex-col p-5">
+            {gitLoading ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <p
+                  className="max-w-full truncate px-2 text-[13px]"
+                  title={gitCancelKey ?? undefined}
+                >
+                  {t("install.gitPreview.loading", { url: gitCancelKey ?? "" })}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => gitCancelKey && handleCancelInstall(gitCancelKey)}
+                  className="text-[13px] text-accent-light hover:underline"
+                >
+                  {t("install.cancel")}
+                </button>
+              </div>
+            ) : gitPreview ? (
+              <>
+                <div className="mb-3 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h2
+                      className="truncate text-[14px] font-semibold text-primary"
+                      title={gitPreviewRepoUrl ?? undefined}
+                    >
+                      {gitPreviewRepoUrl}
+                    </h2>
+                    <p className="mt-1 text-[13px] text-muted">
+                      {t("install.gitPreview.description")}
+                    </p>
+                    {gitSelections.some((item) => item.installed) ? (
+                      <p className="mt-1 text-[13px] text-muted">
+                        {t("install.gitPreview.installedHint")}
+                      </p>
+                    ) : null}
                   </div>
-                ))}
+                  <button
+                    onClick={handleGitPreviewClose}
+                    disabled={gitConfirmLoading}
+                    className="rounded-md p-1 text-muted transition-colors hover:text-secondary"
+                    aria-label={t("common.cancel")}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {/* Select all / deselect all (the rows the filter shows) + status filter */}
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-3">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setVisibleGitSelected(true)}
+                      disabled={gitConfirmLoading || visibleGitSelections.length === 0}
+                      className="text-[13px] text-accent-light hover:underline disabled:opacity-50"
+                    >
+                      {t("install.gitPreview.selectAll")}
+                    </button>
+                    <span className="text-faint">·</span>
+                    <button
+                      type="button"
+                      onClick={() => setVisibleGitSelected(false)}
+                      disabled={gitConfirmLoading || visibleGitSelections.length === 0}
+                      className="text-[13px] text-muted hover:underline disabled:opacity-50"
+                    >
+                      {t("install.gitPreview.deselectAll")}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1" role="group" aria-label={t("install.gitPreview.statusFilter")}>
+                    {([
+                      { id: "all" as const, label: t("install.gitPreview.filter.all") },
+                      { id: "installed" as const, label: t("install.gitPreview.filter.installed") },
+                      { id: "uninstalled" as const, label: t("install.gitPreview.filter.uninstalled") },
+                    ]).map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        aria-pressed={gitStatusFilter === option.id}
+                        onClick={() => setGitStatusFilter(option.id)}
+                        className={cn(
+                          "rounded-full border px-2.5 py-0.5 text-[12px] font-medium whitespace-nowrap transition-colors",
+                          gitStatusFilter === option.id
+                            ? "border-accent-border bg-accent-bg text-accent-light"
+                            : "border-border-subtle bg-background text-muted hover:text-secondary"
+                        )}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {gitSelections.length === 0 ? (
+                  <p className="py-6 text-center text-[13px] text-muted">{t("install.gitPreview.empty")}</p>
+                ) : visibleGitSelections.length === 0 ? (
+                  <p className="py-6 text-center text-[13px] text-muted">
+                    {t("install.gitPreview.noMatches")}
+                  </p>
+                ) : (
+                  <div className="max-h-[52vh] space-y-2 overflow-y-auto scrollbar-hide pr-1">
+                    {visibleGitSelections.map((item) => (
+                      <div
+                        key={item.rel_path}
+                        title={item.rel_path}
+                        className={cn(
+                          "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors",
+                          item.selected
+                            ? "border-accent-border bg-accent-bg/40"
+                            : "border-border-subtle bg-background opacity-50"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={item.selected}
+                          disabled={gitConfirmLoading}
+                          onChange={(e) =>
+                            setGitSelections((prev) =>
+                              prev.map((s) =>
+                                s.rel_path === item.rel_path
+                                  ? { ...s, selected: e.target.checked }
+                                  : s
+                              )
+                            )
+                          }
+                          className="h-4 w-4 shrink-0 accent-accent"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={item.name}
+                              onChange={(e) =>
+                                setGitSelections((prev) =>
+                                  prev.map((s) =>
+                                    s.rel_path === item.rel_path ? { ...s, name: e.target.value } : s
+                                  )
+                                )
+                              }
+                              disabled={!item.selected || gitConfirmLoading}
+                              placeholder={t("install.gitPreview.namePlaceholder")}
+                              className="app-input min-w-0 flex-1 bg-background py-1 text-[13px]"
+                            />
+                            {item.installed ? (
+                              <span
+                                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[12px] font-medium text-emerald-600 dark:text-emerald-400"
+                                title={t("install.installed")}
+                              >
+                                <Check className="h-3 w-3" />
+                                {t("install.installed")}
+                              </span>
+                            ) : null}
+                          </div>
+                          {gitDuplicateNames.has(item.name) ? (
+                            <code className="mt-1 block truncate text-[12px] text-faint">
+                              {item.rel_path}
+                            </code>
+                          ) : null}
+                          {item.description ? (
+                            <p className="mt-1 truncate text-[12px] text-muted">{item.description}</p>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-auto flex items-center justify-between gap-3 border-t border-border-subtle pt-3">
+                  <span className="text-[13px] text-muted">
+                    {t("install.gitPreview.selectedCount", {
+                      selected: gitSelectionCount.selected,
+                      total: gitSelectionCount.total,
+                    })}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleGitPreviewClose}
+                      disabled={gitConfirmLoading}
+                      className="px-3 py-1.5 text-[13px] font-medium text-muted hover:text-secondary transition-colors"
+                    >
+                      {t("common.cancel")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleGitConfirm}
+                      disabled={gitConfirmLoading || gitSelections.every((s) => !s.selected)}
+                      className="app-button-primary"
+                    >
+                      {gitConfirmLoading ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <DownloadCloud className="h-3.5 w-3.5" />
+                      )}
+                      {t("install.gitPreview.confirm")}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border-subtle px-6 py-16 text-center">
+                <Github className="h-6 w-6 text-muted" />
+                <p className="max-w-sm text-[13px] text-muted">
+                  {gitPreviewError ?? t("install.gitPreview.pickRepo")}
+                </p>
               </div>
             )}
-
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={handleGitPreviewClose}
-                disabled={gitConfirmLoading}
-                className="px-3 py-1.5 text-[13px] font-medium text-muted hover:text-secondary transition-colors"
-              >
-                {t("common.cancel")}
-              </button>
-              <button
-                type="button"
-                onClick={handleGitConfirm}
-                disabled={gitConfirmLoading || gitSelections.every((s) => !s.selected)}
-                className="app-button-primary"
-              >
-                {gitConfirmLoading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <DownloadCloud className="h-3.5 w-3.5" />
-                )}
-                {t("install.gitPreview.confirm")}
-              </button>
-            </div>
           </div>
         </div>
       )}

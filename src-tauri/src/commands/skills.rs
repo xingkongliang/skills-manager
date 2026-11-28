@@ -325,12 +325,33 @@ pub struct GitSkillPreview {
     pub rel_path: String,
     pub name: String,
     pub description: Option<String>,
+    /// The library already holds this skill from the same repository and the
+    /// same folder inside it. The dialog leaves these unchecked by default, so
+    /// a second visit to a repository imports only what is new.
+    pub installed: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
 pub struct GitPreviewResult {
     pub temp_dir: String,
     pub skills: Vec<GitSkillPreview>,
+}
+
+/// One row of the Git tab's history: a repository the user previewed or
+/// installed from, with the checkout the cache still holds for it.
+#[derive(Debug, serde::Serialize)]
+pub struct GitRepoHistoryEntry {
+    /// The spelling to show: the URL last used, or the resolved clone URL when
+    /// the repository only reached the library through its installed skills.
+    pub repo_url: String,
+    /// Repository identity, and the input its cache slots are derived from.
+    pub clone_url: String,
+    /// Cached checkout, when one is still on disk (the cache is LRU-pruned).
+    pub cache_dir: Option<String>,
+    /// Distinct skills installed from this repository.
+    pub installed_count: usize,
+    /// Last preview or install, ms since epoch; orders the list.
+    pub last_used_at: i64,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1507,6 +1528,26 @@ pub async fn preview_git_install(
                 if dirs.is_empty() {
                     return Err(AppError::not_found("Downloaded source contains no skills"));
                 }
+                // A `/site/<domain>/<skill>` link names one skill, and that is
+                // exactly what its install records as `source_ref`. A package
+                // that holds several skills is not addressable one row at a
+                // time (every row would claim the same record), so those rows
+                // stay unflagged rather than report a wrong state.
+                let installed = if dirs.len() == 1 {
+                    let canonical = well_known::parse_site_ref(&repo_url)
+                        .map_err(|error| AppError::invalid_input(error.to_string()))?
+                        .canonical_url();
+                    store
+                        .get_all_skills()
+                        .map_err(AppError::db)?
+                        .iter()
+                        .any(|skill| {
+                            skill.source_type == "well-known"
+                                && skill.source_ref.as_deref() == Some(canonical.as_str())
+                        })
+                } else {
+                    false
+                };
                 let skills = dirs
                     .iter()
                     .map(|dir| {
@@ -1524,6 +1565,7 @@ pub async fn preview_git_install(
                             rel_path,
                             name,
                             description: meta.description,
+                            installed,
                         }
                     })
                     .collect();
@@ -1575,8 +1617,11 @@ pub async fn preview_git_install(
         let build_preview = || -> Result<GitPreviewResult, AppError> {
             let skill_dir = resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)?;
             let dirs = collect_git_skill_dirs(&skill_dir);
+            let installed = store.get_all_skills().map_err(AppError::db)?;
 
-            let skills: Vec<GitSkillPreview> = dirs
+            // Each row carries the folder the install record will hold, so
+            // "already installed" is decided at the same depth confirm writes.
+            let mut rows: Vec<(String, GitSkillPreview)> = dirs
                 .iter()
                 .map(|dir| {
                     let meta = skill_metadata::parse_skill_md(dir);
@@ -1589,18 +1634,28 @@ pub async fn preview_git_install(
                         .name
                         .filter(|s| !s.trim().is_empty())
                         .unwrap_or_else(|| basename.clone());
-                    GitSkillPreview {
-                        rel_path,
-                        name,
-                        description: meta.description,
-                    }
+                    (
+                        git_fetcher::relative_subpath(&temp_dir, dir).unwrap_or_default(),
+                        GitSkillPreview {
+                            rel_path,
+                            name,
+                            description: meta.description,
+                            installed: false,
+                        },
+                    )
                 })
                 .collect();
 
-            Ok(GitPreviewResult {
+            mark_installed_rows(&mut rows, &installed, &parsed.clone_url);
+
+            let preview = GitPreviewResult {
                 temp_dir: temp_dir.to_string_lossy().to_string(),
-                skills,
-            })
+                skills: rows.into_iter().map(|(_, skill)| skill).collect(),
+            };
+            // A repository the user just looked at is history whether or not
+            // they import anything from it.
+            record_git_repo_visit(&store, &repo_url);
+            Ok(preview)
         };
 
         build_preview().inspect_err(|_e| {
@@ -1710,6 +1765,49 @@ pub async fn cancel_git_preview(temp_dir: String) -> Result<(), AppError> {
     tauri::async_runtime::spawn_blocking(move || {
         if let Ok(temp_path) = validate_clone_temp_path(&temp_dir) {
             git_fetcher::cleanup_temp(&temp_path);
+        }
+        Ok(())
+    })
+    .await?
+}
+
+/// Repositories the Git tab offers to re-open, newest first.
+#[tauri::command]
+pub async fn list_git_repo_history(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<GitRepoHistoryEntry>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let skills = store.get_all_skills().map_err(AppError::db)?;
+        Ok(git_repo_history(&store, &skills))
+    })
+    .await?
+}
+
+/// Show a repository's cached checkout in the file manager.
+///
+/// The URL is hashed into the slot path rather than joined onto the cache root,
+/// so it cannot escape it; the containment check is belt and braces for a path
+/// the OS is about to open.
+#[tauri::command]
+pub async fn reveal_git_repo_cache(repo_url: String) -> Result<(), AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = git_repo_cache_dir(&repo_url) else {
+            return Err(AppError::invalid_input(
+                "This repository has no cached checkout to show",
+            ));
+        };
+        let cache_root = central_repo::cache_dir().join("repos");
+        let cache_root = cache_root.canonicalize().unwrap_or(cache_root);
+        let canonical = path.canonicalize().map_err(AppError::io)?;
+        if !canonical.starts_with(&cache_root) {
+            return Err(AppError::invalid_input("Invalid repository cache path"));
+        }
+        let status = file_manager::reveal_item(&canonical).map_err(AppError::io)?;
+        if file_manager::exit_is_failure(status.success()) {
+            return Err(AppError::io(format!(
+                "File manager exited with status: {status}"
+            )));
         }
         Ok(())
     })
@@ -3316,6 +3414,211 @@ pub fn skill_rel_key(skill_dir: &Path, dir: &Path) -> String {
     }
 }
 
+/// A repository in the shape the install records store it: the resolved clone
+/// URL, lowercased, without a trailing `/` or `.git`.
+///
+/// `git_fetcher::parse_git_source` is what makes the spellings comparable: a
+/// pasted `https://github.com/owner/repo`, `.../repo.git` and
+/// `.../repo/tree/main/skills` all name the same checkout, so a preview of one
+/// recognizes skills installed through any of them.
+fn repo_identity(url: &str) -> String {
+    let clone_url = git_fetcher::parse_git_source(url).clone_url;
+    let trimmed = clone_url.trim().trim_end_matches('/');
+    trimmed
+        .strip_suffix(".git")
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase()
+}
+
+/// A repository-relative folder in the spelling `source_subpath` uses, with
+/// `/` separators on every platform.
+///
+/// `git_fetcher::relative_subpath` keeps the platform's separators, so a record
+/// written on Windows holds `skills\foo` and would otherwise never match the
+/// preview's `skills/foo`.
+fn repo_relative_path(path: Option<&str>) -> String {
+    path.unwrap_or("")
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_string()
+}
+
+/// Flag the preview rows the library already holds.
+///
+/// A git-installed skill is identified by the pair its record stores: the
+/// repository ([`repo_identity`]) and the skill's folder inside it
+/// (`source_subpath`). `rows` pairs each preview row with that folder, which is
+/// why the comparison ignores `rel_path`: a `/tree/<branch>/<path>` preview is
+/// scanned below the subdirectory, so its `rel_path` is relative to that
+/// directory while the record's path is relative to the repository root.
+fn mark_installed_rows(
+    rows: &mut [(String, GitSkillPreview)],
+    installed: &[SkillRecord],
+    clone_url: &str,
+) {
+    let repo = repo_identity(clone_url);
+    let known: HashSet<(String, String)> = installed
+        .iter()
+        .filter(|skill| matches!(skill.source_type.as_str(), "git" | "skillssh"))
+        .filter_map(|skill| {
+            // `source_ref_resolved` is the clone URL. `source_ref` can be a
+            // `owner/repo/skill` shorthand whose last segment is the skill id,
+            // so it is only the fallback for records that predate the resolved
+            // column.
+            let source = skill
+                .source_ref_resolved
+                .as_deref()
+                .or(skill.source_ref.as_deref())?;
+            (repo_identity(source) == repo)
+                .then(|| (repo.clone(), repo_relative_path(skill.source_subpath.as_deref())))
+        })
+        .collect();
+
+    for (repo_path, skill) in rows.iter_mut() {
+        skill.installed =
+            known.contains(&(repo.clone(), repo_relative_path(Some(repo_path.as_str()))));
+    }
+}
+
+/// Settings key holding the repositories the user has previewed, newest first.
+const GIT_REPO_HISTORY_KEY: &str = "git_repo_history";
+
+/// How many previewed repositories are remembered. Repositories with installed
+/// skills are always listed, so this bounds only the ones previewed and never
+/// installed.
+const GIT_REPO_HISTORY_LIMIT: usize = 20;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct GitRepoVisit {
+    url: String,
+    last_used_at: i64,
+}
+
+fn read_git_repo_visits(store: &SkillStore) -> Vec<GitRepoVisit> {
+    store
+        .get_setting(GIT_REPO_HISTORY_KEY)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Remember that `url` was previewed, so the Git tab can offer it again.
+///
+/// Same repository, same entry: the spellings `owner/repo`, `…/repo.git` and a
+/// `/tree/<branch>/<path>` URL all collapse through [`repo_identity`], and the
+/// newest spelling is the one the list shows.
+fn record_git_repo_visit(store: &SkillStore, url: &str) {
+    let url = url.trim();
+    if url.is_empty() || url.len() > 2048 {
+        return;
+    }
+    let identity = repo_identity(url);
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut visits = read_git_repo_visits(store);
+    visits.retain(|visit| repo_identity(&visit.url) != identity);
+    visits.insert(
+        0,
+        GitRepoVisit {
+            url: url.to_string(),
+            last_used_at: now,
+        },
+    );
+    visits.truncate(GIT_REPO_HISTORY_LIMIT);
+    match serde_json::to_string(&visits) {
+        Ok(raw) => {
+            if let Err(error) = store.set_setting(GIT_REPO_HISTORY_KEY, &raw) {
+                log::warn!("Failed to record git repository history: {error}");
+            }
+        }
+        Err(error) => log::warn!("Failed to serialize git repository history: {error}"),
+    }
+}
+
+/// The cached checkout still on disk for a repository, if any.
+fn git_repo_cache_dir(url: &str) -> Option<PathBuf> {
+    let (full, sparse) = git_fetcher::repo_cache_slots(url);
+    [full, sparse].into_iter().find(|path| path.is_dir())
+}
+
+/// The Git tab's history: previewed repositories plus every repository the
+/// library holds a skill from, newest first.
+///
+/// Repositories come from two places on purpose. Skips that were installed by
+/// the CLI, or before this list existed, never went through a preview, and a
+/// preview that was cancelled never installed anything — both still belong in
+/// the list the user picks a repository from.
+fn git_repo_history(store: &SkillStore, skills: &[SkillRecord]) -> Vec<GitRepoHistoryEntry> {
+    struct Group {
+        repo_url: String,
+        clone_url: String,
+        names: HashSet<String>,
+        installed_at: i64,
+        previewed_at: i64,
+    }
+
+    let mut groups: HashMap<String, Group> = HashMap::new();
+
+    for visit in read_git_repo_visits(store) {
+        let identity = repo_identity(&visit.url);
+        let clone_url = git_fetcher::parse_git_source(&visit.url).clone_url;
+        let group = groups.entry(identity).or_insert_with(|| Group {
+            repo_url: visit.url.clone(),
+            clone_url,
+            names: HashSet::new(),
+            installed_at: 0,
+            previewed_at: 0,
+        });
+        if visit.last_used_at > group.previewed_at {
+            group.previewed_at = visit.last_used_at;
+            group.repo_url = visit.url;
+        }
+    }
+
+    for skill in skills {
+        if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+            continue;
+        }
+        let Some(source) = skill
+            .source_ref_resolved
+            .as_deref()
+            .or(skill.source_ref.as_deref())
+        else {
+            continue;
+        };
+        let clone_url = git_fetcher::parse_git_source(source).clone_url;
+        let identity = repo_identity(source);
+        let group = groups.entry(identity).or_insert_with(|| Group {
+            repo_url: clone_url.clone(),
+            clone_url,
+            names: HashSet::new(),
+            installed_at: 0,
+            previewed_at: 0,
+        });
+        group.names.insert(skill.name.clone());
+        group.installed_at = group.installed_at.max(skill.created_at);
+    }
+
+    let mut entries: Vec<GitRepoHistoryEntry> = groups
+        .into_values()
+        .map(|group| GitRepoHistoryEntry {
+            cache_dir: git_repo_cache_dir(&group.clone_url)
+                .map(|path| path.to_string_lossy().to_string()),
+            repo_url: group.repo_url,
+            clone_url: group.clone_url,
+            installed_count: group.names.len(),
+            last_used_at: group.installed_at.max(group.previewed_at),
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        b.last_used_at
+            .cmp(&a.last_used_at)
+            .then_with(|| a.repo_url.cmp(&b.repo_url))
+    });
+    entries.truncate(GIT_REPO_HISTORY_LIMIT);
+    entries
+}
+
 /// Validate and canonicalize a temp directory path used by the git preview/install flow.
 /// Returns the canonicalized path if it passes security checks.
 pub fn validate_clone_temp_path(temp_dir: &str) -> Result<PathBuf, AppError> {
@@ -4205,6 +4508,184 @@ mod tests {
         assert_ne!(k_a, k_b);
         assert_eq!(k_a, "category-a/foo");
         assert_eq!(k_b, "category-b/foo");
+    }
+
+    // ── installed detection in the git preview ──
+
+    fn preview_row(rel_path: &str) -> GitSkillPreview {
+        GitSkillPreview {
+            rel_path: rel_path.to_string(),
+            name: rel_path.to_string(),
+            description: None,
+            installed: false,
+        }
+    }
+
+    /// One installed git skill whose record stores `resolved` as the repository
+    /// and `subpath` as its folder inside it.
+    fn installed_record(resolved: &str, subpath: Option<&str>) -> SkillRecord {
+        let mut skill = sample_skill("installed", "installed", Path::new("/library/installed"));
+        skill.source_type = "git".to_string();
+        skill.source_ref = Some("https://github.com/owner/repo/tree/main/skills".to_string());
+        skill.source_ref_resolved = Some(resolved.to_string());
+        skill.source_subpath = subpath.map(str::to_string);
+        skill
+    }
+
+    #[test]
+    fn preview_marks_installed_rows_by_repository_and_subpath() {
+        // The record holds a Windows-separated subpath and the resolved URL is
+        // spelled with `.git` while the preview's checkout is not: both must
+        // still name the same skill, and only that row may be flagged.
+        let installed = vec![installed_record(
+            "https://github.com/owner/repo.git",
+            Some("skills\\alpha"),
+        )];
+        let mut rows = vec![
+            ("skills/alpha".to_string(), preview_row("alpha")),
+            ("skills/beta".to_string(), preview_row("beta")),
+        ];
+
+        mark_installed_rows(&mut rows, &installed, "https://github.com/owner/repo");
+
+        assert!(rows[0].1.installed, "the installed folder must be flagged");
+        assert!(!rows[1].1.installed, "a sibling skill must stay unflagged");
+    }
+
+    #[test]
+    fn preview_does_not_flag_the_same_path_in_another_repository() {
+        let installed = vec![installed_record(
+            "https://github.com/other/repo.git",
+            Some("skills/alpha"),
+        )];
+        let mut rows = vec![("skills/alpha".to_string(), preview_row("alpha"))];
+
+        mark_installed_rows(&mut rows, &installed, "https://github.com/owner/repo");
+
+        assert!(
+            !rows[0].1.installed,
+            "a folder name is only an identity within its repository"
+        );
+    }
+
+    #[test]
+    fn preview_matches_a_skill_installed_from_the_repository_root() {
+        // This is the shape confirm writes for a repository whose root is the
+        // skill: `source_subpath` is NULL, and the row's `rel_path` is the
+        // checkout's basename, which must not be compared as a path.
+        let installed = vec![installed_record("https://github.com/owner/repo.git", None)];
+        let mut rows = vec![(String::new(), preview_row("repo-abc123"))];
+
+        mark_installed_rows(&mut rows, &installed, "https://github.com/owner/repo.git");
+
+        assert!(rows[0].1.installed);
+    }
+
+    #[test]
+    fn preview_recognizes_a_skill_installed_through_skills_sh() {
+        let mut skill = installed_record("https://github.com/owner/repo.git", Some("skills/alpha"));
+        skill.source_type = "skillssh".to_string();
+        skill.source_ref = Some("owner/repo/alpha".to_string());
+        let installed = vec![skill];
+        let mut rows = vec![("skills/alpha".to_string(), preview_row("alpha"))];
+
+        mark_installed_rows(&mut rows, &installed, "https://github.com/owner/repo");
+
+        assert!(rows[0].1.installed);
+    }
+
+    #[test]
+    fn preview_ignores_records_that_did_not_come_from_a_repository() {
+        // A copy imported from disk or a website snapshot can carry the same
+        // path in `source_ref`; it is not this repository's copy, and flagging
+        // it would leave the row unselected with nothing to update.
+        let mut local = installed_record("https://github.com/owner/repo.git", Some("skills/alpha"));
+        local.source_type = "local".to_string();
+        let mut site = installed_record("https://github.com/owner/repo.git", Some("skills/alpha"));
+        site.source_type = "well-known".to_string();
+        let mut rows = vec![("skills/alpha".to_string(), preview_row("alpha"))];
+
+        mark_installed_rows(&mut rows, &[local, site], "https://github.com/owner/repo");
+
+        assert!(!rows[0].1.installed);
+    }
+
+    // ── git repository history ──
+
+    fn installed_git_skill(id: &str, name: &str, repo: &str, subpath: &str) -> SkillRecord {
+        let mut skill = sample_skill(id, name, Path::new("/library").join(id).as_path());
+        skill.source_type = "git".to_string();
+        skill.source_ref = Some(repo.to_string());
+        skill.source_ref_resolved = Some(repo.to_string());
+        skill.source_subpath = Some(subpath.to_string());
+        skill
+    }
+
+    #[test]
+    fn history_lists_installed_repositories_with_distinct_skill_counts() {
+        let repo = test_repo();
+        let skills = vec![
+            installed_git_skill("1", "alpha", "git@gitee.com:owner/repo.git", "alpha"),
+            installed_git_skill("2", "beta", "git@gitee.com:owner/repo.git", "beta"),
+            // A second copy of `alpha` (the reinstall duplicate) is still one
+            // skill the user has from this repository.
+            installed_git_skill("3", "alpha", "git@gitee.com:owner/repo.git", "nested/alpha"),
+            installed_git_skill("4", "gamma", "https://github.com/owner/other.git", "gamma"),
+        ];
+
+        let entries = git_repo_history(&repo.store, &skills);
+        let counts: HashMap<&str, usize> = entries
+            .iter()
+            .map(|entry| (entry.clone_url.as_str(), entry.installed_count))
+            .collect();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(counts["git@gitee.com:owner/repo.git"], 2);
+        assert_eq!(counts["https://github.com/owner/other.git"], 1);
+    }
+
+    #[test]
+    fn history_keeps_repositories_that_were_only_previewed() {
+        let repo = test_repo();
+        record_git_repo_visit(&repo.store, "https://github.com/owner/repo");
+
+        let entries = git_repo_history(&repo.store, &[]);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].repo_url, "https://github.com/owner/repo");
+        assert_eq!(entries[0].installed_count, 0);
+    }
+
+    #[test]
+    fn recording_the_same_repository_twice_keeps_the_newest_spelling() {
+        let repo = test_repo();
+        record_git_repo_visit(&repo.store, "https://github.com/owner/repo");
+        record_git_repo_visit(&repo.store, "https://github.com/owner/repo.git");
+
+        let entries = git_repo_history(&repo.store, &[]);
+
+        assert_eq!(entries.len(), 1, "one repository, one row");
+        assert_eq!(entries[0].repo_url, "https://github.com/owner/repo.git");
+        assert_eq!(entries[0].clone_url, "https://github.com/owner/repo.git");
+    }
+
+    #[test]
+    fn history_merges_a_previewed_repository_with_its_installed_skills() {
+        let repo = test_repo();
+        record_git_repo_visit(&repo.store, "https://github.com/owner/repo.git");
+        let skills = vec![installed_git_skill(
+            "1",
+            "alpha",
+            "https://github.com/owner/repo",
+            "alpha",
+        )];
+
+        let entries = git_repo_history(&repo.store, &skills);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].installed_count, 1);
+        // The spelling the user typed is the one the list offers to re-open.
+        assert_eq!(entries[0].repo_url, "https://github.com/owner/repo.git");
     }
 
     // ── RemoteKey dedup (batch check_all fan-out) ──

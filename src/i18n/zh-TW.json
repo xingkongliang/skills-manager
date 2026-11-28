@@ -234,6 +234,18 @@
     "hint": "之後隨時可以在側邊欄的「備份」頁連線或還原備份。"
   },
   "mySkills": {
+    "sort": {
+      "label": "排序",
+      "keys": {
+        "name": "名稱",
+        "created": "建立時間",
+        "updated": "更新時間"
+      },
+      "asc": "升冪",
+      "desc": "降冪",
+      "prioritizeEnabled": "優先展示已開啟",
+      "prioritizeEnabledHint": "開啟後目前 Preset 已啟用的 Skill 會排在最前；關閉則完全依所選排序顯示"
+    },
     "title": "技能庫",
     "applyToDefault": "套用 Preset",
     "applied": "已套用",
@@ -535,11 +547,31 @@
     "gitPreview": {
       "title": "選擇要匯入的 Skill",
       "description": "從倉庫中找到以下 Skill，可自訂名稱後匯入。",
+      "installedHint": "本庫已有的 Skill 已預設取消勾選。",
+      "statusFilter": "狀態篩選",
+      "filter": {
+        "all": "全部",
+        "installed": "已安裝",
+        "uninstalled": "未安裝"
+      },
+      "selectedCount": "已選：{{selected}}/{{total}} 個",
+      "noMatches": "沒有符合目前篩選的 Skill",
+      "pickRepo": "從左側選擇一個歷史倉庫，或輸入位址後點擊「安裝並複製」。",
+      "loading": "正在複製 {{url}}…",
       "selectAll": "全選",
       "deselectAll": "取消全選",
       "namePlaceholder": "Skill 名稱",
       "confirm": "匯入選取項目",
       "empty": "未找到可匯入的 Skill"
+    },
+    "gitHistory": {
+      "title": "歷史倉庫",
+      "count": "共 {{count}} 個",
+      "empty": "還沒有歷史倉庫。複製並預覽過的倉庫會出現在這裡。",
+      "installedCount": "已安裝 {{count}} 個",
+      "noneInstalled": "未安裝",
+      "noCache": "未快取",
+      "openCache": "開啟快取資料夾"
     },
     "scan": {
       "title": "掃描本機 Skills 並匯入",
